@@ -394,6 +394,9 @@ OPTIONAL: "n" "d"
 
 --pushspacexml -This command is used for uploading  a space XML. The parameter "id" refers to a space
 				ID and is required. The ID of the newly created spaces will NOT be printed, even if "returnids" has been called.
+				Instead, when "returnids" has been called, the ID of this upload request is printed. The server
+				processes the XML in the background; its progress can be seen through the web interface at
+				https://www.starexec.org/starexec/secure/details/XMLuploadStatus.jsp?id=XX, where XX is that ID.
 REQUIRED: "f" "id"
 OPTIONAL: None
 

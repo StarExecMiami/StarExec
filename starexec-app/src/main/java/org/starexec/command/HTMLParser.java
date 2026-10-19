@@ -27,12 +27,15 @@ public class HTMLParser {
 	 */
 
 	public static String URLEncode(String u, Map<String, String> params) {
+		// Each key and value is encoded: unencoded, getjobpairs' "id[]" made Tomcat refuse the
+		// request with HTTP 400 ("Invalid character found in the request target") before
+		// StarExec ever saw it. The server decodes them again.
 		StringBuilder answer = new StringBuilder(u);
 		answer.append("?");
 		params.forEach ( (key, value) -> {
-			answer.append(key);
+			answer.append(java.net.URLEncoder.encode(key, java.nio.charset.StandardCharsets.UTF_8));
 			answer.append("=");
-			answer.append(value);
+			answer.append(java.net.URLEncoder.encode(String.valueOf(value), java.nio.charset.StandardCharsets.UTF_8));
 			answer.append("&");
 		} );
 
