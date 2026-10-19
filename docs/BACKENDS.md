@@ -503,8 +503,10 @@ allowed to use, in the message
 ran at the same time on one node must show disjoint lists, and with SMT on,
 each list must hold whole cores: compare it with
 `/sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list` on the node.
-Under the `none` policy the lists overlap, since no pair gets CPUs of its own;
-usually each is the node's full CPU set.
+Under the `none` policy no pair gets CPUs of its own, so the lists normally
+overlap, and usually each is the node's full CPU set. Disjoint lists alone do
+not show that the static policy is on: an inherited affinity, or a cpuset set
+outside Kubernetes, can also separate them, so check the node as well.
 
 ### Configuration
 
