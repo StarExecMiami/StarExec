@@ -33,6 +33,7 @@ import java.util.concurrent.RejectedExecutionException;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -71,10 +72,13 @@ public class XmlUploadDirectoryCleanupTest {
 	private HashMap<String, Object> form;
 	/** The tasks that space XML uploads gave the thread pool. The tests run them. */
 	private final List<Runnable> tasks = new ArrayList<>();
-	private boolean poolRejects;
+	private Pool pool = Pool.QUEUES;
+	/** What another upload does after a task that ran in the request's thread, before the request cleans up. */
+	private Body betweenTaskAndRequest = () -> { };
 	/** The XML files that space or job creation was given, as they were at the time. */
 	private final List<String> seen = new ArrayList<>();
 	private RuntimeException creationFails;
+	private Error creationError;
 	private boolean archiveHoldsADirectory;
 	/** Whether a space XML upload's files were still there when the upload was marked complete. */
 	private Boolean filesLeftAtCompletion;
@@ -119,7 +123,7 @@ public class XmlUploadDirectoryCleanupTest {
 
 	@Test
 	public void aSpaceXmlUploadThatCannotStartDeletesItsDirectory() throws Exception {
-		poolRejects = true;
+		pool = Pool.REFUSES;
 
 		withBoundaries(() -> uploadSpaceXml(archive("spaces.zip")));
 
@@ -168,6 +172,53 @@ public class XmlUploadDirectoryCleanupTest {
 		for (File other : others) {
 			assertTrue(other + " is untouched", new File(other, "other.xml").isFile());
 		}
+	}
+
+	/** When the pool's queue is full, the task runs in the request's thread. */
+	@Test
+	public void aSpaceXmlTaskThatRunsInTheRequestDeletesItsDirectory() throws Exception {
+		pool = Pool.RUNS_IN_THE_REQUEST;
+
+		withBoundaries(() -> uploadSpaceXml(archive("spaces.zip")));
+
+		assertEquals(List.of("spaces.xml"), seen);
+		assertArrayEquals(new String[0], left(spaceUploads()));
+		assertEquals("deleted before the upload is marked complete", Boolean.FALSE, filesLeftAtCompletion);
+	}
+
+	/**
+	 * The task ran in the request's thread, deleted its directory and threw an Error into the request. By then
+	 * another upload has claimed the same name, so the request must not delete it again.
+	 */
+	@Test
+	public void aSpaceXmlTaskThatThrowsInTheRequestDeletesNoOtherUpload() throws Exception {
+		pool = Pool.RUNS_IN_THE_REQUEST;
+		creationError = new SyntheticError("synthetic: an Error while creating the spaces");
+		List<File> other = new ArrayList<>();
+		betweenTaskAndRequest = () -> other.add(claimAsAnotherUpload(spaceUploads(), "other.xml"));
+
+		assertThrows(SyntheticError.class, () -> withBoundaries(() -> uploadSpaceXml(archive("spaces.zip"))));
+
+		assertEquals("the other upload got the name this one released", List.of(new File(spaceUploads(), DATE)), other);
+		assertTrue("the other upload's file is untouched", new File(other.get(0), "other.xml").isFile());
+	}
+
+	/**
+	 * The pool queued the task and then failed, so the request deleted the directory. The task runs later, when
+	 * another upload has the name, and must leave that upload alone, though its archive has the same name.
+	 */
+	@Test
+	public void aSpaceXmlTaskQueuedByAFailedHandOffTouchesNoOtherUpload() throws Exception {
+		pool = Pool.QUEUES_THEN_FAILS;
+
+		assertThrows(SyntheticError.class, () -> withBoundaries(() -> uploadSpaceXml(archive("spaces.zip"))));
+		assertArrayEquals("the request deleted the directory", new String[0], left(spaceUploads()));
+		File other = claimAsAnotherUpload(spaceUploads(), "spaces.zip");
+
+		withBoundaries(this::runTasks);
+
+		assertTrue("no spaces are created from the other upload's archive", seen.isEmpty());
+		assertTrue("the other upload's archive is untouched", new File(other, "spaces.zip").isFile());
 	}
 
 	@Test
@@ -219,6 +270,25 @@ public class XmlUploadDirectoryCleanupTest {
 		void run() throws Exception;
 	}
 
+	/** How the thread pool takes a space XML task. */
+	private enum Pool {
+		/** Queues it, for the test to run. */
+		QUEUES,
+		/** Runs it at once in the request's thread, as CallerRunsPolicy does when the queue is full. */
+		RUNS_IN_THE_REQUEST,
+		/** Refuses it with an exception. */
+		REFUSES,
+		/** Queues it, then fails with an Error, as starting a worker thread can. */
+		QUEUES_THEN_FAILS
+	}
+
+	/** An Error, which the servlets' catch blocks do not catch. */
+	private static final class SyntheticError extends Error {
+		SyntheticError(String message) {
+			super(message);
+		}
+	}
+
 	/** Runs body with the session, database, error log, thread pool and archive extraction replaced. */
 	private void withBoundaries(Body body) throws Exception {
 		try (MockedStatic<R> r = mockStatic(R.class, invocation ->
@@ -231,11 +301,7 @@ public class XmlUploadDirectoryCleanupTest {
 			     case "parseMultipartRequest":
 				     return form;
 			     case "threadPoolExecute":
-				     if (poolRejects) {
-					     throw new RejectedExecutionException("synthetic: the pool is shut down");
-				     }
-				     tasks.add(invocation.getArgument(0));
-				     return null;
+				     return handOff(invocation.getArgument(0));
 			     default:
 				     return invocation.callRealMethod();
 			     }
@@ -288,9 +354,33 @@ public class XmlUploadDirectoryCleanupTest {
 		return response;
 	}
 
+	/** What the thread pool does with a space XML task, as pool says. */
+	private Object handOff(Runnable task) throws Exception {
+		switch (pool) {
+		case REFUSES:
+			throw new RejectedExecutionException("synthetic: the pool refuses the task");
+		case RUNS_IN_THE_REQUEST:
+			try {
+				task.run();
+			} finally {
+				betweenTaskAndRequest.run();
+			}
+			return null;
+		case QUEUES_THEN_FAILS:
+			tasks.add(task);
+			throw new SyntheticError("synthetic: no worker thread could be started");
+		default:
+			tasks.add(task);
+			return null;
+		}
+	}
+
 	/** What creating spaces or jobs from xml does here: note the file, then fail or succeed. */
 	private List<Integer> create(File xml) {
 		seen.add(xml.getName() + (xml.isFile() ? "" : " (missing)"));
+		if (creationError != null) {
+			throw creationError;
+		}
 		if (creationFails != null) {
 			throw creationFails;
 		}
@@ -330,6 +420,13 @@ public class XmlUploadDirectoryCleanupTest {
 			others.add(other);
 		}
 		return others;
+	}
+
+	/** Claims the name that an upload in DATE gets, as another upload would, and puts one file in it. */
+	private static File claimAsAnotherUpload(File uploads, String file) throws IOException {
+		File dir = Util.claimNewDirectory(new File(uploads, DATE));
+		write(new File(dir, file), "theirs\n");
+		return dir;
 	}
 
 	/** An uploaded archive. Saving it, like the real one, needs its directory to exist. */
