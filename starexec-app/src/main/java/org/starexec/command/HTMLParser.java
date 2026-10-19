@@ -3,6 +3,8 @@ package org.starexec.command;
 import org.apache.http.Header;
 import org.starexec.util.Validator;
 
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.regex.*;
 
@@ -100,6 +102,19 @@ public class HTMLParser {
 	}
 
 	/**
+	 * Decodes a cookie value. The server URL-encodes every value it sets, because RFC 6265 does
+	 * not allow commas, spaces or parentheses in one. A value that is not valid encoding, which
+	 * an older server may send, is returned as it was.
+	 */
+	private static String decode(String raw) {
+		try {
+			return URLDecoder.decode(raw, StandardCharsets.UTF_8);
+		} catch (IllegalArgumentException e) {
+			return raw;
+		}
+	}
+
+	/**
 	 * Extracts all the values of a comma-separated cookie as a list of strings.
 	 *
 	 * @param headers Array of headers to check for cookies in
@@ -186,7 +201,7 @@ public class HTMLParser {
 //								System.out.println( "---- now EXITING HTMLParser.extractCookie() --------\n" );
 								// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-					return value.substring(begin, end);
+					return decode(value.substring(begin, end));
 				}
 			}
 		}
