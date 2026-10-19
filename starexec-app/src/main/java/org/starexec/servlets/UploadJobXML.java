@@ -21,10 +21,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 
@@ -43,7 +40,6 @@ public class UploadJobXML extends HttpServlet {
 
 	private static final StarLogger log = StarLogger.getLogger(UploadJobXML.class);
 	private static final String UPLOAD_FILE = "f";
-	private static final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 	private static final String SPACE_ID = R.SPACE;
 
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
@@ -152,7 +148,7 @@ public class UploadJobXML extends HttpServlet {
 
 			File uniqueDir = new File(R.getBatchSpaceXMLDir(), "Job" + userId);
 			uniqueDir = new File(uniqueDir, "TEMP_JOB_XML_FOLDER_");
-			uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
+			uniqueDir = new File(uniqueDir, Util.pathDate());
 
 			uniqueDir.mkdirs();
 			//Process the archive file and extract

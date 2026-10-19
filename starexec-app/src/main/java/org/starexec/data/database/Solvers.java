@@ -26,10 +26,7 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.sql.*;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
 import java.util.*;
-import java.util.Date;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -39,7 +36,6 @@ import java.util.stream.Stream;
 public class Solvers {
 	private static final StarLogger log = StarLogger.getLogger(Solvers.class);
 	private static final String CONFIG_PREFIX = R.CONFIGURATION_PREFIX;
-	private static final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 
 	/**
 	 * Adds a solver to the database. Solver association to a space and run configurations for the solver are also
@@ -583,7 +579,7 @@ public class Solvers {
 		boolean added = false;
 		try {
 			File solverDirectory = new File(s.getPath());
-			String date = shortDate.format(new Date());
+			String date = Util.pathDate();
 			uniqueDir = claimNewDirectory(
 					solverDirectory(new File(R.getSolverPath()), userId, newSolver.getName(), date));
 			newSolver.setPath(uniqueDir.getAbsolutePath());
@@ -2668,7 +2664,7 @@ public class Solvers {
 	public static String getDefaultSolverPath(int userId, String solverName) {
 		File uniqueDir = new File(R.getSolverPath(), "" + userId);
 		uniqueDir = new File(uniqueDir, solverName);
-		uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
+		uniqueDir = new File(uniqueDir, Util.pathDate());
 		return uniqueDir.getAbsolutePath();
 	}
 
