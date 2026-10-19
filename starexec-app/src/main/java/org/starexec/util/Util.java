@@ -2062,17 +2062,22 @@ public class Util {
      * resolve anywhere else. "." resolves to the parent itself and ".." to its parent, so a
      * user-chosen name used as a path component must be checked where the path is built, not
      * only where the name is validated: names already stored before that validation existed
-     * still reach here.
+     * still reach here. The name must be exactly the one component it resolves to, so that the
+     * result is the path that was checked: {@link java.nio.file.Path#resolve} takes an absolute
+     * name as it is, but {@code new File(parent, name)} appends it to the parent.
      *
      * @param parent the directory the result must be directly inside
      * @param name the path component, typically a user-chosen primitive name
      * @return {@code new File(parent, name)}, unchanged in form
-     * @throws IllegalArgumentException when the name does not resolve to a direct child
+     * @throws IllegalArgumentException when the name is not one component that resolves to a
+     *         direct child
      */
     public static File childWithin(File parent, String name) {
         java.nio.file.Path base = parent.toPath().toAbsolutePath().normalize();
         java.nio.file.Path child = base.resolve(name).normalize();
-        if (!base.equals(child.getParent())) {
+        // Comparing the name itself, not only a path built from it, is also what lets CodeQL's
+        // java/path-injection query see this guard.
+        if (!base.equals(child.getParent()) || !child.getFileName().toString().equals(name)) {
             throw new IllegalArgumentException(
                 "name [" + name + "] does not stay directly inside " + base
             );
