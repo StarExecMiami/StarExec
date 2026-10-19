@@ -5,10 +5,13 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -183,8 +186,24 @@ public class PairLogWrittenOnceTest {
 				pb.redirectOutput(log.toFile());
 			}
 			Process p = pb.start();
-			String stdout = stdoutIntoTheLog ? "" : new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-			assertTrue("the script must not hang", p.waitFor(60, TimeUnit.SECONDS));
+			// The pipe is read on its own thread, so that the timeout below also bounds a script that hangs
+			// with it open.
+			CompletableFuture<byte[]> piped = stdoutIntoTheLog
+					? CompletableFuture.completedFuture(new byte[0])
+					: CompletableFuture.supplyAsync(() -> {
+						try {
+							return p.getInputStream().readAllBytes();
+						} catch (IOException e) {
+							throw new UncheckedIOException(e);
+						}
+					});
+			boolean finished = p.waitFor(60, TimeUnit.SECONDS);
+			if (!finished) {
+				p.descendants().forEach(ProcessHandle::destroyForcibly);
+				p.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
+			}
+			assertTrue("the script must not hang", finished);
+			String stdout = new String(piped.get(10, TimeUnit.SECONDS), StandardCharsets.UTF_8);
 			assertEquals("the script must succeed:\n" + (stdoutIntoTheLog ? Files.readString(log) : stdout),
 					0, p.exitValue());
 			return new Run(log, snapshots, stdout);
