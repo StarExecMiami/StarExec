@@ -82,6 +82,14 @@ public class XmlUploadDirectoryCleanupTest {
 	private boolean archiveHoldsADirectory;
 	/** Whether a space XML upload's files were still there when the upload was marked complete. */
 	private Boolean filesLeftAtCompletion;
+	/** Whether extracting an archive fails, as it does for a damaged one. */
+	private boolean extractionFails;
+	/** The error messages that space XML uploads recorded on their status. */
+	private final List<String> xmlErrors = new ArrayList<>();
+	/** Whether a space XML upload was marked as received: "file upload complete" on its status page. */
+	private boolean fileUploadComplete;
+	/** Whether a job XML upload gets the real JobUtil: for uploads that never reach job creation. */
+	private boolean realJobUtil;
 
 	/** The job XML request validation checks the archive name; the application compiles the patterns at startup. */
 	@BeforeClass
@@ -221,6 +229,23 @@ public class XmlUploadDirectoryCleanupTest {
 		assertTrue("the other upload's archive is untouched", new File(other, "spaces.zip").isFile());
 	}
 
+	/** A damaged archive is reported on the upload's status, instead of passing for one that holds no XML. */
+	@Test
+	public void aSpaceXmlArchiveThatCannotBeExtractedIsReported() throws Exception {
+		extractionFails = true;
+
+		withBoundaries(() -> {
+			uploadSpaceXml(archive("spaces.zip"));
+			runTasks();
+		});
+
+		assertEquals(List.of(ArchiveUtil.NOT_EXTRACTED), xmlErrors);
+		assertTrue("the file was received, as a benchmark upload marks it before it extracts", fileUploadComplete);
+		assertTrue("no spaces are created", seen.isEmpty());
+		assertArrayEquals(new String[0], left(spaceUploads()));
+		assertEquals("the upload is marked complete, with no file left", Boolean.FALSE, filesLeftAtCompletion);
+	}
+
 	@Test
 	public void aJobXmlUploadDeletesItsDirectoryWhenItIsDone() throws Exception {
 		HttpServletResponse response = postJobXml(archive("jobs.zip"));
@@ -249,6 +274,20 @@ public class XmlUploadDirectoryCleanupTest {
 		HttpServletResponse response = postJobXml(archive("jobs.zip"));
 
 		verify(response, never()).sendRedirect(anyString());
+		assertTrue("no job is created", seen.isEmpty());
+		assertArrayEquals(new String[0], left(jobUploads()));
+	}
+
+	/** A damaged archive is refused with the reason, not with an empty message. */
+	@Test
+	public void aJobXmlArchiveThatCannotBeExtractedIsRefusedWithTheReason() throws Exception {
+		extractionFails = true;
+		realJobUtil = true;
+
+		HttpServletResponse response = postJobXml(archive("jobs.zip"));
+
+		verify(response).sendError(HttpServletResponse.SC_BAD_REQUEST,
+				"Failed to upload Job XML:\n" + ArchiveUtil.NOT_EXTRACTED);
 		assertTrue("no job is created", seen.isEmpty());
 		assertArrayEquals(new String[0], left(jobUploads()));
 	}
@@ -312,8 +351,19 @@ public class XmlUploadDirectoryCleanupTest {
 		     MockedStatic<Permissions> permissions = mockStatic(Permissions.class);
 		     MockedStatic<ErrorLogs> errorLogs = mockStatic(ErrorLogs.class)) {
 			archives.when(() -> ArchiveUtil.extractArchive(anyString())).thenAnswer(invocation -> {
+				if (extractionFails) {
+					return false;
+				}
 				extract(new File((String) invocation.getArgument(0)));
-				return null;
+				return true;
+			});
+			uploads.when(() -> Uploads.setXMLErrorMessage(eq(STATUS), anyString())).thenAnswer(invocation -> {
+				xmlErrors.add(invocation.getArgument(1));
+				return true;
+			});
+			uploads.when(() -> Uploads.XMLFileUploadComplete(STATUS)).thenAnswer(invocation -> {
+				fileUploadComplete = true;
+				return true;
 			});
 			uploads.when(() -> Uploads.XMLEverythingComplete(STATUS)).thenAnswer(invocation -> {
 				filesLeftAtCompletion = left(spaceUploads()).length > 0;
@@ -343,6 +393,10 @@ public class XmlUploadDirectoryCleanupTest {
 		when(request.getContentType()).thenReturn("multipart/form-data; boundary=synthetic");
 		HttpServletResponse response = mock(HttpServletResponse.class);
 		withBoundaries(() -> {
+			if (realJobUtil) {
+				new UploadJobXML().doPost(request, response);
+				return;
+			}
 			try (MockedConstruction<JobUtil> jobUtils = mockConstruction(JobUtil.class, (jobUtil, context) -> {
 				when(jobUtil.createJobsFromFile(any(File.class), eq(OWNER), eq(SPACE), any(), any()))
 						.thenAnswer(invocation -> create(invocation.getArgument(0)));

@@ -153,7 +153,10 @@ public class UploadJobXML extends HttpServlet {
 
 			File archiveFile = new File(uniqueDir, FilenameUtils.getName(item.getName()));
 			item.write(archiveFile);
-			ArchiveUtil.extractArchive(archiveFile.getAbsolutePath());
+			if (!ArchiveUtil.extractArchive(archiveFile.getAbsolutePath())) {
+				jobUtil.setErrorMessage(ArchiveUtil.NOT_EXTRACTED);
+				return null;
+			}
 			archiveFile.delete();
 
 			//Typically there will just be 1 file, but might as well allow more
