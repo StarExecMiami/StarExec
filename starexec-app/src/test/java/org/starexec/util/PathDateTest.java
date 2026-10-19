@@ -17,6 +17,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -61,11 +62,16 @@ public class PathDateTest {
 		assertEquals("20260704-13.30.00.123", Util.pathDate(TIMES[4]));
 	}
 
-	/** The SimpleDateFormat this replaces gives the same name for every time. */
+	/**
+	 * In the server's en_US locale, the SimpleDateFormat this replaces gives the same name for
+	 * each of these times. Not for every time: before the Gregorian calendar began in 1582 it
+	 * counts Julian dates and DateTimeFormatter does not, but directory names only ever carry
+	 * the current time.
+	 */
 	@Test
 	public void namesAreTheSameAsBefore() {
 		for (LocalDateTime time : TIMES) {
-			DateFormat before = new SimpleDateFormat(R.PATH_DATE_FORMAT);
+			DateFormat before = new SimpleDateFormat(R.PATH_DATE_FORMAT, Locale.US);
 			before.setTimeZone(TimeZone.getTimeZone("UTC"));
 			String expected = before.format(Date.from(time.toInstant(ZoneOffset.UTC)));
 			assertEquals(time.toString(), expected, Util.pathDate(time));
@@ -106,6 +112,8 @@ public class PathDateTest {
 
 		ExecutorService pool = Executors.newFixedThreadPool(threads);
 		CountDownLatch start = new CountDownLatch(1);
+		List<String> allWrong = new ArrayList<>();
+		boolean stopped;
 		try {
 			List<Future<List<String>>> results = new ArrayList<>();
 			for (int t = 0; t < threads; t++) {
@@ -114,7 +122,8 @@ public class PathDateTest {
 				results.add(pool.submit(() -> {
 					start.await();
 					List<String> wrong = new ArrayList<>();
-					for (int i = 0; i < mine.size(); i++) {
+					// Stops when interrupted, so that shutdownNow ends a failed run.
+					for (int i = 0; i < mine.size() && !Thread.currentThread().isInterrupted(); i++) {
 						String name = Util.pathDate(mine.get(i));
 						if (!name.equals(names.get(i))) {
 							wrong.add(mine.get(i) + " gave " + name + ", not " + names.get(i));
@@ -124,17 +133,18 @@ public class PathDateTest {
 				}));
 			}
 			start.countDown();
-			List<String> wrong = new ArrayList<>();
 			for (Future<List<String>> result : results) {
-				wrong.addAll(result.get(60, TimeUnit.SECONDS));
+				allWrong.addAll(result.get(60, TimeUnit.SECONDS));
 			}
-			assertEquals(wrong.isEmpty() ? "" : wrong.get(0), 0, wrong.size());
 		} finally {
+			// Interrupts the workers, which then stop before their next name, and waits for them,
+			// so that a failed run leaves no thread formatting while the next test runs.
 			pool.shutdownNow();
-			// The workers do not check for interruption. Wait for them, so a failed run leaves no
-			// thread formatting while the next test runs.
-			pool.awaitTermination(60, TimeUnit.SECONDS);
+			stopped = pool.awaitTermination(60, TimeUnit.SECONDS);
 		}
+		// After the finally block, so that a worker's own failure is the one reported.
+		assertTrue("the formatting threads did not stop within 60 seconds", stopped);
+		assertEquals(allWrong.isEmpty() ? "" : allWrong.get(0), 0, allWrong.size());
 	}
 
 	/**
