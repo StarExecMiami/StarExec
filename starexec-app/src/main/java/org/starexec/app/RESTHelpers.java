@@ -341,6 +341,9 @@ public class RESTHelpers {
 			"Nothing to compare: the graph plots only completed pairs whose result matches the benchmark's"
 					+ " expected result, and one of the two configurations has none in this space and stage.";
 
+	/** The answer to a solver comparison request that names one configuration twice. */
+	static final String SAME_CONFIGURATION_TWICE = "Choose two different configurations to compare.";
+
 	/**
 	 * Gets the graph of completed pairs over time for a given job.
 	 *
@@ -2369,6 +2372,11 @@ public class RESTHelpers {
 			return gson.toJson(new ValidatorStatusCode(false,
 					"The given size is not valid: please choose an integer from 1-2000"));
 
+		}
+		if (config1 == config2) {
+			// The pairs are split by configuration, so a configuration given twice fills only one side,
+			// and the answer would wrongly say that it has no pairs to plot.
+			return gson.toJson(new ValidatorStatusCode(false, SAME_CONFIGURATION_TWICE));
 		}
 
 		chartPath = Statistics.makeSolverComparisonChart(config1, config2, jobSpaceId, edgeLengthInPixels, c,

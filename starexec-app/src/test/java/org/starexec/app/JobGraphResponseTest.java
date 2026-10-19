@@ -28,7 +28,8 @@ import static org.mockito.ArgumentMatchers.anyList;
  * <p>With no configuration selected, the space overview graph answered HTTP 500: makeSpaceOverviewChart
  * returns null for an empty selection, and the helper dereferenced the result before checking it. The
  * pairs-over-time graph did the same whenever drawing failed. The solver comparison graph reported an
- * internal database error when one configuration had no pair to plot, which is not a failure.
+ * internal database error when one configuration had no pair to plot, which is not a failure, and said
+ * that a configuration compared with itself had none.
  */
 public class JobGraphResponseTest {
 
@@ -139,6 +140,21 @@ public class JobGraphResponseTest {
 			return comparison();
 		});
 		assertRefusedWith(RESTServices.ERROR_DATABASE.getMessage(), json);
+	}
+
+	/**
+	 * The pairs are split by configuration, so one configuration chosen twice fills only one side of the
+	 * comparison, and the answer said that configuration had nothing to plot.
+	 */
+	@Test
+	public void aComparisonOfAConfigurationWithItselfAsksForTwoDifferentOnes() {
+		String json = answer(statistics -> {
+			String response = new RESTServices().getSolverComparisonGraph(STAGE, JOB_SPACE_ID, 5, 5, 300, "white",
+					Mockito.mock(HttpServletRequest.class));
+			statistics.verifyNoInteractions();
+			return response;
+		});
+		assertRefusedWith(RESTHelpers.SAME_CONFIGURATION_TWICE, json);
 	}
 
 	/** The job page reads a drawn comparison as JSON holding the chart's path and its image map. */
