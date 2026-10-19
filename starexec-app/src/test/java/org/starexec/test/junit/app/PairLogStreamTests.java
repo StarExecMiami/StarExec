@@ -26,6 +26,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -115,12 +116,13 @@ public class PairLogStreamTests {
                 java.io.OutputStream.class,
                 File.class,
                 long.class,
-                int.class
+                int.class,
+                boolean.class
         );
         streamMethod.setAccessible(true);
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        long returnedOffset = (Long) streamMethod.invoke(null, 42, output, tempFile, 10L, 1024);
+        long returnedOffset = (Long) streamMethod.invoke(null, 42, output, tempFile, 10L, 1024, false);
         String events = output.toString(StandardCharsets.UTF_8.name());
 
         Assert.assertTrue(events.contains("event: reset"));
@@ -143,12 +145,13 @@ public class PairLogStreamTests {
                 java.io.OutputStream.class,
                 File.class,
                 long.class,
-                int.class
+                int.class,
+                boolean.class
         );
         streamMethod.setAccessible(true);
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        long returnedOffset = (Long) streamMethod.invoke(null, 42, output, tempFile, 0L, 4);
+        long returnedOffset = (Long) streamMethod.invoke(null, 42, output, tempFile, 0L, 4, false);
         String events = output.toString(StandardCharsets.UTF_8.name());
 
         Assert.assertTrue(events.contains("event: chunk"));
@@ -190,12 +193,13 @@ public class PairLogStreamTests {
                 java.io.OutputStream.class,
                 File.class,
                 long.class,
-                int.class
+                int.class,
+                boolean.class
         );
         streamMethod.setAccessible(true);
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        long returnedOffset = (Long) streamMethod.invoke(null, 42, output, tempFile, tempFile.length(), 1024);
+        long returnedOffset = (Long) streamMethod.invoke(null, 42, output, tempFile, tempFile.length(), 1024, false);
         String events = output.toString(StandardCharsets.UTF_8.name());
 
         Assert.assertEquals(tempFile.length(), returnedOffset);
@@ -488,7 +492,7 @@ public class PairLogStreamTests {
 
     /**
      * A chunk must end on a whole character. Each chunk is decoded on its own, so a character split between
-     * two chunks arrived as two U+FFFD, in the copy that replaces the one the pair page rendered.
+     * two chunks arrived as two to four U+FFFD, in the copy that replaces the one the pair page rendered.
      */
     @Test
     public void streamJobPairLogAsyncNeverSplitsACharacterBetweenChunks() throws Exception {
@@ -508,8 +512,9 @@ public class PairLogStreamTests {
     }
 
     /**
-     * Bytes that hold no whole character are sent as they are, so that the stream still reaches the end of a
-     * log that stops inside a character. Holding them back would never send them.
+     * Once the pair has finished, nothing more will be written to its log, so bytes that hold no whole character
+     * are sent as they are: the stream still reaches the end of a log that stops inside a character. Holding
+     * them back would never send them.
      */
     @Test
     public void streamJobPairLogAsyncSendsAMalformedEndAsItIs() throws Exception {
@@ -522,6 +527,66 @@ public class PairLogStreamTests {
         Assert.assertEquals("abc", whole.get("text").getAsString());
         Assert.assertEquals(3L, whole.get("offsetEnd").getAsLong());
         Assert.assertEquals("\uFFFD", rest.get("text").getAsString());
+        Assert.assertEquals(4L, rest.get("offsetEnd").getAsLong());
+    }
+
+    /**
+     * While the pair runs, a character only partly written to its log waits for the rest: sent on their own,
+     * its first bytes would show as U+FFFD until the page is reloaded. The tick that finds nothing more to send
+     * waits a poll interval, and the character goes out whole, with what follows it, once it is written.
+     */
+    @Test
+    public void streamJobPairLogAsyncWaitsForTheRestOfACharacterWhileThePairRuns() throws Exception {
+        File logFile = File.createTempFile("pair-log-stream", ".txt");
+        try {
+            // "ab" and the first two of the euro sign's three bytes, E2 82 AC.
+            Files.write(logFile.toPath(), new byte[] {'a', 'b', (byte) 0xE2, (byte) 0x82});
+            AsyncTick ticks = runAsyncTicks(logFile, Status.StatusCode.STATUS_RUNNING, 3, 0L,
+                    new QueuingScheduledExecutorService(), tick -> {
+                        if (tick == 3) {
+                            Files.write(logFile.toPath(), new byte[] {(byte) 0xAC, 'c'}, StandardOpenOption.APPEND);
+                        }
+                    });
+
+            Assert.assertEquals(List.of("chunk", "chunk"), ticks.names);
+            Assert.assertEquals("events sent by the end of each tick", Arrays.asList(1L, 1L, 2L),
+                    ticks.eventsAfterTick);
+            JsonObject first = JsonParser.parseString(ticks.data.get(0)).getAsJsonObject();
+            JsonObject second = JsonParser.parseString(ticks.data.get(1)).getAsJsonObject();
+            Assert.assertEquals("ab", first.get("text").getAsString());
+            Assert.assertEquals(2L, first.get("offsetEnd").getAsLong());
+            Assert.assertEquals("\u20ACc", second.get("text").getAsString());
+            Assert.assertEquals(2L, second.get("offsetStart").getAsLong());
+            Assert.assertEquals(6L, second.get("offsetEnd").getAsLong());
+            // The first tick; the catch-up tick its progress earns, which sends nothing and so waits the poll
+            // interval's floor of 100 ms, since the test leaves the interval unset; and the tick after the one
+            // that sent the rest.
+            Assert.assertEquals(Arrays.asList(0L, 0L, 100L, 100L), ticks.scheduleDelays);
+            Assert.assertTrue("Expected the stream of a running pair to go on", ticks.followUpQueued);
+        } finally {
+            logFile.delete();
+        }
+    }
+
+    /**
+     * The legacy wrapper waits for the rest of a character too. Its first poll of the running pair sends what
+     * comes before the character, then its heartbeat, and nothing more until the pair has finished, at the next
+     * status poll about a second in. Then nothing more will be written, so the bytes are sent as they are, and
+     * then complete.
+     */
+    @Test
+    public void streamPairLogEventsWaitsForTheRestOfACharacterWhileThePairRuns() throws Exception {
+        LegacyEvents events = runLegacyStream(new byte[] {'a', 'b', (byte) 0xE2, (byte) 0x82},
+                pairWithStatus(Status.StatusCode.STATUS_RUNNING), pairWithStatus(Status.StatusCode.STATUS_COMPLETE));
+
+        Assert.assertEquals(List.of("chunk", "chunk", "complete"), events.names);
+        Assert.assertEquals("the first poll must send \"ab\" and then its heartbeat: " + events.order, 1,
+                events.order.indexOf("heartbeat"));
+        JsonObject first = JsonParser.parseString(events.data.get(0)).getAsJsonObject();
+        JsonObject rest = JsonParser.parseString(events.data.get(1)).getAsJsonObject();
+        Assert.assertEquals("ab", first.get("text").getAsString());
+        Assert.assertEquals(2L, first.get("offsetEnd").getAsLong());
+        Assert.assertEquals(2L, rest.get("offsetStart").getAsLong());
         Assert.assertEquals(4L, rest.get("offsetEnd").getAsLong());
     }
 
@@ -698,6 +763,11 @@ public class PairLogStreamTests {
         }
     }
 
+    /** What a test does, such as writing more of the log, just before a tick of the stream runs. */
+    private interface TickHook {
+        void run(int tick) throws Exception;
+    }
+
     private static AsyncTick runOneAsyncTick(String log, Status.StatusCode code) throws Exception {
         return runOneAsyncTick(log.getBytes(StandardCharsets.UTF_8), code);
     }
@@ -731,6 +801,13 @@ public class PairLogStreamTests {
     /** As above, with {@code logFile} itself as the pair's log. */
     private static AsyncTick runAsyncTicks(File logFile, Status.StatusCode code, int maxTicks, long pauseMillis,
                                            QueuingScheduledExecutorService queueExecutor) throws Exception {
+        return runAsyncTicks(logFile, code, maxTicks, pauseMillis, queueExecutor, tick -> { });
+    }
+
+    /** As above, running {@code beforeTick} just before each tick, with the tick's number, from 1. */
+    private static AsyncTick runAsyncTicks(File logFile, Status.StatusCode code, int maxTicks, long pauseMillis,
+                                           QueuingScheduledExecutorService queueExecutor, TickHook beforeTick)
+            throws Exception {
         RESTServices services = new RESTServices();
 
         SseEventSink eventSink = Mockito.mock(SseEventSink.class);
@@ -777,6 +854,7 @@ public class PairLogStreamTests {
                 }
                 Runnable task = queueExecutor.pollTask();
                 Assert.assertNotNull("Expected tick " + tick + " of the stream to be queued", task);
+                beforeTick.run(tick);
                 task.run();
                 eventsAfterTick.add(Mockito.mockingDetails(builder).getInvocations().stream()
                         .filter(invocation -> invocation.getMethod().getName().equals("name")).count());
@@ -921,6 +999,14 @@ public class PairLogStreamTests {
 
     /** Streams {@code log} through the legacy wrapper for a finished pair 123 and parses the frames. */
     private static LegacyEvents runLegacyStreamOfTerminalPair(byte[] log) throws Exception {
+        return runLegacyStream(log, pairWithStatus(Status.StatusCode.STATUS_COMPLETE));
+    }
+
+    /**
+     * Streams {@code log} through the legacy wrapper for pair 123 and parses the frames. The pair's status reads
+     * return {@code first}, then each of {@code later} in turn, and the last one from then on.
+     */
+    private static LegacyEvents runLegacyStream(byte[] log, JobPair first, JobPair... later) throws Exception {
         Method streamEventsMethod = RESTServices.class.getDeclaredMethod(
                 "streamPairLogEvents",
                 int.class,
@@ -938,7 +1024,7 @@ public class PairLogStreamTests {
             configMock.when(EnvironmentConfig::getPairLogStreamReadChunkBytes).thenReturn(CHUNK);
             configMock.when(EnvironmentConfig::getPairLogStreamMaxDurationSeconds).thenReturn(60L);
             jobPairsMock.when(() -> JobPairs.getLogPath(123)).thenReturn(tempFile.getAbsolutePath());
-            jobPairsMock.when(() -> JobPairs.getPair(123)).thenReturn(pairWithStatus(Status.StatusCode.STATUS_COMPLETE));
+            jobPairsMock.when(() -> JobPairs.getPair(123)).thenReturn(first, later);
 
             streamEventsMethod.invoke(null, 123, output, null);
         } finally {

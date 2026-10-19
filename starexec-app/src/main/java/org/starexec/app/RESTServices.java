@@ -1330,7 +1330,7 @@ public class RESTServices {
 			if (logFile.exists()) {
 				long target = logFile.length();
 				long before = offset;
-				offset = drainAvailableBytes(pairId, output, logFile, offset, target, maxChunkBytes);
+				offset = drainAvailableBytes(pairId, output, logFile, offset, target, maxChunkBytes, pairFinished);
 				if (offset < 0L) {
 					return;
 				}
@@ -1400,8 +1400,16 @@ public class RESTServices {
 		}
 	}
 
+	/**
+	 * Sends the next chunk event: at most {@code maxChunkBytes} of what the log holds from
+	 * {@code currentOffset}, as many of them as {@link #wholeCharacterLength} allows, or nothing.
+	 *
+	 * @param logIsFinal true once the pair has finished, so nothing more will be written to its log
+	 * @return the offset after the last byte sent, the offset it read from if it sent no chunk, or -1 if
+	 *         sending failed
+	 */
 	private static long streamAvailableBytesSse(int pairId, SseEventSink eventSink, Sse sse, File logFile,
-												 long currentOffset, int maxChunkBytes) {
+												 long currentOffset, int maxChunkBytes, boolean logIsFinal) {
 		long fileSize = logFile.length();
 		long offset = currentOffset;
 
@@ -1426,7 +1434,10 @@ public class RESTServices {
 			if (read <= 0) {
 				return offset;
 			}
-			int whole = wholeCharacterLength(bytes, read);
+			int whole = wholeCharacterLength(bytes, read, logIsFinal);
+			if (whole == 0) {
+				return offset; // the log so far ends partway through a character; wait for the rest
+			}
 			offset += whole;
 			String text = new String(bytes, 0, whole, StandardCharsets.UTF_8).replace("\r\n", "\n");
 			String data = "{\"pairId\":" + pairId +
@@ -1450,15 +1461,17 @@ public class RESTServices {
 	 * {@link #PAIR_LOG_STREAM_MAX_CHUNKS_PER_POLL} of them. The chunk size bounds one event, not one poll
 	 * (docs/CONFIGURATION.md): a single chunk per poll let a fast log fall behind, and cut a finished pair's
 	 * log off after its first chunk, because {@code complete} followed it. A caller left short of
-	 * {@code target} polls again at once.
+	 * {@code target} polls again at once. While the pair runs, it stops before a character only partly
+	 * written to the log, which a later poll sends whole.
 	 *
+	 * @param logIsFinal true once the pair has finished, so nothing more will be written to its log
 	 * @return the offset after the last byte sent, or -1 if sending failed
 	 */
 	private static long drainAvailableBytesSse(int pairId, SseEventSink eventSink, Sse sse, File logFile,
-			long currentOffset, long target, int maxChunkBytes) {
+			long currentOffset, long target, int maxChunkBytes, boolean logIsFinal) {
 		long offset = currentOffset;
 		for (int chunks = 0; offset != target && chunks < PAIR_LOG_STREAM_MAX_CHUNKS_PER_POLL; chunks++) {
-			long next = streamAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
+			long next = streamAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes, logIsFinal);
 			if (next < 0L || next == offset) {
 				return next;
 			}
@@ -1565,7 +1578,7 @@ public class RESTServices {
 				if (logFile != null && logFile.exists()) {
 					long target = logFile.length();
 					long before = offset;
-					offset = drainAvailableBytesSse(pairId, eventSink, sse, logFile, offset, target, maxChunkBytes);
+					offset = drainAvailableBytesSse(pairId, eventSink, sse, logFile, offset, target, maxChunkBytes, pairFinished);
 					if (offset < 0L) {
 						closeAndRelease();
 						return;
@@ -1649,7 +1662,15 @@ public class RESTServices {
 		return 0L;
 	}
 
-	private static long streamAvailableBytes(int pairId, OutputStream output, File logFile, long currentOffset, int maxChunkBytes) {
+	/**
+	 * The synchronous counterpart of {@link #streamAvailableBytesSse}, for the legacy stream wrapper.
+	 *
+	 * @param logIsFinal true once the pair has finished, so nothing more will be written to its log
+	 * @return the offset after the last byte sent, the offset it read from if it wrote no chunk, or -1 if
+	 *         writing failed
+	 */
+	private static long streamAvailableBytes(int pairId, OutputStream output, File logFile, long currentOffset,
+			int maxChunkBytes, boolean logIsFinal) {
 		long fileSize = logFile.length();
 		long offset = currentOffset;
 
@@ -1674,7 +1695,10 @@ public class RESTServices {
 			if (read <= 0) {
 				return offset;
 			}
-			int whole = wholeCharacterLength(bytes, read);
+			int whole = wholeCharacterLength(bytes, read, logIsFinal);
+			if (whole == 0) {
+				return offset; // the log so far ends partway through a character; wait for the rest
+			}
 			offset += whole;
 			String text = new String(bytes, 0, whole, StandardCharsets.UTF_8).replace("\r\n", "\n");
 			String data = "{\"pairId\":" + pairId +
@@ -1695,13 +1719,14 @@ public class RESTServices {
 	/**
 	 * The synchronous counterpart of {@link #drainAvailableBytesSse}, for the legacy stream wrapper.
 	 *
+	 * @param logIsFinal true once the pair has finished, so nothing more will be written to its log
 	 * @return the offset after the last byte sent, or -1 if writing failed
 	 */
 	private static long drainAvailableBytes(int pairId, OutputStream output, File logFile, long currentOffset,
-			long target, int maxChunkBytes) {
+			long target, int maxChunkBytes, boolean logIsFinal) {
 		long offset = currentOffset;
 		for (int chunks = 0; offset != target && chunks < PAIR_LOG_STREAM_MAX_CHUNKS_PER_POLL; chunks++) {
-			long next = streamAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
+			long next = streamAvailableBytes(pairId, output, logFile, offset, maxChunkBytes, logIsFinal);
 			if (next < 0L || next == offset) {
 				return next;
 			}
@@ -1716,11 +1741,15 @@ public class RESTServices {
 
 	/**
 	 * How many of the {@code read} bytes to send so that a chunk never ends inside a UTF-8 character: each
-	 * chunk is decoded on its own, so the two parts of a split character would each become U+FFFD. The 1 to 3
-	 * bytes of a character the read cut off start the next chunk. Bytes that hold no whole character, such
-	 * as a log that ends inside one, are sent as they are, so that the stream always advances.
+	 * chunk is decoded on its own, so both parts of a split character would become replacement characters
+	 * (U+FFFD). The 1 to 3 bytes of a character the read cut off start the next chunk. When the read holds
+	 * nothing but the start of one character, the log so far ends partway through it. While the pair runs,
+	 * the rest is still to be written, so nothing is sent yet and the result is 0. Once the log is final,
+	 * nothing more will come: the bytes are sent as they are, so that the stream still reaches the log's end.
+	 *
+	 * @param logIsFinal true once the pair has finished, so nothing more will be written to its log
 	 */
-	private static int wholeCharacterLength(byte[] bytes, int read) {
+	private static int wholeCharacterLength(byte[] bytes, int read, boolean logIsFinal) {
 		// A character is at most 4 bytes, so only the last 3 can belong to one the read cut off.
 		for (int back = 1; back <= Math.min(3, read); back++) {
 			int b = bytes[read - back] & 0xFF;
@@ -1728,7 +1757,13 @@ public class RESTServices {
 				continue; // a continuation byte: the character starts further back
 			}
 			int size = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : b >= 0xC0 ? 2 : 1;
-			return size > back && back < read ? read - back : read;
+			if (size <= back) {
+				return read; // the last character is whole
+			}
+			if (back < read) {
+				return read - back; // the cut character starts the next chunk
+			}
+			return logIsFinal ? read : 0;
 		}
 		return read;
 	}
