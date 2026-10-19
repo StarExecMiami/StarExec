@@ -473,15 +473,17 @@ StarExec does not check it: reading a kubelet's configuration needs the
 
 - **`cpuManagerPolicy: static`.** Only then does a container of a `Guaranteed`
   pod with an integer CPU request get exclusive CPUs. Under the default `none`
-  policy its limit is enforced with a CFS quota, and it runs on every CPU of
-  the node, alongside other pods. The static policy also requires a CPU
-  reservation (`reservedSystemCPUs`, `kubeReserved` or `systemReserved`).
+  policy its limit is enforced with a CFS quota, and it shares the node's CPUs
+  with other pods. The static policy also requires a CPU reservation
+  (`reservedSystemCPUs`, `kubeReserved` or `systemReserved`).
 - **`cpuManagerPolicyOptions: {full-pcpus-only: "true"}`, or SMT turned off.**
   Without it, on an SMT machine the static policy can give two containers the
-  two hardware threads of one physical core. With it, the kubelet admits a pod
-  only if its CPUs fill whole physical cores, and fails any other pod with
-  `SMTAlignmentError`. `STAREXEC_K8S_CPU_LIMIT` must then be a multiple of the
-  threads per core, typically 2 on x86 machines with SMT on.
+  two hardware threads of one physical core. With it, the static policy gives
+  exclusive CPUs only as whole physical cores, and a pod fails with
+  `SMTAlignmentError` if a container's exclusive CPUs cannot be given as whole
+  cores. Containers that get no exclusive CPUs are not checked: they run on the
+  shared CPUs. `STAREXEC_K8S_CPU_LIMIT` must then be a multiple of the threads
+  per core, typically 2 on x86 machines with SMT on.
 
 Changing the policy of a node means draining it and removing the kubelet's
 `cpu_manager_state` file; follow
@@ -501,7 +503,8 @@ allowed to use, in the message
 ran at the same time on one node must show disjoint lists, and with SMT on,
 each list must hold whole cores: compare it with
 `/sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list` on the node.
-Under the `none` policy, every list is the node's full CPU set.
+Under the `none` policy the lists overlap, since no pair gets CPUs of its own;
+usually each is the node's full CPU set.
 
 ### Configuration
 

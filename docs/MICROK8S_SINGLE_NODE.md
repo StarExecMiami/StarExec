@@ -108,7 +108,7 @@ microk8s kubectl -n starexec get jobs,pods
 ```
 
 Check the node's CPU manager before recording benchmark results. `none`, the default, means pairs share
-every CPU (see [Operational Notes](#operational-notes)):
+the node's CPUs (see [Operational Notes](#operational-notes)):
 
 ```bash
 microk8s kubectl get --raw "/api/v1/nodes/$NODE_NAME/proxy/configz" \
@@ -161,7 +161,7 @@ The chart now runs a root init container that creates the directories, applies `
 ## Operational Notes
 
 - This profile is single-node only. If you later move job pods onto additional worker nodes, replace the shared data PVC with an RWX-capable storage backend such as NFS or CephFS.
-- Keep `kubernetes.strictOnePairPerCpu: true` unless you have measured evidence that changing it preserves benchmark isolation. It does not isolate pairs by itself: the kubelet's default CPU manager policy is `none`, under which every pair can use every CPU. Before recording benchmark results, check the node as described in [What Kubernetes needs for exclusive cores](BACKENDS.md#what-kubernetes-needs-for-exclusive-cores). MicroK8s reads kubelet flags from `/var/snap/microk8s/current/args/kubelet`, and its kubelet root directory, which holds `cpu_manager_state`, is `/var/snap/microk8s/common/var/lib/kubelet`.
+- Keep `kubernetes.strictOnePairPerCpu: true` unless you have measured evidence that changing it preserves benchmark isolation. It does not isolate pairs by itself: the kubelet's default CPU manager policy is `none`, under which pairs get no CPUs of their own and share the node's. Before recording benchmark results, check the node as described in [What Kubernetes needs for exclusive cores](BACKENDS.md#what-kubernetes-needs-for-exclusive-cores). MicroK8s reads kubelet flags from `/var/snap/microk8s/current/args/kubelet`, and its kubelet root directory, which holds `cpu_manager_state`, is `/var/snap/microk8s/common/var/lib/kubelet`.
 - Keep `kubernetes.nodeManagement.enabled: false` for this setup. Node labels are static and should be managed explicitly.
 - Do not place database passwords in Git-tracked values files.
 
