@@ -167,7 +167,9 @@ public class HTMLParser {
 			// form like
 			// Set-Cookie: name=Nicholas; expires=Sat, 02 May 2009 23:38:25 GMT
 			// where all cookies are on a single semicolon-delimited line.
-			if (x.getName().equals("Set-Cookie")) {
+			// Header names are case-insensitive (RFC 7230 3.2): a proxy, HTTP/2 or another server
+			// may send "set-cookie" or "Set-cookie".
+			if (x.getName().equalsIgnoreCase("Set-Cookie")) {
 							// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 //							System.out.println( "\tfound a header with name 'Set-Cookie'!" );
 							// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
