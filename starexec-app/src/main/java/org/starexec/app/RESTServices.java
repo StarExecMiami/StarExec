@@ -176,6 +176,13 @@ public class RESTServices {
 	}
 
 	private static final AtomicInteger activePairLogStreams = new AtomicInteger(0);
+
+	/**
+	 * The most chunk events one poll of a pair log stream sends. Each send waits for the client, so the cap
+	 * keeps one long log from holding a stream worker past the stream's deadline, which is checked between
+	 * polls. A stream the cap leaves behind its log polls again at once.
+	 */
+	private static final int PAIR_LOG_STREAM_MAX_CHUNKS_PER_POLL = 32;
 	private static final byte[] NEWLINE = "\n".getBytes(StandardCharsets.UTF_8);
 	private static final int MAX_UPLOAD_SESSION_CREATE_BODY_BYTES = 64 * 1024;
 
@@ -1298,6 +1305,9 @@ public class RESTServices {
 		long offset = resolveInitialOffset(logFile, lastEventId);
 		long lastStatusCheckAt = 0L;
 		long lastHeartbeatAt = 0L;
+		// Once the pair has finished, its status is not read again: the polls that follow send the rest of
+		// its log, and then complete.
+		boolean pairFinished = false;
 
 		while (true) {
 			long now = System.currentTimeMillis();
@@ -1306,30 +1316,33 @@ public class RESTServices {
 				return;
 			}
 
-			if (now - lastStatusCheckAt >= statusPollIntervalMillis) {
+			if (!pairFinished && now - lastStatusCheckAt >= statusPollIntervalMillis) {
 				JobPair pair = JobPairs.getPair(pairId);
 				if (pair == null) {
 					writeSseEvent(output, "error", "{\"code\":\"NOT_AVAILABLE\",\"message\":\"not available\"}");
 					return;
 				}
-				if (!pair.getStatus().getCode().incomplete()) {
-					if (logFile.exists()) {
-						offset = drainAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
-						if (offset < 0L) {
-							return;
-						}
-					}
-					writeSseEvent(output, "complete", "{\"pairId\":" + pairId + "}");
-					return;
-				}
+				pairFinished = !pair.getStatus().getCode().incomplete();
 				lastStatusCheckAt = now;
 			}
 
+			boolean behind = false;
 			if (logFile.exists()) {
-				offset = drainAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
+				long target = logFile.length();
+				long before = offset;
+				offset = drainAvailableBytes(pairId, output, logFile, offset, target, maxChunkBytes);
 				if (offset < 0L) {
 					return;
 				}
+				// Stopped by the cap, short of the log's size when the poll began. A poll that sent nothing is not
+				// behind, even if the size says so: a size can be stale, as NFS caches it, and polling again at
+				// once would spin.
+				behind = offset != before && offset < target;
+			}
+
+			if (pairFinished && !behind) {
+				writeSseEvent(output, "complete", "{\"pairId\":" + pairId + "}");
+				return;
 			}
 
 			now = System.currentTimeMillis();
@@ -1340,6 +1353,9 @@ public class RESTServices {
 				lastHeartbeatAt = now;
 			}
 
+			if (behind) {
+				continue;
+			}
 			try {
 				Thread.sleep(pollIntervalMillis);
 			} catch (InterruptedException e) {
@@ -1410,8 +1426,9 @@ public class RESTServices {
 			if (read <= 0) {
 				return offset;
 			}
-			offset += read;
-			String text = new String(bytes, 0, read, StandardCharsets.UTF_8).replace("\r\n", "\n");
+			int whole = wholeCharacterLength(bytes, read);
+			offset += whole;
+			String text = new String(bytes, 0, whole, StandardCharsets.UTF_8).replace("\r\n", "\n");
 			String data = "{\"pairId\":" + pairId +
 					",\"offsetStart\":" + start +
 					",\"offsetEnd\":" + offset +
@@ -1428,19 +1445,19 @@ public class RESTServices {
 	}
 
 	/**
-	 * Sends everything appended to the log since {@code currentOffset}, up to the log's size when the
-	 * call starts, as consecutive chunk events of at most {@code maxChunkBytes} each. The chunk size
-	 * bounds one event, not one poll (docs/CONFIGURATION.md): a single chunk per poll let a fast log
-	 * fall behind, and cut a finished pair's log off after its first chunk, because {@code complete}
-	 * followed it.
+	 * Sends what the log holds between {@code currentOffset} and {@code target}, its size when the poll
+	 * began, as consecutive chunk events of at most {@code maxChunkBytes} each, and at most
+	 * {@link #PAIR_LOG_STREAM_MAX_CHUNKS_PER_POLL} of them. The chunk size bounds one event, not one poll
+	 * (docs/CONFIGURATION.md): a single chunk per poll let a fast log fall behind, and cut a finished pair's
+	 * log off after its first chunk, because {@code complete} followed it. A caller left short of
+	 * {@code target} polls again at once.
 	 *
 	 * @return the offset after the last byte sent, or -1 if sending failed
 	 */
 	private static long drainAvailableBytesSse(int pairId, SseEventSink eventSink, Sse sse, File logFile,
-			long currentOffset, int maxChunkBytes) {
-		final long target = logFile.length();
+			long currentOffset, long target, int maxChunkBytes) {
 		long offset = currentOffset;
-		while (offset != target) {
+		for (int chunks = 0; offset != target && chunks < PAIR_LOG_STREAM_MAX_CHUNKS_PER_POLL; chunks++) {
 			long next = streamAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
 			if (next < 0L || next == offset) {
 				return next;
@@ -1471,6 +1488,9 @@ public class RESTServices {
 		private volatile long offset;
 		private volatile long lastStatusCheckAt = 0L;
 		private volatile long lastHeartbeatAt = 0L;
+		// Once the pair has finished, its status is not read again: the ticks that follow send the rest of
+		// its log, and then complete.
+		private volatile boolean pairFinished;
 
 		private PairLogStreamSession(int pairId, SseEventSink eventSink, Sse sse, String lastEventId) {
 			this.pairId = pairId;
@@ -1523,6 +1543,7 @@ public class RESTServices {
 				return;
 			}
 
+			long nextTickDelayMillis = -1L; // stays negative when the stream has ended
 			try {
 				long now = System.currentTimeMillis();
 				if (now - startedAt >= maxDurationMillis) {
@@ -1530,36 +1551,38 @@ public class RESTServices {
 					return;
 				}
 
-				if (now - lastStatusCheckAt >= statusPollIntervalMillis) {
+				if (!pairFinished && now - lastStatusCheckAt >= statusPollIntervalMillis) {
 					JobPair pair = JobPairs.getPair(pairId);
 					if (pair == null) {
 						sendAndCloseError("NOT_AVAILABLE", "not available");
 						return;
 					}
-					if (!pair.getStatus().getCode().incomplete()) {
-						if (logFile != null && logFile.exists()) {
-							offset = drainAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
-							if (offset < 0L) {
-								closeAndRelease();
-								return;
-							}
-						}
-						if (!sendSseEvent(pairId, eventSink, sse, null, "complete", "{\"pairId\":" + pairId + "}")) {
-							closeAndRelease();
-							return;
-						}
-						closeAndRelease();
-						return;
-					}
+					pairFinished = !pair.getStatus().getCode().incomplete();
 					lastStatusCheckAt = now;
 				}
 
+				boolean behind = false;
 				if (logFile != null && logFile.exists()) {
-					offset = drainAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
+					long target = logFile.length();
+					long before = offset;
+					offset = drainAvailableBytesSse(pairId, eventSink, sse, logFile, offset, target, maxChunkBytes);
 					if (offset < 0L) {
 						closeAndRelease();
 						return;
 					}
+					// Stopped by the cap, short of the log's size when the tick began. A tick that sent nothing is
+					// not behind, even if the size says so: a size can be stale, as NFS caches it, and ticking
+					// again at once would spin.
+					behind = offset != before && offset < target;
+				}
+
+				if (pairFinished && !behind) {
+					if (!sendSseEvent(pairId, eventSink, sse, null, "complete", "{\"pairId\":" + pairId + "}")) {
+						closeAndRelease();
+						return;
+					}
+					closeAndRelease();
+					return;
 				}
 
 				now = System.currentTimeMillis();
@@ -1571,12 +1594,17 @@ public class RESTServices {
 					lastHeartbeatAt = now;
 				}
 
-				schedule(pollIntervalMillis);
+				nextTickDelayMillis = behind ? 0L : pollIntervalMillis;
 			} catch (RuntimeException e) {
 				log.warn("streamPairLogEventsAsync", "Live log stream failed for pair " + pairId, e);
 				sendAndCloseError("STREAM_FAILURE", "stream unavailable");
 			} finally {
 				tickRunning.set(false);
+			}
+			// Only once the guard is released: a pool thread can start a tick due at once before this one
+			// returns, and a tick that found the guard held would put itself off by a whole poll interval.
+			if (nextTickDelayMillis >= 0L) {
+				schedule(nextTickDelayMillis);
 			}
 		}
 
@@ -1646,8 +1674,9 @@ public class RESTServices {
 			if (read <= 0) {
 				return offset;
 			}
-			offset += read;
-			String text = new String(bytes, 0, read, StandardCharsets.UTF_8).replace("\r\n", "\n");
+			int whole = wholeCharacterLength(bytes, read);
+			offset += whole;
+			String text = new String(bytes, 0, whole, StandardCharsets.UTF_8).replace("\r\n", "\n");
 			String data = "{\"pairId\":" + pairId +
 					",\"offsetStart\":" + start +
 					",\"offsetEnd\":" + offset +
@@ -1669,10 +1698,9 @@ public class RESTServices {
 	 * @return the offset after the last byte sent, or -1 if writing failed
 	 */
 	private static long drainAvailableBytes(int pairId, OutputStream output, File logFile, long currentOffset,
-			int maxChunkBytes) {
-		final long target = logFile.length();
+			long target, int maxChunkBytes) {
 		long offset = currentOffset;
-		while (offset != target) {
+		for (int chunks = 0; offset != target && chunks < PAIR_LOG_STREAM_MAX_CHUNKS_PER_POLL; chunks++) {
 			long next = streamAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
 			if (next < 0L || next == offset) {
 				return next;
@@ -1684,6 +1712,25 @@ public class RESTServices {
 			}
 		}
 		return offset;
+	}
+
+	/**
+	 * How many of the {@code read} bytes to send so that a chunk never ends inside a UTF-8 character: each
+	 * chunk is decoded on its own, so the two parts of a split character would each become U+FFFD. The 1 to 3
+	 * bytes of a character the read cut off start the next chunk. Bytes that hold no whole character, such
+	 * as a log that ends inside one, are sent as they are, so that the stream always advances.
+	 */
+	private static int wholeCharacterLength(byte[] bytes, int read) {
+		// A character is at most 4 bytes, so only the last 3 can belong to one the read cut off.
+		for (int back = 1; back <= Math.min(3, read); back++) {
+			int b = bytes[read - back] & 0xFF;
+			if ((b & 0xC0) == 0x80) {
+				continue; // a continuation byte: the character starts further back
+			}
+			int size = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : b >= 0xC0 ? 2 : 1;
+			return size > back && back < read ? read - back : read;
+		}
+		return read;
 	}
 
 	private static boolean writeSseComment(OutputStream output, String comment) {

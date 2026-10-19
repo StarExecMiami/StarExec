@@ -59,10 +59,14 @@ When live log streaming is enabled, protect benchmark throughput with these goal
 | Non-stream API p95 latency | < +20% vs baseline | > +50% vs baseline |
 | Benchmark pair throughput | >= 95% of baseline | < 90% of baseline |
 
-**Overhead model (rough):**
+**Overhead model (rough), for streams that have caught up with their logs:**
 - File polls/sec ≈ `activeStreams / (POLL_INTERVAL_MS / 1000)`
-- Status DB QPS ≈ `activeStreams / (STATUS_POLL_INTERVAL_MS / 1000)`
-- Max stream egress ≈ `activeStreams × READ_CHUNK_BYTES / (POLL_INTERVAL_MS / 1000)`
+- Status DB QPS ≈ `runningPairStreams / (STATUS_POLL_INTERVAL_MS / 1000)`; a finished pair's status is read once
+- Stream egress ≈ the rate at which the streamed logs grow
+
+A stream more than 32 chunks behind its log, such as one that starts at byte 0 of a long log, sends 32
+chunks of `READ_CHUNK_BYTES` per poll and polls again at once, so it sends as fast as its client reads
+until it has caught up. Each stream worker thread (4 to 16, by CPU count) sends one chunk at a time.
 
 ---
 

@@ -167,7 +167,7 @@ These settings tune the live pair log stream endpoint (`/services/jobs/pairs/{id
 | `STAREXEC_PAIR_LOG_STREAM_MAX_ACTIVE` | `100` | `30` | Max concurrent active live log streams |
 | `STAREXEC_PAIR_LOG_STREAM_POLL_INTERVAL_MS` | `1000` | `2500` | Interval for checking newly appended log bytes |
 | `STAREXEC_PAIR_LOG_STREAM_STATUS_POLL_INTERVAL_MS` | `5000` | `15000` | Interval for polling pair terminal status |
-| `STAREXEC_PAIR_LOG_STREAM_READ_CHUNK_BYTES` | `8192` | `8192` | Max bytes emitted per SSE chunk event |
+| `STAREXEC_PAIR_LOG_STREAM_READ_CHUNK_BYTES` | `8192` | `8192` | Max bytes emitted per SSE chunk event. One poll sends at most 32 chunks; a stream still behind its log polls again at once |
 | `STAREXEC_PAIR_LOG_STREAM_HEARTBEAT_SECONDS` | `15` | `25` | Heartbeat comment interval to keep connections alive |
 | `STAREXEC_PAIR_LOG_STREAM_MAX_DURATION_SECONDS` | `1800` | `900` | Max lifetime for one stream connection |
 | `STAREXEC_PAIR_LOG_STREAM_RETRY_AFTER_SECONDS` | `10` | `10` | Retry-After value when stream capacity is saturated |
