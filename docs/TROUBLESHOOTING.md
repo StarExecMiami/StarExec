@@ -1039,6 +1039,25 @@ kubectl logs -n starexec deploy/<release> | grep -E \
 
 Deleting pods is not the normal remediation, and the backend deliberately holds no permission to do it. A pair that will not rerun is reporting that the cluster still cannot account for its previous execution — resolve that, and the pair proceeds on the next pass.
 
+### Podman pair will not rerun, or a job or user cannot be deleted
+
+**Problem:** A manual rerun reports that it did not complete, deleting a job leaves its pairs recorded as running, or deleting a user reports that one or more active jobs could not be safely stopped and retired.
+
+**Cause:** A rerun, a job deletion and a user deletion each retire a pair's execution, so StarExec first asks the backend to stop it and to confirm that it can no longer run or write a result. The Podman backend stops the container it started for that execution, then lists every container labelled with the execution id. It withholds the confirmation while one of them is running, paused, restarting or cannot be inspected, or has exited without a `starexec.attempt` label and its result is not recorded yet. The pair is then left as it was, so a replacement never runs beside a container that may still write.
+
+**Diagnostics:**
+
+```bash
+# What the application is waiting on
+podman logs starexec-app 2>&1 | grep -E "is not confirmed stopped|could not be confirmed stopped|refusing to delete job"
+
+# The containers the log line names (use its execution id)
+podman ps -a --filter label=starexec.exec.id=<execId> \
+  --format '{{.Names}} {{.Status}} pair={{index .Labels "starexec.pair.id"}} attempt={{index .Labels "starexec.attempt"}}'
+```
+
+The backend does not stop a container it is not tracking, even one that carries the execution id: execution ids start again with each application start, so that container may belong to another pair. Its `starexec.pair.id` label says which pair it runs. Once it has exited and its result is recorded, or it is gone, a rerun or user deletion asked for again proceeds, and a refused job deletion completes on its own: it is retried every five minutes. An exited container without an attempt label clears as soon as the monitor records its result.
+
 ## Performance Issues
 
 ### Slow Startup

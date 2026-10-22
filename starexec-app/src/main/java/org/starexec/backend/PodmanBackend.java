@@ -2459,6 +2459,155 @@ public class PodmanBackend implements Backend {
     }
 
     /**
+     * Stops an execution and reports whether the container engine shows that nothing of it
+     * can still run or write unfenced.
+     *
+     * <p>Without this override the interface default answered {@code UNPROVEN} for every
+     * execution, so on this backend no pair could be rerun, no running job deleted and no
+     * user with a running job deleted. {@link #killPair(int)}'s boolean cannot stand in for
+     * the answer: it is false when the container is already gone or has exited, which is the
+     * safe case, and also when the stop failed.
+     *
+     * <p>The answer comes from a census of the engine by the {@code starexec.exec.id} label,
+     * taken after the stop, and never from this backend's maps: a restart empties them, and a
+     * finished pair's container is untracked once ingested, so absent tracking is evidence of
+     * nothing. The execution is safe only when every container carrying its exec id is
+     * <ul>
+     *   <li>gone,</li>
+     *   <li>{@code created}: never started. The submission that created it returned before
+     *       the pair's exec id was stored, so nothing will start it, or</li>
+     *   <li>{@code exited} or {@code dead}, and either names no pair (a maintenance
+     *       container) or carries {@code starexec.attempt}, so a late ingestion is fenced on
+     *       that attempt (#185). Either way nothing can record its result unfenced.</li>
+     * </ul>
+     * Anything else is {@code UNPROVEN}: a running, paused or restarting container, or one
+     * whose engine leaves any of those three flags unset; any other state; an exited pair
+     * container without an attempt label, even one the monitor quarantined, because the
+     * quarantine is held in memory and after a restart the monitor can ingest the container
+     * again; and any listing or inspection failure. A container the census finds but this
+     * backend does not track is reported, never stopped: exec ids restart with each
+     * application lifetime, so it may belong to another pair.
+     */
+    @Override
+    public KillOutcome killPairConfirmed(int execId) {
+        killPair(execId);
+        return observeExecutionSafety(execId);
+    }
+
+    /** The census behind {@link #killPairConfirmed(int)}; package-private for tests. */
+    KillOutcome observeExecutionSafety(int execId) {
+        DockerClient client = dockerClient;
+        if (client == null) {
+            log.warn(
+                "No container engine client; cannot establish that execId " + execId +
+                    " stopped"
+            );
+            return KillOutcome.UNPROVEN;
+        }
+        String execIdLabel = String.valueOf(execId);
+        List<Container> listed;
+        try {
+            // One label filter, and every label is checked again below, so the census does
+            // not depend on how an engine combines filters or whether it applies them.
+            listed = client
+                .listContainersCmd()
+                .withShowAll(true)
+                .withLabelFilter(Collections.singletonMap(LABEL_EXEC_ID, execIdLabel))
+                .exec();
+        } catch (Exception e) {
+            log.warn(
+                "Could not list containers for execId " + execId +
+                    "; cannot establish that it stopped",
+                e
+            );
+            return KillOutcome.UNPROVEN;
+        }
+        if (listed == null) {
+            log.warn(
+                "Container listing for execId " + execId + " returned no body; cannot" +
+                    " establish that it stopped"
+            );
+            return KillOutcome.UNPROVEN;
+        }
+        for (Container container : listed) {
+            Map<String, String> labels = container.getLabels();
+            if (labels == null
+                    || !"true".equals(labels.get(LABEL_MANAGED))
+                    || !execIdLabel.equals(labels.get(LABEL_EXEC_ID))) {
+                continue;
+            }
+            String unsafe = whyItMayStillRunOrWrite(client, container.getId(), labels);
+            if (unsafe != null) {
+                log.warn(
+                    "execId " + execId + " is not confirmed stopped: container " +
+                        container.getId() + " " + unsafe + ". OPERATOR ACTION: inspect" +
+                        " the containers labelled " + LABEL_EXEC_ID + "=" + execId + "."
+                );
+                return KillOutcome.UNPROVEN;
+            }
+        }
+        return KillOutcome.CONFIRMED_SAFE;
+    }
+
+    /**
+     * Whether ingestion could record this container's result against a pair. Both ingestion
+     * paths skip a container whose {@code starexec.pair.id} label is absent, malformed or not
+     * positive, which is what maintenance containers carry.
+     */
+    private static boolean namesAPair(Map<String, String> labels) {
+        try {
+            return Integer.parseInt(labels.get(LABEL_PAIR_ID)) > 0;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    /** @return null when the container can neither run nor write unfenced, else why it may */
+    private String whyItMayStillRunOrWrite(
+        DockerClient client,
+        String containerId,
+        Map<String, String> labels
+    ) {
+        com.github.dockerjava.api.command.InspectContainerResponse.ContainerState state;
+        try {
+            var inspection = client.inspectContainerCmd(containerId).exec();
+            state = inspection == null ? null : inspection.getState();
+        } catch (NotFoundException e) {
+            return null; // removed after the listing
+        } catch (Exception e) {
+            return "could not be inspected (" + e.getMessage() + ")";
+        }
+        if (state == null) {
+            return "has no readable state";
+        }
+        String status = state.getStatus();
+        // Each flag must be reported false: an unset flag is no report of a stop.
+        if (!Boolean.FALSE.equals(state.getRunning())
+                || !Boolean.FALSE.equals(state.getPaused())
+                || !Boolean.FALSE.equals(state.getRestarting())) {
+            return "is " + status + " (running=" + state.getRunning() + ", paused=" +
+                state.getPaused() + ", restarting=" + state.getRestarting() + ")";
+        }
+        if ("created".equals(status)) {
+            return null;
+        }
+        if (!"exited".equals(status) && !"dead".equals(status)) {
+            return "is in state " + status;
+        }
+        if (!namesAPair(labels)) {
+            return null; // ingestion records no result from it
+        }
+        if (parseAttemptLabel(labels) != null) {
+            return null; // a late ingestion is fenced on that attempt
+        }
+        // Not even when the monitor quarantined it: the quarantine is held in memory, and
+        // after a restart the monitor can ingest the container again, unfenced, into
+        // whatever attempt the pair is on by then.
+        return "has exited without a valid " + LABEL_ATTEMPT + " label, so its result" +
+            " could still be ingested unfenced";
+    }
+
+    /**
      * Kills all StarExec job containers.
      */
     @Override
