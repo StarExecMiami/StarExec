@@ -116,9 +116,15 @@ postgres:
     database: "database"
     rootPassword: "rootPassword"
 
-  # Persistence for PostgreSQL
+  # Persistence for the embedded PostgreSQL (postgres.host: localhost). With
+  # enabled: false its data lives in an emptyDir, which starts empty whenever the
+  # pod is recreated (upgrade, node drain, eviction): every account, solver,
+  # benchmark and job result is lost. Turn it off only for a database you can
+  # afford to lose; values-ci.yaml and values-dev.yaml turn it off. An empty
+  # storageClass uses the cluster's default StorageClass; set one if the cluster
+  # has no default.
   persistence:
-    enabled: false
+    enabled: true
     storageClass: ""
     size: 20Gi
 

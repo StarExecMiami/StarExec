@@ -208,14 +208,28 @@ For a single-node MicroK8s deployment that uses this machine as the only compute
 helm repo add starexec https://starexecmiami.github.io/StarExec
 helm repo update
 
-# Install with secure configuration (the chart refuses to render without
-# postgres.existingSecret or explicit dev credentials)
+# The chart refuses to render without postgres.existingSecret or explicit
+# dev credentials. Create the secret first; the chart reads its keys user,
+# password and database.
+kubectl create namespace starexec
+kubectl -n starexec create secret generic starexec-postgres-credentials \
+  --from-literal=user=starexec \
+  --from-literal=password="$(openssl rand -base64 32)" \
+  --from-literal=database=starexec
+
 helm install starexec starexec/starexec \
-  --create-namespace \
   -n starexec \
-  --set postgres.password="$(openssl rand -base64 32)" \
-  --set postgres.rootPassword="$(openssl rand -base64 32)"
+  --set postgres.existingSecret=starexec-postgres-credentials
 ```
+
+The embedded PostgreSQL (`postgres.host: localhost`, the default) keeps its data on
+its own PersistentVolumeClaim, `postgres.persistence.size` (20Gi) from
+`postgres.persistence.storageClass` or, when that is empty, the cluster's default
+StorageClass. On a cluster with neither, the claim stays Pending and so does the pod.
+`postgres.persistence.enabled=false` puts the database in an emptyDir instead, which
+starts empty whenever the pod is recreated (upgrade, node drain, eviction): every
+account, solver, benchmark and job result is lost. `values-ci.yaml` and
+`values-dev.yaml` set it to false.
 
 #### From Local Chart
 
@@ -267,7 +281,6 @@ persistence:
   enabled: true
   storageClass: "standard"
   appDataSize: 50Gi
-  postgresDataSize: 20Gi
 
 # Ingress (optional)
 ingress:
