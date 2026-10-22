@@ -16,6 +16,8 @@ import java.util.regex.Pattern;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.starexec.test.unit.jobs.JobscriptBlocks.indexOfLineStartingWith;
+import static org.starexec.test.unit.jobs.JobscriptBlocks.stageLoop;
 
 /**
  * A solver the kernel stops at its container's memory limit.
@@ -123,6 +125,27 @@ public class ContainerOomKillTest {
 		String out = probe.runChecks(WATCHER_CPU_EXCEEDED, VAR_NO_BREACH, "0", "1");
 
 		assertEquals(out, EXCEED_CPU, probe.status());
+	}
+
+	/**
+	 * The kernel can stop the stage's deadlock watchdog as well as the solver. A watchdog gone without firing was
+	 * read as a deadlock, which the checks record as a wall-clock timeout before they reach the memory check.
+	 * The jobscript's own arming and deadlock check run here, with the watchdog killed before it can fire.
+	 */
+	@Test
+	public void aWatchdogKilledWithTheSolverDoesNotHideTheBreach() throws Exception {
+		Probe probe = new Probe(folder, true);
+		probe.cgroupV2(1, CONTAINER_LIMIT_BYTES);
+
+		String out = probe.runChecksAfter("STAGE_WATCHDOG_TIMEOUT=3600\nJOB_PAIR_EXTRA_TIME=120\nSANDBOX_PARAM=sandbox\n"
+				+ JobscriptBlocks.arming() + "\n"
+				+ JobscriptBlocks.endWatchdogBeforeItFires("KILL")
+				+ JobscriptBlocks.deadlockCheck() + "\n",
+				WATCHER_KILLED_BY_SIGNAL, VAR_NO_BREACH, "0", "1");
+
+		JobscriptBlocks.assertEndedBeforeItFired(out);
+		assertEquals("a memory breach, not a wall-clock timeout:\n" + out, EXCEED_MEM, probe.status());
+		assertEquals("the stage that was running", 2, probe.stage());
 	}
 
 	// ------------------------------------------------------------ where the count comes from
@@ -241,28 +264,6 @@ public class ContainerOomKillTest {
 
 	// ----------------------------------------------------------------------- helpers
 
-	/** The body of the jobscript's stage loop. */
-	private static List<String> stageLoop() throws Exception {
-		List<String> lines = Files.readAllLines(SGE.resolve("jobscript"));
-		int start = -1;
-		for (int i = 0; i < lines.size(); i++) {
-			if (lines.get(i).startsWith("for (( STAGE_INDEX")) {
-				start = i;
-				break;
-			}
-		}
-		assertTrue("the stage loop must exist", start >= 0);
-		int end = -1;
-		for (int i = start; i < lines.size(); i++) {
-			if (lines.get(i).equals("done")) {
-				end = i;
-				break;
-			}
-		}
-		assertTrue("the stage loop must end", end > start);
-		return lines.subList(start + 1, end);
-	}
-
 	/**
 	 * The jobscript's limit checks as they run after the solver, from {@code ERROR_DETECTED=false} to the disk
 	 * quota check, so the tests run the shipped code rather than a copy of it.
@@ -284,15 +285,6 @@ public class ContainerOomKillTest {
 		String block = String.join("\n", loop.subList(start, end));
 		assertFalse("the checks must run as shipped, with no template placeholder", block.contains("$$"));
 		return block;
-	}
-
-	private static int indexOfLineStartingWith(List<String> lines, String prefix) {
-		for (int i = 0; i < lines.size(); i++) {
-			if (lines.get(i).strip().startsWith(prefix)) {
-				return i;
-			}
-		}
-		return -1;
 	}
 
 	/** Runs shell code against the shipped functions.bash, with the jobscript's EXIT trap and a fake cgroup. */
@@ -332,8 +324,14 @@ public class ContainerOomKillTest {
 			Files.writeString(memory.resolve("memory.limit_in_bytes"), limitBytes + "\n");
 		}
 
-		/** Runs the jobscript's limit checks on these runsolver files and these counts. */
+		/** Runs the jobscript's limit checks on these runsolver files and these counts, with no deadlock. */
 		String runChecks(String watcher, String var, String before, String after) throws Exception {
+			return runChecksAfter("JOB_PAIR_DEADLOCKED=false\n", watcher, var, before, after);
+		}
+
+		/** The same, after {@code deadlock}: shell code that sets JOB_PAIR_DEADLOCKED, as the jobscript does. */
+		String runChecksAfter(String deadlock, String watcher, String var, String before, String after)
+				throws Exception {
 			Path watchFile = root.resolve("watcher.out");
 			Path varFile = root.resolve("var.out");
 			Files.writeString(watchFile, watcher);
@@ -346,7 +344,7 @@ public class ContainerOomKillTest {
 					+ "CURRENT_STAGE_MEMORY=1024\n"
 					+ "WATCHFILE=\"" + watchFile + "\"\n"
 					+ "VARFILE=\"" + varFile + "\"\n"
-					+ "JOB_PAIR_DEADLOCKED=false\n"
+					+ deadlock
 					+ "OOM_KILLS_BEFORE_SOLVER='" + before + "'\n"
 					+ "OOM_KILLS_AFTER_SOLVER='" + after + "'\n"
 					+ limitChecks() + "\n"

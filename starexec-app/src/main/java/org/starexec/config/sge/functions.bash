@@ -857,8 +857,25 @@ function cleanForNextStage {
 	rm -f "$LOCAL_BENCH_PATH"
 }
 
+# Where killDeadlockedJobPair records that it fired. In the pair's working directory, which
+# container mode creates empty for each execution; the jobscript also removes the file before
+# arming each stage's watchdog, so it can only have been left by the current stage's.
+#
+# A function rather than a variable: the watchdog computes the path inside a command
+# substitution, so even a missing WORKING_DIR (set -u) fails only that write, never the kill.
+function deadlockWatchdogFiredFile {
+	echo "$WORKING_DIR/deadlock-watchdog-fired"
+}
+
+# Whether the current stage's watchdog has fired. Read from the record it leaves, not from
+# whether it is still running: a watchdog can end without firing -- killed by the kernel or a
+# stray signal, or ended by an error of its own -- and one that has fired may still be killing.
+function deadlockWatchdogFired {
+	[ -e "$(deadlockWatchdogFiredFile)" ]
+}
+
 # Kills all of a sandboxes processes if their job pair becomes deadlocked
-# and time out.
+# and time out. When it fires, it leaves deadlockWatchdogFiredFile behind.
 # Input:
 #    $1 - The timeout of the jobpair, currently the wallclock
 #    $2 - The extra time we give to the jobpair after the wallclock timeout
@@ -895,6 +912,12 @@ function killDeadlockedJobPair {
 	WATCHDOG_SLEEP_PID=$!
 	wait "$WATCHDOG_SLEEP_PID" || true
 	trap - TERM
+
+	# Recorded before anything is killed: the reap below ends the solver, and the jobscript's
+	# check after the solver must find the record by then. Not fatal, like the log lines: a
+	# failed write must not stop the kill. The stage is then judged on its own output, which
+	# after a reap is usually missing, so it ends as ERROR_RUNSCRIPT.
+	{ : > "$(deadlockWatchdogFiredFile)"; } 2>/dev/null || log "killDeadlockedJobPair: could not record that it fired" || true
 
 	log "killDeadlockedJobPair: About to kill jobpair run by $CURRENT_USER because it has exceeded it's total allotted runtime." || true
 
