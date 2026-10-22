@@ -556,8 +556,12 @@ make k8s-status
 ```bash
 # Control script behavior
 KUBECONFIG=/path/to/kubeconfig make k8s-detect
-DRY_RUN=true make k8s-setup
+make k8s-setup-dry-run    # preview what make k8s-setup would change
 ```
+
+`DRY_RUN` does not reach `make k8s-setup`: with or without it, the target labels
+the worker nodes, creates the namespace, and creates the data PVC when it finds a
+storage class. Preview with `make k8s-setup-dry-run`.
 
 When the default `kubectl` context is broken but `microk8s kubectl` works,
 the Makefile now exports a temporary kubeconfig from `microk8s config` for
