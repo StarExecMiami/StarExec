@@ -91,9 +91,11 @@ Use a secrets management solution:
 #### Option 1: Kubernetes Secrets
 
 ```bash
-# Create secret
+# Create secret: the chart reads the keys user, password and database
 kubectl create secret generic starexec-db-secret \
+  --from-literal=user=starexec \
   --from-literal=password="$(openssl rand -base64 32)" \
+  --from-literal=database=starexec \
   -n starexec
 
 # Reference in Helm values
@@ -125,20 +127,24 @@ export STAREXEC_DB_PASSWORD_FILE=/etc/starexec/db-password
 
 ### Secret Rotation
 
-Rotate secrets regularly (every 90 days):
+Rotate secrets regularly (every 90 days). On Quokka, Jenkins rewrites the secret
+`starexec-postgres-credentials` from its own credential on every deploy: change the password
+in that Jenkins credential too, or the next deploy restores the old password and the app can no
+longer log in.
 
 ```bash
 # 1. Generate new password
 NEW_PASSWORD="$(openssl rand -base64 32)"
 
-# 2. Update database
-make db-shell
-ALTER USER starexec WITH PASSWORD 'new-password';
+# 2. Update the database role (embedded PostgreSQL; psql substitutes :'pw')
+kubectl -n starexec exec -i deploy/starexec -c postgres -- \
+  psql -U starexec -d starexec -v ON_ERROR_STOP=1 -v pw="$NEW_PASSWORD" <<'SQL'
+ALTER USER starexec WITH PASSWORD :'pw';
+SQL
 
-# 3. Update secret
-kubectl create secret generic starexec-db-secret \
-  --from-literal=password="$NEW_PASSWORD" \
-  --dry-run=client -o yaml | kubectl apply -f -
+# 3. Update only the password key: recreating the secret from one literal drops user and database
+kubectl -n starexec patch secret starexec-db-secret --type merge \
+  -p "{\"stringData\":{\"password\":\"$NEW_PASSWORD\"}}"
 
 # 4. Restart application
 kubectl rollout restart deployment/starexec -n starexec
