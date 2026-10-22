@@ -279,13 +279,14 @@ Enforce container resource limits:
 ```yaml
 # Helm values
 resources:
-  limits:
-    memory: 4Gi
-    cpu: 2
-    ephemeral-storage: 10Gi
-  requests:
-    memory: 2Gi
-    cpu: 1
+  app:
+    limits:
+      memory: 4Gi
+      cpu: 2
+      ephemeral-storage: 10Gi
+    requests:
+      memory: 2Gi
+      cpu: 1
 ```
 
 ### Image Security

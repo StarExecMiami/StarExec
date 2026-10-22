@@ -830,8 +830,8 @@ kubectl describe pod <pod-name> -n starexec
    kubectl top nodes
    
    # Reduce resource requests
-   helm upgrade starexec starexec/starexec \
-     --set resources.requests.memory=1Gi
+   helm upgrade starexec starexec/starexec --reuse-values \
+     --set resources.app.requests.memory=1Gi
    ```
 
 2. **PVC not bound**
@@ -1067,16 +1067,23 @@ make logs-postgres | grep migration
 # Check memory usage
 podman stats starexec-app
 
-# Check JVM heap
-podman exec starexec-app jstat -gc 1
+# Check the container's memory limit, current use and OOM kills (cgroup v2)
+podman exec starexec-app sh -c 'cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current; grep oom_kill /sys/fs/cgroup/memory.events'
+
+# On Kubernetes, a container the kernel killed shows "Reason: OOMKilled" under "Last State"
+# once it has restarted, or under "State" until it does
+kubectl describe pod <pod-name> -n starexec
 ```
+
+The image ships a JRE, without `jstat` or `jcmd`. Its JVM heap may grow to 2048 MiB (`-Xmx2048m`), so a memory limit at or below that leaves nothing for the memory the JVM uses outside the heap.
 
 **Solution:**
 
+Raise the limit, or lower `-Xmx` through `env.JAVA_OPTS` (see [Java System Properties](CONFIGURATION.md#java-system-properties)), so that the limit stays well above the heap:
+
 ```bash
-# Tune JVM settings
-helm upgrade starexec starexec/starexec \
-  --set javaOpts="-Xmx2g -XX:+UseG1GC"
+helm upgrade starexec starexec/starexec --reuse-values \
+  --set resources.app.limits.memory=4Gi
 ```
 
 ### Jobs Running Slowly

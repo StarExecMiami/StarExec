@@ -217,9 +217,10 @@ postgres:
   rootPassword: "your-secure-root-password"
   
 resources:
-  limits:
-    memory: 4Gi
-    cpu: 2
+  app:
+    limits:
+      memory: 4Gi
+      cpu: 2
 ```
 
 Install with custom values:
