@@ -24,7 +24,8 @@ kubectl get pods -n starexec
 # Restart everything
 make stop && make start
 
-# Complete reset (⚠️ deletes data)
+# Complete reset: deletes every volume of the environment (database and
+# files) and the image. Back up first: make stop && make volumes-backup ENV=dev
 make reset ENV=dev
 
 # Check configuration
@@ -317,9 +318,13 @@ make: *** [Makefile:231: build] Error 125
    ```bash
    make cache-images
    ```
-3. Retry your build:
+3. Retry the build, then deploy it. `LOCAL=1` deploys the image you just
+   built; without it, `make start` replaces it with the registry's `latest`
+   whenever the registry is reachable:
    ```bash
-   make stop nuke build start status ENV=dev FORCE=1
+   make build
+   make start ENV=dev LOCAL=1
+   make status
    ```
 
 **If you have already run `make cache-images`:**
@@ -412,9 +417,11 @@ podman inspect starexec-app | grep -A 5 State
    # Check volume exists
    podman volume ls | grep starexec
    
-   # Recreate volumes
-   make volumes-delete ENV=dev
+   # Create any missing volumes; existing volumes keep their data
    make volumes-create ENV=dev
+
+   # Give the PostgreSQL volume back to the postgres user (999:999)
+   make volumes-fix-permissions ENV=dev
    ```
 
 ## Database Issues
@@ -537,23 +544,33 @@ Only terminate sessions you recognize as stale/non-critical.
 # 1) Stop deployment
 make stop
 
-# 2) Restore known-good backup (preferred)
-make volumes-restore ENV=dev
+# 2) Keep a file-level copy of the damaged volumes: the restore writes over
+#    them, and they hold everything written since the last backup
+make volumes-backup ENV=dev
 
-# 3) Start again
-make start
+# 3) Restore a known-good backup (preferred). The copy from step 2 is now
+#    the newest set, so name the good one
+make volumes-restore ENV=dev RESTORE_TIMESTAMP=<timestamp of the last good set>
+
+# 4) Start again with the same image
+make start ENV=dev LOCAL=1
 ```
 
 If no valid backup exists, inspect logs first (`make logs-postgres`). Use `pg_resetwal` only as a last resort and only with full awareness of data-loss risk.
 
-**For corrupted state:**
+**To start over with empty volumes:** this deletes every volume of the
+environment, so the uploaded solvers, benchmarks and job output go with the
+database. It also removes the legacy `starexec-data` and `starexec-postgres`
+volumes if they exist, whatever `ENV` is. There is no database-only reset:
+the files on the data volume belong to rows in the database. Keep a copy of
+the damaged volumes first:
 
 ```bash
-# ⚠️ DESTRUCTIVE: Complete database reset
 make stop
-make volumes-delete ENV=dev
+make volumes-backup ENV=dev    # file-level copy of all five volumes
+make volumes-delete ENV=dev    # asks you to type DELETE
 make volumes-create ENV=dev
-make start  # Migrations run automatically
+make start ENV=dev             # migrations run on startup
 ```
 
 ### Database Locked
@@ -606,9 +623,11 @@ podman volume inspect starexec-dev-data
 **Solution:**
 
 ```bash
-# Recreate volumes
-make volumes-delete ENV=dev
+# Create any missing volumes; existing volumes keep their data
 make volumes-create ENV=dev
+
+# Give the PostgreSQL volume back to the postgres user (999:999)
+make volumes-fix-permissions ENV=dev
 ```
 
 ### Port Already in Use
@@ -1151,8 +1170,8 @@ make stop
 # Restore
 make volumes-restore ENV=dev
 
-# Start fresh
-make start
+# Start again with the same image
+make start ENV=dev LOCAL=1
 ```
 
 ## Known Issues

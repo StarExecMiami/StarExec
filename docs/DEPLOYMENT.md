@@ -150,7 +150,7 @@ Before deploying to production:
 - [ ] **Change default password**: `export STAREXEC_DB_PASSWORD="secure-value"`
 - [ ] **Create env-specific values file**: `cp charts/starexec/values-podman.yaml charts/starexec/values-podman-prod.yaml`
 - [ ] **Create volumes**: `make volumes-create ENV=prod`
-- [ ] **Configure backups**: Set up automated `make volumes-backup ENV=prod`
+- [ ] **Configure backups**: Set up `make volumes-backup ENV=prod`, with the stack stopped for a consistent database copy (see [VOLUMES.md](VOLUMES.md#automated-backup))
 - [ ] **Set resource limits**: Configure CPU/memory in `values-podman-prod.yaml`
 - [ ] **Enable TLS**: Configure reverse proxy (nginx, traefik)
 - [ ] **Review security**: Follow [Security Guide](SECURITY.md)
@@ -181,7 +181,8 @@ make stop && make build-fresh && make start
 # View configuration
 make config-show ENV=dev
 
-# Complete reset (⚠️ deletes data)
+# Complete reset: deletes every volume of the environment (database and
+# files) and the image
 make reset ENV=dev
 ```
 
@@ -347,11 +348,18 @@ helm upgrade starexec starexec/starexec \
 
 ### Uninstalling
 
+`helm uninstall` deletes the PersistentVolumeClaims the chart created, and with
+them the volumes when their reclaim policy is `Delete` (the default for a
+StorageClass). Every values profile except `values-prod.yaml` lets the chart
+create its claims; `values-prod.yaml` uses claims created outside the chart,
+which `helm uninstall` leaves in place. Back up first (see
+[Backup and Disaster Recovery](#backup-and-disaster-recovery)).
+
 ```bash
-# Remove release (keeps PVCs)
+# Remove the release, and the PVCs the chart created
 helm uninstall starexec -n starexec
 
-# Remove namespace and all resources
+# Remove the namespace and everything in it, PVCs included
 kubectl delete namespace starexec
 ```
 
@@ -418,16 +426,19 @@ affinity:
 ### Podman
 
 ```bash
-# Create backup
+# Create backup, with the stack stopped so the database copy is consistent
+make stop
 make volumes-backup ENV=prod
+# Restart production; VOLUMES.md (Manual Backup) explains each setting
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 
-# Backups stored in ./backups/
+# Backups stored in ./backups/ as starexec-prod-full-<timestamp>-<volume>.tar.gz
 ls -la backups/
 
-# Restore from backup
+# Restore a backup set (data and database volumes), named by its timestamp
 make stop
-make volumes-restore ENV=prod BACKUP=backups/starexec-prod-20250101-120000.tar.gz
-make start
+make volumes-restore ENV=prod RESTORE_TIMESTAMP=20250101-120000
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 ```
 
 ### Kubernetes

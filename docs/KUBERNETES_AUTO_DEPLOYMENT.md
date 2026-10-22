@@ -280,7 +280,7 @@ make k8s-generate-values        # Generate Helm values
 # Deployment
 make k8s-deploy-auto            # Complete automated deployment
 make deploy-k8s ENV=prod        # Deploy with values
-make undeploy-k8s               # Remove deployment
+make undeploy-k8s               # helm uninstall: also deletes the PVCs the chart created
 
 # Status
 make k8s-status                 # Show cluster and deployment status
