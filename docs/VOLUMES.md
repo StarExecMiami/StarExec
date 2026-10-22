@@ -117,7 +117,13 @@ persistence:
   backendSize: 10Gi
   sandboxSize: 10Gi
   workSize: 10Gi
-  postgresDataSize: 50Gi
+
+# The embedded PostgreSQL's own claim (postgres.host: localhost)
+postgres:
+  persistence:
+    enabled: true          # false = emptyDir: the database is lost when the pod is recreated
+    storageClass: "fast-ssd"
+    size: 50Gi
 ```
 
 ---

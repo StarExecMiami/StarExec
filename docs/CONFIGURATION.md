@@ -248,7 +248,6 @@ persistence:
   enabled: true
   storageClass: "fast-ssd"
   appDataSize: 100Gi
-  postgresDataSize: 100Gi
 
 backend:
   type: kubernetes
