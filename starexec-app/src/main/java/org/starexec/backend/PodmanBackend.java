@@ -268,6 +268,8 @@ public class PodmanBackend implements Backend {
      */
     @Override
     public void initialize(String backendRoot) {
+        // Set once the engine answers: a failure after that is not a connection problem.
+        boolean engineAnswered = false;
         try {
             log.info("Initializing PodmanBackend...");
 
@@ -289,9 +291,10 @@ public class PodmanBackend implements Backend {
                 .versionCmd()
                 .exec()
                 .getVersion();
+            engineAnswered = true;
             log.info(
-                "PodmanBackend initialized successfully. Engine version: " +
-                    engineVersion
+                "Connected to the container engine at " + containerSocketPath +
+                    ". Engine version: " + engineVersion
             );
 
             // Check for job runner image if using prebuilt mode
@@ -340,6 +343,10 @@ public class PodmanBackend implements Backend {
             startContainerEventListener();
 
             initialized = true;
+            log.info(
+                "PodmanBackend initialized successfully. Engine version: " +
+                    engineVersion
+            );
         } catch (CpuPartitionManager.UnsafePartitionConfigurationException e) {
             // Not a connection problem, so not reported as one: the configuration asks for
             // isolation it cannot have, and running unpinned instead would publish
@@ -353,7 +360,17 @@ public class PodmanBackend implements Backend {
         } catch (Exception e) {
             // Wrap and throw up stack; logging/handling deferred to caller.
             // Avoid double-logging by NOT logging here + throwing with same message.
-            String errorMessage = 
+            if (engineAnswered) {
+                // The socket works: a later step failed (image check, partitions, queues,
+                // reconciliation), so name that step's error instead of the socket checklist.
+                throw new IllegalStateException(
+                    "Podman backend not started: the container engine at " + containerSocketPath +
+                        " answered, but a start-up step failed: " + e +
+                        ". No Podman job runs until this is fixed and StarExec is restarted.",
+                    e
+                );
+            }
+            String errorMessage =
                 "Could not connect to the container engine at: " + containerSocketPath + "\n" +
                 "Please verify:\n" +
                 "  1. Socket service is running: systemctl --user status podman.socket\n" +
