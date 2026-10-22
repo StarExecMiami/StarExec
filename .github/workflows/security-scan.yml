@@ -30,6 +30,14 @@ on:
 permissions:
   contents: read
 
+# A burst of merges used to start one full scan per merge, all refreshing the
+# NVD database at once. The newest commit contains the older ones, so a newer
+# run on the same ref supersedes any run still in progress. The event name keeps
+# a push from cancelling the weekly scheduled scan.
+concurrency:
+  group: security-scan-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   dependency-scan:
     name: Dependency Vulnerability Scan
@@ -66,8 +74,10 @@ jobs:
           npm audit --package-lock-only --json > npm-audit.json || true
           python3 .github/scripts/npm_audit_gate.py npm-audit.json package-lock.json .github/npm-audit-exceptions.json
       
+      # Daily, not weekly: a cache key cannot be overwritten, so with a weekly key
+      # every run re-downloaded all NVD changes since the first save of the week.
       - name: Set Dependency-Check cache key
-        run: echo "CACHE_EPOCH=$(date +'%Y-W%V')" >> "$GITHUB_ENV"
+        run: echo "CACHE_EPOCH=$(date -u +'%Y-%m-%d')" >> "$GITHUB_ENV"
 
       - name: Restore Dependency-Check database
         id: dependency-check-cache
@@ -75,10 +85,9 @@ jobs:
         with:
           path: ${{ env.DC_DATA_DIR }}
           key: ${{ runner.os }}-dependency-check-v2-${{ env.CACHE_EPOCH }}
-          # A prior weekly cache is only an update input. The strict update
+          # A prior day's cache is only an update input. The strict update
           # step below must succeed before the vulnerability scan can run.
           restore-keys: |
-            ${{ runner.os }}-dependency-check-v2-${{ env.CACHE_EPOCH }}-
             ${{ runner.os }}-dependency-check-v2-
 
       - name: Update Dependency-Check database
