@@ -360,17 +360,27 @@ Jenkins.
 
 ### Upgrading
 
-```bash
-# Upgrade with new values
-helm upgrade starexec starexec/starexec \
-  -f my-values.yaml \
-  -n starexec
+On Quokka, upgrade through the Jenkins job above, never with `helm upgrade` by
+hand. Elsewhere, upgrade from the chart in your checkout and pass the complete
+values the release runs with. A `helm upgrade` that passes any `-f` or `--set`
+starts again from the chart's defaults: every earlier value the command does
+not repeat is dropped, an image digest set with `--set` included.
 
-# Upgrade to specific version
-helm upgrade starexec starexec/starexec \
-  --version 1.2.0 \
-  -n starexec
+```bash
+# Values the release runs with now
+helm get values starexec -n starexec
+
+# Upgrade with the whole values file and every --set the release uses
+helm upgrade starexec ./charts/starexec -n starexec \
+  -f charts/starexec/values-prod.yaml \
+  --set-string image.tag=sha-<full-git-sha> \
+  --set-string image.digest=sha256:<digest>
 ```
+
+The chart's version is always `0.1.0`, and each publish to the chart
+repository replaces everything published before, so `--version` cannot select
+another chart. To deploy an older StarExec, check out that commit and deploy
+its chart.
 
 ### Uninstalling
 
@@ -525,13 +535,14 @@ stops without it.
 
 ### Kubernetes
 
+On Quokka, run the Jenkins job. Elsewhere, upgrade as described under
+[Upgrading](#upgrading): a `helm upgrade` with no values keeps the release's
+values, its image included, so it does not move StarExec to a new version.
+Dump the database first (see
+[Backup and Disaster Recovery](#backup-and-disaster-recovery)): a rollback
+cannot undo a migration.
+
 ```bash
-# Update Helm repo
-helm repo update
-
-# Upgrade release
-helm upgrade starexec starexec/starexec -n starexec
-
 # Watch rollout
 kubectl rollout status deployment/starexec -n starexec
 ```
@@ -570,6 +581,13 @@ make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 ```
 
 ### Kubernetes
+
+`helm rollback` restores an earlier revision's manifests and values. It does
+not touch the database: Flyway has no undo, so an application rolled back past
+a migration runs on the newer schema. To go back past a migration, also restore
+the database dump taken before the upgrade. Jenkins deploys with `--atomic`,
+which rolls a failed upgrade back the same way, possibly after the new version
+has already migrated the database.
 
 ```bash
 # Rollback to previous revision
