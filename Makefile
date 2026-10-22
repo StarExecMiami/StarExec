@@ -1215,6 +1215,7 @@ deploy-podman-helm:
 		--set image.tag=$(IMAGE_TAG) \
 		--set image.pullPolicy=Never \
 		--set backend.type=podman \
+		--set podman.hostPort=$(APP_PORT) \
 		--set-string podman.containerSocket.enabled=true \
 		--set-string podman.containerSocket.hostPath="$(PODMAN_SOCKET_PATH)" \
 		$${SOCKET_GID:+--set security.pod.supplementalGroups[0]=$$SOCKET_GID} \

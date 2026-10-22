@@ -6,7 +6,8 @@
 # DEPLOYMENT MODE CONFIGURATION
 # ============================================================================
 # Deployment mode is now derived from backend.type (see backend section below).
-# hostPort binding is enabled automatically when backend.type is "podman".
+# hostPort binding is enabled automatically when backend.type is "podman"
+# (podman.hostPort below).
 
 # ============================================================================
 # IMAGE CONFIGURATION
@@ -206,6 +207,10 @@ podman:
     # explicitly when invoking Helm directly.
     # See docs/TROUBLESHOOTING.md#podman-issues for remediation steps.
     hostPath: "/run/user/1000/podman/podman.sock"
+
+  # Host port the app is published on when backend.type is "podman".
+  # `make deploy-podman` sets it from APP_PORT.
+  hostPort: 7827
 
   # Job container configuration
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
