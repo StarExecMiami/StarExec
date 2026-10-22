@@ -2139,20 +2139,21 @@ public class Util {
     }
 
     /**
-     * Creates a cookie carrying an id or a comma-separated list of ids, with the same
-     * security attributes as {@link #createEncodedCookie(String, String)} but with the value
-     * left exactly as given.
+     * Creates a cookie carrying an id or a comma-separated list of ids, encoded and with the
+     * same security attributes as {@link #createEncodedCookie(String, String)}.
      *
-     * <p>The value is not URL-encoded: StarexecCommand reads these cookies straight from the
-     * response headers and splits them on commas ({@code HTMLParser.extractMultipartCookie}),
-     * so encoding the separator would change what the client parses.
+     * <p>RFC 6265 does not allow a comma in a cookie value, and Tomcat's cookie processor throws
+     * when such a cookie is added. Copying several items called this after the copy, so the
+     * user got a server error for a copy that had happened. A single id encodes to itself, so
+     * StarexecCommand releases from before the encoding still read it; the client decodes the
+     * value ({@code HTMLParser.extractCookie}) before it splits a list on commas.
      *
      * @param name  The cookie name
-     * @param value The cookie value, used verbatim
-     * @return A new Cookie with the value unchanged and the security attributes applied
+     * @param value An id, or ids separated by commas
+     * @return A new Cookie with the encoded value and the security attributes applied
      */
     public static Cookie createIdCookie(String name, String value) {
-        return withSecurityAttributes(new Cookie(name, value));
+        return createEncodedCookie(name, value);
     }
 
     /**
