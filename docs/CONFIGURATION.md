@@ -145,7 +145,7 @@ These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYP
 |----------|---------|-------------|
 | `STAREXEC_LOCAL_CONCURRENCY` | `min(4, CPU_cores)` | Max parallel jobs (local backend) |
 | `STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS` | `3600` | Job timeout (1 hour) |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `2048` | Podman cgroup memory ceiling per container (MiB) |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `2048` | Podman cgroup memory ceiling per container (MiB). It caps every job's memory limit: a solver the kernel stops there is recorded as `EXCEED_MEM` |
 | `STAREXEC_CPU_PARTITION_COUNT` | `auto` | `N > 1` creates topology-aware Podman partitions; `auto` uses multiple NUMA nodes and otherwise remains unpinned |
 | `STAREXEC_CPU_PARTITIONS` | unset | Explicit Podman cpusets; overrides the partition count |
 | `STAREXEC_PARTITION_MAX_JOBS` | `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS` | Maximum concurrent jobs in each CPU partition |

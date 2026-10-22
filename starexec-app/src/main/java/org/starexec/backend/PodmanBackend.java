@@ -2368,7 +2368,11 @@ public class PodmanBackend implements Backend {
                 "STAREXEC_PAIR_ID=" + pairId,
                 "STAREXEC_MEM_LIMIT=" + defaultMemoryMb,
                 "CONTAINER_MODE=true", // Signal to job script to use file-based communication
-                "STAREXEC_OUTPUT_DIR=" + outputDir
+                "STAREXEC_OUTPUT_DIR=" + outputDir,
+                // This container runs this pair alone, so an OOM kill the kernel counts in its
+                // cgroup is this pair's. The job script records one as a memory breach; without
+                // the flag (the local backend shares one cgroup across pairs) it reads no count.
+                "STAREXEC_PAIR_HAS_OWN_CGROUP=true"
             )
         ); // Where to write status.json, stats.json, attributes.txt
 
