@@ -237,8 +237,13 @@ StarExec provides a live stream endpoint for job pair logs using
 
 ### Behavior
 
-- `chunk` events stream appended log text incrementally.
-- `complete` event is emitted when the pair reaches a terminal status.
+- `chunk` events stream the log's text incrementally, in pieces of at most
+  `STAREXEC_PAIR_LOG_STREAM_READ_CHUNK_BYTES` bytes that end on whole UTF-8 characters.
+  While the pair runs, a character only partly written to the log is sent once it is
+  whole; only a finished log that stops partway through a character ends with those
+  bytes as they are, which decode to U+FFFD.
+- `complete` event is emitted once the pair has reached a terminal status and its whole
+  log has been sent.
 - `error` event indicates stream timeout or transient read failure.
 - heartbeat comments are sent periodically to keep the connection alive.
 
