@@ -93,9 +93,9 @@ curl -c cookies.txt -b cookies.txt \
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `desc` | string | Job description |
-| `preProcess` | integer | Pre-processor ID (`-1` for none) |
-| `postProcess` | integer | Post-processor ID (`-1` for none) |
+| `desc` | string | Job description; absent or empty, the job shows `no description` |
+| `preProcess` | integer | Pre-processor ID (`-1` or absent for none) |
+| `postProcess` | integer | Post-processor ID (`-1` or absent for none) |
 | `wallclockTimeout` | integer | Wallclock timeout in seconds |
 | `cpuTimeout` | integer | CPU timeout in seconds |
 | `maxMem` | double | Maximum memory in gigabytes |

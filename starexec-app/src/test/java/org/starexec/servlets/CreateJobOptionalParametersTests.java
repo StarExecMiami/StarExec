@@ -33,8 +33,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
@@ -43,7 +45,8 @@ import static org.mockito.Mockito.verify;
 
 /**
  * The create-job servlet must answer truthfully about what it created, for every combination of the
- * optional {@code traversal} and {@code pause} parameters a client may send.
+ * optional parameters a client may send: {@code traversal}, {@code pause}, {@code desc},
+ * {@code preProcess} and {@code postProcess}.
  *
  * <p>Two defects were observed at runtime against a live stack (probe c45, 2026-10-17):
  * <ul>
@@ -54,12 +57,17 @@ import static org.mockito.Mockito.verify;
  *       job: the job existed and ran, yet the client received HTTP 500, so a retry made a duplicate.</li>
  * </ul>
  *
+ * <p>Two more on 2026-10-21 (probe c53): docs/API_GUIDE.md lists {@code desc}, {@code preProcess} and
+ * {@code postProcess} as optional, yet a request without either processor died in
+ * {@code Integer.parseInt(null)} with HTTP 500, and one without {@code desc} was refused with HTTP 400.
+ *
  * <p>The database and session are replaced at their static boundaries; {@code JobManager.setupJob}
  * and the depth-first / round-robin builders run for real. A present-but-invalid value must be
  * rejected with HTTP 400 before any job is created; an absent value must take the documented
- * default (depth-first, not paused), and a blank value counts as absent.
+ * default (depth-first, not paused, no processor, the default description), and a blank value counts
+ * as absent.
  */
-public class CreateJobTraversalPauseTests {
+public class CreateJobOptionalParametersTests {
 
 	private static final int USER_ID = 33;
 	private static final int SPACE_ID = 22;
@@ -69,6 +77,8 @@ public class CreateJobTraversalPauseTests {
 	private static final int SOLVER_ID = 11;
 	/** The id the stubbed {@code Jobs.add} assigns, so a later {@code Jobs.pause} can be traced to it. */
 	private static final int JOB_ID = 77;
+	/** What a job keeps when it is given no description, or an empty one. */
+	private static final String DEFAULT_DESCRIPTION = new Job().getDescription();
 
 	/** The request validator's patterns are compiled at application start, not statically. */
 	@BeforeClass
@@ -224,6 +234,104 @@ public class CreateJobTraversalPauseTests {
 					never());
 			jobs.verify(() -> Jobs.pause(anyInt()), never());
 		});
+	}
+
+	/**
+	 * Without {@code desc}, {@code preProcess} and {@code postProcess} the job is created as StarexecCommand's
+	 * defaults for them create it (an empty description, -1 for each processor): no processors, and the
+	 * default description.
+	 */
+	@Test
+	public void missingDescriptionAndProcessorsTakeTheDefaults() throws Exception {
+		Map<String, String> params = choiceParams("runChosenFromSpace");
+		params.remove("desc");
+		params.remove("preProcess");
+		params.remove("postProcess");
+		assertCreatedWithoutProcessors(params, DEFAULT_DESCRIPTION);
+	}
+
+	/** Each processor is optional on its own. */
+	@Test
+	public void missingPreProcessorMeansNone() throws Exception {
+		Map<String, String> params = choiceParams("runChosenFromSpace");
+		params.remove("preProcess");
+		assertCreatedWithoutProcessors(params, "regression test");
+	}
+
+	/** Each processor is optional on its own. */
+	@Test
+	public void missingPostProcessorMeansNone() throws Exception {
+		Map<String, String> params = choiceParams("runChosenFromSpace");
+		params.remove("postProcess");
+		assertCreatedWithoutProcessors(params, "regression test");
+	}
+
+	/** Blank counts as absent here too: a blank processor reached {@code Integer.parseInt} and failed. */
+	@Test
+	public void blankDescriptionAndProcessorsTakeTheDefaults() throws Exception {
+		Map<String, String> params = choiceParams("runChosenFromSpace");
+		params.put("desc", "  ");
+		params.put("preProcess", "");
+		params.put("postProcess", "   ");
+		assertCreatedWithoutProcessors(params, DEFAULT_DESCRIPTION);
+	}
+
+	/** Optional is not unchecked: a processor id that is sent must still be an integer. */
+	@Test
+	public void invalidProcessorIsRejectedBeforeAnyJobIsCreated() throws Exception {
+		Map<String, String> params = choiceParams("runChosenFromSpace");
+		params.put("preProcess", "first");
+		assertRejected(params, "pre processor");
+	}
+
+	/** Optional is not unchecked: a description that is sent must still pass the description check. */
+	@Test
+	public void invalidDescriptionIsRejectedBeforeAnyJobIsCreated() throws Exception {
+		Map<String, String> params = choiceParams("runChosenFromSpace");
+		params.put("desc", "<b>bold</b>");
+		assertRejected(params, "description");
+	}
+
+	/**
+	 * A "choose a benchmark from this space" job made from {@code params} is created with no processors and
+	 * the given description: the client is redirected to it, {@code setupJob} receives -1 ("none") for both
+	 * processors, and the job handed to {@code Jobs.add} has that description and no stage processors.
+	 */
+	private static void assertCreatedWithoutProcessors(Map<String, String> params, String description)
+			throws Exception {
+		HttpServletRequest req = request(params);
+		Mockito.when(req.getParameterValues("bench")).thenReturn(new String[]{String.valueOf(BENCH_ID)});
+
+		createJob(req, (response, jobs, jobManager) -> {
+			verify(response, never()).sendError(anyInt(), anyString());
+			verify(response).sendRedirect(contains("job.jsp"));
+			jobManager.verify(() -> JobManager.setupJob(eq(USER_ID), Mockito.any(), Mockito.any(), eq(-1), eq(-1),
+					eq(QUEUE_ID), anyLong(), anyInt(), anyInt(), anyLong(), anyBoolean(), anyInt(), Mockito.any(),
+					Mockito.any()));
+			jobs.verify(() -> Jobs.add(Mockito.argThat(job -> description.equals(job.getDescription())
+					&& job.getStageAttributesByStageNumber(1).getPreProcessor() == null
+					&& job.getStageAttributesByStageNumber(1).getPostProcessor() == null), eq(SPACE_ID)));
+		});
+	}
+
+	/** A request from {@code params} is refused with HTTP 400 naming {@code field}, and no job is created. */
+	private static void assertRejected(Map<String, String> params, String field) throws Exception {
+		HttpServletResponse response = Mockito.mock(HttpServletResponse.class);
+		try (MockedStatic<RESTHelpers> rest = Mockito.mockStatic(RESTHelpers.class);
+				MockedStatic<SessionUtil> session = Mockito.mockStatic(SessionUtil.class);
+				MockedStatic<Users> users = Mockito.mockStatic(Users.class);
+				MockedStatic<Permissions> permissions = Mockito.mockStatic(Permissions.class);
+				MockedStatic<Communities> communities = Mockito.mockStatic(Communities.class);
+				MockedStatic<Processors> processors = Mockito.mockStatic(Processors.class);
+				MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class)) {
+
+			stubValidationGates(rest, session, users, permissions, communities, processors);
+
+			new CreateJob().doPost(request(params), response);
+
+			verify(response).sendError(eq(HttpServletResponse.SC_BAD_REQUEST), contains(field));
+			jobs.verify(() -> Jobs.add(Mockito.any(Job.class), anyInt()), never());
+		}
 	}
 
 	/** Assertions run while the static mocks of a successful creation are still open. */

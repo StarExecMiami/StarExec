@@ -284,11 +284,12 @@ public class CreateJob extends HttpServlet {
 				}
 			}
 
-			//Setup the job's attributes
+			//Setup the job's attributes. An absent description is passed on as null, and the job keeps its
+			//default description, as it does for an empty one.
 			Job j = JobManager
 					.setupJob(userId, (String) request.getParameter(name), (String) request.getParameter(description),
-							  Integer.parseInt((String) request.getParameter(preProcessor)),
-							  Integer.parseInt((String) request.getParameter(postProcessor)),
+							  optionalProcessorId(request, preProcessor),
+							  optionalProcessorId(request, postProcessor),
 							  Integer.parseInt((String) request.getParameter(workerQueue)), seed, cpuLimit, runLimit,
 							  memoryLimit, suppressTimestamp, resultsIntervalNum, option, framework
 					);
@@ -482,6 +483,19 @@ public class CreateJob extends HttpServlet {
 	}
 
 	/**
+	 * A processor id the request may leave out (docs/API_GUIDE.md). Absent or blank means no processor: -1, the
+	 * value StarexecCommand and the web forms send for "none". A present value has already passed
+	 * {@link #isValid(HttpServletRequest)}, which applies the same absent-or-blank test.
+	 *
+	 * @param request the create-job request
+	 * @param parameter the name of the processor parameter
+	 * @return the processor id, or -1 for none
+	 */
+	private static int optionalProcessorId(HttpServletRequest request, String parameter) {
+		return Util.paramExists(parameter, request) ? Integer.parseInt(request.getParameter(parameter)) : -1;
+	}
+
+	/**
 	 * Uses the Validate util to ensure the incoming request is valid. This checks for illegal characters and content
 	 * length requirements to ensure it is not malicious.
 	 *
@@ -589,8 +603,10 @@ public class CreateJob extends HttpServlet {
 			}
 			// Make sure the queue is a valid selection and user has access to it
 			Integer queueId = Integer.parseInt(request.getParameter(workerQueue));
-			// Ensure the job description is valid
-			if (!Validator.isValidPrimDescription((String) request.getParameter(description))) {
+			// Ensure the job description is valid. It is optional (docs/API_GUIDE.md): StarexecCommand sends an
+			// empty one by default, and an absent or blank one is stored the same way.
+			if (Util.paramExists(description, request) &&
+					!Validator.isValidPrimDescription((String) request.getParameter(description))) {
 				return new ValidatorStatusCode(false,
 											   "The given description is invalid, please see the help files to " +
 													   "see the valid format"
