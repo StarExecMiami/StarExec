@@ -115,7 +115,7 @@ These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYP
 | `STAREXEC_K8S_JOB_IMAGE` | `starexec/job-runner:latest` | No | `ghcr.io/starexecmiami/starexec-job-runner:latest` | Container image for job execution |
 | `STAREXEC_K8S_DATA_PVC` | `starexec-data` | No | `starexec-data` | PVC name for shared data volume |
 | `STAREXEC_K8S_SERVICE_ACCOUNT` | `starexec-job` | No | `starexec-job` | ServiceAccount for job pods |
-| `STAREXEC_K8S_QUEUE_LABEL` | `starexec/queue` | No | `starexec/queue` | Label key for queue discovery and node grouping. Current Kubernetes-native job placement does not yet add queue-specific selectors. |
+| `STAREXEC_K8S_QUEUE_LABEL` | `starexec/queue` | No | `starexec/queue` | Label key that assigns worker nodes to queues. A named queue's pods run only on worker nodes labelled `<key>=<queue name>`, and the default queue's on workers without the key; see BACKENDS.md, Queue Management. |
 | `STAREXEC_K8S_MEMORY_LIMIT` | `2Gi` | No | `4Gi` | Memory limit per job pod |
 | `STAREXEC_K8S_CPU_LIMIT` | `1` | No | `2` | CPU core limit per job pod |
 | `STAREXEC_K8S_JOB_TTL_SECONDS` | `3600` | No | `7200` | Job cleanup TTL after completion |
