@@ -47,6 +47,15 @@ CONTAINER_STATS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stats.json"
 CONTAINER_STAGE_ATTRS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-attributes"
 CONTAINER_STAGE_STATS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-stats"
 CONTAINER_LOG_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/${PAIR_ID}.txt"
+# Whether the job script's stdout already is that file. On the local backend it is: LocalBackend
+# redirects the script's output to the pair log, and STAREXEC_OUTPUT_DIR is the log's directory.
+# Kubernetes and Podman send stdout to the container runtime instead. Checked once, here: the
+# jobscript sources this file at its top level, where stdout is the script's own.
+if [ /dev/stdout -ef "$CONTAINER_LOG_FILE" ]; then
+	STDOUT_IS_CONTAINER_LOG=true
+else
+	STDOUT_IS_CONTAINER_LOG=false
+fi
 
 # Write status update for container mode
 function containerWriteStatus {
@@ -786,7 +795,10 @@ function initSandbox {
 function log {
 	local MESSAGE="$(date +'%D %r %Z'): $1"
 	echo "$MESSAGE"
-	if isContainerMode; then
+	# When stdout is the log, the echo above has already written the line there. Appending it too
+	# would write through a second descriptor, while the stdout one, opened without O_APPEND, keeps
+	# its own offset: the copy would land past it, and the script's next output would overwrite it.
+	if isContainerMode && [ "$STDOUT_IS_CONTAINER_LOG" != true ]; then
 		mkdir -p "$(dirname "$CONTAINER_LOG_FILE")"
 		echo "$MESSAGE" >> "$CONTAINER_LOG_FILE"
 	fi
