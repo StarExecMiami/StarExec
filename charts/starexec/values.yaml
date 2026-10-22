@@ -56,6 +56,12 @@ backend:
 persistence:
   enabled: true
   storageClass: ""
+  # Helm resource policy of the PersistentVolumeClaims this chart creates.
+  # "keep" makes helm uninstall, and an upgrade or rollback that no longer
+  # renders a claim, leave the claim and its data in place; delete such a
+  # claim with kubectl when you mean to. "" lets Helm delete them. Claims
+  # named in existingClaims are never created or deleted by the chart.
+  resourcePolicy: keep
   existingClaims:
     data: ""
     backend: ""
