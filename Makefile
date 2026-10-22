@@ -45,7 +45,7 @@ IMAGE_NAME?=$(IMAGE_REGISTRY)/starexec
 IMAGE_TAG?=latest
 CHART_DIR=./charts/starexec
 RELEASE_NAME?=starexec
-HELM_VALUES?=values.yaml
+HELM_VALUES?=charts/starexec/values-auto-detected.yaml
 SECRET_NAME=secret-postgres
 STAREXEC_DB_PASSWORD?=starexec_dev_password
 STAREXEC_DB_PASSWORD_FILE?=/run/secrets/starexec-db-password
@@ -1413,16 +1413,13 @@ k8s-deploy-auto: k8s-detect
 # Deploy to Kubernetes with specified environment
 deploy-k8s:
 	@echo "Deploying to Kubernetes with environment: $(ENV)"
-	@# Use auto-generated values if they exist, otherwise use env-specific values
-	@if [ -f "charts/starexec/values-auto-detected.yaml" ] && [ "$(HELM_VALUES)" = "charts/starexec/values.yaml" ]; then \
-		VALUES_FILE="charts/starexec/values-auto-detected.yaml"; \
-		echo "${YELLOW}Using auto-detected values file: $$VALUES_FILE${RESET}"; \
-	else \
-		VALUES_FILE="$(HELM_VALUES)"; \
-	fi; \
+	@# HELM_VALUES names the values file: by default the one make k8s-generate-values writes.
+	@# A file that does not exist stops the deploy rather than being swapped for another profile.
+	@VALUES_FILE="$(HELM_VALUES)"; \
 	if [ ! -f "$$VALUES_FILE" ]; then \
-		VALUES_FILE="charts/starexec/values-kubernetes.yaml"; \
-		echo "${YELLOW}Using Kubernetes values file: $$VALUES_FILE${RESET}"; \
+		echo "${RED}✗ Values file not found: $$VALUES_FILE${RESET}"; \
+		echo "  Run 'make k8s-generate-values', or pass HELM_VALUES=<values file>."; \
+		exit 1; \
 	fi; \
 	TMP_KUBECONFIG=""; \
 	KUBECTL_CMD="kubectl"; \
