@@ -312,6 +312,11 @@ public class CreateJob extends HttpServlet {
 			String selection = request.getParameter(run);
 			String benchMethod = request.getParameter(benchChoice);
 			String traversalMethod = request.getParameter(traversal);
+			if (Util.isNullOrEmpty(traversalMethod)) {
+				// The web forms default the radio to depth-first and the manual documents depth-first
+				// as the default; absence must behave the same, not throw.
+				traversalMethod = "depth";
+			}
 			//Depending on our run selection, handle each case differently
 			//if the user created a quickJob, they uploaded a single text benchmark and a solver to run
 			switch (selection) {
@@ -424,8 +429,14 @@ public class CreateJob extends HttpServlet {
 				return;
 			}
 
-			boolean submitSuccess = Jobs.add(j, space);
+			// Resolved before the job is written so a missing value cannot throw after Jobs.add
+			// has already persisted the job. Absence defaults to "no", as both web forms do.
 			String start_paused = request.getParameter(pause);
+			if (Util.isNullOrEmpty(start_paused)) {
+				start_paused = "no";
+			}
+
+			boolean submitSuccess = Jobs.add(j, space);
 
 			//if the user chose to immediately pause the job
 			if (start_paused.equals("yes")) {
@@ -587,6 +598,20 @@ public class CreateJob extends HttpServlet {
 			}
 			if (!Util.paramExists(run, request)) {
 				return new ValidatorStatusCode(false, "You need to select a run choice for this job");
+			}
+			if (Util.paramExists(traversal, request)) {
+				String traversalMethod = request.getParameter(traversal);
+				if (!traversalMethod.equals("depth") && !traversalMethod.equals("robin")) {
+					return new ValidatorStatusCode(false,
+											   "The job-pair traversal must be either \"depth\" or \"robin\"");
+				}
+			}
+			if (Util.paramExists(pause, request)) {
+				String startPaused = request.getParameter(pause);
+				if (!startPaused.equals("yes") && !startPaused.equals("no")) {
+					return new ValidatorStatusCode(false,
+											   "Whether to pause the job on creation must be either \"yes\" or \"no\"");
+				}
 			}
 			if (Util.paramExists(otherOutputOption, request)) {
 				if (!Validator.isValidBool(request.getParameter(otherOutputOption))) {
