@@ -241,35 +241,38 @@ podman exec starexec-postgres \
 
 ### Restoring Backups
 
-#### From SQL Dump
+The app and PostgreSQL run in one pod, and `make stop` removes the whole pod, PostgreSQL
+included. Stop only the app container. There is no `postgres` role: the database superuser is
+`STAREXEC_DB_USER` (default `starexec`).
 
 ```bash
-# Stop application
-make stop
+# starexec-app and starexec-postgres, or starexec-pod-app and starexec-pod-postgres with Helm
+APP=$(podman ps --format '{{.Names}}' | grep -E '^starexec(-pod)?-app$')
+PG=$(podman ps --format '{{.Names}}' | grep -E '^starexec(-pod)?-postgres$')
+```
 
-# Restore
-cat backup.sql | podman exec -i starexec-postgres psql -U starexec
+#### From SQL Dump
 
-# Start application
-make start
+A plain SQL dump restores into an empty database. Restored over the live one, it fails on every
+object that already exists and leaves a mix of old and new rows. These commands delete the
+current database, so dump it first (`make db-dump`).
+
+```bash
+podman stop "$APP"
+
+podman exec "$PG" psql -U starexec -d postgres -c "DROP DATABASE starexec;"
+podman exec "$PG" psql -U starexec -d postgres -c "CREATE DATABASE starexec OWNER starexec;"
+podman exec -i "$PG" psql -U starexec -d starexec -v ON_ERROR_STOP=1 < backup.sql
+
+podman start "$APP"
 ```
 
 #### From Custom Format
 
 ```bash
-podman exec -i starexec-postgres \
-  pg_restore -U starexec -d starexec < backup.dump
-```
-
-#### To Fresh Database
-
-```bash
-# Drop and recreate database
-podman exec starexec-postgres psql -U postgres -c "DROP DATABASE starexec;"
-podman exec starexec-postgres psql -U postgres -c "CREATE DATABASE starexec OWNER starexec;"
-
-# Restore
-cat backup.sql | podman exec -i starexec-postgres psql -U starexec
+podman stop "$APP"
+podman exec -i "$PG" pg_restore -U starexec -d starexec --clean --if-exists < backup.dump
+podman start "$APP"
 ```
 
 ### Automated Backups
@@ -500,8 +503,8 @@ echo $STAREXEC_DB_PASSWORD
 # Check pg_hba.conf authentication
 podman exec starexec-postgres cat /var/lib/postgresql/data/pg_hba.conf
 
-# Reset password
-podman exec starexec-postgres psql -U postgres -c \
+# Reset password (the superuser is STAREXEC_DB_USER; there is no postgres role)
+podman exec starexec-postgres psql -U starexec -c \
   "ALTER USER starexec WITH PASSWORD 'new-password';"
 ```
 
