@@ -175,8 +175,9 @@ make db-shell
 # Stop deployment
 make stop
 
-# Restart with fresh build
-make stop && make build-fresh && make start
+# Restart with a fresh build. LOCAL=1 deploys it; without it, make start
+# replaces it with the registry's latest image
+make stop && make build-fresh && make start LOCAL=1
 
 # View configuration
 make config-show ENV=dev
@@ -455,11 +456,24 @@ See [Volume Management](VOLUMES.md) for detailed backup procedures.
 # Pull latest changes
 git pull origin containerised
 
-# Rebuild and redeploy
+# Back up with the stack stopped: the new version's migrations change the
+# database, and a rollback does not undo them
 make stop
+make volumes-backup ENV=prod
+
+# Rebuild and redeploy production
 make build-fresh
-make start
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 ```
+
+`ENV=prod` selects the `starexec-prod-*` volumes, and `VALS=` names the Podman
+production values file: with `ENV=prod` alone, make selects the Kubernetes
+profile `values-prod.yaml`, whose pod mounts other volumes. `LOCAL=1` deploys
+the image you just built; without it, `make start` replaces that image with
+the registry's `latest` whenever the registry is reachable. Run it in a shell
+where `STAREXEC_DB_PASSWORD` is set, as for the first deployment
+([Production Checklist](#production-checklist)): with `ENV=prod`, `make start`
+stops without it.
 
 ### Kubernetes
 
@@ -496,12 +510,15 @@ make logs-app | grep -i flyway
 ### Podman
 
 ```bash
-# Restore from backup
+# Restore the backup set taken before the upgrade, named by its timestamp
 make stop
-make volumes-restore ENV=prod BACKUP=backups/last-known-good.tar.gz
+make volumes-restore ENV=prod RESTORE_TIMESTAMP=<timestamp>
+
+# Build the previous version and deploy that image, with the settings
+# explained under Upgrading StarExec
 git checkout <previous-version>
 make build
-make start
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 ```
 
 ### Kubernetes

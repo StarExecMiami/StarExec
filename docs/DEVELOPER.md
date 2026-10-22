@@ -255,7 +255,7 @@ podman run -d --name starexec-postgres \
   postgres:15
 
 # Run the application (recommended paths)
-make start                 # Podman deployment (rebuilds the image)
+make build && make start LOCAL=1   # Podman deployment of your checkout
 # or
 docker compose up --build  # Docker Compose
 
@@ -559,8 +559,8 @@ git checkout -b feature/my-feature
 # Run tests
 mvn test
 
-# Build and test locally
-make stop && make build && make start
+# Build and test locally (LOCAL=1 deploys the image you just built)
+make stop && make build && make start LOCAL=1
 ```
 
 ### 4. Commit Changes
@@ -665,7 +665,8 @@ make build-fresh        # Build without cache
 make build-prod         # Production build
 
 # Deployment
-make start              # Start environment
+make start              # Start environment with the registry's latest image
+make start LOCAL=1      # Start environment with the image from make build
 make stop               # Stop environment
 make status             # Check status
 make logs               # View logs
