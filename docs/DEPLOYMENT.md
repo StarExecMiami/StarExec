@@ -268,12 +268,13 @@ postgres:
 
 # Resource limits
 resources:
-  limits:
-    memory: 4Gi
-    cpu: 2
-  requests:
-    memory: 2Gi
-    cpu: 1
+  app:
+    limits:
+      memory: 4Gi
+      cpu: 2
+    requests:
+      memory: 2Gi
+      cpu: 1
 
 # Persistence
 persistence:

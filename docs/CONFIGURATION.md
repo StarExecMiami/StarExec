@@ -236,12 +236,13 @@ postgres:
   existingSecret: starexec-postgres-secret
 
 resources:
-  limits:
-    memory: 8Gi
-    cpu: 4
-  requests:
-    memory: 4Gi
-    cpu: 2
+  app:
+    limits:
+      memory: 8Gi
+      cpu: 4
+    requests:
+      memory: 4Gi
+      cpu: 2
 
 persistence:
   enabled: true
@@ -384,9 +385,10 @@ postgres:
   existingSecret: company-db-secret
 
 resources:
-  limits:
-    memory: 16Gi
-    cpu: 8
+  app:
+    limits:
+      memory: 16Gi
+      cpu: 8
 
 # SSE live log stream tuning (benchmark-priority profile)
 env:
@@ -441,15 +443,25 @@ email:
 
 ### Java System Properties
 
-Advanced users can set JVM properties:
+The image starts Tomcat with this `JAVA_OPTS` (set in the `Dockerfile`):
 
-```bash
-# Via environment variable
-export JAVA_OPTS="-Xmx4g -XX:+UseG1GC"
-
-# Via Helm values
-javaOpts: "-Xmx4g -XX:+UseG1GC"
+```text
+-Djava.security.egd=file:/dev/./urandom -Djava.awt.headless=true -Xms512m -Xmx2048m -XX:+UseG1GC -XX:+UseStringDeduplication
 ```
+
+To change it, set `JAVA_OPTS` under `env` in your Helm values. The value replaces the image's whole setting, so repeat the flags you keep:
+
+```yaml
+env:
+  JAVA_OPTS: "-Djava.security.egd=file:/dev/./urandom -Djava.awt.headless=true -Xms512m -Xmx4g -XX:+UseG1GC -XX:+UseStringDeduplication"
+
+resources:
+  app:
+    limits:
+      memory: 6Gi
+```
+
+Keep `-Xmx` well below `resources.app.limits.memory`: the JVM also uses memory outside the heap, and the container is killed when its total use reaches the limit. A `JAVA_OPTS` exported in your shell does not reach the container.
 
 ## Configuration Precedence
 
