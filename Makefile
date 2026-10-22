@@ -927,7 +927,8 @@ db-shell:
 
 db-dump:
 	@echo "Creating PostgreSQL dump (uses volume script if available)"
-	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) dump-postgres $(ENV)
+	@$(call resolve_postgres_container); \
+	PG_CONTAINER="$$PG_CONTAINER" PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) dump-postgres $(ENV)
 
 db-migrate:
 	@echo "Running Flyway migrations (this may take 30-60 seconds)..."
