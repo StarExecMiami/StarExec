@@ -244,14 +244,51 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # `latest` and `<branch>` must name the image of the branch head. Runs for pushes made close together
+      # finish in any order (on 2026-10-19 four merges landed within 10 s, the head's run finished first, and
+      # an older run then moved `latest` to its own image), so a run moves those two tags only if its commit is
+      # still the head once its commit tags are pushed. Commit tags are always pushed: Jenkins deploys
+      # `sha-<commit>`. The check runs seconds before the push and a newer commit's run takes minutes, so the
+      # newest run that passes the check is also the last one to move the tags.
       - name: Publish validated image
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          floating=()
           while IFS= read -r tag; do
-            if [ -n "$tag" ]; then
-              docker tag "$LOCAL_IMAGE_TAG" "$tag"
-              docker push "$tag"
-            fi
+            [ -n "$tag" ] || continue
+            case "${tag##*:}" in
+              latest | "$BRANCH_NAME")
+                floating+=("$tag")
+                continue
+                ;;
+            esac
+            docker tag "$LOCAL_IMAGE_TAG" "$tag"
+            docker push "$tag"
           done <<< "$IMAGE_TAGS"
+          if [ "${#floating[@]}" -eq 0 ]; then
+            exit 0
+          fi
+          head=""
+          for attempt in 1 2 3; do
+            if head=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH_NAME" --jq .object.sha); then
+              break
+            fi
+            head=""
+            echo "Branch head lookup failed (attempt $attempt of 3)" >&2
+            sleep 5
+          done
+          if [ "$head" != "$COMMIT_SHA" ]; then
+            note="Not moving ${floating[*]##*:}: $BRANCH_NAME is at ${head:-an unknown commit}, not $COMMIT_SHA."
+            echo "::warning::$note"
+            echo "$note" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          for tag in "${floating[@]}"; do
+            docker tag "$LOCAL_IMAGE_TAG" "$tag"
+            docker push "$tag"
+          done
 
       # ------------------------------------------------------------------
       # Summary
