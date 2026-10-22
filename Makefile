@@ -24,7 +24,7 @@ MAKEFLAGS += --no-print-directory
 # IMAGE_TAG       - Image version tag (default: latest)
 # ENV             - Deployment environment: dev, ci, prod (default: dev)
 # FORCE           - Skip confirmation prompts: 0 or 1 (default: 0)
-# DRY_RUN         - Preview destructive ops without executing: 0 or 1 (default: 0)
+# DRY_RUN         - Preview volumes-delete, clean-hard, reset and nuke without executing: 0 or 1 (default: 0)
 #
 # Database Configuration:
 # STAREXEC_DB_PASSWORD      - Database password (⚠️ set for non-dev environments)
@@ -301,7 +301,7 @@ help:
 	@echo "  ENV=prod              Production (Kubernetes PVCs)"
 	@echo ""
 	@echo "Flags:"
-	@echo "  DRY_RUN=1             Preview destructive operations without executing"
+	@echo "  DRY_RUN=1             Preview volumes-delete, clean-hard, reset and nuke without executing"
 	@echo "  FORCE=1               Skip confirmation prompts (use with caution)"
 	@echo ""
 	@echo "Examples:"
@@ -459,8 +459,8 @@ volumes-backup: verify-deps
 			printf "Continue with backup anyway? (y/N): "; \
 			read ans; \
 			if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
-				echo "Backup cancelled."; \
-				exit 0; \
+				echo "Backup cancelled; nothing was changed."; \
+				exit 1; \
 			fi; \
 		fi; \
 	fi
@@ -560,17 +560,23 @@ volumes-health:
 	@echo "Running volume health checks for environment: $(ENV)"
 	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) health-check $(ENV)
 
+# Each recipe line runs in its own shell, so `exit` in one line cannot stop the next. A guard therefore either
+# fails (`exit 1` stops make) or, for DRY_RUN, leaves the destructive lines out of the recipe altogether.
 volumes-delete:
-	@if [ "$(DRY_RUN)" = "1" ]; then \
-		echo "[DRY RUN] Would delete volumes for environment: $(ENV)"; \
-		echo "  - $(VOLUME_PREFIX)-$(ENV)-data"; \
-		echo "  - $(VOLUME_PREFIX)-$(ENV)-sandbox"; \
-		echo "  - $(VOLUME_PREFIX)-$(ENV)-backend"; \
-		echo "  - $(VOLUME_PREFIX)-$(ENV)-work"; \
-		echo "  - $(VOLUME_PREFIX)-$(ENV)-postgres"; \
-		exit 0; \
+ifeq ($(DRY_RUN),1)
+	@echo "[DRY RUN] Would delete volumes for environment: $(ENV)"
+	@echo "  - $(VOLUME_PREFIX)-$(ENV)-data"
+	@echo "  - $(VOLUME_PREFIX)-$(ENV)-sandbox"
+	@echo "  - $(VOLUME_PREFIX)-$(ENV)-backend"
+	@echo "  - $(VOLUME_PREFIX)-$(ENV)-work"
+	@echo "  - $(VOLUME_PREFIX)-$(ENV)-postgres"
+	@echo "  - $(VOLUME_PREFIX)-data and $(VOLUME_PREFIX)-postgres, if they exist (older layouts)"
+	@if [ "$${CLEAN_HOSTPATH:-0}" = "1" ]; then \
+		echo "  - host directories $${HOSTPATH_DATA:-/tmp/starexec-data} and $${HOSTPATH_POSTGRES:-/tmp/postgres-data} (CLEAN_HOSTPATH=1)"; \
 	fi
+else
 	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) delete $(ENV)
+endif
 
 volumes-help:
 	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) help
@@ -1020,8 +1026,8 @@ migrate-podman:
 	@printf "Continue with manual migration? (y/N): "; \
 	read ans; \
 	if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
-		echo "Cancelled"; \
-		exit 0; \
+		echo "Cancelled; nothing was changed"; \
+		exit 1; \
 	fi
 	@echo "Running Flyway migration against Podman PostgreSQL"
 	@echo "Waiting for PostgreSQL to be ready..."
@@ -1559,8 +1565,8 @@ clean-cache:
 		printf "Continue? (y/N): "; \
 		read ans; \
 		if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
-			echo "Cancelled"; \
-			exit 0; \
+			echo "Cancelled; nothing was changed"; \
+			exit 1; \
 		fi; \
 	else \
 		echo "${RED}Running non-interactively without FORCE=1. Aborting.${RESET}"; \
@@ -1577,15 +1583,17 @@ clean-all: clean-podman volumes-delete
 	@echo "${GREEN}✓ Full cleanup complete (pods, images, volumes removed; cache preserved)${RESET}"
 
 clean-hard:
-	@if [ "$(DRY_RUN)" = "1" ]; then \
-		echo "[DRY RUN] Would perform HARD RESET for ENV=$(ENV):"; \
-		echo "  - Remove pods: starexec, starexec-pod, $(POD_NAME)"; \
-		echo "  - Remove containers: $(APP_CONTAINER), $(DB_CONTAINER)"; \
-		echo "  - Remove secrets: $(RELEASE_NAME)-$(SECRET_NAME)-*"; \
-		echo "  - Remove volumes: $(VOLUME_PREFIX)-$(ENV)-data, $(VOLUME_PREFIX)-$(ENV)-sandbox, $(VOLUME_PREFIX)-$(ENV)-backend, $(VOLUME_PREFIX)-$(ENV)-work, $(VOLUME_PREFIX)-$(ENV)-postgres"; \
-		echo "  - Remove image: $(RELEASE_NAME):$(IMAGE_TAG)"; \
-		exit 0; \
+ifeq ($(DRY_RUN),1)
+	@echo "[DRY RUN] Would perform HARD RESET for ENV=$(ENV):"
+	@echo "  - Remove pods: starexec, starexec-pod, $(POD_NAME)"
+	@echo "  - Remove containers: $(APP_CONTAINER), $(DB_CONTAINER)"
+	@echo "  - Remove secrets: $(RELEASE_NAME)-$(SECRET_NAME)-*"
+	@echo "  - Remove volumes: $(VOLUME_PREFIX)-$(ENV)-data, $(VOLUME_PREFIX)-$(ENV)-sandbox, $(VOLUME_PREFIX)-$(ENV)-backend, $(VOLUME_PREFIX)-$(ENV)-work, $(VOLUME_PREFIX)-$(ENV)-postgres, and $(VOLUME_PREFIX)-data and $(VOLUME_PREFIX)-postgres if they exist"
+	@if [ "$${CLEAN_HOSTPATH:-0}" = "1" ]; then \
+		echo "  - Remove host directories: $${HOSTPATH_DATA:-/tmp/starexec-data}, $${HOSTPATH_POSTGRES:-/tmp/postgres-data} (CLEAN_HOSTPATH=1)"; \
 	fi
+	@echo "  - Remove image: $(RELEASE_NAME):$(IMAGE_TAG)"
+else
 	@echo "${YELLOW}⚠️  HARD RESET: Removes ALL StarExec resources for ENV=$(ENV)${RESET}"
 	@echo "${RED}This will delete:${RESET}"
 	@echo "  - Pods and containers"
@@ -1597,8 +1605,8 @@ clean-hard:
 		printf "Type '$(ENV)' to confirm: "; \
 		read ans; \
 		if [ "$$ans" != "$(ENV)" ]; then \
-			echo "${YELLOW}Cancelled${RESET}"; \
-			exit 0; \
+			echo "${YELLOW}Cancelled; nothing was changed${RESET}"; \
+			exit 1; \
 		fi; \
 	else \
 		echo "${YELLOW}FORCE=1 detected, skipping confirmation${RESET}"; \
@@ -1610,12 +1618,16 @@ clean-hard:
 	@echo "Removing StarExec image..."
 	@$(PODMAN_CMD) rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
 	@echo "${GREEN}✓ Hard reset complete for ENV=$(ENV)${RESET}"
+endif
 
 # ============================================================================
 # CONVENIENT CLEANUP ALIASES
 # ============================================================================
 
-reset: stop clean-hard
+# clean-hard removes the deployment itself, after its confirmation; a `stop` prerequisite would take the
+# deployment down before the question is even asked, and during a DRY_RUN.
+reset: clean-hard
+ifneq ($(DRY_RUN),1)
 	@echo ""
 	@echo "${GREEN}✓✓✓ Complete reset finished ✓✓✓${RESET}"
 	@echo "Environment ${BOLD}$(ENV)${RESET} has been completely cleaned:"
@@ -1624,9 +1636,12 @@ reset: stop clean-hard
 	@echo "  - All images removed"
 	@echo ""
 	@echo "To redeploy: ${BLUE}make deploy-podman ENV=$(ENV)${RESET}"
+endif
 
 nuke: reset
+ifneq ($(DRY_RUN),1)
 	@echo "${GREEN}Environment $(ENV) nuked successfully${RESET}"
+endif
 
 status:
 	@echo "${BOLD}${BLUE}══════════════════════════════════════════${RESET}"
