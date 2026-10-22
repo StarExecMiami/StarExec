@@ -418,9 +418,12 @@ helm install starexec starexec/starexec \
 Create secrets for sensitive data:
 
 ```bash
-# Create database secret
+# Create database secret. The chart reads three keys from it: user, password and database
+# (postgres.existingSecretKeys sets their names). A missing key stops the pod from starting.
 kubectl create secret generic starexec-postgres-secret \
-  --from-literal=password="$(generate-password)" \
+  --from-literal=user=starexec \
+  --from-literal=password="$(openssl rand -base64 32)" \
+  --from-literal=database=starexec \
   -n starexec
 
 # Create SMTP secret
