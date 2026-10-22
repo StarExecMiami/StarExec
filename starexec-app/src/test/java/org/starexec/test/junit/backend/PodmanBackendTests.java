@@ -129,6 +129,12 @@ public class PodmanBackendTests {
         Field dockerClientField = PodmanBackend.class.getDeclaredField("dockerClient");
         dockerClientField.setAccessible(true);
         dockerClientField.set(backend, mockDockerClient);
+
+        // These tests stand in for initialize() by injecting the client, so mark the backend
+        // initialized: one that is not refuses every submission (PodmanBackendInitGuardTest).
+        Field initializedField = PodmanBackend.class.getDeclaredField("initialized");
+        initializedField.setAccessible(true);
+        initializedField.set(backend, true);
     }
 
     /**
