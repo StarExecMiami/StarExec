@@ -555,21 +555,36 @@ helm install starexec ./charts/starexec \
 
 ### Queue Management
 
-Worker labels are used for Kubernetes-native node selection, and queue labels
-are preserved for node grouping and queue administration APIs. The current
-backend does not yet add queue-specific selectors to submitted Job pods.
+Every pair's pod runs only on worker nodes (`starexec.org/worker=true`, set by
+`STAREXEC_K8S_WORKER_SELECTOR_KEY` and `STAREXEC_K8S_WORKER_SELECTOR_VALUE`), and
+its queue decides which ones, through the queue label
+(`STAREXEC_K8S_QUEUE_LABEL`, default `starexec/queue`):
+
+- A named queue's pods select nodes labelled with that queue, for example
+  `starexec/queue=fast-solvers`.
+- The default queue, `all.q`, runs on worker nodes with no queue label, or with
+  one of the default spellings: `all.q`, `all`, `default`, or an empty value.
+- A pair whose queue no worker node carries is not submitted. It ends with
+  status `ERROR_SGE_REJECT`, and the application log names the missing label.
+  Pairs wait rather than fail while all of a queue's nodes are cordoned or
+  NotReady, while `STAREXEC_K8S_CPU_LIMIT` is not smaller than the allocatable
+  CPU of the queue's largest schedulable node (the log says `Impossible CPU
+  configuration`), and until the backend has listed the nodes once.
+
+The backend reads queue labels only from worker nodes, so a node needs both
+labels:
 
 ```bash
 # Label worker nodes
 kubectl label nodes worker-1 starexec.org/worker=true
 kubectl label nodes worker-1 starexec/queue=fast-solvers
+kubectl label nodes worker-2 starexec.org/worker=true
 kubectl label nodes worker-2 starexec/queue=heavy-solvers
 ```
 
 ### Current limitations
 
 - End-to-end operator validation is still in progress.
-- Queue labels are not yet enforced in Job pod placement.
 - Monitoring is polling-based today; watch/informer integration is still future work.
 - No repository benchmark currently proves large-scale concurrency claims.
 - Treat Kubernetes support as controlled-use rather than fully mature production guidance.
