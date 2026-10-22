@@ -733,6 +733,365 @@ public class PodmanBackendTests {
         assertFalse("Container should be removed from tracking", execIdMap.containsKey(TEST_EXEC_ID));
     }
 
+    // ==================== Confirmed Kill Tests ====================
+    // killPairConfirmed gates every rerun, job deletion and user deletion. Before it was
+    // overridden here the interface default answered UNPROVEN for every execution, so none
+    // of those could ever proceed on this backend.
+
+    private static Map<String, String> pairContainerLabels(int execId, Integer attemptNo) {
+        Map<String, String> labels = new HashMap<>();
+        labels.put("starexec.managed", "true");
+        labels.put("starexec.exec.id", String.valueOf(execId));
+        labels.put("starexec.pair.id", "42");
+        labels.put("starexec.kind", "job-pair");
+        labels.put("starexec.label.version", "2");
+        if (attemptNo != null) {
+            labels.put("starexec.attempt", String.valueOf(attemptNo));
+        }
+        return labels;
+    }
+
+    private static Container listedContainer(String containerId, Map<String, String> labels) {
+        Container container = mock(Container.class);
+        when(container.getId()).thenReturn(containerId);
+        when(container.getLabels()).thenReturn(labels);
+        return container;
+    }
+
+    private void stubInspectState(
+        String containerId, String status, Boolean running, Boolean paused, Boolean restarting
+    ) {
+        InspectContainerCmd command = mock(InspectContainerCmd.class);
+        InspectContainerResponse response = mock(InspectContainerResponse.class);
+        InspectContainerResponse.ContainerState state =
+            mock(InspectContainerResponse.ContainerState.class);
+        when(mockDockerClient.inspectContainerCmd(containerId)).thenReturn(command);
+        when(command.exec()).thenReturn(response);
+        when(response.getState()).thenReturn(state);
+        when(state.getStatus()).thenReturn(status);
+        when(state.getRunning()).thenReturn(running);
+        when(state.getPaused()).thenReturn(paused);
+        when(state.getRestarting()).thenReturn(restarting);
+    }
+
+    private void censusReturns(Container... containers) {
+        when(mockListContainersCmd.exec()).thenReturn(Arrays.asList(containers));
+    }
+
+    @Test
+    public void testKillPairConfirmed_FinishedUntrackedExecutionIsSafe() {
+        // A COMPLETE pair: its container was ingested and removed, so nothing tracks it and
+        // the engine has nothing for its exec id. This is every rerun of a finished pair.
+        assertEquals(
+            "An execution with no container left is confirmed stopped",
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_CensusSelectsByExecIdLabelAcrossAllStates() {
+        backend.killPairConfirmed(TEST_EXEC_ID);
+
+        verify(mockListContainersCmd).withShowAll(true);
+        verify(mockListContainersCmd).withLabelFilter(
+            Collections.singletonMap("starexec.exec.id", String.valueOf(TEST_EXEC_ID))
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_StopsTrackedRunningContainerThenConfirms() throws Exception {
+        Map<Integer, String> execIdMap = getExecIdMap();
+        execIdMap.put(TEST_EXEC_ID, TEST_CONTAINER_ID);
+        markSubmissionSlotHeld(TEST_EXEC_ID);
+
+        // After the stop and forced removal the engine lists nothing for the exec id.
+        assertEquals(
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+        verify(mockDockerClient).stopContainerCmd(TEST_CONTAINER_ID);
+        verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
+        assertFalse("Tracking is released", execIdMap.containsKey(TEST_EXEC_ID));
+        assertEquals("The slot is released", 0, getActiveSubmissionSlots());
+    }
+
+    @Test
+    public void testKillPairConfirmed_UntrackedRunningContainerIsUnprovenAndLeftAlone() {
+        // Exec ids restart with each application lifetime, so a running container that this
+        // backend does not track may belong to another pair: report it, never stop it.
+        censusReturns(listedContainer("other-lifetime", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("other-lifetime", "running", true, false, false);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+        verify(mockDockerClient, never()).stopContainerCmd(anyString());
+        verify(mockDockerClient, never()).removeContainerCmd(anyString());
+    }
+
+    @Test
+    public void testKillPairConfirmed_ContainerThatSurvivedTheStopIsUnproven() throws Exception {
+        Map<Integer, String> execIdMap = getExecIdMap();
+        execIdMap.put(TEST_EXEC_ID, TEST_CONTAINER_ID);
+        doThrow(new RuntimeException("engine timeout")).when(mockRemoveContainerCmd).exec();
+        censusReturns(listedContainer(TEST_CONTAINER_ID, pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState(TEST_CONTAINER_ID, "running", true, false, false);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+        assertTrue("A failed kill keeps the container tracked", execIdMap.containsKey(TEST_EXEC_ID));
+    }
+
+    @Test
+    public void testKillPairConfirmed_ListingFailureIsUnproven() {
+        when(mockListContainersCmd.exec()).thenThrow(new RuntimeException("connection refused"));
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ListingWithNoBodyIsUnproven() {
+        when(mockListContainersCmd.exec()).thenReturn(null);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_NoEngineClientIsUnproven() throws Exception {
+        setBackendField("dockerClient", null);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ExitedContainerFencedOnItsAttemptIsSafe() {
+        // A late ingestion carries attempt 3; a rerun has moved the pair past it, so the
+        // write is refused (#185).
+        censusReturns(listedContainer("exited-fenced", pairContainerLabels(TEST_EXEC_ID, 3)));
+        stubInspectState("exited-fenced", "exited", false, false, false);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ExitedUnfencedContainerIsUnprovenEvenWhenQuarantined()
+        throws Exception {
+        censusReturns(listedContainer("exited-unfenced", pairContainerLabels(TEST_EXEC_ID, null)));
+        stubInspectState("exited-unfenced", "exited", false, false, false);
+
+        assertEquals(
+            "An uningested result with no attempt label could land on the replacement",
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+
+        // The quarantine is held in memory: after a restart the monitor can ingest the
+        // container again, unfenced, into the attempt a rerun started.
+        ContainerJobMonitor monitor = mock(ContainerJobMonitor.class);
+        when(monitor.isQuarantined("exited-unfenced")).thenReturn(true);
+        setJobMonitor(monitor);
+        assertEquals(
+            "A quarantine does not outlive the application, so it proves nothing",
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_AttemptLabelThatDoesNotParseLeavesItUnfenced() {
+        // Ingestion fences only on a positive attempt (parseAttemptLabel); any other value
+        // leaves the late write unfenced.
+        for (String attempt : new String[] {"not-a-number", "", "0", "-3"}) {
+            Map<String, String> labels = pairContainerLabels(TEST_EXEC_ID, null);
+            labels.put("starexec.attempt", attempt);
+            String id = "attempt-" + attempt;
+            censusReturns(listedContainer(id, labels));
+            stubInspectState(id, "exited", false, false, false);
+            assertEquals(
+                "attempt label '" + attempt + "' fences nothing",
+                PodmanBackend.KillOutcome.UNPROVEN,
+                backend.killPairConfirmed(TEST_EXEC_ID)
+            );
+        }
+    }
+
+    @Test
+    public void testKillPairConfirmed_OneUnsafeContainerOutweighsSafeOnes() {
+        stubInspectState("fenced", "exited", false, false, false);
+        stubInspectState("never-started", "created", false, false, false);
+        stubInspectState("still-running", "running", true, false, false);
+        Container fenced = listedContainer("fenced", pairContainerLabels(TEST_EXEC_ID, 2));
+        Container neverStarted =
+            listedContainer("never-started", pairContainerLabels(TEST_EXEC_ID, 2));
+        Container stillRunning =
+            listedContainer("still-running", pairContainerLabels(TEST_EXEC_ID, 2));
+
+        censusReturns(fenced, stillRunning);
+        assertEquals(
+            "A safe container listed first does not decide",
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+
+        censusReturns(stillRunning, fenced);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        censusReturns(fenced, neverStarted);
+        assertEquals(
+            "Every container is safe, so the execution is",
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_NeverStartedContainerIsSafe() {
+        censusReturns(listedContainer("created-only", pairContainerLabels(TEST_EXEC_ID, null)));
+        stubInspectState("created-only", "created", false, false, false);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_PausedRestartingOrUnknownStateIsUnproven() {
+        censusReturns(listedContainer("paused", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("paused", "paused", false, true, false);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        censusReturns(listedContainer("restarting", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("restarting", "restarting", false, false, true);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        censusReturns(listedContainer("removing", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("removing", "removing", false, false, false);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        // An unset flag is no report of a stop, even beside an exited status and an attempt
+        // label that would otherwise make the container safe.
+        censusReturns(listedContainer("no-running-flag", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("no-running-flag", "exited", null, false, false);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        censusReturns(listedContainer("no-paused-flag", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("no-paused-flag", "exited", false, null, false);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        censusReturns(listedContainer("no-restarting-flag", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("no-restarting-flag", "exited", false, false, null);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+    }
+
+    @Test
+    public void testKillPairConfirmed_InspectionFailureIsUnproven() {
+        censusReturns(listedContainer("uninspectable", pairContainerLabels(TEST_EXEC_ID, 1)));
+        InspectContainerCmd command = mock(InspectContainerCmd.class);
+        when(mockDockerClient.inspectContainerCmd("uninspectable")).thenReturn(command);
+        when(command.exec()).thenThrow(new RuntimeException("engine timeout"));
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ContainerRemovedAfterListingIsSafe() {
+        censusReturns(listedContainer("just-removed", pairContainerLabels(TEST_EXEC_ID, 1)));
+        InspectContainerCmd command = mock(InspectContainerCmd.class);
+        when(mockDockerClient.inspectContainerCmd("just-removed")).thenReturn(command);
+        when(command.exec()).thenThrow(new NotFoundException("No such container"));
+
+        assertEquals(
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_IgnoresContainersOfOtherExecutionsAndUnmanagedOnes() {
+        // An engine that ignored the filter would return everything: only this exec id's
+        // managed containers may decide.
+        Map<String, String> unmanaged = pairContainerLabels(TEST_EXEC_ID, 1);
+        unmanaged.remove("starexec.managed");
+        censusReturns(
+            listedContainer("other-exec", pairContainerLabels(TEST_EXEC_ID + 1, 1)),
+            listedContainer("unmanaged", unmanaged),
+            listedContainer("no-labels", null)
+        );
+        stubInspectState("other-exec", "running", true, false, false);
+        stubInspectState("unmanaged", "running", true, false, false);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ExitedMaintenanceContainerIsSafe() {
+        Map<String, String> maintenance = pairContainerLabels(TEST_EXEC_ID, null);
+        maintenance.put("starexec.kind", "maintenance");
+        maintenance.put("starexec.pair.id", "0");
+        censusReturns(listedContainer("maintenance", maintenance));
+        stubInspectState("maintenance", "exited", false, false, false);
+
+        assertEquals(
+            "The monitor records no pair result from a maintenance container",
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ExitedContainerIsJudgedByItsPairIdAsIngestionIs() {
+        // Ingestion keys on the pair id label, not on starexec.kind: a positive pair id with
+        // no kind label could still be ingested, so without an attempt it is not safe.
+        Map<String, String> noKind = pairContainerLabels(TEST_EXEC_ID, null);
+        noKind.remove("starexec.kind");
+        censusReturns(listedContainer("no-kind", noKind));
+        stubInspectState("no-kind", "exited", false, false, false);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        Map<String, String> noPair = pairContainerLabels(TEST_EXEC_ID, null);
+        noPair.remove("starexec.pair.id");
+        censusReturns(listedContainer("no-pair", noPair));
+        stubInspectState("no-pair", "exited", false, false, false);
+        assertEquals(
+            "Ingestion skips a container with no pair id",
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+
+        Map<String, String> malformedPair = pairContainerLabels(TEST_EXEC_ID, null);
+        malformedPair.put("starexec.pair.id", "not-a-number");
+        censusReturns(listedContainer("malformed-pair", malformedPair));
+        stubInspectState("malformed-pair", "exited", false, false, false);
+        assertEquals(
+            "Ingestion skips a container whose pair id does not parse",
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
     // ==================== Kill All Tests ====================
 
     @Test
