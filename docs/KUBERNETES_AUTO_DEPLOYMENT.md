@@ -321,7 +321,9 @@ The Role and its binding are rendered whenever the chart is configured for a
 Kubernetes backend, so a normal `helm upgrade` applies the permission with no
 manual step. If you manage RBAC outside this chart — a hand-written Role or
 ClusterRole bound to the application's service account — you must carry the
-equivalent pod read permission yourself.
+equivalent pod read permission yourself, and the rest of the backend's
+permissions listed in [BACKENDS.md](BACKENDS.md) (its namespace, nodes, and
+Job deletion).
 
 **If the permission is missing** the backend does not fail. It logs once, per
 process, that it cannot list pods in the namespace and that job-level behavior

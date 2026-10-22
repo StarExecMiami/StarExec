@@ -603,8 +603,22 @@ helm install starexec ./charts/starexec \
 - Worker nodes labeled: `starexec.org/worker=true`
 - (Optional) Queue labels: `starexec/queue=<queue-name>`
 - RBAC for the application's ServiceAccount, which the chart's `rbac.yaml`
-  provides: `batch/jobs` (`get, list, watch, create, delete`) and, read-only,
-  `pods` (`get, list`).
+  provides whenever the backend is Kubernetes:
+  - a Role in the release namespace: `batch/jobs` (`get, list, watch, create,
+    delete, deletecollection`), `pods` (`get, list`), and `get` on the
+    release's own Namespace object;
+  - a ClusterRole, `<fullname>-<namespace>-node-reader` (for release
+    `starexec` in namespace `starexec`, `starexec-starexec-node-reader`):
+    `nodes` (`get, list`). Nodes are cluster-scoped, so a Role cannot grant
+    this.
+
+  On a cluster that enforces RBAC, both reads are required: without the
+  namespace read the backend does not initialize, and without the node read it
+  never learns which queues have a schedulable node and holds every pair.
+  `deletecollection` is the admin "pause all", which deletes every managed Job
+  in one request. Changing node labels from StarExec (queue management) also
+  needs `kubernetes.nodeManagement.enabled: true`, which adds a ClusterRole
+  with `update` and `patch` on nodes.
 
   The pods rule is what separates a pod that is running from one that has never
   started — `JobStatus.active` is defined by Kubernetes as counting pending and
