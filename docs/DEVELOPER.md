@@ -226,7 +226,8 @@ make logs
 # Check status
 make status
 
-# Complete reset (deletes data)
+# Complete reset: deletes every volume of the environment (database and
+# files) and the image
 make reset ENV=dev
 ```
 
@@ -239,7 +240,8 @@ docker compose up --build
 # Stop
 docker compose down
 
-# With fresh database
+# Start over with empty volumes: -v deletes every volume of the stack,
+# the database and the files alike
 docker compose down -v && docker compose up --build
 ```
 
@@ -669,7 +671,7 @@ make start              # Start environment
 make stop               # Stop environment
 make status             # Check status
 make logs               # View logs
-make reset              # Full reset
+make reset              # Delete all data and the image
 
 # Database
 make db-shell           # Database CLI
@@ -707,17 +709,25 @@ mvn clean package -U
 # Check logs
 podman logs starexec-app
 
-# Reset environment
+# Redeploy; volumes and their data are kept
+make stop && make start ENV=dev
+
+# Last resort: delete every volume of the environment and the image
 make reset ENV=dev
 ```
 
 ### Database Issues
 
+`make volumes-delete` has no `VOLUMES=` option: it deletes all five volumes of
+the environment, files included, so there is no database-only reset. To start
+the development environment over with empty volumes:
+
 ```bash
-# Reset database
-make volumes-delete ENV=dev VOLUMES=postgres
+make stop
+make volumes-backup ENV=dev   # optional copy, taken while stopped
+make volumes-delete ENV=dev   # asks you to type DELETE
 make volumes-create ENV=dev
-make start
+make start ENV=dev            # migrations run on startup
 ```
 
 ### Port Already in Use

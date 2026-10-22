@@ -289,7 +289,7 @@ make stop                      # Undeploy
 make status                    # Check status
 make logs                      # View logs
 make volumes-backup ENV=dev    # Backup data
-make reset                     # Complete cleanup
+make reset                     # Delete all data and the image
 ```
 
 ### Kubernetes (Helm)
@@ -297,7 +297,7 @@ make reset                     # Complete cleanup
 ```bash
 helm list -n starexec                    # List releases
 helm upgrade starexec starexec/starexec  # Upgrade
-helm uninstall starexec -n starexec      # Remove
+helm uninstall starexec -n starexec      # Remove (deletes the chart's PVCs)
 kubectl logs -n starexec -l app.kubernetes.io/name=starexec # View logs
 ```
 
