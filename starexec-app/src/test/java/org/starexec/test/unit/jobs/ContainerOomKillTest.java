@@ -184,6 +184,25 @@ public class ContainerOomKillTest {
 		assertEquals("", probe.print("pairCgroupMemoryLimitMib"));
 	}
 
+	/** A count or a limit the files do not give as a number is none, and reading it does not end the job script. */
+	@Test
+	public void aValueThatIsNotANumberIsNone() throws Exception {
+		Probe probe = new Probe(folder, true);
+		probe.cgroupV2(0, CONTAINER_LIMIT_BYTES);
+
+		Files.writeString(probe.cgroup.resolve("memory.events"), "low 0\nhigh 0\nmax 3\noom 1\noom_kill x\n");
+		assertEquals("", probe.print("pairCgroupOomKills"));
+
+		Files.writeString(probe.cgroup.resolve("memory.events"), "low 0\nhigh 0\nmax 3\noom 1\n");
+		assertEquals("a kernel that does not count OOM kills", "", probe.print("pairCgroupOomKills"));
+
+		Files.writeString(probe.cgroup.resolve("memory.events"), "");
+		assertEquals("", probe.print("pairCgroupOomKills"));
+
+		Files.writeString(probe.cgroup.resolve("memory.max"), "268435456 bytes\n");
+		assertEquals("", probe.print("pairCgroupMemoryLimitMib"));
+	}
+
 	/** Without a limit to name, the pair log still records the breach. */
 	@Test
 	public void aBreachUnderAnUnreadableLimitIsStillRecorded() throws Exception {
@@ -206,6 +225,7 @@ public class ContainerOomKillTest {
 	public void theCountIsTakenRightAroundTheSolver() throws Exception {
 		List<String> loop = stageLoop();
 
+		int preProcessing = indexOfLineStartingWith(loop, "copyDependencies");
 		int before = indexOfLineStartingWith(loop, "OOM_KILLS_BEFORE_SOLVER=$(pairCgroupOomKills)");
 		int run = indexOfLineStartingWith(loop, "if [ \"$BENCHMARKING_FRAMEWORK\" == \"$BENCHEXEC\" ]; then");
 		int solver = indexOfLineStartingWith(loop, "eval \"$RUNSOLVER_CMD\"");
@@ -214,6 +234,7 @@ public class ContainerOomKillTest {
 
 		assertTrue("the solver must be run in the loop", run >= 0 && solver > run);
 		assertTrue("the count must be taken before the solver starts", before >= 0 && before < run);
+		assertTrue("and after this stage's pre-processor has run", preProcessing >= 0 && preProcessing < before);
 		assertTrue("and again after it returns", after > solver);
 		assertTrue("and before the post-processor runs", postProcessing > after);
 	}
@@ -332,10 +353,14 @@ public class ContainerOomKillTest {
 					+ "echo \"ERROR_DETECTED=$ERROR_DETECTED\"\n");
 		}
 
-		/** What a functions.bash function prints. */
+		/**
+		 * What a functions.bash function prints, read as the jobscript reads it: by assignment, where set -e ends
+		 * the script if the function fails, which run() reports.
+		 */
 		String print(String function) throws Exception {
 			String out = run("declare -F " + function + " > /dev/null || { echo 'no function " + function + "'; exit 3; }\n"
-					+ "echo \"PRINTED=[$(" + function + ")]\"\n");
+					+ "PRINTED=$(" + function + ")\n"
+					+ "echo \"PRINTED=[$PRINTED]\"\n");
 			Matcher m = Pattern.compile("PRINTED=\\[(.*)\\]").matcher(out);
 			assertTrue(out, m.find());
 			return m.group(1);
