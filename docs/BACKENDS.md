@@ -223,6 +223,14 @@ StarExec queue and job. `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` and
 job script replaced both values before execution. They never selected cores or
 changed the effective solver budgets.
 
+The memory limit runsolver enforces on the solver is the job's own.
+`STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` caps each pair's whole container, the job
+script and runsolver included, whatever the job's limit, so a pair whose job
+allows more runs at the ceiling. A job created without a memory limit gets
+16 GiB, more than the default ceiling of 2048 MiB. A solver the kernel stops at
+the ceiling is recorded as a memory breach (`EXCEED_MEM`), and the pair log
+gives both limits. Set the ceiling above the largest memory limit your jobs use.
+
 For scientific measurements, configure topology-aware cpusets with
 `STAREXEC_CPU_PARTITION_COUNT` or `STAREXEC_CPU_PARTITIONS`; see
 [CPU partition scheduling](cpu-partition-scheduling.md). On an unpartitioned
@@ -742,7 +750,7 @@ export OAR_SERVER=oar-server.example.com
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME`     | 5       | Batch size per submission cycle                          |
 | `STAREXEC_NODE_MULTIPLIER`             | 16      | Queue depth = multiplier × nodes                         |
 | `STAREXEC_CONTAINER_POLL_INTERVAL_MS`  | 5000    | Poll interval for job completion                         |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048    | Podman cgroup memory ceiling per container               |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048    | Podman cgroup memory ceiling per container; caps every job's memory limit |
 | `STAREXEC_CPU_PARTITION_COUNT`         | `auto`  | `N > 1` creates topology-aware partitions; `auto` uses multiple NUMA nodes and otherwise remains unpinned |
 | `STAREXEC_CPU_PARTITIONS`              | unset   | Explicit cpusets; overrides the partition count          |
 | `STAREXEC_CONTAINER_CPU_QUOTA_CORES`   | 0       | Unpartitioned CFS cap; does not provide CPU affinity     |

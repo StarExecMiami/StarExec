@@ -1261,6 +1261,72 @@ function sendExceedMemStatus {
 	sendStageFailure $EXCEED_MEM "${STAGE_NUMBERS[STAGE_INDEX]}"
 }
 
+# Records a memory breach the kernel enforced: while the solver ran, the kernel's OOM killer stopped one
+# of the pair's processes, normally because the pair's container reached its memory limit.
+#
+# runsolver enforces only the stage's own memory limit. When the container's limit is lower, the kernel
+# acts first: runsolver then reports a solver ended by a signal and no limit of its own exceeded, and
+# without this the pair was recorded as complete.
+function sendContainerOomStatus {
+	local limit
+	limit=$(pairCgroupMemoryLimitMib)
+	if [ -n "$limit" ]; then
+		limit="$limit MiB"
+	else
+		limit="unknown"
+	fi
+	log "epilog detects that the kernel's OOM killer stopped a process of this pair while the solver ran: the container's memory limit is $limit, and this stage's memory limit is $CURRENT_STAGE_MEMORY MiB"
+	sendStageFailure $EXCEED_MEM "${STAGE_NUMBERS[STAGE_INDEX]}"
+}
+
+# Prints how many of this pair's processes the kernel's OOM killer has stopped, or nothing when that
+# cannot be known.
+#
+# Only a pair with a cgroup of its own has such a count. The Podman backend runs each pair in a container
+# of its own and says so with STAREXEC_PAIR_HAS_OWN_CGROUP; the container's private cgroup namespace makes
+# its cgroup the root of /sys/fs/cgroup. The local backend runs every pair inside the application's cgroup,
+# where a kill cannot be attributed to one pair, so it does not set the flag.
+#
+# cgroup v2 keeps the count in memory.events, v1 (Linux 4.13 and later) in memory.oom_control. The pair's
+# processes live in that cgroup, or on v2 possibly below it, where memory.events counts them too. Never
+# fails: callers run under set -e.
+function pairCgroupOomKills {
+	[ "${STAREXEC_PAIR_HAS_OWN_CGROUP:-}" = true ] || return 0
+	local root="${STAREXEC_CGROUP_ROOT:-/sys/fs/cgroup}"
+	local file
+	for file in "$root/memory.events" "$root/memory/memory.oom_control"; do
+		if [ -r "$file" ]; then
+			awk '$1 == "oom_kill" && $2 ~ /^[0-9]+$/ { print $2; exit }' "$file" 2>/dev/null || true
+			return 0
+		fi
+	done
+	return 0
+}
+
+# Prints the memory limit of this pair's cgroup in MiB, or nothing when it has none or it cannot be read.
+# Never fails, like pairCgroupOomKills.
+function pairCgroupMemoryLimitMib {
+	[ "${STAREXEC_PAIR_HAS_OWN_CGROUP:-}" = true ] || return 0
+	local root="${STAREXEC_CGROUP_ROOT:-/sys/fs/cgroup}"
+	local bytes=""
+	if [ -r "$root/memory.max" ]; then
+		bytes=$(cat "$root/memory.max" 2>/dev/null || true)
+	elif [ -r "$root/memory/memory.limit_in_bytes" ]; then
+		bytes=$(cat "$root/memory/memory.limit_in_bytes" 2>/dev/null || true)
+	fi
+	# No limit reads "max" on v2 and 9223372036854771712 on v1. No real limit has 19 digits (10^18 bytes).
+	if [[ $bytes =~ ^[0-9]+$ ]] && ((${#bytes} < 19)); then
+		echo $((bytes / 1048576))
+	fi
+	return 0
+}
+
+# True when two counts from pairCgroupOomKills, taken before and after the solver ran, show a kill. A
+# missing count is no evidence of anything, so it never is.
+function oomKillsRose {
+	isInteger "${1:-}" && isInteger "${2:-}" && (($2 > $1))
+}
+
 function setStartTime {
 	log "sending start time for pair id = $PAIR_ID"
 	if isContainerMode; then

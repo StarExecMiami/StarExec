@@ -500,6 +500,27 @@ public class PodmanBackendTests {
         );
     }
 
+    /**
+     * Each pair runs in a container of its own, so an OOM kill counted in that container's cgroup is
+     * this pair's. The job script only attributes such a kill to the pair when told so: under the
+     * local backend every pair shares the application's cgroup.
+     */
+    @Test
+    public void eachPairsContainerTellsTheJobScriptItsCgroupIsThePairsOwn()
+        throws Exception {
+        configureBackendForSubmitScript();
+
+        List<String> environment = createEnvironmentVariables(
+            42L,
+            "/app/data/jobin/job_1",
+            "/app/data/joboutput/job_1"
+        );
+        assertTrue(
+            "the job script must be told the container's cgroup is the pair's own",
+            environment.contains("STAREXEC_PAIR_HAS_OWN_CGROUP=true")
+        );
+    }
+
     private void configureCreateContainerSuccess(String containerId) {
         CreateContainerResponse createResponse = mock(CreateContainerResponse.class);
         when(createResponse.getId()).thenReturn(containerId);

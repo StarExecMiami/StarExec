@@ -23,7 +23,7 @@ This guide covers:
 | `STAREXEC_LOCAL_CONCURRENCY` | `min(4, CPU cores)` | Match physical cores; prefer `STAREXEC_LOCAL_CORE_LIST` |
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` | 5 | Keep queue 50-100 deep |
 | `STAREXEC_CONTAINER_POLL_INTERVAL_MS` | 5000 | Lower for latency, higher for scale |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048 | Podman cgroup memory ceiling; match solver requirements |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048 | Podman cgroup memory ceiling; above the largest job memory limit, which it caps |
 | `STAREXEC_CPU_PARTITION_COUNT` | `auto` | `N > 1` creates topology-aware partitions; `auto` leaves a single-NUMA host unpinned |
 | `STAREXEC_CONTAINER_CPU_QUOTA_CORES` | 0 | Optional CFS cap for unpartitioned containers; not a substitute for affinity |
 
