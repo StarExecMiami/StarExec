@@ -98,6 +98,11 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           python3 scripts/check-chart-service-exposure.py
 
+      - name: Check the chart's claims survive helm uninstall
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 scripts/check-chart-pvc-retention.py
+
       - name: Check chart version
         id: chart-info
         run: |

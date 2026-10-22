@@ -361,16 +361,28 @@ helm upgrade starexec starexec/starexec \
 
 ### Uninstalling
 
-`helm uninstall` deletes the PersistentVolumeClaims the chart created, and with
-them the volumes when their reclaim policy is `Delete` (the default for a
-StorageClass). Every values profile except `values-prod.yaml` lets the chart
-create its claims; `values-prod.yaml` uses claims created outside the chart,
-which `helm uninstall` leaves in place. Back up first (see
+`helm uninstall` leaves the PersistentVolumeClaims the chart created, and the
+data on them: the chart marks each one `helm.sh/resource-policy: keep`
+(`persistence.resourcePolicy` in `values.yaml`). An upgrade or rollback that
+stops rendering a claim, for example once `persistence.existingClaims` names
+another one, leaves it as well. A later install with the same release name in
+the same namespace takes the kept claims over again. `values-prod.yaml` uses
+claims created outside the chart, which Helm never deletes.
+
+A release installed before the chart carried the annotation gets it on its next
+`helm upgrade`; until then, `helm uninstall` still deletes its claims.
+
+Deleting a claim deletes its volume when the reclaim policy is `Delete` (the
+default for a StorageClass). Back up first (see
 [Backup and Disaster Recovery](#backup-and-disaster-recovery)).
 
 ```bash
-# Remove the release, and the PVCs the chart created
+# Remove the release; the PVCs and their data stay
 helm uninstall starexec -n starexec
+
+# Delete data as well: list the PVCs, then delete the ones you mean to
+kubectl get pvc -n starexec
+kubectl delete pvc <name> -n starexec
 
 # Remove the namespace and everything in it, PVCs included
 kubectl delete namespace starexec
