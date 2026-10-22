@@ -240,6 +240,11 @@ public class PodmanBackend implements Backend {
     // Flag set during graceful shutdown to reject new submissions
     private volatile boolean shuttingDown = false;
 
+    // Set as the last step of a successful initialize(). BackendInitializer logs a failed
+    // initialize() and lets the application start, so without this a backend with no
+    // engine client, no CPU partitions or no monitor would still be given pairs.
+    private volatile boolean initialized = false;
+
     // Cached legacy node ID for database updates to avoid N+1 queries.
     // Partition-aware code uses partitionNodeIds instead.
     private int cachedNodeId = -1;
@@ -333,6 +338,18 @@ public class PodmanBackend implements Backend {
 
             // Subscribe to container events
             startContainerEventListener();
+
+            initialized = true;
+        } catch (CpuPartitionManager.UnsafePartitionConfigurationException e) {
+            // Not a connection problem, so not reported as one: the configuration asks for
+            // isolation it cannot have, and running unpinned instead would publish
+            // untrustworthy measurements.
+            throw new IllegalStateException(
+                "Podman backend not started: " + e.getMessage() +
+                    ". No Podman job runs until the CPU partition configuration is fixed" +
+                    " and StarExec is restarted.",
+                e
+            );
         } catch (Exception e) {
             // Wrap and throw up stack; logging/handling deferred to caller.
             // Avoid double-logging by NOT logging here + throwing with same message.
@@ -346,6 +363,16 @@ public class PodmanBackend implements Backend {
                 "\nAlternatively, run 'make preflight-podman' for more diagnostics.";
             throw new IllegalStateException(errorMessage, e);
         }
+    }
+
+    /**
+     * A backend that has not finished {@link #initialize} runs nothing, and one that is
+     * shutting down takes nothing new. JobManager asks this before it claims any pair, so
+     * the pairs stay queued instead of failing or running unpinned.
+     */
+    @Override
+    public boolean isQueueDispatchable(String queueName) {
+        return initialized && !shuttingDown;
     }
 
     private List<CpuPartition> getEffectivePartitions() {
@@ -1296,6 +1323,18 @@ public class PodmanBackend implements Backend {
         if (shuttingDown) {
             log.warn("Rejecting submission for pair " + pairId +
                      " — backend is shutting down");
+            return -1;
+        }
+
+        // JobManager does not dispatch to an uninitialized backend (isQueueDispatchable),
+        // so this only catches a caller that skipped that check. A pair is not to blame and
+        // stays queued; a maintenance script (no pair) just does not run.
+        if (!initialized) {
+            String reason = "Podman backend is not initialized (see the startup log)";
+            if (pairId > 0) {
+                throw new SubmissionDeferredException(reason + "; pair " + pairId + " stays queued");
+            }
+            log.warn(reason + "; not running maintenance script " + scriptPath);
             return -1;
         }
 
