@@ -771,15 +771,15 @@ function initUI() {
 
 		$("#spaceOverviewUpdate")
 		.click(function() {
-			updateSpaceOverviewGraph();
+			updateSpaceOverviewGraph(true);
 		});
 		$("#solverComparisonUpdate")
 		.click(function() {
-			updateSolverComparison(300, "white");
+			updateSolverComparison(300, "white", true);
 		});
 		$("#pairTimeUpdate")
 		.click(function() {
-			updatePairJobTimeGraph();
+			updatePairJobTimeGraph(true);
 		});
 
 		if (star.isUserSubscribedToJob !== undefined) {
@@ -1161,7 +1161,65 @@ function setupPostProcessButton() {
 	});
 }
 
-function updatePairJobTimeGraph() {
+// The graph services answer a chart as text (a path, or JSON holding the path and an image map),
+// and a refusal as a JSON status code. Given the text, parseReturnCode finds no "success" field
+// and reports success, so a refusal showed no message and left a broken or stale chart.
+function parseGraphResponse(text) {
+	if (typeof text === "string" && text.charAt(0) === "{") {
+		try {
+			return JSON.parse(text);
+		} catch (e) {
+			return text;
+		}
+	}
+	return text;
+}
+
+// Nothing aborts a graph request when the user asks for the same graph again, so two can be in
+// flight and the older one can answer last. Only the latest request for a graph may draw it, clear
+// it or say why it could not be drawn: an older answer would replace or clear the newer chart.
+var latestGraphRequests = {};
+
+// Starts a request for graph; the function returned tells whether it is still the latest one.
+function startGraphRequest(graph) {
+	var request = (latestGraphRequests[graph] || 0) + 1;
+	latestGraphRequests[graph] = request;
+	return function() {
+		return latestGraphRequests[graph] === request;
+	};
+}
+
+// An HTTP error never reaches the success callback, which left the previous chart up.
+// Only a graph the user asked for (announce) says why it is missing: the page also draws the
+// solver comparison by itself whenever its statistics load, and that draw must stay silent.
+function onGraphRequestError(isLatest, clearGraph, announce) {
+	return function(xhr, textStatus) {
+		if (textStatus === "abort" || !isLatest()) {
+			return;
+		}
+		clearGraph();
+		if (announce) {
+			showMessage("error", "The graph could not be drawn (HTTP " + xhr.status + ").", 5000);
+		}
+	};
+}
+
+function clearPairTimeGraph() {
+	$("#pairTimeGraph, #bigPairTimeGraph").attr("src", starexecRoot + "images/noDisplayGraph.png");
+}
+
+function clearSpaceOverviewGraph() {
+	$("#spaceOverview, #bigSpaceOverview").attr("src", starexecRoot + "images/noDisplayGraph.png");
+}
+
+// Clears both sizes and their image maps, so that no link points at a benchmark of an earlier chart.
+function clearSolverComparison() {
+	$("#solverComparison300, #solverComparison800").attr("src", starexecRoot + "images/noDisplayGraph.png");
+	$("#solverComparisonMap300, #solverComparisonMap800").remove();
+}
+
+// announce: true when the user pressed Update, so that a graph that cannot be drawn says why.
+function updatePairJobTimeGraph(announce) {
 	var postUrl = null;
 
 	if(DETAILS_JOB.isAnonymousPage) {
@@ -1171,25 +1229,31 @@ function updatePairJobTimeGraph() {
 	}
 	log('updatePairJobTimeGraph postUrl: ' + postUrl);
 
+	var isLatest = startGraphRequest("pairTime");
 	var xhr = $.post(
 			postUrl,
 			{},
 			function(returnCode) {
-				var s = parseReturnCode(returnCode);
+				if (!isLatest()) {
+					return;
+				}
+				var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
 				if(s) {
 					$("#pairTimeGraph").attr("src", returnCode);
 					$("#bigPairTimeGraph").attr("src", returnCode + "800");
 				} else {
-					$("#pairTimeGraph").attr("src", starexecRoot + "images/noDisplayGraph.png");
+					clearPairTimeGraph();
 				}
 			},
 			"text"
 		);
+		xhr.fail(onGraphRequestError(isLatest, clearPairTimeGraph, announce === true));
 		openAjaxRequests.push(xhr);
 }
 
 
-function updateSpaceOverviewGraph() {
+// announce: true when the user pressed Update, so that a graph that cannot be drawn says why.
+function updateSpaceOverviewGraph(announce) {
 	var configs = [];
 	var logY = false;
 	$("#spaceOverviewSelections option:selected").each(function() {
@@ -1208,11 +1272,15 @@ function updateSpaceOverviewGraph() {
 	}
 	log('updateSpaceOverviewGraph postUrl: ' + postUrl);
 
+	var isLatest = startGraphRequest("spaceOverview");
 	var xhr = $.post(
 		postUrl,
 		{logY: logY, selectedIds: configs},
 		function(returnCode) {
-			var s = parseReturnCode(returnCode);
+			if (!isLatest()) {
+				return;
+			}
+			var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
 			if (s) {
 				var currentConfigs = [];
 				$("#spaceOverviewSelections option:selected").each(function() {
@@ -1226,17 +1294,20 @@ function updateSpaceOverviewGraph() {
 					$("#bigSpaceOverview").attr("src", returnCode + "800");
 				}
 			} else {
-			$("#spaceOverview")
-			.attr("src", starexecRoot + "images/noDisplayGraph.png");
+				clearSpaceOverviewGraph();
 			}
 		},
 		"text"
 	);
+	xhr.fail(onGraphRequestError(isLatest, clearSpaceOverviewGraph, announce === true));
 	openAjaxRequests.push(xhr);
 }
 
-//size is in pixels and color is a string
-function updateSolverComparison(size, color) {
+//size is in pixels and color is a string. announce: true when the user pressed Update, so that a
+//comparison that cannot be drawn says why; the draw that follows each statistics load passes nothing.
+//isLatest: passed only by the small chart's request for the large one, which belongs to its request.
+function updateSolverComparison(size, color, announce, isLatest) {
+	isLatest = isLatest || startGraphRequest("solverComparison");
 	var config1 = $("#solverChoice1 option:selected").attr("value");
 	var config2 = $("#solverChoice2 option:selected").attr("value");
 
@@ -1252,7 +1323,10 @@ function updateSolverComparison(size, color) {
 		postUrl,
 		{},
 		function(returnCode) {
-			var s = parseReturnCode(returnCode);
+			if (!isLatest()) {
+				return;
+			}
+			var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
 			if (s) {
 				var jsonObject = $.parseJSON(returnCode);
 				var src = jsonObject.src;
@@ -1263,16 +1337,16 @@ function updateSolverComparison(size, color) {
 					$("#dialog-solverComparison").append(map);
 				} else {
 					$("#graphField").append(map);
-					updateSolverComparison(800, "black");
+					updateSolverComparison(800, "black", announce, isLatest);
 				}
 			} else {
-			$("#solverComparison300")
-			.attr("src", starexecRoot + "images/noDisplayGraph.png");
+				clearSolverComparison();
 			}
 		},
 		"text"
 	);
 
+	xhr.fail(onGraphRequestError(isLatest, clearSolverComparison, announce === true));
 	openAjaxRequests.push(xhr);
 }
 
