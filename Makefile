@@ -82,14 +82,17 @@ VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
 # Podman deployments require values files that do not rely on pre-existing
 # Kubernetes secrets.  The K8s profiles (values-dev.yaml, values-prod.yaml)
 # use `existingSecret` which must be created before deployment.  The Podman
-# profiles (values-local-dev.yaml, values-podman.yaml) use
+# profiles (values-local-dev.yaml and copies of values-podman.yaml.example) use
 # `allowInsecureDevCredentials: true` so the Helm chart creates the secret.
 #
 #   ENV=dev  → values-local-dev.yaml (Podman local dev)
 #   ENV=ci   → values-ci.yaml          (CI — already Podman-compatible)
-#   ENV=prod → values-prod.yaml        (K8s only; use values-podman.yaml for Podman)
+#   ENV=prod → values-prod.yaml        (Kubernetes only; see below)
 #
-# Explicit command-line overrides (VALS=...) are always respected.
+# Explicit command-line overrides (VALS=...) are always respected. A Podman
+# deploy with Helm refuses values-prod.yaml however it was selected
+# (require_podman_values): on Podman, production passes
+# VALS=charts/starexec/values-podman-prod.yaml, a copy of the example.
 # ============================================================================
 PODMAN_DEV_VALUES_FILE := $(CHART_DIR)/values-local-dev.yaml
 ifneq ($(origin VALS),command line)
@@ -600,6 +603,31 @@ define require_values_file
 			echo "Available values files:"; \
 			ls -1 $(CHART_DIR)/values*.yaml $(CHART_DIR)/values*.yaml.example 2>/dev/null | sed 's/^/  /'; \
 		fi; \
+		echo ""; \
+		exit 1; \
+	fi
+endef
+
+# require_podman_values — refuse to deploy values-prod.yaml, the Kubernetes
+# profile, to Podman with Helm, however it was selected (ENV=prod selects it
+# unless VALS= names another file). Its pod reads a database Secret that the
+# render does not create, and cleanup_deployment removes the release's Podman
+# secrets before every deploy; it also mounts other volumes than the
+# starexec-$(ENV)-* volumes that job containers and volumes-backup use.
+# Runs before anything is pulled, created or stopped. Without Helm,
+# deploy-podman-direct renders no values file, so the check does not apply.
+# Usage: @$(call require_podman_values)
+define require_podman_values
+	if [ "$(abspath $(PODMAN_VALS))" = "$(abspath $(CHART_DIR)/values-prod.yaml)" ] && command -v helm >/dev/null 2>&1; then \
+		echo ""; \
+		echo "${RED}  ✗  values-prod.yaml is the Kubernetes profile; Podman cannot deploy it${RESET}"; \
+		echo "     Its pod needs a database Secret this deployment does not create, and"; \
+		echo "     it mounts other volumes than the starexec-$(ENV)-* volumes."; \
+		echo "     ENV=prod selects it unless VALS= names the Podman values file:"; \
+		echo ""; \
+		echo "  cp $(CHART_DIR)/values-podman.yaml.example $(CHART_DIR)/values-podman-prod.yaml"; \
+		echo "  # set postgres.password and postgres.rootPassword in it, then:"; \
+		echo "  make deploy-podman ENV=prod VALS=$(CHART_DIR)/values-podman-prod.yaml"; \
 		echo ""; \
 		exit 1; \
 	fi
@@ -1160,6 +1188,7 @@ define cleanup_deployment
 endef
 
 deploy-podman: preflight-podman preflight-cgroup
+	@$(call require_podman_values)
 	@echo "${BOLD}${BLUE}Deploying to Podman with environment: $(ENV)${RESET}"
 	@$(MAKE) image
 	@$(MAKE) volumes-create
@@ -1195,6 +1224,7 @@ deploy-podman: preflight-podman preflight-cgroup
 	@echo "  ✓ PostgreSQL readiness gate passed"
 
 deploy-podman-helm:
+	@$(call require_podman_values)
 	@# Verify values file exists before proceeding
 	@if [ ! -f "$(PODMAN_VALS)" ]; then \
 		echo "${RED}✗ Values file not found: $(PODMAN_VALS)${RESET}"; \

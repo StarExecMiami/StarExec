@@ -104,6 +104,11 @@ You should see:
      make start
      ```
 
+     This starts the development profile (`ENV=dev`) with its default
+     credentials. For production, create the Podman production values file and
+     deploy with `ENV=prod` as described in
+     [the Deployment Guide](DEPLOYMENT.md#method-2-podman--makefile-recommended-for-production).
+
 7. Access the application:
      - URL: `http://localhost:7827/starexec`
      - Default credentials: `admin:admin`

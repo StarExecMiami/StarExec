@@ -129,11 +129,22 @@ git checkout containerised
 make start
 
 # Production deployment (requires env-specific values + secure password)
-cp charts/starexec/values-podman.yaml charts/starexec/values-podman-prod.yaml
-# Edit values-podman-prod.yaml for production limits, credentials, and socket path
-export STAREXEC_DB_PASSWORD="$(openssl rand -base64 32)"
-make deploy-podman ENV=prod
+cp charts/starexec/values-podman.yaml.example charts/starexec/values-podman-prod.yaml
+# Edit values-podman-prod.yaml: set postgres.password and postgres.rootPassword
+# to strong values, and the production limits
+export STAREXEC_DB_PASSWORD='<the postgres.password you set>'
+make deploy-podman ENV=prod VALS=charts/starexec/values-podman-prod.yaml
 ```
+
+`VALS=` is required. `ENV=prod` alone selects the Kubernetes profile
+`values-prod.yaml`, whose pod needs a database Secret this deployment does not
+create and mounts other volumes than the `starexec-prod-*` volumes that job
+containers and `make volumes-backup ENV=prod` use; `make deploy-podman` refuses
+it. The database password is `postgres.password`. `make deploy-podman ENV=prod`
+also stops while `STAREXEC_DB_PASSWORD` is unset or the development default,
+and without Helm (`deploy-podman-direct`) the password comes from that variable
+instead, so set both to the same value. `values-podman-prod.yaml` is gitignored
+because it holds these passwords.
 
 ### Environment-Specific Configuration
 
@@ -141,14 +152,14 @@ make deploy-podman ENV=prod
 |-------------|---------|---------|
 | `dev` | `make deploy-podman ENV=dev` | Local development with defaults |
 | `ci` | `make deploy-podman ENV=ci` | CI/testing with ephemeral volumes |
-| `prod` | `make deploy-podman ENV=prod` | Production with secure settings (typically using a custom Podman override such as `charts/starexec/values-podman-prod.yaml`) |
+| `prod` | `make deploy-podman ENV=prod VALS=charts/starexec/values-podman-prod.yaml` | Production, with the Podman values file created above |
 
 ### Production Checklist
 
 Before deploying to production:
 
-- [ ] **Change default password**: `export STAREXEC_DB_PASSWORD="secure-value"`
-- [ ] **Create env-specific values file**: `cp charts/starexec/values-podman.yaml charts/starexec/values-podman-prod.yaml`
+- [ ] **Change default password**: set `postgres.password` in `values-podman-prod.yaml`, and `STAREXEC_DB_PASSWORD` to the same value
+- [ ] **Create env-specific values file**: `cp charts/starexec/values-podman.yaml.example charts/starexec/values-podman-prod.yaml`
 - [ ] **Create volumes**: `make volumes-create ENV=prod`
 - [ ] **Configure backups**: Set up automated `make volumes-backup ENV=prod`
 - [ ] **Set resource limits**: Configure CPU/memory in `values-podman-prod.yaml`
