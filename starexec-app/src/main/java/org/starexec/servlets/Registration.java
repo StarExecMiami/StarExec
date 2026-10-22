@@ -279,7 +279,9 @@ public class Registration extends HttpServlet {
 					// Don't fail the registration if personal space creation fails
 				}
 			try {
-				Mail.sendPassword(user, request.getParameter(Registration.USER_PASSWORD));
+				if (!Mail.sendPassword(user, request.getParameter(Registration.USER_PASSWORD))) {
+					return new ValidatorStatusCode(true, "email_failed");
+				}
 			} catch (Exception e) {
 				log.warn("Failed to send password email to user " + user.getEmail(), e);
 				// Fix: keep success=true because account creation succeeded and only follow-up email delivery failed — see GitHub issue #85 audit
@@ -302,7 +304,9 @@ public class Registration extends HttpServlet {
 			log.info(String.format("Registration was successfully started for user [%s].", sanitizedName));
 
 				try {
-					Mail.sendActivationCode(user, code);
+					if (!Mail.sendActivationCode(user, code)) {
+						return new ValidatorStatusCode(true, "email_failed");
+					}
 				} catch (Exception e) {
 					log.warn("Failed to send activation email to user " + user.getEmail(), e);
 					// Fix: keep success=true because registration succeeded and only follow-up email delivery failed — see GitHub issue #85 audit
