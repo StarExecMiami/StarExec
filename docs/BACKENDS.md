@@ -425,10 +425,21 @@ On startup, `KubernetesNativeBackend` now performs a reconciliation pass
 before the monitor starts. It scans ENQUEUED and RUNNING DB pairs,
 compares them to live managed Kubernetes Jobs, rebuilds in-memory tracking
 for live jobs, processes terminal jobs through the normal completion
-callback, resets stale ENQUEUED pairs back to pending, and marks stale
-RUNNING pairs as failed. During graceful shutdown it stops accepting new
-submissions, drains terminal jobs one final time, stops the monitor, and
-preserves still-running Kubernetes Jobs for the next startup recovery pass.
+callback, and resets stale ENQUEUED pairs back to pending. A RUNNING pair
+whose Job no longer exists is left RUNNING and logged as
+`RECONCILIATION INTERVENTION REQUIRED`: no result is invented for it. Within
+three hours the periodic broken-pair check sets it to `ERROR_SUBMIT_FAIL`,
+which the automatic rerun does not retry; rerun such pairs by hand. During
+graceful shutdown it stops accepting new submissions, drains terminal jobs
+one final time, stops the monitor, and preserves still-running Kubernetes
+Jobs for the next startup recovery pass.
+
+Kubernetes deletes a finished Job `kubernetes.ttlSecondsAfterFinished`
+seconds after it ends (`STAREXEC_K8S_JOB_TTL_SECONDS`, default 3600). When
+a pair's Job finishes while StarExec is down and is deleted before StarExec
+starts again, the pair's result is never recorded and the pair ends up as
+above. To ride out a longer outage, raise the value above its length; every
+finished Job then stays in the namespace that much longer.
 
 ### Verified differences from the legacy backend
 
