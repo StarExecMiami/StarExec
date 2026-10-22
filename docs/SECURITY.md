@@ -551,24 +551,38 @@ sudo usermod -aG backup starexec
 
 ### Response Plan
 
-1. **Isolate the system**
+1. **Preserve evidence first.** The application log (`/var/log/starexec`) and the console log exist
+   only inside the app container, on no volume. `make stop` and scaling the deployment to zero
+   delete that container, so copy the logs out before you stop anything.
    ```bash
-   # Stop all services
-   make stop
-   
-   # Block network access
-   sudo iptables -A INPUT -j DROP
-   sudo iptables -A OUTPUT -j DROP
-   ```
+   mkdir -p forensics
 
-2. **Preserve evidence**
-   ```bash
-   # Snapshot volumes
-   make volumes-backup ENV=prod
-   
-   # Copy logs
-   cp -r /var/log/starexec /forensics/logs-$(date +%Y%m%d)
+   # Kubernetes (namespace starexec)
+   kubectl -n starexec logs deploy/starexec -c app --timestamps > forensics/app-console.log
+   kubectl -n starexec exec deploy/starexec -c app -- tar -C /var/log -cf - starexec > forensics/app-logs.tar
+   kubectl -n starexec get pods,jobs,events -o wide > forensics/cluster-state.txt
+
+   # Podman: the app container is starexec-app, or starexec-pod-app when deployed with Helm
+   APP=$(podman ps --format '{{.Names}}' | grep -E '^starexec(-pod)?-app$')
+   podman logs --timestamps "$APP" > forensics/app-console.log
+   podman cp "$APP":/var/log/starexec forensics/app-logs
    ```
+   Then dump the database. On Podman, `make volumes-backup ENV=...` must use the `ENV` you
+   deployed with: a volume that does not exist under that name is created empty, and its archive
+   holds only `EMPTY_VOLUME.txt`. List each archive with `tar -tzf` before you rely on it.
+
+2. **Isolate the system** without cutting off your own access.
+   ```bash
+   # Kubernetes: stops the app and its embedded PostgreSQL; the data stays on its claims
+   kubectl -n starexec scale deploy/starexec --replicas=0
+
+   # Podman: removes the pod; named volumes are kept
+   make stop
+   ```
+   Pair Jobs that are already running keep running; list them with `kubectl -n starexec get jobs`.
+   Do not append `iptables -A INPUT -j DROP` and `iptables -A OUTPUT -j DROP` on a host you reach
+   over the network: they also drop your SSH session, and on a cluster node the cluster's own
+   traffic. Block access at the proxy or firewall in front of StarExec, or from the console.
 
 3. **Investigate**
    - Review logs for unauthorized access
