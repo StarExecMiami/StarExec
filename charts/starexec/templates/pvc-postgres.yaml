@@ -5,6 +5,10 @@ metadata:
   name: {{ include "starexec.volumeName" (list . "postgres") }}
   labels:
     {{- include "chart.labels" . | nindent 4 }}
+  {{- with .Values.persistence.resourcePolicy }}
+  annotations:
+    helm.sh/resource-policy: {{ . | quote }}
+  {{- end }}
 spec:
   accessModes:
     - ReadWriteOnce

@@ -3630,6 +3630,141 @@ public class JobPairs {
         return ConditionalPairUpdateResult.ERROR;
     }
 
+    /** What {@link #settleStaleSubmission} did with a pair whose submission went stale. */
+    public enum StaleSubmissionOutcome {
+        /** The execution was confirmed stopped and the job was killed or deleted: the pair is KILLED. */
+        KILLED,
+        /**
+         * The execution was confirmed stopped and the job may still run the pair -- it is paused,
+         * or was resumed meanwhile -- so the pair is back at PENDING_SUBMIT.
+         */
+        RETURNED_TO_PENDING,
+        /**
+         * Only the execution id was written: the stop was not confirmed, or pause had already
+         * moved the pair on, so its status is left to the kill, pause and monitor paths.
+         */
+        EXECUTION_RECORDED,
+        /** The pair is gone, or another execution owns it. Nothing was written. */
+        STALE,
+        /** The database call failed. Nothing was written. */
+        ERROR,
+    }
+
+    /**
+     * Settles a pair that {@code JobManager.submitJobs} claimed and submitted but could not
+     * record the execution of, because the pair stopped being submit-eligible in between: its
+     * job was killed, deleted or paused, or pause had already marked the pair PAUSED.
+     *
+     * <p>Nothing used to be written for such a pair. It stayed ENQUEUED with no execution id,
+     * so {@code Jobs.kill} could not name its execution and refused to call it stopped: deleting
+     * the job was refused on every retry, and the pair stayed ENQUEUED until
+     * FIND_BROKEN_JOB_PAIRS filed it ERROR_SUBMIT_FAIL, up to three hours later.
+     *
+     * <p>The execution id is always recorded, so that every path that proves a stop by identity
+     * (kill, delete, rerun) can reach the execution. The status is settled only after the
+     * caller confirmed that execution stopped, and only while the pair is still ENQUEUED: KILLED
+     * when its job was killed or deleted, PENDING_SUBMIT otherwise. PENDING_SUBMIT rather than
+     * PAUSED for a paused job, because ResumeJob resumes only the PAUSED pairs its own statement
+     * can see: a PAUSED written just after a concurrent resume would strand the pair, whereas a
+     * pending pair of a paused job is simply not claimed until the job is resumed, and KillJob
+     * kills it like any other pending pair.
+     *
+     * <p>Only the pair row is locked. The job's flags are then read without a lock, as
+     * {@code RetryNeverStartedPair} does: killed and deleted never revert, and a pause, resume
+     * or kill that starts after this commits treats a PENDING_SUBMIT pair like any other.
+     * PauseJob, ResumeJob and KillJob lock the job row first and then only pairs at
+     * PENDING_SUBMIT or PAUSED, so none of them waits for the ENQUEUED pair this holds. The
+     * price is one window of a few statements, which {@code RetryNeverStartedPair} shares: a
+     * kill that commits after the flags are read and before this commits does not see the
+     * pair, which then stays PENDING_SUBMIT under a killed job until the job is killed or
+     * deleted again. A refused deletion is retried, and each retry runs KillJob. The identity
+     * fence is that of {@link #tryReturnDeferredPairToPending}: nothing is written unless
+     * {@code COALESCE(sge_id, 0)} still equals the value loaded before the claim.
+     *
+     * @param pairId        the pair whose submission went stale
+     * @param execIdAtClaim {@code COALESCE(sge_id, 0)} as loaded before the claim
+     * @param execId        the execution the backend created for this submission
+     * @param stopConfirmed whether the backend confirmed that execution stopped
+     * @return what was written
+     */
+    public static StaleSubmissionOutcome settleStaleSubmission(
+        int pairId,
+        int execIdAtClaim,
+        int execId,
+        boolean stopConfirmed
+    ) {
+        Connection con = null;
+        PreparedStatement lockPs = null;
+        PreparedStatement execPs = null;
+        PreparedStatement jobPs = null;
+        PreparedStatement pairPs = null;
+        PreparedStatement stagePs = null;
+        ResultSet lockRs = null;
+        ResultSet jobRs = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+
+            lockPs = con.prepareStatement(
+                "SELECT status_code, COALESCE(sge_id, 0), job_id FROM starexec.job_pairs WHERE id = ? FOR UPDATE");
+            lockPs.setInt(1, pairId);
+            lockRs = lockPs.executeQuery();
+            if (!lockRs.next() || lockRs.getInt(2) != execIdAtClaim) {
+                Common.doRollback(con);
+                return StaleSubmissionOutcome.STALE;
+            }
+            final int status = lockRs.getInt(1);
+            final int jobId = lockRs.getInt(3);
+
+            execPs = con.prepareStatement("UPDATE starexec.job_pairs SET sge_id = ? WHERE id = ?");
+            execPs.setInt(1, execId);
+            execPs.setInt(2, pairId);
+            execPs.executeUpdate();
+
+            if (!stopConfirmed || status != StatusCode.STATUS_ENQUEUED.getVal()) {
+                Common.endTransaction(con);
+                return StaleSubmissionOutcome.EXECUTION_RECORDED;
+            }
+
+            jobPs = con.prepareStatement(
+                "SELECT COALESCE(killed, FALSE) OR COALESCE(deleted, FALSE) FROM starexec.jobs WHERE id = ?");
+            jobPs.setInt(1, jobId);
+            jobRs = jobPs.executeQuery();
+            // job_pairs.job_id references jobs, so the row is there; a missing one reads as ended.
+            final boolean ended = !jobRs.next() || jobRs.getBoolean(1);
+            final int target = ended
+                ? StatusCode.STATUS_KILLED.getVal()
+                : StatusCode.STATUS_PENDING_SUBMIT.getVal();
+
+            pairPs = con.prepareStatement("UPDATE starexec.job_pairs SET status_code = ? WHERE id = ?");
+            pairPs.setInt(1, target);
+            pairPs.setInt(2, pairId);
+            pairPs.executeUpdate();
+
+            stagePs = con.prepareStatement(
+                "UPDATE starexec.jobpair_stage_data SET status_code = ? WHERE jobpair_id = ?");
+            stagePs.setInt(1, target);
+            stagePs.setInt(2, pairId);
+            stagePs.executeUpdate();
+
+            Common.endTransaction(con);
+            return ended ? StaleSubmissionOutcome.KILLED : StaleSubmissionOutcome.RETURNED_TO_PENDING;
+        } catch (Exception e) {
+            log.error("settleStaleSubmission pairId=" + pairId + ", execId=" + execId, e);
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(jobRs);
+            Common.safeClose(lockRs);
+            Common.safeClose(stagePs);
+            Common.safeClose(pairPs);
+            Common.safeClose(jobPs);
+            Common.safeClose(execPs);
+            Common.safeClose(lockPs);
+            Common.safeClose(con);
+        }
+        return StaleSubmissionOutcome.ERROR;
+    }
+
     /**
      * Marks a RUNNING pair as a terminal failure, but only if the pair
      * is still in RUNNING status (prevents race with concurrent updates).

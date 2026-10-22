@@ -417,6 +417,12 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	log "listing contents of the output directory"
 	ls -l "$OUT_DIR"
 
+	# The kernel's count of this pair's OOM kills, taken around the solver alone: the pre-processor has
+	# run by now, and the post-processor runs after the second count. runsolver enforces the stage's own
+	# memory limit; when the container's limit is lower, the kernel stops the solver first, and only this
+	# count shows it. Empty for pairs without a cgroup of their own.
+	OOM_KILLS_BEFORE_SOLVER=$(pairCgroupOomKills)
+
 	if [ "$BENCHMARKING_FRAMEWORK" == "$BENCHEXEC" ]; then
 		MEM_IN_BYTES=$(( CURRENT_STAGE_MEMORY * 1000000 ))
 
@@ -547,6 +553,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		fi
 	fi
 
+	OOM_KILLS_AFTER_SOLVER=$(pairCgroupOomKills)
 
 	# move the working directory back to the top level sandbox
 	cd $WORKING_DIR
@@ -659,6 +666,10 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 			ERROR_DETECTED=true
 		elif (grep 'VSize exceeded' "$WATCHFILE" ) then
 			sendExceedMemStatus
+			ERROR_DETECTED=true
+		# Last, as BenchExec does: a limit runsolver enforced itself names the limit that ended the run.
+		elif oomKillsRose "$OOM_KILLS_BEFORE_SOLVER" "$OOM_KILLS_AFTER_SOLVER"; then
+			sendContainerOomStatus
 			ERROR_DETECTED=true
 		fi
 	fi

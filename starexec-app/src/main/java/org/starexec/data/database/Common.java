@@ -110,7 +110,8 @@ public class Common {
 	}
 
 	/**
-	 * Creates a new historical record in the logins table which keeps track of all user logins.
+	 * Records one login in the logins table. The table only holds the logins since the last weekly report:
+	 * the weekly reports task in {@code PeriodicTasks} empties it with {@link Logins#resetLogins()}.
 	 * @param userId The user that has logged in
 	 * @param ipAddress The IP address the user logged in from
 	 * @param browser The browser/agent information about the browser the user logged in with

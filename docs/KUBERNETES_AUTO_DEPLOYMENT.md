@@ -280,7 +280,7 @@ make k8s-generate-values        # Generate Helm values
 # Deployment
 make k8s-deploy-auto            # Complete automated deployment
 make deploy-k8s ENV=prod        # Deploy with values
-make undeploy-k8s               # Remove deployment
+make undeploy-k8s               # helm uninstall: keeps the PVCs and their data
 
 # Status
 make k8s-status                 # Show cluster and deployment status
@@ -321,7 +321,9 @@ The Role and its binding are rendered whenever the chart is configured for a
 Kubernetes backend, so a normal `helm upgrade` applies the permission with no
 manual step. If you manage RBAC outside this chart — a hand-written Role or
 ClusterRole bound to the application's service account — you must carry the
-equivalent pod read permission yourself.
+equivalent pod read permission yourself, and the rest of the backend's
+permissions listed in [BACKENDS.md](BACKENDS.md) (its namespace, nodes, and
+Job deletion).
 
 **If the permission is missing** the backend does not fail. It logs once, per
 process, that it cannot list pods in the namespace and that job-level behavior
@@ -556,8 +558,12 @@ make k8s-status
 ```bash
 # Control script behavior
 KUBECONFIG=/path/to/kubeconfig make k8s-detect
-DRY_RUN=true make k8s-setup
+make k8s-setup-dry-run    # preview what make k8s-setup would change
 ```
+
+`DRY_RUN` does not reach `make k8s-setup`: with or without it, the target labels
+the worker nodes, creates the namespace, and creates the data PVC when it finds a
+storage class. Preview with `make k8s-setup-dry-run`.
 
 When the default `kubectl` context is broken but `microk8s kubectl` works,
 the Makefile now exports a temporary kubeconfig from `microk8s config` for
