@@ -1,0 +1,38 @@
+name: Podman Render
+
+# make start renders the Podman pod with scripts/generate-render-yaml.sh when Helm is not installed.
+# The test runs that script on the real template and checks the pod can start job containers.
+on:
+  push:
+    branches: [UMprod, dev, containerised]
+    paths:
+      - "render.yaml.template"
+      - "scripts/generate-render-yaml.sh"
+      - "scripts/test_generate_render_yaml.py"
+      - "charts/starexec/values.yaml"
+      - ".github/workflows/podman-render.yml"
+  pull_request:
+    branches: [UMprod, dev, containerised]
+    paths:
+      - "render.yaml.template"
+      - "scripts/generate-render-yaml.sh"
+      - "scripts/test_generate_render_yaml.py"
+      - "charts/starexec/values.yaml"
+      - ".github/workflows/podman-render.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    name: Render the Podman pod without Helm
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test the render script
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 -m unittest discover -s scripts -p 'test_generate_render_yaml.py' -v
