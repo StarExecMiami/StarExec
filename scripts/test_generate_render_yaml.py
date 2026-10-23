@@ -473,7 +473,10 @@ class AppMemoryTests(unittest.TestCase):
                 result = r.run()
                 self.assertEqual(0, result.returncode, result.stderr)
                 container = app(r.pod())
-                heap = java_heap_bytes(env_of(container).get("JAVA_OPTS") or image_opts)
+                env = env_of(container)
+                # A JAVA_OPTS that the pod names replaces the image's, even when it is empty or has no value.
+                opts = (env["JAVA_OPTS"] or "") if "JAVA_OPTS" in env else image_opts
+                heap = java_heap_bytes(opts)
                 self.assertIsNotNone(
                     heap, "no -Xmx in the image's or the pod's JAVA_OPTS"
                 )
