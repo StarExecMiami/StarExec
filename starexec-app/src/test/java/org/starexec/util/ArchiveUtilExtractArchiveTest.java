@@ -85,6 +85,15 @@ public class ArchiveUtilExtractArchiveTest {
 	}
 
 	/**
+	 * A file name with no directory leaves nowhere to extract to. The method returns false for that too; it does
+	 * not throw.
+	 */
+	@Test
+	public void aPathWithNoDirectoryIsNotExtracted() {
+		assertFalse(ArchiveUtil.extractArchive("spaces.zip"));
+	}
+
+	/**
 	 * Returns the given one-entry zip archive with the uncompressed size in its central directory set to
 	 * {@code size}.
 	 */
