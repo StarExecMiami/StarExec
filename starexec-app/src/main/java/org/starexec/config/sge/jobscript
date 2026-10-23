@@ -360,6 +360,10 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	# this will be set to true below if the job pair gets deadlocked
 	echo "Calling killDeadlockedJobPair"
 
+	# The watchdog leaves this file behind when it fires, and the check after the solver reads
+	# it. Removed before each stage's watchdog is armed, so an earlier stage's record cannot
+	# be read as this one's; a failure here ends the pair rather than risking that.
+	rm -f "$(deadlockWatchdogFiredFile)"
 	killDeadlockedJobPair "$STAGE_WATCHDOG_TIMEOUT" "$JOB_PAIR_EXTRA_TIME" "$SANDBOX_PARAM" &
 	# Get the process of our defensive killDeadlockedJobPair function.
 	KILL_DEADLOCKED_JOB_PAIR_PID=$!
@@ -564,15 +568,22 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	# B7: the watchdog started before this stage's pre-processor now also has to
 	# outlive this point, to cover the post-processor phase still ahead (copyOutput
-	# below) -- so only PROBE its liveness here with `kill -0` (sends no signal)
-	# instead of ending it. The real kill happens once this stage's post-processing
-	# is done (stopDeadlockWatchdog, right after the copyOutput call below), and
-	# again from exitJobscript as a safety net for every early-exit path in between.
+	# below) -- so it is not stopped here, only asked whether it has already fired.
+	# The real kill happens once this stage's post-processing is done
+	# (stopDeadlockWatchdog, right after the copyOutput call below), and again from
+	# exitJobscript as a safety net for every early-exit path in between.
+	#
+	# Whether it fired is read from the record it leaves before killing anything, not from
+	# whether it is still running. A watchdog gone without firing -- killed by the kernel or
+	# a stray signal, or ended by an error of its own -- used to be read as a deadlock, so
+	# the stage was recorded as a wall-clock timeout even when its solver had finished in time.
 	log "Runsolver finished. Checking whether the defensive killall function already fired."
 	JOB_PAIR_DEADLOCKED=false
-	if ! kill -0 "$KILL_DEADLOCKED_JOB_PAIR_PID" 2>/dev/null; then
+	if deadlockWatchdogFired; then
 		log "Job pair was deadlocked (killDeadlockedJobPair already ran)."
 		JOB_PAIR_DEADLOCKED=true
+	elif ! isOwnLiveChild "${KILL_DEADLOCKED_JOB_PAIR_PID:-}"; then
+		log "The deadlock watchdog ended without firing; this stage is judged on its own output."
 	fi
 
 	log "listing contents of the output directory recursively"
