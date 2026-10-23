@@ -28,7 +28,6 @@ import org.starexec.util.Timer;
 import org.starexec.util.Util;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.sql.SQLException;
@@ -1105,7 +1104,7 @@ public abstract class JobManager {
 					}
 				}
 				replacements.put("$$BENCH_SAVE_PATH$$", benchDirPath);
-			} catch (FileNotFoundException e) {
+			} catch (IOException e) {
 				log.error("Could not get unique benchmark directory.", e);
 			}
 		} else {

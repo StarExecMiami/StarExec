@@ -18,12 +18,16 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URL;
 import java.net.URI;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.nio.charset.StandardCharsets;
 
@@ -114,6 +118,12 @@ public class UploadBenchmark extends HttpServlet {
 						json = "{\"jobId\": " + jobId + ", \"status\": \"PENDING\", \"progressPercentage\": 0, \"totalFilesFound\": 0, \"totalFilesProcessed\": 0}";
 					}
 					response.getWriter().write(json);
+				} else if (isDeletedUser(userId)) {
+					// The user was deleted while the upload was under way (#275).
+					response.sendError(
+						HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+						"Could not find the user uploading these benchmarks"
+					);
 				} else {
 					response.sendError(
 						HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
@@ -159,98 +169,191 @@ public class UploadBenchmark extends HttpServlet {
 				Integer.parseInt(depRootRaw) : spaceId;
 		final Permission perm = this.extractPermissions(form);
 		final String localOrUrlOrGit = (String) form.get(FILE_LOC);
-		
-		// Save uploaded file
-		File archiveFile = null;
-		String sourceUrl = null;
+
+		// Where the archive comes from: the file in this request, or an address to download it from.
+		PartWrapper fileToUpload = null;
+		URL url = null;
+		String archiveName;
 		if (localOrUrlOrGit.equals("local")) {
-			PartWrapper fileToUpload = (PartWrapper) form.get(BENCHMARK_FILE);
+			fileToUpload = (PartWrapper) form.get(BENCHMARK_FILE);
 			if (fileToUpload == null) {
 				throw new Exception("No uploaded benchmark file provided for local upload");
 			}
-			
-			// Create unique directory for this upload
-			File uniqueDir = getDirectoryForBenchmarkUpload(userId, null);
-			archiveFile = new File(uniqueDir, FilenameUtils.getName(fileToUpload.getName()));
-			fileToUpload.write(archiveFile);
-			
-		log.info(method, "Saved uploaded file to: " + archiveFile.getAbsolutePath());
-	} else if (localOrUrlOrGit.equals("URL")) {
-		// Downloaded by the upload worker, not here (#139): an archive can take minutes to fetch,
-		// which would hold this request, and the proxy in front of it, open. The job records the
-		// address and the file the worker writes it to; isRequestValid has checked the address.
-		URL url = new URI(((String) form.get(FILE_URL)).trim()).toURL();
-		String name = Util.archiveNameFromUrl(url);
-		if (name == null) {
-			throw new IllegalArgumentException(Util.ARCHIVE_NAME_REQUIRED);
-		}
-		archiveFile = new File(getDirectoryForBenchmarkUpload(userId, null), name);
-		sourceUrl = url.toString();
-		log.info(method, "Upload by URL will be downloaded by the upload worker to: " + archiveFile.getAbsolutePath());
-	} else {
-		// Git uploads are the last step of #139 and still need a design decision.
-		throw new UnsupportedOperationException("Git uploads not yet supported in async mode");
-	}
-	
-	// Enqueue job using the new immutable request builder.
-	// This captures all parameters and the archive size for SJF scheduling.
-	UploadJob.UploadJobRequest uploadRequest = new UploadJob.UploadJobRequest.Builder()
-		.archivePath(archiveFile.getAbsolutePath())
-		.userId(userId)
-		.spaceId(spaceId)
-		.uploadMethod(uploadMethod)
-		.benchmarkTypeId(typeId)
-		.downloadable(downloadable)
-		// Jobs are claimed smallest first. An upload by URL is not downloaded yet, so its size is
-		// unknown: it is queued at the most it can be, rather than at 0, which would put every such
-		// job ahead of all others and let one user's downloads hold the worker.
-		.archiveSize(sourceUrl == null ? archiveFile.length() : Util.ARCHIVE_DOWNLOAD_MAX_BYTES)
-		.hasDependencies(hasDependencies)
-		.depRootSpaceId(depRootSpaceId)
-		.linked(linked)
-		.sourceUrl(sourceUrl)
-		// The default permissions of the spaces a "convert" upload creates, as the form chose them.
-		.spacePermissions(perm)
-		.build();
-
-	long jobId = UploadJobQueue.enqueueJob(uploadRequest);
-	
-	if (jobId > 0) {
-			log.info(method, "Enqueued upload job " + jobId + " for user " + userId);
+			archiveName = FilenameUtils.getName(fileToUpload.getName());
+		} else if (localOrUrlOrGit.equals("URL")) {
+			// Downloaded by the upload worker, not here (#139): an archive can take minutes to fetch,
+			// which would hold this request, and the proxy in front of it, open. The job records the
+			// address and the file the worker writes it to; isRequestValid has checked the address.
+			url = new URI(((String) form.get(FILE_URL)).trim()).toURL();
+			archiveName = Util.archiveNameFromUrl(url);
+			if (archiveName == null) {
+				throw new IllegalArgumentException(Util.ARCHIVE_NAME_REQUIRED);
+			}
 		} else {
-			log.error(method, "Failed to enqueue upload job for user " + userId);
+			// Git uploads are the last step of #139 and still need a design decision.
+			throw new UnsupportedOperationException("Git uploads not yet supported in async mode");
 		}
-		
-		return jobId;
+
+		// Nothing else would ever read or delete the directory of an upload that is not queued, so
+		// it is deleted again here unless the job is (#275). That includes the upload of a user
+		// deleted while the archive arrived: the job's insert fails on its foreign key.
+		File uniqueDir = getDirectoryForBenchmarkUpload(userId, null);
+		long jobId = -1;
+		try {
+			File archiveFile = new File(uniqueDir, archiveName);
+			if (fileToUpload != null) {
+				fileToUpload.write(archiveFile);
+				log.info(method, "Saved uploaded file to: " + archiveFile.getAbsolutePath());
+			} else {
+				log.info(method, "Upload by URL will be downloaded by the upload worker to: "
+						+ archiveFile.getAbsolutePath());
+			}
+			String sourceUrl = url == null ? null : url.toString();
+
+			// Enqueue job using the new immutable request builder.
+			// This captures all parameters and the archive size for SJF scheduling.
+			UploadJob.UploadJobRequest uploadRequest = new UploadJob.UploadJobRequest.Builder()
+				.archivePath(archiveFile.getAbsolutePath())
+				.userId(userId)
+				.spaceId(spaceId)
+				.uploadMethod(uploadMethod)
+				.benchmarkTypeId(typeId)
+				.downloadable(downloadable)
+				// Jobs are claimed smallest first. An upload by URL is not downloaded yet, so its size is
+				// unknown: it is queued at the most it can be, rather than at 0, which would put every such
+				// job ahead of all others and let one user's downloads hold the worker.
+				.archiveSize(sourceUrl == null ? archiveFile.length() : Util.ARCHIVE_DOWNLOAD_MAX_BYTES)
+				.hasDependencies(hasDependencies)
+				.depRootSpaceId(depRootSpaceId)
+				.linked(linked)
+				.sourceUrl(sourceUrl)
+				// The default permissions of the spaces a "convert" upload creates, as the form chose them.
+				.spacePermissions(perm)
+				.build();
+
+			jobId = UploadJobQueue.enqueueJob(uploadRequest);
+			if (jobId > 0) {
+				log.info(method, "Enqueued upload job " + jobId + " for user " + userId);
+			} else {
+				log.error(method, "Failed to enqueue upload job for user " + userId);
+			}
+			return jobId;
+		} finally {
+			if (jobId <= 0) {
+				deleteDirectoryForBenchmarkUpload(userId, uniqueDir);
+			}
+		}
 	}
 
 	/**
-	 * Creates a directory that benchmarks can be placed in, which is empty on initialization.
+	 * Creates a new, empty directory that benchmarks can be placed in:
+	 * {@code <benchmark root>/<userId>/<time>}, or a directory named {@code name} inside that.
+	 *
+	 * <p>The time is the current one to the millisecond. A directory that exists already is never
+	 * used again: two uploads, copies or adds that asked in the same millisecond shared it, so that
+	 * each registered the other's files, and one deleting its own files after a failure deleted the
+	 * other's (#275). The next millisecond is tried instead, which keeps the name a time that
+	 * {@link UploadArtifactPathGuard#isUploadDirectoryName} accepts.
 	 *
 	 * @param userId The ID of the user who will own the new benchmarks
-	 * @param name An optional name to be used in the directory structure of userId/date/name. If null, benchmarks will
-	 * be directly under the /date/ directory
-	 * @return File object representing the new directory
+	 * @param name An optional name for a directory inside the new one; null for none
+	 * @return the new directory: the one named {@code name} if a name was given
+	 * @throws IOException if no new directory could be created
 	 */
-	public static File getDirectoryForBenchmarkUpload(int userId, String name) throws FileNotFoundException {
-		final String methodName = "getDirectoryForBenchmarkUpload";
-		File uniqueDir = new File(R.getBenchmarkPath(), "" + userId);
-		uniqueDir = new File(uniqueDir, SHORT_DATE.format(LocalDateTime.now()));
-		if (name != null) {
-			uniqueDir = new File(uniqueDir, name);
-		}
-		log.debug(methodName, "Creating directory  " + uniqueDir + " as " + System.getProperty("user.name"));
-		boolean dirMade = uniqueDir.mkdirs();
-		if (!dirMade) {
-			log.warn(methodName, "Directory was not made." + uniqueDir.getAbsolutePath());
-			log.warn(methodName, "Did file already exist: " + uniqueDir.exists());
-			log.warn(methodName, "User was: " + System.getProperty("user.name"));
-			log.warn(methodName, "canWrite for file: " + uniqueDir.canWrite());
-			if (!uniqueDir.exists()) {
-				throw new FileNotFoundException("The unique directory could not be made for some reason.");
+	public static File getDirectoryForBenchmarkUpload(int userId, String name) throws IOException {
+		return getDirectoryForBenchmarkUpload(userId, name, LocalDateTime.now());
+	}
+
+	/** {@link #getDirectoryForBenchmarkUpload(int, String)} with the time to start from. */
+	static File getDirectoryForBenchmarkUpload(int userId, String name, LocalDateTime start) throws IOException {
+		Path userDir = Files.createDirectories(new File(R.getBenchmarkPath(), String.valueOf(userId)).toPath());
+		for (int i = 0; i <= Util.MAX_DIRECTORY_SUFFIX; i++) {
+			Path claimed = userDir.resolve(SHORT_DATE.format(start.plus(i, ChronoUnit.MILLIS)));
+			try {
+				Files.createDirectory(claimed);
+			} catch (FileAlreadyExistsException e) {
+				continue;
+			}
+			if (name == null) {
+				return claimed.toFile();
+			}
+			try {
+				return Files.createDirectory(Util.childWithin(claimed.toFile(), name).toPath()).toFile();
+			} catch (IOException | RuntimeException e) {
+				try {
+					Files.deleteIfExists(claimed);
+				} catch (IOException cleanup) {
+					e.addSuppressed(cleanup);
+				}
+				throw e;
 			}
 		}
-		return uniqueDir;
+		throw new IOException("No new directory for benchmarks could be created in " + userDir);
+	}
+
+	/**
+	 * Deletes a directory that {@link #getDirectoryForBenchmarkUpload} created, with everything in it,
+	 * for an upload, copy or add that did not keep it: nothing else would ever delete it (#275).
+	 * Never throws, so it cannot replace the exception that caused the cleanup.
+	 *
+	 * <p>It is the time-named directory that is deleted, so a named one inside it goes with it. If
+	 * the user no longer exists, a user deletion ran meanwhile: it removed the user's whole
+	 * directory, which the caller may have created again. That is then deleted too, while empty.
+	 *
+	 * @param userId the user the directory was created for
+	 * @param dir the directory getDirectoryForBenchmarkUpload returned; null does nothing
+	 */
+	public static void deleteDirectoryForBenchmarkUpload(int userId, File dir) {
+		final String method = "deleteDirectoryForBenchmarkUpload";
+		if (dir == null) {
+			return;
+		}
+		try {
+			Path root = new File(R.getBenchmarkPath()).toPath().toAbsolutePath().normalize();
+			Path claimed = claimedDirectory(root, userId, dir.toPath().toAbsolutePath().normalize());
+			if (claimed == null) {
+				log.warn(method, "Not deleting " + dir + ": it is not a directory created for user " + userId);
+				return;
+			}
+			if (!Util.safeDeleteDirectory(claimed.toString())) {
+				log.warn(method, "Could not delete " + claimed);
+			}
+			if (isDeletedUser(userId)) {
+				Util.deleteEmptyParents(root, claimed);
+			}
+		} catch (RuntimeException e) {
+			log.warn(method, "Could not clean up " + dir, e);
+		}
+	}
+
+	/**
+	 * The directory {@code <root>/<userId>/<time>} that dir is, or is inside, or null if dir is not
+	 * in such a directory.
+	 */
+	static Path claimedDirectory(Path root, int userId, Path dir) {
+		if (!dir.startsWith(root)) {
+			return null;
+		}
+		Path relative = root.relativize(dir);
+		if (relative.getNameCount() < 2
+				|| !relative.getName(0).toString().equals(String.valueOf(userId))
+				|| !UploadArtifactPathGuard.isUploadDirectoryName(relative.getName(1).toString())) {
+			return null;
+		}
+		return root.resolve(relative.subpath(0, 2));
+	}
+
+	/**
+	 * Whether the user has been deleted. Never throws, as it is asked in cleanup code: a failed
+	 * lookup, whatever the cause, counts as not deleted, so that nothing is deleted on a guess.
+	 */
+	static boolean isDeletedUser(int userId) {
+		try {
+			return !Users.exists(userId);
+		} catch (SQLException | RuntimeException e) {
+			log.warn("isDeletedUser", "Could not check whether user " + userId + " exists", e);
+			return false;
+		}
 	}
 
 	/**
@@ -266,17 +369,25 @@ public class UploadBenchmark extends HttpServlet {
 	public static Integer addBenchmarkFromText(
 			String benchText, String name, int userId, int typeId, boolean downloadable
 	) {
+		File uniqueDir = null;
+		Integer id = null;
 		try {
 			log.debug("trying to add benchmark with text = " + benchText + " and name = " + name);
-			File uniqueDir = getDirectoryForBenchmarkUpload(userId, null);
+			uniqueDir = getDirectoryForBenchmarkUpload(userId, null);
 			FileUtils.writeStringToFile(new File(uniqueDir, name), benchText, StandardCharsets.UTF_8);
 			List<Benchmark> bench =
 					Benchmarks.extractSpacesAndBenchmarks(uniqueDir, typeId, userId, downloadable, null, null)
 					          .getBenchmarksRecursively();
 			//add the benchmark to the database, but don't put it in any spaces
-			return Benchmarks.processAndAdd(bench, null, 1, false, null).get(0);
+			id = Benchmarks.processAndAdd(bench, null, 1, false, null).get(0);
+			return id;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
+		} finally {
+			// No benchmark row refers to the file of one that was not added (#275).
+			if (id == null || id <= 0) {
+				deleteDirectoryForBenchmarkUpload(userId, uniqueDir);
+			}
 		}
 
 		return null;
@@ -292,8 +403,10 @@ public class UploadBenchmark extends HttpServlet {
 	 * @return The ID of the newly created benchmark
 	 */
 	public static Integer addBenchmarkFromFile(File benchFile, int userId, int typeId, boolean downloadable) {
+		File uniqueDir = null;
+		Integer id = null;
 		try {
-			File uniqueDir = getDirectoryForBenchmarkUpload(userId, null);
+			uniqueDir = getDirectoryForBenchmarkUpload(userId, null);
 			FileUtils.copyFileToDirectory(benchFile, uniqueDir);
 			String[] filesInUniqueDir = uniqueDir.list();
 			log.debug("Files in uniqueDir: ");
@@ -305,9 +418,15 @@ public class UploadBenchmark extends HttpServlet {
 					Benchmarks.extractSpacesAndBenchmarks(uniqueDir, typeId, userId, downloadable, null, null)
 					          .getBenchmarksRecursively();
 			//add the benchmark to the database, but don't put it in any spaces
-			return Benchmarks.processAndAdd(bench, null, 1, false, null).get(0);
+			id = Benchmarks.processAndAdd(bench, null, 1, false, null).get(0);
+			return id;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
+		} finally {
+			// No benchmark row refers to the file of one that was not added (#275).
+			if (id == null || id <= 0) {
+				deleteDirectoryForBenchmarkUpload(userId, uniqueDir);
+			}
 		}
 		return null;
 	}

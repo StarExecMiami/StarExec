@@ -13,8 +13,10 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.AccessDeniedException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
@@ -1803,6 +1805,32 @@ public class Util {
     /** {@link #pathDate()} for the given time. */
     static String pathDate(LocalDateTime time) {
         return PATH_DATE.format(time);
+    }
+
+    /**
+     * Deletes the parents of dir, nearest first, while they are empty and strictly inside root.
+     * Only an empty directory can be deleted this way, so nothing else is ever removed. An upload
+     * whose user was deleted meanwhile uses it to remove the directories it created again above
+     * its own (#275).
+     *
+     * @param root the directory to stop below; it is never deleted
+     * @param dir the path whose parents are deleted; it is not deleted itself
+     */
+    public static void deleteEmptyParents(Path root, Path dir) {
+        for (Path parent = dir.getParent();
+             parent != null && parent.startsWith(root) && !parent.equals(root);
+             parent = parent.getParent()) {
+            try {
+                Files.delete(parent);
+            } catch (NoSuchFileException e) {
+                // Already gone; the one above may still be empty.
+            } catch (DirectoryNotEmptyException e) {
+                return;
+            } catch (IOException e) {
+                log.warn("Could not delete the empty directory " + parent, e);
+                return;
+            }
+        }
     }
 
     /** How many suffixed names {@link #claimNewDirectory} tries after the one it was given. */

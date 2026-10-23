@@ -493,9 +493,14 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             UploadJobQueue.failJob(job.getId(), errorMessage);
             
         } finally {
-            // Only delete the extraction directory when processing FAILED — the files
-            // were never registered in the DB so there is nothing to preserve.
-            if (!processingSucceeded && !preserveArtifactsForRetry && extractDir != null && safeToDeleteExtractDir) {
+            if (!processingSucceeded && UploadBenchmark.isDeletedUser(job.getUserId())) {
+                // The user was deleted while this job ran. The job's row went with the user, so it is
+                // never retried, and no row refers to its files: whatever it wrote, including the
+                // user's directory the download or the extraction created again, is deleted (#275).
+                deleteFilesOfDeletedUser(job);
+            } else if (!processingSucceeded && !preserveArtifactsForRetry && extractDir != null && safeToDeleteExtractDir) {
+                // Only delete the extraction directory when processing FAILED — the files
+                // were never registered in the DB so there is nothing to preserve.
                 try {
                     Path safeExtractDir = getUploadPathGuard().validateExtractionDirectoryPath(
                         extractDir.getAbsolutePath(),
@@ -509,6 +514,51 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                 }
             }
         }
+    }
+
+    /**
+     * Deletes everything an upload job wrote for a user who no longer exists: its extraction
+     * directories, finished or not, its archive, and then the directories above them while they are
+     * empty. Each path is checked by the upload path guard first, and symbolic links are refused,
+     * not followed. Each is deleted on its own, so one that cannot be deleted does not keep the
+     * others. Never throws, so it cannot replace the exception that ended the job.
+     */
+    private void deleteFilesOfDeletedUser(UploadJob job) {
+        String method = "deleteFilesOfDeletedUser";
+        UploadArtifactPathGuard pathGuard;
+        Path archive;
+        try {
+            pathGuard = getUploadPathGuard();
+            archive = pathGuard.validateSourceArchivePath(job.getArchivePath(), job.getUserId());
+        } catch (IOException | RuntimeException e) {
+            log.warn(method, "Not deleting the files of upload job " + job.getId()
+                + ": its archive path is not one an upload writes", e);
+            return;
+        }
+        Path directory = archive.getParent();
+        if (Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+            try (DirectoryStream<Path> extractions =
+                     Files.newDirectoryStream(directory, "upload_" + job.getId() + "_*")) {
+                for (Path extraction : extractions) {
+                    try {
+                        UploadArtifactFileSystem.deleteDirectoryWithoutFollowingLinks(
+                            pathGuard.validateExtractionDirectoryPath(
+                                extraction.toString(), job.getId(), job.getUserId()));
+                    } catch (IOException | RuntimeException e) {
+                        log.warn(method, "Could not delete " + extraction, e);
+                    }
+                }
+            } catch (IOException | RuntimeException e) {
+                log.warn(method, "Could not list " + directory, e);
+            }
+        }
+        try {
+            UploadArtifactFileSystem.deleteFileWithoutFollowingLinks(archive);
+        } catch (IOException | RuntimeException e) {
+            log.warn(method, "Could not delete " + archive, e);
+        }
+        Util.deleteEmptyParents(pathGuard.getBenchmarkRoot(), archive);
+        log.info(method, "Cleaned up the files of upload job " + job.getId() + ", whose user no longer exists");
     }
 
     /**

@@ -662,12 +662,17 @@ public class RESTServices {
 			return gson.toJson(new ValidatorStatusCode(false, "Upload session path is invalid"));
 		}
 
+		// Only the chunks directory is created here. The session's own directory was created with
+		// the session, so if it is missing, a user deletion removed it along with the session's row:
+		// creating it again would leave this chunk behind with no row that refers to it (#275).
 		try {
-			java.nio.file.Path parent = stagingPath.getParent();
-			if (parent != null) {
-				Files.createDirectories(parent);
+			try {
+				Files.createDirectory(chunksDir);
+			} catch (FileAlreadyExistsException e) {
+				if (!Files.isDirectory(chunksDir, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+					throw e;
+				}
 			}
-			Files.createDirectories(chunksDir);
 		} catch (IOException e) {
 			log.error("uploadSessionChunk", "Failed to prepare upload staging directory for session " + sessionId, e);
 			return gson.toJson(new ValidatorStatusCode(false, "Failed to prepare upload staging directory"));
