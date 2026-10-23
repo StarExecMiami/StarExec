@@ -28,6 +28,17 @@
 #   IMAGE_NAME                      (default: localhost/local/starexec)
 #   IMAGE_TAG                       (default: latest)
 #
+# With STAREXEC_BACKEND_TYPE=podman (what `make start` uses), the lines between
+# the "BEGIN podman-backend" and "END podman-backend" markers stay in, so that
+# StarExec can start job containers; with any other backend they are removed:
+#   PODMAN_SOCKET_PATH              the container engine's socket on the host
+#                                   (default: $XDG_RUNTIME_DIR/podman/podman.sock)
+#   PODMAN_SOCKET_GID               the group that owns that socket (read from it)
+#   STAREXEC_CONTAINER_HOST_DATA_PATH
+#                                   the data volume's path on the host (default:
+#                                   its mountpoint, from `podman volume inspect`)
+#   STAREXEC_CONTAINER_JOB_IMAGE    (default: ghcr.io/starexecmiami/starexec-job-runner:latest)
+#
 # ============================================================================
 ---
 # Source: starexec/templates/deployment.yaml
@@ -39,6 +50,12 @@ metadata:
     app: starexec
 spec:
   restartPolicy: Always
+  # BEGIN podman-backend
+  securityContext:
+    # The group that owns the container engine's socket, so that the app can use it.
+    supplementalGroups:
+      - ${PODMAN_SOCKET_GID}
+  # END podman-backend
   volumes:
     - name: data
       persistentVolumeClaim:
@@ -55,6 +72,12 @@ spec:
     - name: postgres-data
       persistentVolumeClaim:
         claimName: ${STAREXEC_POSTGRES_VOL:-starexec-dev-postgres}
+    # BEGIN podman-backend
+    - name: podman-socket
+      hostPath:
+        path: "${PODMAN_SOCKET_PATH}"
+        type: Socket
+    # END podman-backend
   containers:
     - name: app
       image: "${IMAGE_NAME:-localhost/local/starexec}:${IMAGE_TAG:-latest}"
@@ -81,6 +104,16 @@ spec:
           value: "localhost"
         - name: STAREXEC_BACKEND_TYPE
           value: "${STAREXEC_BACKEND_TYPE:-local}"
+        # BEGIN podman-backend
+        # The Podman backend starts each job in a container, through the engine's socket.
+        - name: STAREXEC_CONTAINER_SOCKET
+          value: "unix:///run/podman/podman.sock"
+        - name: STAREXEC_CONTAINER_JOB_IMAGE
+          value: "${STAREXEC_CONTAINER_JOB_IMAGE:-ghcr.io/starexecmiami/starexec-job-runner:latest}"
+        # Job containers mount files from the data volume, and the engine needs that volume's path on the host.
+        - name: STAREXEC_CONTAINER_HOST_DATA_PATH
+          value: "${STAREXEC_CONTAINER_HOST_DATA_PATH}"
+        # END podman-backend
         - name: STAREXEC_BACKEND_ROOT
           value: "/app/backend"
         - name: STAREXEC_BACKEND_WORKING_DIR
@@ -106,6 +139,10 @@ spec:
           mountPath: /app/backend
         - name: work
           mountPath: /app/work
+        # BEGIN podman-backend
+        - name: podman-socket
+          mountPath: /run/podman/podman.sock
+        # END podman-backend
       resources:
         limits:
           cpu: 1000m
