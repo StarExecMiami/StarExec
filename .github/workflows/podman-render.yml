@@ -10,6 +10,7 @@ on:
       - "scripts/generate-render-yaml.sh"
       - "scripts/test_generate_render_yaml.py"
       - "charts/starexec/values.yaml"
+      - "Makefile"
       - ".github/workflows/podman-render.yml"
   pull_request:
     branches: [UMprod, dev, containerised]
@@ -18,6 +19,7 @@ on:
       - "scripts/generate-render-yaml.sh"
       - "scripts/test_generate_render_yaml.py"
       - "charts/starexec/values.yaml"
+      - "Makefile"
       - ".github/workflows/podman-render.yml"
 
 permissions:

@@ -37,7 +37,8 @@ BASE_ENV = {
 
 # A stand-in for `podman [global options] volume exists|create|inspect ... NAME`. It knows the volumes listed in
 # FAKE_PODMAN_VOLUMES and the ones it has created, fails `volume create` when FAKE_PODMAN_CREATE_FAILS is set,
-# prints an empty mountpoint when FAKE_PODMAN_NO_MOUNTPOINT is set, and logs every call.
+# prints an empty mountpoint when FAKE_PODMAN_NO_MOUNTPOINT is set, fails `volume inspect` of a known volume after
+# printing a path when FAKE_PODMAN_INSPECT_FAILS is set, and logs every call.
 FAKE_PODMAN = """#!/bin/sh
 echo "$*" >> "$FAKE_PODMAN_LOG"
 while [ "${1#-}" != "$1" ]; do shift; done
@@ -66,6 +67,11 @@ create)
 	exit 0 ;;
 inspect)
 	if known "$name"; then
+		if [ -n "$FAKE_PODMAN_INSPECT_FAILS" ]; then
+			echo "/srv/podman/volumes/$name/_data"
+			echo "Error: cannot inspect volume $name" >&2
+			exit 125
+		fi
 		if [ -n "$FAKE_PODMAN_NO_MOUNTPOINT" ]; then
 			echo
 		else
@@ -286,6 +292,19 @@ class PodmanBackendTests(unittest.TestCase):
         self.assertIn("STAREXEC_CONTAINER_HOST_DATA_PATH", result.stderr)
         self.assertFalse(self.r.output.exists())
 
+    def test_a_data_volume_that_cannot_be_inspected_stops_the_render(self):
+        """A failed inspect is not trusted, even when it printed something that looks like a path."""
+        self.r.env["FAKE_PODMAN_INSPECT_FAILS"] = "1"
+        result = self.r.run()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "cannot read the path on the host of the data volume starexec-dev-data",
+            result.stderr,
+        )
+        calls = self.r.podman_calls()
+        self.assertEqual([], [c for c in calls if c.startswith("volume create")])
+        self.assertFalse(self.r.output.exists())
+
     def test_an_explicit_host_data_path_is_used_as_given(self):
         self.r.env["STAREXEC_CONTAINER_HOST_DATA_PATH"] = "/srv/starexec/data"
         self.r.env["FAKE_PODMAN_VOLUMES"] = ""
@@ -416,6 +435,40 @@ class LocalBackendTests(unittest.TestCase):
     def test_no_section_marker_is_left_in_the_manifest(self):
         self.assertEqual(0, self.r.run().returncode)
         self.assertEqual([], marker_lines(self.r.output.read_text()))
+
+
+class MakefileContractTests(unittest.TestCase):
+    """What the script takes from `make start`: the Makefile must keep passing it."""
+
+    def setUp(self):
+        self.makefile = (REPO / "Makefile").read_text()
+
+    def recipe(self, target):
+        lines = self.makefile.splitlines()
+        start = lines.index(f"{target}:")
+        body = []
+        for line in lines[start + 1 :]:
+            if not line.startswith("\t"):
+                break
+            body.append(line)
+        return "\n".join(body)
+
+    def test_the_podman_settings_reach_the_render_script(self):
+        # The script runs `podman volume` commands with PODMAN_CMD, so that with sudo they see the volumes that
+        # `$(PODMAN_CMD) play kube` mounts, and takes the socket and its default from the other two.
+        for name in ("PODMAN_CMD", "PODMAN_REQUIRES_SUDO", "PODMAN_SOCKET_PATH"):
+            self.assertRegex(self.makefile, rf"(?m)^export {name}\s*$")
+        default = re.search(r"(?m)^PODMAN_SOCKET_PATH \?= (.*)$", self.makefile)
+        self.assertIsNotNone(default)
+        self.assertIn("/run/podman/podman.sock", default.group(1))
+        self.assertIn("$(XDG_RUNTIME_DIR)/podman/podman.sock", default.group(1))
+
+    def test_make_start_without_helm_renders_for_the_podman_backend(self):
+        recipe = self.recipe("deploy-podman-direct")
+        self.assertIn("./scripts/generate-render-yaml.sh", recipe)
+        self.assertIn("STAREXEC_BACKEND_TYPE=$${STAREXEC_BACKEND_TYPE:-podman}", recipe)
+        self.assertIn("STAREXEC_DATA_VOL=", recipe)
+        self.assertIn("$(PODMAN_CMD) play kube", recipe)
 
 
 if __name__ == "__main__":
