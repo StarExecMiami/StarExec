@@ -3681,12 +3681,17 @@ BEGIN
             ERRCODE = 'P0002',
             MESSAGE = format('Job %s not found', _jobId);
     END IF;
+
+    -- Only pairs that were never dispatched are paused here: 1 = PENDING_SUBMIT becomes
+    -- 20 = PAUSED. ENQUEUED (2) and RUNNING (4) pairs have an execution to stop first;
+    -- Jobs.pause stops them after this call and pauses each one it stopped.
     UPDATE job_pairs SET status_code = 20 WHERE job_id = _jobId AND status_code = 1;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job %s has no pending pairs to pause', _jobId);
-    END IF;
+
+    -- No RAISE when that matched nothing. A job whose pairs have all been dispatched has
+    -- no pending pair, and that is the ordinary state of a small job or of the end of a
+    -- large one. The removed "IF NOT FOUND THEN RAISE" rolled back paused = true above and
+    -- made Jobs.pause return false before it stopped anything, so the pause failed with a
+    -- database error and the pairs ran on. KillJob and ResumeJob dropped the same check.
 END;
 $$ LANGUAGE plpgsql;
 

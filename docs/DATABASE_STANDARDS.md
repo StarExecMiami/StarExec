@@ -28,7 +28,7 @@ Use when parent record should not be deleted if child records exist (prevents or
 - **Examples**:
   - `analytics_users.user_id → users.id` - Historical analytics should not silently disappear during user deletion
   - `analytics_users.event_id → analytics_events.event_id` - Analytics rows should not outlive the event they summarize
-  - `logins.user_id → users.id` - Login history should be preserved even if user is deleted
+  - `logins.user_id → users.id` - A user's login rows are never removed as a side effect: `DeleteUser` deletes them explicitly, just before the user. The table is not a permanent history either. Every Thursday (server time zone), the weekly reports task (`CREATE_WEEKLY_REPORTS` in `PeriodicTasks.java`) stores and mails the report, then empties it with `Logins.resetLogins()`
 
 #### 4. ON DELETE SET DEFAULT
 Use when child rows must remain valid but should fall back to a stable lookup default.
@@ -140,5 +140,5 @@ CONSTRAINT analytics_users_to_users FOREIGN KEY (user_id) REFERENCES users(id)
 
 -- Wrong behavior choice
 CONSTRAINT logins_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
--- Should be NO ACTION to preserve login history
+-- Should be RESTRICT (V0110): DeleteUser then deletes a user's login rows on purpose, never as a side effect
 ```

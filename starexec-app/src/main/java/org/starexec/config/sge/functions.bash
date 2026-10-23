@@ -47,6 +47,15 @@ CONTAINER_STATS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stats.json"
 CONTAINER_STAGE_ATTRS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-attributes"
 CONTAINER_STAGE_STATS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-stats"
 CONTAINER_LOG_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/${PAIR_ID}.txt"
+# Whether the job script's stdout already is that file. On the local backend it is: LocalBackend
+# redirects the script's output to the pair log, and STAREXEC_OUTPUT_DIR is the log's directory.
+# Kubernetes and Podman send stdout to the container runtime instead. Checked once, here: the
+# jobscript sources this file at its top level, where stdout is the script's own.
+if [ /dev/stdout -ef "$CONTAINER_LOG_FILE" ]; then
+	STDOUT_IS_CONTAINER_LOG=true
+else
+	STDOUT_IS_CONTAINER_LOG=false
+fi
 
 # Write status update for container mode
 function containerWriteStatus {
@@ -786,7 +795,10 @@ function initSandbox {
 function log {
 	local MESSAGE="$(date +'%D %r %Z'): $1"
 	echo "$MESSAGE"
-	if isContainerMode; then
+	# When stdout is the log, the echo above has already written the line there. Appending it too
+	# would write through a second descriptor, while the stdout one, opened without O_APPEND, keeps
+	# its own offset: the copy would land past it, and the script's next output would overwrite it.
+	if isContainerMode && [ "$STDOUT_IS_CONTAINER_LOG" != true ]; then
 		mkdir -p "$(dirname "$CONTAINER_LOG_FILE")"
 		echo "$MESSAGE" >> "$CONTAINER_LOG_FILE"
 	fi
@@ -845,8 +857,25 @@ function cleanForNextStage {
 	rm -f "$LOCAL_BENCH_PATH"
 }
 
+# Where killDeadlockedJobPair records that it fired. In the pair's working directory, which
+# container mode creates empty for each execution; the jobscript also removes the file before
+# arming each stage's watchdog, so it can only have been left by the current stage's.
+#
+# A function rather than a variable: the watchdog computes the path inside a command
+# substitution, so even a missing WORKING_DIR (set -u) fails only that write, never the kill.
+function deadlockWatchdogFiredFile {
+	echo "$WORKING_DIR/deadlock-watchdog-fired"
+}
+
+# Whether the current stage's watchdog has fired. Read from the record it leaves, not from
+# whether it is still running: a watchdog can end without firing -- killed by the kernel or a
+# stray signal, or ended by an error of its own -- and one that has fired may still be killing.
+function deadlockWatchdogFired {
+	[ -e "$(deadlockWatchdogFiredFile)" ]
+}
+
 # Kills all of a sandboxes processes if their job pair becomes deadlocked
-# and time out.
+# and time out. When it fires, it leaves deadlockWatchdogFiredFile behind.
 # Input:
 #    $1 - The timeout of the jobpair, currently the wallclock
 #    $2 - The extra time we give to the jobpair after the wallclock timeout
@@ -883,6 +912,12 @@ function killDeadlockedJobPair {
 	WATCHDOG_SLEEP_PID=$!
 	wait "$WATCHDOG_SLEEP_PID" || true
 	trap - TERM
+
+	# Recorded before anything is killed: the reap below ends the solver, and the jobscript's
+	# check after the solver must find the record by then. Not fatal, like the log lines: a
+	# failed write must not stop the kill. The stage is then judged on its own output, which
+	# after a reap is usually missing, so it ends as ERROR_RUNSCRIPT.
+	{ : > "$(deadlockWatchdogFiredFile)"; } 2>/dev/null || log "killDeadlockedJobPair: could not record that it fired" || true
 
 	log "killDeadlockedJobPair: About to kill jobpair run by $CURRENT_USER because it has exceeded it's total allotted runtime." || true
 
@@ -1247,6 +1282,72 @@ function sendCpuExceededStatus {
 function sendExceedMemStatus {
 	log "epilog detects max virtual memory exceeded"
 	sendStageFailure $EXCEED_MEM "${STAGE_NUMBERS[STAGE_INDEX]}"
+}
+
+# Records a memory breach the kernel enforced: while the solver ran, the kernel's OOM killer stopped one
+# of the pair's processes, normally because the pair's container reached its memory limit.
+#
+# runsolver enforces only the stage's own memory limit. When the container's limit is lower, the kernel
+# acts first: runsolver then reports a solver ended by a signal and no limit of its own exceeded, and
+# without this the pair was recorded as complete.
+function sendContainerOomStatus {
+	local limit
+	limit=$(pairCgroupMemoryLimitMib)
+	if [ -n "$limit" ]; then
+		limit="$limit MiB"
+	else
+		limit="unknown"
+	fi
+	log "epilog detects that the kernel's OOM killer stopped a process of this pair while the solver ran: the container's memory limit is $limit, and this stage's memory limit is $CURRENT_STAGE_MEMORY MiB"
+	sendStageFailure $EXCEED_MEM "${STAGE_NUMBERS[STAGE_INDEX]}"
+}
+
+# Prints how many of this pair's processes the kernel's OOM killer has stopped, or nothing when that
+# cannot be known.
+#
+# Only a pair with a cgroup of its own has such a count. The Podman backend runs each pair in a container
+# of its own and says so with STAREXEC_PAIR_HAS_OWN_CGROUP; the container's private cgroup namespace makes
+# its cgroup the root of /sys/fs/cgroup. The local backend runs every pair inside the application's cgroup,
+# where a kill cannot be attributed to one pair, so it does not set the flag.
+#
+# cgroup v2 keeps the count in memory.events, v1 (Linux 4.13 and later) in memory.oom_control. The pair's
+# processes live in that cgroup, or on v2 possibly below it, where memory.events counts them too. Never
+# fails: callers run under set -e.
+function pairCgroupOomKills {
+	[ "${STAREXEC_PAIR_HAS_OWN_CGROUP:-}" = true ] || return 0
+	local root="${STAREXEC_CGROUP_ROOT:-/sys/fs/cgroup}"
+	local file
+	for file in "$root/memory.events" "$root/memory/memory.oom_control"; do
+		if [ -r "$file" ]; then
+			awk '$1 == "oom_kill" && $2 ~ /^[0-9]+$/ { print $2; exit }' "$file" 2>/dev/null || true
+			return 0
+		fi
+	done
+	return 0
+}
+
+# Prints the memory limit of this pair's cgroup in MiB, or nothing when it has none or it cannot be read.
+# Never fails, like pairCgroupOomKills.
+function pairCgroupMemoryLimitMib {
+	[ "${STAREXEC_PAIR_HAS_OWN_CGROUP:-}" = true ] || return 0
+	local root="${STAREXEC_CGROUP_ROOT:-/sys/fs/cgroup}"
+	local bytes=""
+	if [ -r "$root/memory.max" ]; then
+		bytes=$(cat "$root/memory.max" 2>/dev/null || true)
+	elif [ -r "$root/memory/memory.limit_in_bytes" ]; then
+		bytes=$(cat "$root/memory/memory.limit_in_bytes" 2>/dev/null || true)
+	fi
+	# No limit reads "max" on v2 and 9223372036854771712 on v1. No real limit has 19 digits (10^18 bytes).
+	if [[ $bytes =~ ^[0-9]+$ ]] && ((${#bytes} < 19)); then
+		echo $((bytes / 1048576))
+	fi
+	return 0
+}
+
+# True when two counts from pairCgroupOomKills, taken before and after the solver ran, show a kill. A
+# missing count is no evidence of anything, so it never is.
+function oomKillsRose {
+	isInteger "${1:-}" && isInteger "${2:-}" && (($2 > $1))
 }
 
 function setStartTime {

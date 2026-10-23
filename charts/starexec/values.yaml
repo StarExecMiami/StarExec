@@ -6,7 +6,8 @@
 # DEPLOYMENT MODE CONFIGURATION
 # ============================================================================
 # Deployment mode is now derived from backend.type (see backend section below).
-# hostPort binding is enabled automatically when backend.type is "podman".
+# hostPort binding is enabled automatically when backend.type is "podman"
+# (podman.hostPort below).
 
 # ============================================================================
 # IMAGE CONFIGURATION
@@ -56,6 +57,12 @@ backend:
 persistence:
   enabled: true
   storageClass: ""
+  # Helm resource policy of the PersistentVolumeClaims this chart creates.
+  # "keep" makes helm uninstall, and an upgrade or rollback that no longer
+  # renders a claim, leave the claim and its data in place; delete such a
+  # claim with kubectl when you mean to. "" lets Helm delete them. Claims
+  # named in existingClaims are never created or deleted by the chart.
+  resourcePolicy: keep
   existingClaims:
     data: ""
     backend: ""
@@ -116,9 +123,15 @@ postgres:
     database: "database"
     rootPassword: "rootPassword"
 
-  # Persistence for PostgreSQL
+  # Persistence for the embedded PostgreSQL (postgres.host: localhost). With
+  # enabled: false its data lives in an emptyDir, which starts empty whenever the
+  # pod is recreated (upgrade, node drain, eviction): every account, solver,
+  # benchmark and job result is lost. Turn it off only for a database you can
+  # afford to lose; values-ci.yaml and values-dev.yaml turn it off. An empty
+  # storageClass uses the cluster's default StorageClass; set one if the cluster
+  # has no default.
   persistence:
-    enabled: false
+    enabled: true
     storageClass: ""
     size: 20Gi
 
@@ -179,10 +192,12 @@ kubernetes:
   workerSelectorKey: "starexec.org/worker"
   workerSelectorValue: "true"
 
-  # Academic reproducibility mode:
-  # requests one Kubernetes CPU per job pair to reduce oversubscription.
-  # Physical-core exclusivity still depends on cluster/node CPU-manager and
-  # SMT configuration outside this chart.
+  # Academic reproducibility mode: refuse a fractional resources.limits.cpu,
+  # so that job pods (always Guaranteed: requests = limits) can be given
+  # exclusive CPUs. It pins nothing itself. Exclusive CPUs need the kubelet's
+  # static CPU manager policy on every worker, and whole physical cores also
+  # need its full-pcpus-only option or SMT off; this chart cannot set either.
+  # See "What Kubernetes needs for exclusive cores" in docs/BACKENDS.md.
   strictOnePairPerCpu: true
 
   # Job lifecycle management
@@ -204,6 +219,10 @@ podman:
     # explicitly when invoking Helm directly.
     # See docs/TROUBLESHOOTING.md#podman-issues for remediation steps.
     hostPath: "/run/user/1000/podman/podman.sock"
+
+  # Host port the app is published on when backend.type is "podman".
+  # `make deploy-podman` sets it from APP_PORT.
+  hostPort: 7827
 
   # Job container configuration
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"

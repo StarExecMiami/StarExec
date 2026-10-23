@@ -126,6 +126,7 @@ ops.txt
 **/secret-render.yaml
 **/secret-*.yaml
 **/values-podman.yaml
+**/values-podman-prod.yaml
 **/values-local.yaml
 /**/*-local.yaml
 

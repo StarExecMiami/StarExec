@@ -6995,10 +6995,38 @@ public class Jobs {
                 continue;
             }
 
+            // Only after a stop. An execution the backend did not stop may still finish,
+            // and its result must still reach the database.
+            if (killed) {
+                retireStoppedExecution(pairId);
+            }
+
             JobPairs.setStatusForPairAndStages(
                 pairId,
                 StatusCode.STATUS_PAUSED.getVal()
             );
+        }
+    }
+
+    /**
+     * Stops the backend from reporting on an execution that pause has just stopped, so that
+     * nothing writes over the PAUSED status that follows.
+     *
+     * <p>LocalJobMonitor polls a pair's status.json until it reads a terminal status. A killed
+     * run leaves behind the last status it wrote, usually RUNNING, so the monitor wrote RUNNING
+     * over PAUSED on its next poll and on every poll after it. The pair never read as paused,
+     * ResumeJob (which resumes only PAUSED pairs) passed it over, and it stayed RUNNING with no
+     * process behind it. {@link #kill} retires tracking for the same reason.
+     *
+     * <p>Called before PAUSED is written, so the only write it cannot prevent is one that a poll
+     * had already committed to before tracking was retired. A failure is logged and the pair is
+     * paused anyway: it has been stopped, and left RUNNING it would be stranded just the same.
+     */
+    private static void retireStoppedExecution(int pairId) {
+        try {
+            R.BACKEND.clearPairTracking(pairId);
+        } catch (Exception e) {
+            log.warn("pause: could not retire backend tracking for pairId=" + pairId, e);
         }
     }
 
@@ -7008,9 +7036,18 @@ public class Jobs {
      * @param userId
      */
     public static void pauseAllUserJobs(int userId) {
-        boolean success = true;
-        for (Integer i : Jobs.getRunningJobs(userId)) {
-            success = success && Jobs.pause(i);
+        // getRunningJobs and pause log their own failures at ERROR. This runs on every
+        // scheduling cycle while the user is over quota, so it adds context at INFO only.
+        List<Integer> jobIds = Jobs.getRunningJobs(userId);
+        if (jobIds == null) {
+            log.info("pauseAllUserJobs: could not list the running jobs of user " + userId);
+            return;
+        }
+        // Attempt every job: one failed pause must not leave the user's other jobs running.
+        for (Integer jobId : jobIds) {
+            if (!Jobs.pause(jobId)) {
+                log.info("pauseAllUserJobs: could not pause job " + jobId + " of user " + userId);
+            }
         }
     }
 

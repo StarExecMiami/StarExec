@@ -240,6 +240,11 @@ public class PodmanBackend implements Backend {
     // Flag set during graceful shutdown to reject new submissions
     private volatile boolean shuttingDown = false;
 
+    // Set as the last step of a successful initialize(). BackendInitializer logs a failed
+    // initialize() and lets the application start, so without this a backend with no
+    // engine client, no CPU partitions or no monitor would still be given pairs.
+    private volatile boolean initialized = false;
+
     // Cached legacy node ID for database updates to avoid N+1 queries.
     // Partition-aware code uses partitionNodeIds instead.
     private int cachedNodeId = -1;
@@ -263,6 +268,8 @@ public class PodmanBackend implements Backend {
      */
     @Override
     public void initialize(String backendRoot) {
+        // Set once the engine answers: a failure after that is not a connection problem.
+        boolean engineAnswered = false;
         try {
             log.info("Initializing PodmanBackend...");
 
@@ -284,9 +291,10 @@ public class PodmanBackend implements Backend {
                 .versionCmd()
                 .exec()
                 .getVersion();
+            engineAnswered = true;
             log.info(
-                "PodmanBackend initialized successfully. Engine version: " +
-                    engineVersion
+                "Connected to the container engine at " + containerSocketPath +
+                    ". Engine version: " + engineVersion
             );
 
             // Check for job runner image if using prebuilt mode
@@ -333,10 +341,36 @@ public class PodmanBackend implements Backend {
 
             // Subscribe to container events
             startContainerEventListener();
+
+            initialized = true;
+            log.info(
+                "PodmanBackend initialized successfully. Engine version: " +
+                    engineVersion
+            );
+        } catch (CpuPartitionManager.UnsafePartitionConfigurationException e) {
+            // Not a connection problem, so not reported as one: the configuration asks for
+            // isolation it cannot have, and running unpinned instead would publish
+            // untrustworthy measurements.
+            throw new IllegalStateException(
+                "Podman backend not started: " + e.getMessage() +
+                    ". No Podman job runs until the CPU partition configuration is fixed" +
+                    " and StarExec is restarted.",
+                e
+            );
         } catch (Exception e) {
             // Wrap and throw up stack; logging/handling deferred to caller.
             // Avoid double-logging by NOT logging here + throwing with same message.
-            String errorMessage = 
+            if (engineAnswered) {
+                // The socket works: a later step failed (image check, partitions, queues,
+                // reconciliation), so name that step's error instead of the socket checklist.
+                throw new IllegalStateException(
+                    "Podman backend not started: the container engine at " + containerSocketPath +
+                        " answered, but a start-up step failed: " + e +
+                        ". No Podman job runs until this is fixed and StarExec is restarted.",
+                    e
+                );
+            }
+            String errorMessage =
                 "Could not connect to the container engine at: " + containerSocketPath + "\n" +
                 "Please verify:\n" +
                 "  1. Socket service is running: systemctl --user status podman.socket\n" +
@@ -346,6 +380,16 @@ public class PodmanBackend implements Backend {
                 "\nAlternatively, run 'make preflight-podman' for more diagnostics.";
             throw new IllegalStateException(errorMessage, e);
         }
+    }
+
+    /**
+     * A backend that has not finished {@link #initialize} runs nothing, and one that is
+     * shutting down takes nothing new. JobManager asks this before it claims any pair, so
+     * the pairs stay queued instead of failing or running unpinned.
+     */
+    @Override
+    public boolean isQueueDispatchable(String queueName) {
+        return initialized && !shuttingDown;
     }
 
     private List<CpuPartition> getEffectivePartitions() {
@@ -1296,6 +1340,18 @@ public class PodmanBackend implements Backend {
         if (shuttingDown) {
             log.warn("Rejecting submission for pair " + pairId +
                      " — backend is shutting down");
+            return -1;
+        }
+
+        // JobManager does not dispatch to an uninitialized backend (isQueueDispatchable),
+        // so this only catches a caller that skipped that check. A pair is not to blame and
+        // stays queued; a maintenance script (no pair) just does not run.
+        if (!initialized) {
+            String reason = "Podman backend is not initialized (see the startup log)";
+            if (pairId > 0) {
+                throw new SubmissionDeferredException(reason + "; pair " + pairId + " stays queued");
+            }
+            log.warn(reason + "; not running maintenance script " + scriptPath);
             return -1;
         }
 
@@ -2312,7 +2368,11 @@ public class PodmanBackend implements Backend {
                 "STAREXEC_PAIR_ID=" + pairId,
                 "STAREXEC_MEM_LIMIT=" + defaultMemoryMb,
                 "CONTAINER_MODE=true", // Signal to job script to use file-based communication
-                "STAREXEC_OUTPUT_DIR=" + outputDir
+                "STAREXEC_OUTPUT_DIR=" + outputDir,
+                // This container runs this pair alone, so an OOM kill the kernel counts in its
+                // cgroup is this pair's. The job script records one as a memory breach; without
+                // the flag (the local backend shares one cgroup across pairs) it reads no count.
+                "STAREXEC_PAIR_HAS_OWN_CGROUP=true"
             )
         ); // Where to write status.json, stats.json, attributes.txt
 
@@ -2456,6 +2516,155 @@ public class PodmanBackend implements Backend {
             log.error("Error killing container: " + containerId, e);
             return false;
         }
+    }
+
+    /**
+     * Stops an execution and reports whether the container engine shows that nothing of it
+     * can still run or write unfenced.
+     *
+     * <p>Without this override the interface default answered {@code UNPROVEN} for every
+     * execution, so on this backend no pair could be rerun, no running job deleted and no
+     * user with a running job deleted. {@link #killPair(int)}'s boolean cannot stand in for
+     * the answer: it is false when the container is already gone or has exited, which is the
+     * safe case, and also when the stop failed.
+     *
+     * <p>The answer comes from a census of the engine by the {@code starexec.exec.id} label,
+     * taken after the stop, and never from this backend's maps: a restart empties them, and a
+     * finished pair's container is untracked once ingested, so absent tracking is evidence of
+     * nothing. The execution is safe only when every container carrying its exec id is
+     * <ul>
+     *   <li>gone,</li>
+     *   <li>{@code created}: never started. The submission that created it returned before
+     *       the pair's exec id was stored, so nothing will start it, or</li>
+     *   <li>{@code exited} or {@code dead}, and either names no pair (a maintenance
+     *       container) or carries {@code starexec.attempt}, so a late ingestion is fenced on
+     *       that attempt (#185). Either way nothing can record its result unfenced.</li>
+     * </ul>
+     * Anything else is {@code UNPROVEN}: a running, paused or restarting container, or one
+     * whose engine leaves any of those three flags unset; any other state; an exited pair
+     * container without an attempt label, even one the monitor quarantined, because the
+     * quarantine is held in memory and after a restart the monitor can ingest the container
+     * again; and any listing or inspection failure. A container the census finds but this
+     * backend does not track is reported, never stopped: exec ids restart with each
+     * application lifetime, so it may belong to another pair.
+     */
+    @Override
+    public KillOutcome killPairConfirmed(int execId) {
+        killPair(execId);
+        return observeExecutionSafety(execId);
+    }
+
+    /** The census behind {@link #killPairConfirmed(int)}; package-private for tests. */
+    KillOutcome observeExecutionSafety(int execId) {
+        DockerClient client = dockerClient;
+        if (client == null) {
+            log.warn(
+                "No container engine client; cannot establish that execId " + execId +
+                    " stopped"
+            );
+            return KillOutcome.UNPROVEN;
+        }
+        String execIdLabel = String.valueOf(execId);
+        List<Container> listed;
+        try {
+            // One label filter, and every label is checked again below, so the census does
+            // not depend on how an engine combines filters or whether it applies them.
+            listed = client
+                .listContainersCmd()
+                .withShowAll(true)
+                .withLabelFilter(Collections.singletonMap(LABEL_EXEC_ID, execIdLabel))
+                .exec();
+        } catch (Exception e) {
+            log.warn(
+                "Could not list containers for execId " + execId +
+                    "; cannot establish that it stopped",
+                e
+            );
+            return KillOutcome.UNPROVEN;
+        }
+        if (listed == null) {
+            log.warn(
+                "Container listing for execId " + execId + " returned no body; cannot" +
+                    " establish that it stopped"
+            );
+            return KillOutcome.UNPROVEN;
+        }
+        for (Container container : listed) {
+            Map<String, String> labels = container.getLabels();
+            if (labels == null
+                    || !"true".equals(labels.get(LABEL_MANAGED))
+                    || !execIdLabel.equals(labels.get(LABEL_EXEC_ID))) {
+                continue;
+            }
+            String unsafe = whyItMayStillRunOrWrite(client, container.getId(), labels);
+            if (unsafe != null) {
+                log.warn(
+                    "execId " + execId + " is not confirmed stopped: container " +
+                        container.getId() + " " + unsafe + ". OPERATOR ACTION: inspect" +
+                        " the containers labelled " + LABEL_EXEC_ID + "=" + execId + "."
+                );
+                return KillOutcome.UNPROVEN;
+            }
+        }
+        return KillOutcome.CONFIRMED_SAFE;
+    }
+
+    /**
+     * Whether ingestion could record this container's result against a pair. Both ingestion
+     * paths skip a container whose {@code starexec.pair.id} label is absent, malformed or not
+     * positive, which is what maintenance containers carry.
+     */
+    private static boolean namesAPair(Map<String, String> labels) {
+        try {
+            return Integer.parseInt(labels.get(LABEL_PAIR_ID)) > 0;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    /** @return null when the container can neither run nor write unfenced, else why it may */
+    private String whyItMayStillRunOrWrite(
+        DockerClient client,
+        String containerId,
+        Map<String, String> labels
+    ) {
+        com.github.dockerjava.api.command.InspectContainerResponse.ContainerState state;
+        try {
+            var inspection = client.inspectContainerCmd(containerId).exec();
+            state = inspection == null ? null : inspection.getState();
+        } catch (NotFoundException e) {
+            return null; // removed after the listing
+        } catch (Exception e) {
+            return "could not be inspected (" + e.getMessage() + ")";
+        }
+        if (state == null) {
+            return "has no readable state";
+        }
+        String status = state.getStatus();
+        // Each flag must be reported false: an unset flag is no report of a stop.
+        if (!Boolean.FALSE.equals(state.getRunning())
+                || !Boolean.FALSE.equals(state.getPaused())
+                || !Boolean.FALSE.equals(state.getRestarting())) {
+            return "is " + status + " (running=" + state.getRunning() + ", paused=" +
+                state.getPaused() + ", restarting=" + state.getRestarting() + ")";
+        }
+        if ("created".equals(status)) {
+            return null;
+        }
+        if (!"exited".equals(status) && !"dead".equals(status)) {
+            return "is in state " + status;
+        }
+        if (!namesAPair(labels)) {
+            return null; // ingestion records no result from it
+        }
+        if (parseAttemptLabel(labels) != null) {
+            return null; // a late ingestion is fenced on that attempt
+        }
+        // Not even when the monitor quarantined it: the quarantine is held in memory, and
+        // after a restart the monitor can ingest the container again, unfenced, into
+        // whatever attempt the pair is on by then.
+        return "has exited without a valid " + LABEL_ATTEMPT + " label, so its result" +
+            " could still be ingested unfenced";
     }
 
     /**

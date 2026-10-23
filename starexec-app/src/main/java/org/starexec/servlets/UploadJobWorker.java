@@ -587,6 +587,24 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
      * Handles 'convert' method using legacy synchronous code that creates subspaces.
      * This is required because the async BoundedUploadProcessor doesn't support subspace creation.
      */
+    /**
+     * The default permissions of the spaces a "convert" upload creates: the ones the upload form
+     * chose. A job queued before they were stored has none, and keeps the default every created
+     * space used to get whatever the form said: the five "add" permissions and no "remove" ones.
+     */
+    static Permission spacePermissionsFor(UploadJob job) {
+        if (job.getSpacePermissions() != null) {
+            return job.getSpacePermissions();
+        }
+        Permission perm = new Permission();
+        perm.setAddSolver(true);
+        perm.setAddBenchmark(true);
+        perm.setAddUser(true);
+        perm.setAddSpace(true);
+        perm.setAddJob(true);
+        return perm;
+    }
+
     private void handleConvertMethod(UploadJob job, File extractDir) throws Exception {
         String method = "handleConvertMethod";
         
@@ -596,15 +614,8 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         int typeId = job.getBenchmarkTypeId();
         boolean downloadable = job.isDownloadable();
         
-        // Get default permissions for new spaces
-        // Default: add solver, bench, user, space, job permissions
-        Permission perm = new Permission();
-        perm.setAddSolver(true);
-        perm.setAddBenchmark(true);
-        perm.setAddUser(true);
-        perm.setAddSpace(true);
-        perm.setAddJob(true);
-        
+        Permission perm = spacePermissionsFor(job);
+
         log.info(method, "Converting directory structure to spaces for job " + job.getId());
         
         // Create progress listener for real-time updates

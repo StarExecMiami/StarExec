@@ -697,15 +697,34 @@ inspect_volume() {
 dump_postgres() {
     local env="${1:-dev}"
     local output="${BACKUP_DIR}/postgres-dump-${env}-${DATE_STAMP}.sql.gz"
-    local container_name="starexec-postgres"
+    # Written under a temporary name and renamed once complete, so a failed dump
+    # never leaves a file that looks like a backup.
+    local partial="${output}.partial"
+    # make db-dump passes the container it resolved for the release. Run directly,
+    # try the names of the two layouts: the pod of `make start`, then docker-compose.
+    local container_name="${PG_CONTAINER:-}"
+    if [ -z "$container_name" ]; then
+        local candidate
+        for candidate in starexec-pod-postgres starexec-postgres; do
+            if ${PODMAN_CMD:-podman} container exists "$candidate" 2>/dev/null; then
+                container_name="$candidate"
+                break
+            fi
+        done
+    fi
+    if [ -z "$container_name" ]; then
+        log_error "PostgreSQL container not found (tried starexec-pod-postgres, starexec-postgres); set PG_CONTAINER"
+        exit 1
+    fi
 
     mkdir -p "$BACKUP_DIR"
 
-    log_info "Creating PostgreSQL logical dump for environment: $env"
-
-    # This assumes PostgreSQL container is running
+    # The database role of both layouts is starexec (POSTGRES_USER); the image
+    # creates no postgres role then.
     local db_name="${STAREXEC_DB_NAME:-starexec}"
-    local db_user="${STAREXEC_DB_USER:-postgres}"
+    local db_user="${STAREXEC_DB_USER:-starexec}"
+
+    log_info "Creating PostgreSQL logical dump for environment $env from container $container_name as $db_user"
 
     # Use password file inside container (more secure)
     if [ -n "${STAREXEC_DB_PASSWORD_FILE:-}" ]; then
@@ -746,8 +765,9 @@ dump_postgres() {
         # Use password file (no password in env or args)
         ${PODMAN_CMD:-podman} exec "$container_name" bash -c "
             PGPASSFILE='/tmp/.pgpass_formatted' pg_dump -h localhost -U '${db_user}' -d '${db_name}' | gzip
-        " > "$output" || {
+        " > "$partial" || {
             ${PODMAN_CMD:-podman} exec "$container_name" rm -f /tmp/.pgpass_formatted 2>/dev/null || true
+            rm -f "$partial"
             log_error "PostgreSQL dump failed"
             exit 1
         }
@@ -759,9 +779,14 @@ dump_postgres() {
         log_warn "Using PGPASSWORD environment variable (less secure)"
         log_warn "Consider setting STAREXEC_DB_PASSWORD_FILE for better security"
         local db_pass="${STAREXEC_DB_PASSWORD:-starexec_password}"
-        ${PODMAN_CMD:-podman} exec -e PGPASSWORD="$db_pass" "$container_name" \
-            pg_dump -U "$db_user" -d "$db_name" | gzip > "$output"
+        if ! ${PODMAN_CMD:-podman} exec -e PGPASSWORD="$db_pass" "$container_name" \
+            pg_dump -U "$db_user" -d "$db_name" | gzip > "$partial"; then
+            rm -f "$partial"
+            log_error "PostgreSQL dump failed"
+            exit 1
+        fi
     fi
+    mv "$partial" "$output"
 
     log_info "Postgres dump complete: $output"
     log_info "Size: $(du -h "$output" | cut -f1)"

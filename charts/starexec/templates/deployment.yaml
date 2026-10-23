@@ -178,7 +178,7 @@ spec:
              - name: http
                containerPort: 8080
 {{- if eq .Values.backend.type "podman" }}
-               hostPort: 7827
+               hostPort: {{ required "podman.hostPort is required when backend.type is podman" .Values.podman.hostPort }}
 {{- end }}
           env:
             - name: STAREXEC_DB_HOST

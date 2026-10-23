@@ -193,6 +193,30 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 		assertEquals(1, completions());
 	}
 
+	/**
+	 * The backend records when the pair started.
+	 *
+	 * <p>The shipped job script stamps {@code start_time} itself only outside container mode,
+	 * where it can reach the database; in container mode it leaves the stamp to the host.
+	 * PodmanBackend and KubernetesNativeBackend stamp it, and LocalBackend did not, so every pair
+	 * it ran in a container finished with no start time. This script, like the shipped one in
+	 * container mode, writes nothing to the database.
+	 */
+	@Test
+	public void recordsWhenThePairStarted() throws Exception {
+		submit(firstStageOnlyScript());
+		awaitTerminal();
+
+		try (Connection con = Common.getConnection()) {
+			assertEquals("start_time must be recorded", 1, scalar(con,
+					"SELECT count(*) FROM starexec.job_pairs WHERE id=" + PAIR_ID
+							+ " AND start_time IS NOT NULL"));
+			assertEquals("the pair cannot start after it ended", 1, scalar(con,
+					"SELECT count(*) FROM starexec.job_pairs WHERE id=" + PAIR_ID
+							+ " AND start_time <= coalesce(end_time, now())"));
+		}
+	}
+
 	// ------------------------------------------------------------------------- harness
 
 	private void submit(String script) throws Exception {
