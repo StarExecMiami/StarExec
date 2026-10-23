@@ -10,6 +10,7 @@ Run: python3 -m unittest discover -s scripts -p 'test_generate_render_yaml.py'
 
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -181,13 +182,26 @@ def chart_job_image():
     return yaml.safe_load(CHART_VALUES.read_text())["podman"]["jobImage"]
 
 
+# JVM sizes, as in -Xmx2048m or -XX:MaxHeapSize=2g.
+HEAP_FLAG = re.compile(r"(?:-Xmx|-XX:MaxHeapSize=)(\d+)([kKmMgGtT]?)")
+
+
 def java_heap_bytes(java_opts):
-    """The heap ceiling JAVA_OPTS gives the JVM: the last -Xmx wins, as for the java launcher."""
-    sizes = re.findall(r"(?<!\S)-Xmx(\d+)([kKmMgGtT]?)(?!\S)", java_opts)
-    if not sizes:
+    """The heap cap JAVA_OPTS gives the JVM, in bytes, or None when it sets none.
+
+    catalina.sh passes JAVA_OPTS to java through eval, so the shell's quoting applies: a quoted
+    "-Dx= -Xmx1g" is one property, not a heap flag. The JVM takes the last -Xmx or -XX:MaxHeapSize.
+    Raises ValueError when JAVA_OPTS cannot be split or that flag cannot be read.
+    """
+    flags = [
+        t for t in shlex.split(java_opts) if t.startswith(("-Xmx", "-XX:MaxHeapSize="))
+    ]
+    if not flags:
         return None
-    number, unit = sizes[-1]
-    return int(number) * 1024 ** " kmgt".index(unit.lower() or " ")
+    match = HEAP_FLAG.fullmatch(flags[-1])
+    if not match:
+        raise ValueError(f"cannot read the heap flag {flags[-1]!r}")
+    return int(match[1]) * 1024 ** " kmgt".index(match[2].lower() or " ")
 
 
 def memory_bytes(quantity):
@@ -478,7 +492,8 @@ class AppMemoryTests(unittest.TestCase):
                 opts = (env["JAVA_OPTS"] or "") if "JAVA_OPTS" in env else image_opts
                 heap = java_heap_bytes(opts)
                 self.assertIsNotNone(
-                    heap, "no -Xmx in the image's or the pod's JAVA_OPTS"
+                    heap,
+                    "no -Xmx or -XX:MaxHeapSize in the image's or the pod's JAVA_OPTS",
                 )
                 limit = memory_bytes(container["resources"]["limits"]["memory"])
                 self.assertLessEqual(
@@ -486,6 +501,33 @@ class AppMemoryTests(unittest.TestCase):
                     0.75 * limit,
                     f"heap {heap >> 20} MiB, app memory limit {limit >> 20} MiB",
                 )
+
+
+class HeapFlagTests(unittest.TestCase):
+    """java_heap_bytes reads JAVA_OPTS as catalina.sh passes it to java: through the shell's eval."""
+
+    def test_a_quoted_property_is_not_a_heap_flag(self):
+        self.assertEqual(4 << 30, java_heap_bytes("-Xmx4g -Dnote=' -Xmx1g '"))
+
+    def test_maxheapsize_after_xmx_wins(self):
+        self.assertEqual(4 << 30, java_heap_bytes("-Xmx2048m -XX:MaxHeapSize=4g"))
+
+    def test_xmx_after_maxheapsize_wins(self):
+        self.assertEqual(2 << 30, java_heap_bytes("-XX:MaxHeapSize=4g -Xmx2048m"))
+
+    def test_a_size_without_a_unit_is_in_bytes(self):
+        self.assertEqual(2 << 30, java_heap_bytes("-Xmx2147483648"))
+
+    def test_no_heap_flag(self):
+        self.assertIsNone(java_heap_bytes("-Xms512m -XX:+UseG1GC"))
+
+    def test_a_heap_flag_it_cannot_read_is_an_error(self):
+        with self.assertRaises(ValueError):
+            java_heap_bytes("-Xmx2.5g")
+
+    def test_options_the_shell_cannot_split_are_an_error(self):
+        with self.assertRaises(ValueError):
+            java_heap_bytes("-Xmx2g -Dx='")
 
 
 class MakefileContractTests(unittest.TestCase):
