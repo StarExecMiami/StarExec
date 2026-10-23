@@ -202,9 +202,12 @@ def java_heap_bytes(java_opts):
 
     catalina.sh passes JAVA_OPTS to java through eval, so the shell's quoting applies: a quoted
     "-Dx= -Xmx1g" is one property, not a heap flag. The JVM takes the last -Xmx or -XX:MaxHeapSize.
-    Raises ValueError when JAVA_OPTS cannot be split, that flag cannot be read, or an option reads more
-    options from a file (an @argfile, -XX:VMOptionsFile or -XX:Flags), which the test cannot see.
+    Raises ValueError when JAVA_OPTS holds a "$" or a backquote, which eval would expand, when it cannot
+    be split, when that flag cannot be read, or when an option reads more options from a file (an
+    @argfile, -XX:VMOptionsFile or -XX:Flags), which the test cannot see.
     """
+    if "$" in java_opts or "`" in java_opts:
+        raise ValueError(f"{java_opts!r} has a shell expansion")
     tokens = shlex.split(java_opts)
     files = [
         t for t in tokens if t.startswith(("@", "-XX:VMOptionsFile=", "-XX:Flags="))
@@ -603,6 +606,14 @@ class HeapFlagTests(unittest.TestCase):
     def test_a_flags_file_is_an_error(self):
         with self.assertRaises(ValueError):
             java_heap_bytes("-Xmx2g -XX:Flags=/etc/starexec/hotspotrc")
+
+    def test_a_variable_is_an_error(self):
+        with self.assertRaises(ValueError):
+            java_heap_bytes("-Xmx2g $HEAP")
+
+    def test_a_command_substitution_is_an_error(self):
+        with self.assertRaises(ValueError):
+            java_heap_bytes("-Xmx2g `cat /etc/heap`")
 
 
 class MakefileContractTests(unittest.TestCase):
