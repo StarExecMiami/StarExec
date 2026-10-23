@@ -72,11 +72,13 @@ sed_escape() {
 # them; they are removed for any other backend.
 backend_subs=()
 if [ "$STAREXEC_BACKEND_TYPE" = podman ]; then
-    # The same default as the Makefile's PODMAN_SOCKET_PATH.
+    # The same default as the Makefile's PODMAN_SOCKET_PATH, and the service that provides that socket.
     if [ "${PODMAN_REQUIRES_SUDO:-no}" = yes ]; then
         default_socket=/run/podman/podman.sock
+        socket_service="sudo systemctl enable --now podman.socket"
     else
         default_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+        socket_service="systemctl --user enable --now podman.socket"
     fi
     PODMAN_SOCKET_PATH="${PODMAN_SOCKET_PATH:-$default_socket}"
     STAREXEC_CONTAINER_JOB_IMAGE="${STAREXEC_CONTAINER_JOB_IMAGE:-ghcr.io/starexecmiami/starexec-job-runner:latest}"
@@ -84,7 +86,7 @@ if [ "$STAREXEC_BACKEND_TYPE" = podman ]; then
     manifest_safe STAREXEC_CONTAINER_JOB_IMAGE "$STAREXEC_CONTAINER_JOB_IMAGE"
     [ -S "$PODMAN_SOCKET_PATH" ] ||
         fail "no container engine socket at $PODMAN_SOCKET_PATH, and the Podman backend starts jobs through it." \
-            "Start it with: systemctl --user enable --now podman.socket. Or set PODMAN_SOCKET_PATH."
+            "Start it with: $socket_service. Or set PODMAN_SOCKET_PATH."
     PODMAN_SOCKET_GID=$(stat -c '%g' "$PODMAN_SOCKET_PATH")
     if [ -z "${STAREXEC_CONTAINER_HOST_DATA_PATH:-}" ]; then
         read -r -a podman_cmd <<< "${PODMAN_CMD:-podman}"

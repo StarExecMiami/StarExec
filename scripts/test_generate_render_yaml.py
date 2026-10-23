@@ -344,6 +344,18 @@ class PodmanBackendTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn(str(self.r.dir / "absent.sock"), result.stderr)
         self.assertIn("systemctl --user enable --now podman.socket", result.stderr)
+        self.assertNotIn("sudo systemctl", result.stderr)
+        self.assertFalse(self.r.output.exists())
+
+    def test_a_missing_system_socket_names_the_system_service(self):
+        """Rootful Podman's socket belongs to the system service, which systemctl --user does not start."""
+        self.r.env["PODMAN_REQUIRES_SUDO"] = "yes"
+        self.r.env["PODMAN_SOCKET_PATH"] = str(self.r.dir / "absent.sock")
+        result = self.r.run()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(str(self.r.dir / "absent.sock"), result.stderr)
+        self.assertIn("sudo systemctl enable --now podman.socket", result.stderr)
+        self.assertNotIn("systemctl --user", result.stderr)
         self.assertFalse(self.r.output.exists())
 
     def test_a_file_that_is_not_a_socket_stops_the_render(self):
