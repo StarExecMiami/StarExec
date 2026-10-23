@@ -18,9 +18,6 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 
@@ -38,7 +35,6 @@ import java.util.List;
 public class UploadSpaceXML extends HttpServlet {
 
 	private static final StarLogger log = StarLogger.getLogger(UploadSpaceXML.class);
-	private final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 	private static final String SPACE_ID = R.SPACE;
 	private static final String UPLOAD_FILE = "f";
 
@@ -110,7 +106,7 @@ public class UploadSpaceXML extends HttpServlet {
 			// Don't need to keep file long - just using download directory
 			File uniqueDir = new File(R.getBatchSpaceXMLDir(), "" + userId);
 			uniqueDir = new File(uniqueDir, "TEMP_XML_FOLDER_");
-			uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
+			uniqueDir = new File(uniqueDir, Util.pathDate());
 
 			uniqueDir.mkdirs();
 

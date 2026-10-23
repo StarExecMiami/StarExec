@@ -36,9 +36,6 @@ import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
@@ -73,7 +70,6 @@ public class UploadSolver extends HttpServlet {
 	private static final String RUN_TEST_JOB = "runTestJob";
 	private static final String SETTING_ID = "settingId";
 	private static final String SOLVER_TYPE = "execType";
-	private final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
 			throws ServletException, IOException {
@@ -266,7 +262,7 @@ public class UploadSolver extends HttpServlet {
 
 			//Set up the unique directory to store the solver
 			solverDir = Solvers.claimNewDirectory(Solvers.solverDirectory(
-					new File(R.getSolverPath()), userId, newSolver.getName(), shortDate.format(new Date())));
+					new File(R.getSolverPath()), userId, newSolver.getName(), Util.pathDate()));
 			File uniqueDir = solverDir;
 
 			newSolver.setPath(uniqueDir.getAbsolutePath());

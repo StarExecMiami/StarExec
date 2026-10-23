@@ -19,6 +19,8 @@ import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.text.DecimalFormat;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -55,6 +57,8 @@ import org.starexec.logger.StarLogger;
 public class Util {
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    // Immutable and thread-safe, unlike SimpleDateFormat, so every request thread can share it.
+    private static final DateTimeFormatter PATH_DATE = DateTimeFormatter.ofPattern(R.PATH_DATE_FORMAT);
     private static final Pattern UNSAFE_SHELL_META_CHARS = Pattern.compile(
         "[;|&><`\\r\\n]"
     );
@@ -1782,6 +1786,22 @@ public class Util {
             FileUtils.deleteQuietly(sandbox);
         }
         return sandbox2;
+    }
+
+    /**
+     * The current local time as a directory name, in {@link R#PATH_DATE_FORMAT}: the time to the
+     * millisecond. Uploads and copies name the directories they create with it. The hour runs
+     * from 01 to 24, so 00:05:09.017 on 18 October 2026 is 20261018-24.05.09.017.
+     *
+     * @return the directory name for the current time
+     */
+    public static String pathDate() {
+        return pathDate(LocalDateTime.now());
+    }
+
+    /** {@link #pathDate()} for the given time. */
+    static String pathDate(LocalDateTime time) {
+        return PATH_DATE.format(time);
     }
 
     /**
