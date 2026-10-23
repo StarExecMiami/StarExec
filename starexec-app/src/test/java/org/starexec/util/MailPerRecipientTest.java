@@ -23,6 +23,7 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -68,6 +69,25 @@ public class MailPerRecipientTest {
 	}
 
 	@Test
+	public void mailCountsTheAddressesTheServerAcceptedAMessageFor() {
+		List<List<String>> accepted = new ArrayList<>();
+		try (MockedStatic<ErrorLogs> persisted = quietErrorLogs();
+		     MockedConstruction<SimpleEmail> emails = transport(Set.of(UNUSABLE), Set.of(CAROL), accepted)) {
+			assertEquals(2, Mail.mail("body", "subject", List.of(ALICE, UNUSABLE, BOB, CAROL)));
+			assertEquals(List.of(List.of(ALICE), List.of(BOB)), accepted);
+		}
+	}
+
+	@Test
+	public void mailWithNoAddressesBuildsNoMessage() {
+		try (MockedConstruction<SimpleEmail> emails = mockConstruction(SimpleEmail.class)) {
+			assertEquals(0, Mail.mail("body", "subject", (Collection<String>) null));
+			assertEquals(0, Mail.mail("body", "subject", List.of()));
+			assertTrue(emails.constructed().isEmpty());
+		}
+	}
+
+	@Test
 	public void aJoinRequestReachesEveryLeaderWhoseAddressWorks() throws Exception {
 		List<List<String>> accepted = new ArrayList<>();
 		try (JoinRequestStatics statics = new JoinRequestStatics(leaders(UNUSABLE, ALICE, BOB));
@@ -99,6 +119,7 @@ public class MailPerRecipientTest {
 		     MockedConstruction<SimpleEmail> emails = transport(Set.of(), Set.of(BOB), accepted)) {
 			Mail.sendCommunityRequest(requester(), request());
 			assertEquals(Set.of(ALICE, CAROL), recipients(accepted));
+			logs.assertNoSyntheticAddress();
 		}
 	}
 

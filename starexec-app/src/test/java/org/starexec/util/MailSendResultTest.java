@@ -56,7 +56,7 @@ public class MailSendResultTest {
 	public void anAcceptedMessageIsReportedSentWhateverTheRecipientListDoesAfterwards() throws Exception {
 		try (MockedStatic<ErrorLogs> logs = quietErrorLogs();
 		     MockedConstruction<SimpleEmail> emails = mockConstruction(SimpleEmail.class)) {
-			assertTrue(Mail.mail("body", "subject", sizeWorksOnce(TO)));
+			assertEquals(1, Mail.mail("body", "subject", sizeWorksOnce(TO)));
 			verify(emails.constructed().get(0)).send();
 		}
 	}
@@ -73,7 +73,7 @@ public class MailSendResultTest {
 	@Test
 	public void noRecipientsIsReportedNotSent() {
 		try (MockedConstruction<SimpleEmail> emails = mockConstruction(SimpleEmail.class)) {
-			assertFalse(Mail.mail("body", "subject", List.of()));
+			assertEquals(0, Mail.mail("body", "subject", List.of()));
 			assertTrue("nothing may be built for no recipients", emails.constructed().isEmpty());
 		}
 	}
