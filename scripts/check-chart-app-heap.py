@@ -16,14 +16,16 @@ killed a JVM that held 896 MiB of heap.
 
 For every values file in the chart directory this check renders the chart, reads the
 app container's memory limit and its JAVA_OPTS (the profile's env value when it sets
-one, even an empty one, since that replaces the image's; else the Dockerfile's), and
-fails when the heap ceiling is above 75% of the limit. The sizing
-example in docs/CONFIGURATION.md (-Xmx4g under a 6Gi limit) is at 67%. A values file
-the check does not list fails it too, so a new profile cannot skip it.
+one, even an empty one, since that replaces the image's; else the Dockerfile's), splits
+JAVA_OPTS as the shell does (catalina.sh passes it to java through eval), and fails when
+the heap ceiling is above 75% of the limit. The sizing example in docs/CONFIGURATION.md
+(-Xmx4g under a 6Gi limit) is at 67%. A values file the check does not list fails it
+too, so a new profile cannot skip it.
 """
 
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 
@@ -72,7 +74,7 @@ QUANTITY = {
 }
 # JVM sizes, as in -Xmx2048m or -XX:MaxHeapSize=2g.
 JVM_SIZE = {"": 1, "k": 2**10, "m": 2**20, "g": 2**30, "t": 2**40}
-HEAP_FLAG = re.compile(r"(?:^|\s)(?:-Xmx|-XX:MaxHeapSize=)(\d+)([kKmMgGtT]?)(?=\s|$)")
+HEAP_FLAG = re.compile(r"(?:-Xmx|-XX:MaxHeapSize=)(\d+)([kKmMgGtT]?)")
 VALUES_FILE = re.compile(r"values.*\.yaml(\.example)?")
 
 
@@ -86,12 +88,22 @@ def quantity_bytes(value):
 
 
 def heap_ceiling(java_opts):
-    """Bytes of the last -Xmx or -XX:MaxHeapSize in java_opts (the JVM takes the last), or None."""
-    found = HEAP_FLAG.findall(java_opts)
-    if not found:
+    """Bytes of the heap cap the JVM takes from java_opts, or None when it sets none.
+
+    catalina.sh passes JAVA_OPTS to java through eval, so the shell's quoting applies: a
+    quoted "-Dx= -Xmx1g" is one property, not a heap flag. The JVM takes the last -Xmx or
+    -XX:MaxHeapSize. Raises ValueError when java_opts cannot be split or that flag cannot be
+    read.
+    """
+    flags = [
+        t for t in shlex.split(java_opts) if t.startswith(("-Xmx", "-XX:MaxHeapSize="))
+    ]
+    if not flags:
         return None
-    number, unit = found[-1]
-    return int(number) * JVM_SIZE[unit.lower()]
+    match = HEAP_FLAG.fullmatch(flags[-1])
+    if not match:
+        raise ValueError(f"cannot read the heap flag {flags[-1]!r}")
+    return int(match[1]) * JVM_SIZE[match[2].lower()]
 
 
 def image_java_opts():
@@ -148,7 +160,10 @@ def check(values, default_opts):
         return f"{values}: the app memory limit {limit!r} is not a Kubernetes quantity"
     if limit_bytes <= 0:
         return f"{values}: the app memory limit {limit} is not a positive size"
-    heap = heap_ceiling(java_opts)
+    try:
+        heap = heap_ceiling(java_opts)
+    except ValueError as err:
+        return f"{values}: {source} cannot be read as catalina.sh reads it: {err}"
     if heap is None:
         return (
             f"{values}: {source} sets no -Xmx, so the JVM sizes its heap from the memory it "
