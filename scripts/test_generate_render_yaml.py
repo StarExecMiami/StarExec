@@ -23,6 +23,7 @@ REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "generate-render-yaml.sh"
 TEMPLATE = REPO / "render.yaml.template"
 CHART_VALUES = REPO / "charts" / "starexec" / "values.yaml"
+DOCKERFILE = REPO / "Dockerfile"
 
 # What `make deploy-podman-direct` passes for ENV=dev, minus the Makefile's own exports (set per test).
 BASE_ENV = {
@@ -178,6 +179,25 @@ def marker_lines(text):
 
 def chart_job_image():
     return yaml.safe_load(CHART_VALUES.read_text())["podman"]["jobImage"]
+
+
+def java_heap_bytes(java_opts):
+    """The heap ceiling JAVA_OPTS gives the JVM: the last -Xmx wins, as for the java launcher."""
+    sizes = re.findall(r"(?<!\S)-Xmx(\d+)([kKmMgGtT]?)(?!\S)", java_opts)
+    if not sizes:
+        return None
+    number, unit = sizes[-1]
+    return int(number) * 1024 ** " kmgt".index(unit.lower() or " ")
+
+
+def memory_bytes(quantity):
+    """A Kubernetes memory quantity, such as 3Gi or 512M, in bytes."""
+    number, unit = re.fullmatch(
+        r"(\d+(?:\.\d+)?)([KMGT]i|[kMGT])?", str(quantity)
+    ).groups()
+    scale = {None: 1, "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40}
+    scale.update({"k": 10**3, "M": 10**6, "G": 10**9, "T": 10**12})
+    return int(float(number) * scale[unit])
 
 
 class PodmanBackendTests(unittest.TestCase):
@@ -435,6 +455,33 @@ class LocalBackendTests(unittest.TestCase):
     def test_no_section_marker_is_left_in_the_manifest(self):
         self.assertEqual(0, self.r.run().returncode)
         self.assertEqual([], marker_lines(self.r.output.read_text()))
+
+
+class AppMemoryTests(unittest.TestCase):
+    """The app's memory limit against the heap the JVM may take."""
+
+    def test_the_app_memory_limit_leaves_room_beyond_the_heap(self):
+        # The JVM keeps an explicit -Xmx whatever the container's limit is, and also uses memory outside its heap.
+        # Should the heap reach the limit, the kernel kills Tomcat (OOMKilled) and no OutOfMemoryError is logged.
+        # So the heap may take at most 75% of the limit.
+        image_opts = re.search(r'JAVA_OPTS="([^"]*)"', DOCKERFILE.read_text()).group(1)
+        for backend in ("local", "podman"):
+            with self.subTest(backend=backend):
+                r = Render(self, STAREXEC_BACKEND_TYPE=backend, PODMAN_CMD="podman")
+                r.env["PODMAN_SOCKET_PATH"] = str(r.socket())
+                result = r.run()
+                self.assertEqual(0, result.returncode, result.stderr)
+                container = app(r.pod())
+                heap = java_heap_bytes(env_of(container).get("JAVA_OPTS") or image_opts)
+                self.assertIsNotNone(
+                    heap, "no -Xmx in the image's or the pod's JAVA_OPTS"
+                )
+                limit = memory_bytes(container["resources"]["limits"]["memory"])
+                self.assertLessEqual(
+                    heap,
+                    0.75 * limit,
+                    f"heap {heap >> 20} MiB, app memory limit {limit >> 20} MiB",
+                )
 
 
 class MakefileContractTests(unittest.TestCase):
