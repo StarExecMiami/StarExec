@@ -50,12 +50,8 @@
  * │  └───────────────────────────────────────────────────────────────────────┘  │
  * └─────────────────────────────────────────────────────────────────────────────┘
  *
- * Dependency:
- *   <dependency>
- *     <groupId>io.fabric8</groupId>
- *     <artifactId>kubernetes-client</artifactId>
- *     <version>6.10.0</version>
- *   </dependency>
+ * Dependency: io.fabric8:kubernetes-client with the OkHttp transport
+ *   (kubernetes-httpclient-okhttp, Vert.x excluded); versions in starexec-app/pom.xml.
  *
  * Configuration (environment variables):
  *   STAREXEC_K8S_NAMESPACE       - Kubernetes namespace (default: starexec).
@@ -3538,10 +3534,9 @@ public class KubernetesNativeBackend implements Backend {
         try {
             // Foreground, explicitly.
             //
-            // fabric8 6.10.0 sends Background when no policy is given
-            // (HasMetadataOperationsImpl.defaultContext applies withPropagationPolicy(
-            // BACKGROUND) because BaseClient.getOperationContext() is null for a client
-            // built by KubernetesClientBuilder). Background deletes the owner FIRST and
+            // fabric8 sends Background when no policy is given: a client built by
+            // KubernetesClientBuilder puts "propagationPolicy": "Background" in the
+            // DeleteOptions (seen on 6.10.0 and 7.9.0). Background deletes the owner FIRST and
             // reaps dependents asynchronously, so the Job's disappearance would say
             // nothing at all about its pod. Foreground keeps the Job alive behind a
             // foregroundDeletion finalizer until its dependents are gone, which makes the
@@ -4485,7 +4480,8 @@ public class KubernetesNativeBackend implements Backend {
      * build ships (2.21, raised for CVE fixes) that clone throws on the node's managedFields
      * ("keySerializer" is null). Every queue operation therefore failed before a request
      * left the application (Quokka, 2026-10-15). A merge patch carries only the fields it
-     * names and never serializes an object the server returned.
+     * names and never serializes an object the server returned. fabric8 7.9 clones correctly,
+     * but the merge patch stays: it is one request, where {@code edit()} reads the node first.
      */
     private void mergePatchNode(String nodeName, JsonObject patch) {
         kubernetesClient
