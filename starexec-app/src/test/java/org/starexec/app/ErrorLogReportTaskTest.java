@@ -15,6 +15,7 @@ import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -37,8 +38,9 @@ import static org.mockito.Mockito.mockStatic;
 /**
  * Once a day, PeriodicTasks' SEND_ERROR_LOGS task emails the error_logs table to the admins and developers
  * subscribed to it, then deletes what it sent. Here the table is a list behind a fake database connection, so
- * each test reads which lines the task left, whatever statements it used to delete them. Mail, the subscriber
- * query, the admin check and the runscript error count are replaced; the error log code runs for real.
+ * each test reads which lines the task left, whatever statements it used to delete them, and checks that it
+ * closed every connection and statement it opened. Mail, the subscriber query, the admin check and the
+ * runscript error count are replaced; the error log code runs for real.
  */
 public class ErrorLogReportTaskTest {
 
@@ -163,11 +165,49 @@ public class ErrorLogReportTaskTest {
 		assertRanThrough();
 	}
 
-	/** The task neither failed nor sent a statement the fake table does not know. */
-	private void assertRanThrough() {
+	@Test
+	public void aDeleteTheDatabaseRefusesKeepsTheLinesForTheNextReport() {
+		twoOldLines();
+		subscribe(7, "root@example.org", true);
+		accepted = 1;
+		table.refuseDeletes = 1;
+
+		runTheTask();
+
+		assertTrue("nothing is deleted when the delete fails",
+				table.messages().containsAll(List.of("first old line", "second old line")));
+		assertTrue("the failure is logged: " + table.added(), table.added().stream()
+				.anyMatch(m -> m.contains("the database refused the delete")));
 		assertEquals(List.of(), table.unexpected);
-		assertTrue("the task failed: " + table.added(), table.added().stream()
+		assertResourcesClosed();
+
+		int loggedBefore = table.added().size();
+		runTheTask();
+
+		assertEquals("the next report is sent", 2, reports.size());
+		assertTrue("with the lines the failed delete kept", reports.get(1).contains("first old line")
+				&& reports.get(1).contains("second old line"));
+		assertEquals("once it is delivered, they are deleted", List.of(), table.messages());
+		assertRanThroughSince(loggedBefore);
+	}
+
+	/** The task neither failed, nor sent a statement the fake table does not know, nor left anything open. */
+	private void assertRanThrough() {
+		assertRanThroughSince(0);
+	}
+
+	/** {@link #assertRanThrough()}, reading only the lines logged after the first {@code from}. */
+	private void assertRanThroughSince(int from) {
+		assertEquals(List.of(), table.unexpected);
+		List<String> logged = table.added().subList(from, table.added().size());
+		assertTrue("the task failed: " + logged, logged.stream()
 				.noneMatch(m -> m.contains("caught throwable") || m.contains("Failed to send error log emails")));
+		assertResourcesClosed();
+	}
+
+	private void assertResourcesClosed() {
+		assertEquals("every connection the task opened is closed", table.connections, table.closedConnections);
+		assertEquals("every statement the task prepared is closed", table.statements, table.closedStatements);
 	}
 
 	private void twoOldLines() {
@@ -225,13 +265,20 @@ public class ErrorLogReportTaskTest {
 
 	/**
 	 * The error_logs table as a list, behind a fake connection that runs the statements the error log code sends.
-	 * A statement it does not know is recorded in {@link #unexpected} and answered with nothing.
+	 * A statement it does not know is recorded in {@link #unexpected} and answered with nothing. It counts the
+	 * connections and statements it hands out and those closed, and refuses the next {@link #refuseDeletes}
+	 * deletes with an SQLException, as a database that cannot delete would.
 	 */
 	private static final class FakeErrorLogTable {
 		private final List<Row> rows = new ArrayList<>();
 		private final List<String> added = new ArrayList<>();
 		final List<String> unexpected = new ArrayList<>();
 		private int nextId = 1;
+		int refuseDeletes;
+		int connections;
+		int closedConnections;
+		int statements;
+		int closedStatements;
 
 		private static final class Row {
 			final int id;
@@ -263,6 +310,8 @@ public class ErrorLogReportTaskTest {
 		}
 
 		Connection connection() {
+			connections++;
+			boolean[] closed = {false};
 			return mock(Connection.class, invocation -> {
 				switch (invocation.getMethod().getName()) {
 					case "prepareStatement":
@@ -272,6 +321,14 @@ public class ErrorLogReportTaskTest {
 						Array array = mock(Array.class, a ->
 								a.getMethod().getName().equals("getArray") ? elements : null);
 						return array;
+					case "isClosed":
+						return closed[0];
+					case "close":
+						if (!closed[0]) {
+							closed[0] = true;
+							closedConnections++;
+						}
+						return null;
 					default:
 						return defaultValue(invocation);
 				}
@@ -279,6 +336,8 @@ public class ErrorLogReportTaskTest {
 		}
 
 		private PreparedStatement statement(String sql) {
+			statements++;
+			boolean[] closed = {false};
 			Map<Integer, Object> parameters = new HashMap<>();
 			return mock(PreparedStatement.class, invocation -> {
 				String name = invocation.getMethod().getName();
@@ -296,6 +355,14 @@ public class ErrorLogReportTaskTest {
 						return update(sql, parameters);
 					case "getUpdateCount":
 						return -1;
+					case "isClosed":
+						return closed[0];
+					case "close":
+						if (!closed[0]) {
+							closed[0] = true;
+							closedStatements++;
+						}
+						return null;
 					default:
 						return defaultValue(invocation);
 				}
@@ -321,6 +388,12 @@ public class ErrorLogReportTaskTest {
 		}
 
 		private int update(String sql, Map<Integer, Object> parameters) throws Exception {
+			boolean delete = sql.equals("SELECT starexec.DeleteErrorLogsBefore(?)")
+					|| sql.equals("DELETE FROM starexec.error_logs WHERE id = ANY(?)");
+			if (delete && refuseDeletes > 0) {
+				refuseDeletes--;
+				throw new SQLException("the database refused the delete");
+			}
 			int before = rows.size();
 			if (sql.equals("SELECT starexec.DeleteErrorLogsBefore(?)")) {
 				Timestamp time = (Timestamp) parameters.get(1);
