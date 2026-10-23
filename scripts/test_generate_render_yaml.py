@@ -462,7 +462,8 @@ class AppMemoryTests(unittest.TestCase):
 
     def test_the_app_memory_limit_leaves_room_beyond_the_heap(self):
         # The JVM keeps an explicit -Xmx whatever the container's limit is, and also uses memory outside its heap.
-        # Should the heap reach the limit, the kernel kills Tomcat (OOMKilled) and no OutOfMemoryError is logged.
+        # What outgrows the limit goes to swap, as `podman kube play` sets no swap limit, or, on a host without swap,
+        # the kernel kills Tomcat (OOMKilled) and no OutOfMemoryError is logged.
         # So the heap may take at most 75% of the limit.
         image_opts = re.search(r'JAVA_OPTS="([^"]*)"', DOCKERFILE.read_text()).group(1)
         for backend in ("local", "podman"):

@@ -463,7 +463,7 @@ resources:
       memory: 6Gi
 ```
 
-Keep `-Xmx` well below `resources.app.limits.memory`: the JVM also uses memory outside the heap, and the container is killed when its total use reaches the limit. A `JAVA_OPTS` exported in your shell does not reach the container.
+Keep `-Xmx` well below `resources.app.limits.memory`: the JVM also uses memory outside the heap, and when its total use reaches the limit the kernel kills the container. Under Podman, on a host with swap, it moves what does not fit to swap instead, while swap has room, because `podman kube play` gives the pod no swap limit. A `JAVA_OPTS` exported in your shell does not reach the container.
 
 ## Configuration Precedence
 

@@ -1184,8 +1184,9 @@ make logs-postgres | grep migration
 # Check memory usage
 podman stats starexec-app
 
-# Check the container's memory limit, current use and OOM kills (cgroup v2)
-podman exec starexec-app sh -c 'cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current; grep oom_kill /sys/fs/cgroup/memory.events'
+# Check the container's memory limit, its use of memory and of swap, how often it reached the limit (max)
+# and how many processes the kernel killed for it (oom_kill) (cgroup v2)
+podman exec starexec-app sh -c 'cd /sys/fs/cgroup; cat memory.max memory.current memory.swap.current; grep -E "^(max|oom_kill) " memory.events'
 
 # On Kubernetes, a container the kernel killed shows "Reason: OOMKilled" under "Last State"
 # once it has restarted, or under "State" until it does
@@ -1193,6 +1194,8 @@ kubectl describe pod <pod-name> -n starexec
 ```
 
 The image ships a JRE, without `jstat` or `jcmd`. Its JVM heap may grow to 2048 MiB (`-Xmx2048m`), so a memory limit at or below that leaves nothing for the memory the JVM uses outside the heap.
+
+Under Podman, the pod has no swap limit. On a host with swap, a container that reaches its memory limit is not killed while swap has room: the kernel moves what does not fit to swap, so `memory.swap.current` and `max` grow while `oom_kill` stays 0.
 
 **Solution:**
 
