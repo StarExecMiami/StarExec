@@ -2,17 +2,18 @@
 """Assert the application's JVM heap fits inside its memory limit in every values profile.
 
 The image starts Tomcat with an explicit -Xmx (JAVA_OPTS in the Dockerfile), and the
-JVM keeps an explicit -Xmx whatever the container's memory limit is. Under rootless
-Podman it cannot even read that limit: /sys/fs/cgroup is not readable by the image's
-user, and `java -XshowSettings:system` prints "Memory Limit: Unlimited". When the heap
-may grow to the limit or past it, the kernel kills Tomcat outright (exit 137,
-OOMKilled) once the heap and the JVM's other memory reach the limit, instead of the
-JVM raising an OutOfMemoryError that the application can log.
+JVM keeps an explicit -Xmx whatever the container's memory limit is. When the heap may
+grow to the limit or past it, the heap and the JVM's other memory outgrow the limit.
+Without swap, the kernel then kills Tomcat outright (exit 137, OOMKilled) instead of the
+JVM raising an OutOfMemoryError that the application can log. With swap, what does not
+fit goes to swap, since the pods `make start` plays have no swap limit.
 
 On 2026-10-23 the chart's values.yaml (2Gi, which values-podman.yaml.example
 inherits), values-local-dev.yaml (1Gi, the profile `make start` renders) and
-values-ci.yaml (512Mi) all ran the image's -Xmx2048m. Under the 1Gi limit the kernel
-killed a JVM that held 896 MiB of heap.
+values-ci.yaml (512Mi) all ran the image's -Xmx2048m. Under a 1Gi limit without swap,
+the kernel killed a JVM that held 896 MiB of heap. Under 1Gi in a pod played as
+`make start` plays it, on a host with swap, a JVM holding 1920 MiB of heap had 1023 MiB
+in swap.
 
 For every values file in the chart directory this check renders the chart, reads the
 app container's memory limit and its JAVA_OPTS (the profile's env value when it sets
