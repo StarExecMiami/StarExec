@@ -57,7 +57,7 @@ public class ArchiveUtilExtractArchiveTest {
 		assertFalse(ArchiveUtil.extractArchive(zip.getAbsolutePath()));
 	}
 
-	/** One of the two reasons for refusal that {@link ArchiveUtil#NOT_EXTRACTED} names. */
+	/** Refused for safety. */
 	@Test
 	public void aZipArchiveWithDotDotInAFileNameIsNotExtracted() throws IOException {
 		File dir = tmp.newFolder("upload");
@@ -68,7 +68,7 @@ public class ArchiveUtilExtractArchiveTest {
 		assertFalse("nothing is written beside the upload's directory", new File(tmp.getRoot(), "space.xml").exists());
 	}
 
-	/** The other reason for refusal that {@link ArchiveUtil#NOT_EXTRACTED} names. */
+	/** Refused for safety. */
 	@Test
 	public void aZipArchiveThatWouldExpandFarBeyondItsSizeIsNotExtracted() throws IOException {
 		File dir = tmp.newFolder("upload");
@@ -85,9 +85,8 @@ public class ArchiveUtilExtractArchiveTest {
 	}
 
 	/**
-	 * Sets the uncompressed size that the central directory of a one-entry zip archive declares. The check against
-	 * archives that expand too far reads the declared sizes, so this stands in for such an archive without
-	 * writing one: deflate cannot pass about 1030 to 1, too close to the limit for a test to rely on.
+	 * Returns the given one-entry zip archive with the uncompressed size in its central directory set to
+	 * {@code size}.
 	 */
 	private static byte[] declaringItsEntryExpandsTo(int size, byte[] zip) {
 		ByteBuffer bytes = ByteBuffer.wrap(zip).order(ByteOrder.LITTLE_ENDIAN);

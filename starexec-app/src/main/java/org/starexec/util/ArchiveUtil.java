@@ -25,13 +25,11 @@ public class ArchiveUtil {
 
     /**
      * What a space or job XML upload tells its user when {@link #extractArchive(String)} could not extract the
-     * archive. The reasons for refusal it names are checks that {@link #extractArchive(String, String)} makes, so a
-     * change to those checks should change this message too.
+     * archive.
      */
     public static final String NOT_EXTRACTED =
         "StarExec has failed to extract your uploaded file. It may be damaged, or it may have been refused for " +
-        "safety: an archive is refused when it would expand to far more than its own size, and a .zip or .tar " +
-        "archive is also refused when a file in it has \"..\" in its name.";
+        "safety.";
 
     /**
      * Gets the uncompressed size of an archive
