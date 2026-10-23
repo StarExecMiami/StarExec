@@ -73,6 +73,22 @@ public class ErrorLogReportTaskTest {
 	}
 
 	@Test
+	public void aLineNoOneReceivedIsGivenUpAfterFiveDays() {
+		table.insert("six days old", StarLevel.ERROR, Timestamp.from(Instant.now().minus(6, ChronoUnit.DAYS)));
+		table.insert("four days old", StarLevel.ERROR, Timestamp.from(Instant.now().minus(4, ChronoUnit.DAYS)));
+		subscribe(7, "root@example.org", true);
+		accepted = 0;
+
+		runTheTask();
+
+		assertFalse("kept for five days, then given up", table.messages().contains("six days old"));
+		assertTrue("younger lines still wait for the next report", table.messages().contains("four days old"));
+		assertTrue("the log says what was given up: " + table.added(), table.added().stream()
+				.anyMatch(m -> m.contains("1 line(s) older than 5 days are deleted unsent")));
+		assertRanThrough();
+	}
+
+	@Test
 	public void aDeliveredReportDeletesOnlyTheLinesItContained() {
 		twoOldLines();
 		subscribe(7, "root@example.org", true);
