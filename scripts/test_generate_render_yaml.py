@@ -34,6 +34,8 @@ OTHER_JAVA_OPTIONS = (
     "JAVA_TOOL_OPTIONS",
     "_JAVA_OPTIONS",
 )
+# Variables that move the bin/setenv.sh that catalina.sh sources.
+TOMCAT_LOCATIONS = ("CATALINA_BASE", "CATALINA_HOME")
 
 # What `make deploy-podman-direct` passes for ENV=dev, minus the Makefile's own exports (set per test).
 BASE_ENV = {
@@ -494,6 +496,7 @@ class AppMemoryTests(unittest.TestCase):
         # the kernel kills Tomcat (OOMKilled) and no OutOfMemoryError is logged.
         # So the heap may take at most 75% of the limit.
         image_opts = re.search(r'JAVA_OPTS="([^"]*)"', DOCKERFILE.read_text()).group(1)
+        tomcat = re.search(r"\bCATALINA_HOME=(\S+)", DOCKERFILE.read_text()).group(1)
         for backend in ("local", "podman"):
             with self.subTest(backend=backend):
                 r = Render(self, STAREXEC_BACKEND_TYPE=backend, PODMAN_CMD="podman")
@@ -502,11 +505,22 @@ class AppMemoryTests(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
                 container = app(r.pod())
                 env = env_of(container)
-                for name in OTHER_JAVA_OPTIONS:
+                # The pod must start Tomcat as the image does, so that JAVA_OPTS is its only source of Java options.
+                for key in ("command", "args", "envFrom"):
+                    self.assertNotIn(key, container, f"the app container sets {key}")
+                for name in OTHER_JAVA_OPTIONS + TOMCAT_LOCATIONS:
                     self.assertNotIn(
                         name,
                         env,
                         f"the pod sets {name}; this test reads the heap from JAVA_OPTS alone",
+                    )
+                for mount in container.get("volumeMounts", []):
+                    path = mount["mountPath"].rstrip("/")
+                    self.assertFalse(
+                        path == tomcat
+                        or path.startswith(tomcat + "/")
+                        or tomcat.startswith(path + "/"),
+                        f"the pod mounts {mount['mountPath']} over {tomcat}, where catalina.sh looks for bin/setenv.sh",
                     )
                 # A JAVA_OPTS that the pod names replaces the image's, even when it is empty or has no value.
                 opts = (env["JAVA_OPTS"] or "") if "JAVA_OPTS" in env else image_opts
