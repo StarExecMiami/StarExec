@@ -25,6 +25,15 @@ SCRIPT = REPO / "scripts" / "generate-render-yaml.sh"
 TEMPLATE = REPO / "render.yaml.template"
 CHART_VALUES = REPO / "charts" / "starexec" / "values.yaml"
 DOCKERFILE = REPO / "Dockerfile"
+ENTRYPOINT = REPO / "docker" / "entrypoint.sh"
+# Variables that also carry Java options, each able to set the heap: catalina.sh passes CATALINA_OPTS after
+# JAVA_OPTS, the java launcher reads JDK_JAVA_OPTIONS, and the JVM reads JAVA_TOOL_OPTIONS and _JAVA_OPTIONS.
+OTHER_JAVA_OPTIONS = (
+    "CATALINA_OPTS",
+    "JDK_JAVA_OPTIONS",
+    "JAVA_TOOL_OPTIONS",
+    "_JAVA_OPTIONS",
+)
 
 # What `make deploy-podman-direct` passes for ENV=dev, minus the Makefile's own exports (set per test).
 BASE_ENV = {
@@ -191,11 +200,16 @@ def java_heap_bytes(java_opts):
 
     catalina.sh passes JAVA_OPTS to java through eval, so the shell's quoting applies: a quoted
     "-Dx= -Xmx1g" is one property, not a heap flag. The JVM takes the last -Xmx or -XX:MaxHeapSize.
-    Raises ValueError when JAVA_OPTS cannot be split or that flag cannot be read.
+    Raises ValueError when JAVA_OPTS cannot be split, that flag cannot be read, or an option reads more
+    options from a file (an @argfile, -XX:VMOptionsFile or -XX:Flags), which the test cannot see.
     """
-    flags = [
-        t for t in shlex.split(java_opts) if t.startswith(("-Xmx", "-XX:MaxHeapSize="))
+    tokens = shlex.split(java_opts)
+    files = [
+        t for t in tokens if t.startswith(("@", "-XX:VMOptionsFile=", "-XX:Flags="))
     ]
+    if files:
+        raise ValueError(f"{files[0]!r} reads options from a file")
+    flags = [t for t in tokens if t.startswith(("-Xmx", "-XX:MaxHeapSize="))]
     if not flags:
         return None
     match = HEAP_FLAG.fullmatch(flags[-1])
@@ -488,6 +502,12 @@ class AppMemoryTests(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
                 container = app(r.pod())
                 env = env_of(container)
+                for name in OTHER_JAVA_OPTIONS:
+                    self.assertNotIn(
+                        name,
+                        env,
+                        f"the pod sets {name}; this test reads the heap from JAVA_OPTS alone",
+                    )
                 # A JAVA_OPTS that the pod names replaces the image's, even when it is empty or has no value.
                 opts = (env["JAVA_OPTS"] or "") if "JAVA_OPTS" in env else image_opts
                 heap = java_heap_bytes(opts)
@@ -501,6 +521,35 @@ class AppMemoryTests(unittest.TestCase):
                     0.75 * limit,
                     f"heap {heap >> 20} MiB, app memory limit {limit >> 20} MiB",
                 )
+
+    def test_tomcat_takes_its_java_options_from_java_opts_alone(self):
+        # The memory test reads the heap from JAVA_OPTS: the pod's, or else the one the Dockerfile sets. So the
+        # Dockerfile must set JAVA_OPTS once, the entrypoint must leave it alone, and nothing may pass Java options
+        # another way: catalina.sh also sources bin/setenv.sh when it exists.
+        def code_lines(path, name):
+            return [
+                line
+                for line in path.read_text().splitlines()
+                if name in line and not line.lstrip().startswith("#")
+            ]
+
+        java_opts = code_lines(DOCKERFILE, "JAVA_OPTS")
+        self.assertEqual(
+            1,
+            len(java_opts),
+            f"the Dockerfile must set JAVA_OPTS on one line: {java_opts}",
+        )
+        self.assertRegex(java_opts[0], r'JAVA_OPTS="[^"]*"')
+        for name in OTHER_JAVA_OPTIONS + ("setenv",):
+            self.assertEqual(
+                [], code_lines(DOCKERFILE, name), f"the Dockerfile mentions {name}"
+            )
+        for name in ("JAVA_OPTS",) + OTHER_JAVA_OPTIONS + ("setenv",):
+            self.assertEqual(
+                [],
+                code_lines(ENTRYPOINT, name),
+                f"docker/entrypoint.sh mentions {name}",
+            )
 
 
 class HeapFlagTests(unittest.TestCase):
@@ -528,6 +577,18 @@ class HeapFlagTests(unittest.TestCase):
     def test_options_the_shell_cannot_split_are_an_error(self):
         with self.assertRaises(ValueError):
             java_heap_bytes("-Xmx2g -Dx='")
+
+    def test_an_argument_file_is_an_error(self):
+        with self.assertRaises(ValueError):
+            java_heap_bytes("-Xmx2g @/etc/starexec/jvm.args")
+
+    def test_a_vm_options_file_is_an_error(self):
+        with self.assertRaises(ValueError):
+            java_heap_bytes("-Xmx2g -XX:VMOptionsFile=/etc/starexec/jvm.options")
+
+    def test_a_flags_file_is_an_error(self):
+        with self.assertRaises(ValueError):
+            java_heap_bytes("-Xmx2g -XX:Flags=/etc/starexec/hotspotrc")
 
 
 class MakefileContractTests(unittest.TestCase):
