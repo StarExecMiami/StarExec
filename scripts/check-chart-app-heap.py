@@ -15,8 +15,9 @@ values-ci.yaml (512Mi) all ran the image's -Xmx2048m. Under the 1Gi limit the ke
 killed a JVM that held 896 MiB of heap.
 
 For every values file in the chart directory this check renders the chart, reads the
-app container's memory limit and its JAVA_OPTS (the rendered env value, else the
-Dockerfile's), and fails when the heap ceiling is above 75% of the limit. The sizing
+app container's memory limit and its JAVA_OPTS (the profile's env value when it sets
+one, even an empty one, since that replaces the image's; else the Dockerfile's), and
+fails when the heap ceiling is above 75% of the limit. The sizing
 example in docs/CONFIGURATION.md (-Xmx4g under a 6Gi limit) is at 67%. A values file
 the check does not list fails it too, so a new profile cannot skip it.
 """
@@ -131,14 +132,20 @@ def check(values, default_opts):
     """One failure message for this profile, or None after printing its OK line."""
     app = app_container(render(values), values)
     env = {e["name"]: e.get("value") for e in app.get("env") or []}
-    if env.get("JAVA_OPTS"):
+    # A JAVA_OPTS in the pod replaces the image's, even an empty one.
+    if "JAVA_OPTS" in env:
         java_opts, source = env["JAVA_OPTS"], "env.JAVA_OPTS"
+        if java_opts is None:
+            return f"{values}: env.JAVA_OPTS has no plain value, so its heap cannot be read"
     else:
         java_opts, source = default_opts, "the Dockerfile's JAVA_OPTS"
     limit = ((app.get("resources") or {}).get("limits") or {}).get("memory")
     if limit is None:
         return f"{values}: the app container has no memory limit"
-    limit_bytes = quantity_bytes(limit)
+    try:
+        limit_bytes = quantity_bytes(limit)
+    except ValueError:
+        return f"{values}: the app memory limit {limit!r} is not a Kubernetes quantity"
     if limit_bytes <= 0:
         return f"{values}: the app memory limit {limit} is not a positive size"
     heap = heap_ceiling(java_opts)
