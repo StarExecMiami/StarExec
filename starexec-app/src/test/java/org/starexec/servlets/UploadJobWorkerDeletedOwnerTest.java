@@ -4,6 +4,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.apache.commons.io.FileUtils;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -14,6 +15,7 @@ import org.starexec.data.database.UploadJobQueue;
 import org.starexec.data.database.Users;
 import org.starexec.data.to.UploadJob;
 import org.starexec.data.to.User;
+import org.starexec.util.UploadArtifactFileSystem;
 import org.starexec.util.UploadArtifactPathGuard;
 
 import java.io.File;
@@ -22,13 +24,18 @@ import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mockStatic;
@@ -45,7 +52,8 @@ import static org.mockito.Mockito.mockStatic;
  * owned by no one.
  *
  * <p>Each test runs one job through the worker's real processJob. The database is replaced at its
- * static boundary; the files are real, under a temporary benchmark root.
+ * static boundary; the files are real, under a temporary benchmark root. Where a test needs a
+ * deletion to fail, the file helper is replaced for that call and runs for real for every other.
  */
 public class UploadJobWorkerDeletedOwnerTest {
 
@@ -173,6 +181,143 @@ public class UploadJobWorkerDeletedOwnerTest {
 		assertTrue("another job's files are kept", Files.isRegularFile(anotherJobs));
 	}
 
+	/**
+	 * The archive path comes from the job's row, so the cleanup checks it first. One that is not
+	 * where this user's uploads write, here another user's directory, deletes nothing: neither the
+	 * archive there nor what is beside it.
+	 */
+	@Test
+	public void anArchivePathOutsideTheUsersUploadsDeletesNothing() throws Exception {
+		Path othersArchive = neighbour.toPath().resolveSibling("other.tar.gz");
+		writeArchive(othersArchive, 1);
+		Path besideIt = write(othersArchive.resolveSibling("upload_" + JOB_ID + "_1/Problems/a.p"));
+		ownerExists.set(false);
+		UploadJob job = job(null);
+		job.setArchivePath(othersArchive.toString());
+
+		process(worker(), job);
+
+		assertTrue("the archive in another user's directory is kept", Files.isRegularFile(othersArchive));
+		assertTrue("the files beside it are kept", Files.isRegularFile(besideIt));
+		assertTrue("another user's benchmark is untouched", neighbour.isFile());
+	}
+
+	/** Nor does one that is not a path at all, and the cleanup throws nothing of its own. */
+	@Test
+	public void anArchivePathThatIsNotAPathDeletesNothing() throws Exception {
+		writeArchive(archive, 1);
+		ownerExists.set(false);
+		UploadJob job = job(null);
+		job.setArchivePath(archive + "\0");
+
+		process(worker(), job);
+
+		assertTrue("the archive is kept", Files.isRegularFile(archive));
+	}
+
+	/**
+	 * Each extraction directory is deleted on its own: two that cannot be deleted, one with a
+	 * checked and one with an unchecked exception, keep neither the third nor the archive.
+	 */
+	@Test
+	public void anExtractionThatCannotBeDeletedDoesNotKeepTheRest() throws Exception {
+		writeArchive(archive, 1);
+		Path directory = archive.getParent();
+		for (int i = 1; i <= 3; i++) {
+			write(directory.resolve("upload_" + JOB_ID + "_" + i + "/Problems/a.p"));
+		}
+		ownerExists.set(false);
+		AtomicInteger attempts = new AtomicInteger();
+
+		try (MockedStatic<UploadArtifactFileSystem> files = mockStatic(UploadArtifactFileSystem.class, invocation -> {
+			if (invocation.getMethod().getName().equals("deleteDirectoryWithoutFollowingLinks")) {
+				int attempt = attempts.incrementAndGet();
+				if (attempt == 1) {
+					throw new IOException("synthetic: cannot delete");
+				}
+				if (attempt == 2) {
+					throw new UncheckedIOException(new IOException("synthetic: cannot delete"));
+				}
+			}
+			return invocation.callRealMethod();
+		})) {
+			process(worker(), job(null));
+		}
+
+		assertEquals("every extraction directory is tried", 3, attempts.get());
+		assertEquals("only the two that could not be deleted are left", 2, extractions(directory).size());
+		assertFalse("the archive is deleted", Files.exists(archive));
+	}
+
+	/**
+	 * A link among the job's extraction directories is refused, not followed: what it points to,
+	 * here another user's directory, is kept, and the archive is still deleted.
+	 */
+	@Test
+	public void aLinkAmongTheExtractionsIsNotFollowed() throws Exception {
+		writeArchive(archive, 1);
+		try {
+			Files.createSymbolicLink(archive.resolveSibling("upload_" + JOB_ID + "_1"), neighbour.toPath().getParent());
+		} catch (UnsupportedOperationException | IOException e) {
+			Assume.assumeNoException("this file store cannot create symlinks", e);
+		}
+		ownerExists.set(false);
+
+		process(worker(), job(null));
+
+		assertTrue("what the link points to is kept", neighbour.isFile());
+		assertFalse("the archive is deleted", Files.exists(archive));
+	}
+
+	/**
+	 * A directory that cannot be listed still loses the archive and then, once empty, itself and
+	 * the user's directory: a failed listing skips only the extraction directories.
+	 */
+	@Test
+	public void aDirectoryThatCannotBeListedStillLosesTheArchive() throws Exception {
+		Path directory = archive.getParent();
+		Assume.assumeTrue("POSIX file permissions", Files.getFileStore(directory).supportsFileAttributeView("posix"));
+		writeArchive(archive, 1);
+		ownerExists.set(false);
+		Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("-wx------"));
+		try {
+			Assume.assumeFalse("file permissions apply to this user", Files.isReadable(directory));
+			process(worker(), job(null));
+		} finally {
+			if (Files.exists(directory)) {
+				Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwx------"));
+			}
+		}
+
+		assertFalse("the archive is deleted", Files.exists(archive));
+		assertNothingLeftForTheOwner();
+	}
+
+	/**
+	 * An archive that cannot be deleted does not end the job with an exception of the cleanup's
+	 * own, and the extraction before it is still deleted. The failure injected is unchecked: the
+	 * cleanup catches those too, so none can replace the exception that ended the job.
+	 */
+	@Test
+	public void anArchiveThatCannotBeDeletedThrowsNothing() throws Exception {
+		writeArchive(archive, 1);
+		Path finished = write(archive.resolveSibling("upload_" + JOB_ID + "_1/Problems/b.p"));
+		ownerExists.set(false);
+
+		try (MockedStatic<UploadArtifactFileSystem> files = mockStatic(UploadArtifactFileSystem.class, invocation -> {
+			if (invocation.getMethod().getName().equals("deleteFileWithoutFollowingLinks")
+					&& archive.equals(invocation.getArgument(0))) {
+				throw new UncheckedIOException(new IOException("synthetic: cannot delete"));
+			}
+			return invocation.callRealMethod();
+		})) {
+			process(worker(), job(null));
+		}
+
+		assertTrue("the archive that could not be deleted is left", Files.isRegularFile(archive));
+		assertFalse("the extraction is deleted", Files.exists(finished.getParent().getParent()));
+	}
+
 	/** Users.deleteUser's end: the row is gone and the user's benchmark directory is deleted. */
 	private void deleteOwner() {
 		ownerExists.set(false);
@@ -249,6 +394,15 @@ public class UploadJobWorkerDeletedOwnerTest {
 				new File(root, "" + OWNER).exists());
 		assertTrue("another user's benchmark is untouched", neighbour.isFile());
 		assertTrue("the benchmark root is kept", root.isDirectory());
+	}
+
+	/** The job's extraction directories in a directory, as the cleanup finds them. */
+	private static List<Path> extractions(Path directory) throws IOException {
+		List<Path> found = new ArrayList<>();
+		try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory, "upload_" + JOB_ID + "_*")) {
+			stream.forEach(found::add);
+		}
+		return found;
 	}
 
 	private static Path write(Path file) throws IOException {
