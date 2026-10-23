@@ -1080,6 +1080,8 @@ public class Benchmarks {
 	 * @author Eric Burns
 	 */
 	public static int copyBenchmark(Benchmark b, int userId, int spaceId) {
+		File uniqueDir = null;
+		int benchId = -1;
 		try {
 			log.debug("Copying benchmark " + b.getName() + " (id=" + b.getId()
 					+ ") to new user id=" + userId + ", spaceId=" + spaceId);
@@ -1109,12 +1111,11 @@ public class Benchmarks {
 			// an old benchmark that already passed validation
 			newBenchmark.getAttributes().put(R.VALID_BENCHMARK_ATTRIBUTE, "true");
 
-			File uniqueDir = UploadBenchmark.getDirectoryForBenchmarkUpload(userId, String.valueOf(b.getId()));
-			uniqueDir.mkdirs();
+			uniqueDir = UploadBenchmark.getDirectoryForBenchmarkUpload(userId, String.valueOf(b.getId()));
 			newBenchmark.setPath(uniqueDir.getAbsolutePath() + File.separator + benchmarkFile.getName());
 
 			FileUtils.copyFileToDirectory(benchmarkFile, uniqueDir);
-			int benchId = Benchmarks.addAndAssociate(newBenchmark, spaceId, null);
+			benchId = Benchmarks.addAndAssociate(newBenchmark, spaceId, null);
 			if (benchId < 0) {
 				log.error("copyBenchmark: addAndAssociate failed for benchmark '"
 						+ b.getName() + "' (source id=" + b.getId() + ") into spaceId=" + spaceId);
@@ -1133,6 +1134,12 @@ public class Benchmarks {
 			log.error("copyBenchmark: failed to copy benchmark '" + b.getName()
 					+ "' (id=" + b.getId() + ", path=" + b.getPath() + ")", e);
 			return -1;
+		} finally {
+			// No live benchmark row refers to the file of a copy that was not added (#275):
+			// addAndAssociate either inserted nothing or marked its row deleted again.
+			if (benchId < 0) {
+				UploadBenchmark.deleteDirectoryForBenchmarkUpload(userId, uniqueDir);
+			}
 		}
 	}
 

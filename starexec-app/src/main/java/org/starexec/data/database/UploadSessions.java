@@ -121,8 +121,10 @@ public class UploadSessions {
         int chunkSize = Math.max(1, EnvironmentConfig.getUploadSessionChunkSizeBytes());
         int totalChunks = (int)Math.ceil(totalBytes / (double)chunkSize);
 
+        File sessionDir = null;
+        boolean created = false;
         try {
-            File sessionDir = UploadBenchmark.getDirectoryForBenchmarkUpload(
+            sessionDir = UploadBenchmark.getDirectoryForBenchmarkUpload(
                 userId, "upload-session-" + UUID.randomUUID()
             );
             File stagingFile = new File(sessionDir, cleanFileName + ".part");
@@ -149,7 +151,9 @@ public class UploadSessions {
             if (!keys.next()) {
                 return Optional.empty();
             }
-            return getSession(keys.getLong(1));
+            Optional<UploadSession> session = getSession(keys.getLong(1));
+            created = session.isPresent();
+            return session;
         } catch (Exception e) {
             log.error("createSession", "Failed to create upload session for user " + userId, e);
             return Optional.empty();
@@ -157,6 +161,10 @@ public class UploadSessions {
             Common.safeClose(keys);
             Common.safeClose(ps);
             Common.safeClose(con);
+            // The caller was told there is no session, so nothing will use its directory (#275).
+            if (!created) {
+                UploadBenchmark.deleteDirectoryForBenchmarkUpload(userId, sessionDir);
+            }
         }
     }
 

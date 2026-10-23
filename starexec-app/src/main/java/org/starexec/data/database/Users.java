@@ -318,6 +318,22 @@ public class Users {
 	}
 
 	/**
+	 * Whether a user with this id exists, that is, has not been deleted.
+	 *
+	 * <p>Unlike {@link #get(int)}, a failed lookup is not an answer: the error is thrown, so that a
+	 * caller deciding whether to delete a user's files cannot mistake a lost connection for a
+	 * deleted user. Nor does it require a role, as get does.
+	 *
+	 * @param userId the id of the user
+	 * @return true if the user's row exists
+	 * @throws SQLException if the database could not be asked
+	 */
+	public static boolean exists(int userId) throws SQLException {
+		return Common.query(
+				"SELECT 1 FROM starexec.users WHERE id = ?", procedure -> procedure.setInt(1, userId), ResultSet::next);
+	}
+
+	/**
 	 * Retrieves a user from the database given the user's id
 	 *
 	 * @param id the id of the user to get
