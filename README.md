@@ -23,8 +23,8 @@ Choose your deployment method:
 # Fastest path - Docker Compose
 docker compose up --build
 
-# Production path - Podman
-make start
+# Production path - Podman (create the values file first: docs/DEPLOYMENT.md)
+make deploy-podman ENV=prod VALS=charts/starexec/values-podman-prod.yaml
 
 # Kubernetes - Helm
 helm repo add starexec https://starexecmiami.github.io/StarExec

@@ -707,9 +707,11 @@ public class EnvironmentConfig {
     /**
      * Podman cgroup memory ceiling for each job container (in MiB).
      *
-     * <p>The generated job script still enforces the job's own memory budget. This
-     * container-level ceiling is also exposed as {@code STAREXEC_MEM_LIMIT} for
-     * {@code GetComputerInfo} metadata.</p>
+     * <p>runsolver enforces the job's own memory limit inside the container, but this
+     * ceiling bounds the whole container, so a pair whose job allows more is held to
+     * it. The job script records a solver the kernel stops at the ceiling as a memory
+     * breach ({@code EXCEED_MEM}). The ceiling is also exposed as
+     * {@code STAREXEC_MEM_LIMIT} for {@code GetComputerInfo} metadata.</p>
      */
     public static long getContainerDefaultMemoryMb() {
         return Long.parseLong(

@@ -11,6 +11,10 @@ metadata:
 {{- end }}
   labels:
     {{- include "chart.labels" . | nindent 4 }}
+  {{- with .Values.persistence.resourcePolicy }}
+  annotations:
+    helm.sh/resource-policy: {{ . | quote }}
+  {{- end }}
 spec:
 {{- if eq (include "starexec.isKubernetesBackend" .) "true" }}
   accessModes:

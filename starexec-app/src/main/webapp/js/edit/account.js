@@ -189,7 +189,7 @@ function initUI() {
     $("#dialog-createSettingsProfile").dialog({
       modal: true,
       width: 380,
-      height: 165,
+      height: "auto",
       buttons: {
         create: function () {
           $(this).dialog("close");
@@ -300,7 +300,7 @@ function initUI() {
     $("#dialog-confirm-delete").dialog({
       modal: true,
       width: 380,
-      height: 200,
+      height: "auto",
       buttons: {
         yes: function () {
           $("#dialog-confirm-delete").dialog("close");
@@ -421,7 +421,7 @@ function attachWebsiteMonitor() {
     $("#dialog-confirm-delete").dialog({
       modal: true,
       width: 380,
-      height: 165,
+      height: "auto",
       buttons: {
         OK: function () {
           $("#dialog-confirm-delete").dialog("close");

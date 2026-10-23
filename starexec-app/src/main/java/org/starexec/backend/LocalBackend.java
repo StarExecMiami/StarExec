@@ -606,6 +606,14 @@ public class LocalBackend implements Backend {
             // Start the job process
             job.process = startJobProcess(job);
 
+            // Record when the pair started. Outside container mode the job script does it
+            // through SetPairStartTime; in container mode it cannot reach the database and
+            // leaves the stamp to the host, as PodmanBackend and KubernetesNativeBackend do.
+            // setStartTime only fills an empty start_time, and a rerun clears it.
+            if (pairId > 0) {
+                org.starexec.data.database.JobPairs.setStartTime(pairId);
+            }
+
             // Update execution host mapping now that the process is alive
             if (job.process != null && job.process.isAlive() && pairId > 0 && cachedNodeId > 0) {
                 try {

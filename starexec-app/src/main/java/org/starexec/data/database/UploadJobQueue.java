@@ -49,8 +49,8 @@ public class UploadJobQueue {
     private static final String INSERT_JOB_SQL = 
         "INSERT INTO upload_jobs (archive_path, user_id, space_id, upload_method, " +
         "benchmark_type_id, downloadable, priority, archive_size, " +
-        "has_dependencies, dep_root_space_id, linked, upload_session_id, source_url) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        "has_dependencies, dep_root_space_id, linked, upload_session_id, source_url, space_permissions) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     
     // An upload by URL holds its worker for as long as the download takes, up to the downloader's
     // deadline, so at most one runs at a time: slow downloads can never occupy every worker and
@@ -198,6 +198,7 @@ public class UploadJobQueue {
         ps.setBoolean(11, request.isLinked());
         ps.setObject(12, request.getUploadSessionId().orElse(null), java.sql.Types.BIGINT);
         ps.setString(13, request.getSourceUrl().orElse(null));
+        ps.setString(14, request.getSpacePermissions().orElse(null));
     }
     
     /**
@@ -862,6 +863,30 @@ public class UploadJobQueue {
     /**
      * Maps a ResultSet row to an UploadJob object.
      */
+    /**
+     * Reads a column that a recent migration added, when that migration may not have run yet.
+     *
+     * <p>Jenkins starts the new application before it applies the migrations, so for a minute or
+     * two the code can be ahead of the schema. The claim is an autocommitted UPDATE ... RETURNING *:
+     * a claimed row that then failed to map would stay PROCESSING, with no worker, until the next
+     * restart. Only PostgreSQL's undefined_column (42703) is read as "not stored"; any other
+     * failure propagates.
+     *
+     * @param rs The row
+     * @param column A column added by a migration
+     * @return Its value, or null when the column does not exist yet
+     */
+    static String columnAddedByMigration(ResultSet rs, String column) throws SQLException {
+        try {
+            return rs.getString(column);
+        } catch (SQLException e) {
+            if ("42703".equals(e.getSQLState())) {
+                return null;
+            }
+            throw e;
+        }
+    }
+
     private static UploadJob mapResultSetToJob(ResultSet rs) throws SQLException {
         UploadJob job = new UploadJob();
         job.setId(rs.getLong("id"));
@@ -890,7 +915,8 @@ public class UploadJobQueue {
         job.setLinked(rs.getBoolean("linked"));
         long uploadSessionId = rs.getLong("upload_session_id");
         job.setUploadSessionId(rs.wasNull() ? null : uploadSessionId);
-        job.setSourceUrl(rs.getString("source_url"));
+        job.setSourceUrl(columnAddedByMigration(rs, "source_url"));
+        job.setSpacePermissions(UploadJob.decodeSpacePermissions(columnAddedByMigration(rs, "space_permissions")));
         job.setLastProcessedPath(rs.getString("last_processed_path"));
         job.setLastProcessedIndex(rs.getInt("last_processed_index"));
         job.setExtractPath(rs.getString("extract_path"));
