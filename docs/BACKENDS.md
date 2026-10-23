@@ -223,6 +223,14 @@ StarExec queue and job. `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` and
 job script replaced both values before execution. They never selected cores or
 changed the effective solver budgets.
 
+The memory limit runsolver enforces on the solver is the job's own.
+`STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` caps each pair's whole container, the job
+script and runsolver included, whatever the job's limit, so a pair whose job
+allows more runs at the ceiling. A job created without a memory limit gets
+16 GiB, more than the default ceiling of 2048 MiB. A solver the kernel stops at
+the ceiling is recorded as a memory breach (`EXCEED_MEM`), and the pair log
+gives both limits. Set the ceiling above the largest memory limit your jobs use.
+
 For scientific measurements, configure topology-aware cpusets with
 `STAREXEC_CPU_PARTITION_COUNT` or `STAREXEC_CPU_PARTITIONS`; see
 [CPU partition scheduling](cpu-partition-scheduling.md). On an unpartitioned
@@ -425,10 +433,21 @@ On startup, `KubernetesNativeBackend` now performs a reconciliation pass
 before the monitor starts. It scans ENQUEUED and RUNNING DB pairs,
 compares them to live managed Kubernetes Jobs, rebuilds in-memory tracking
 for live jobs, processes terminal jobs through the normal completion
-callback, resets stale ENQUEUED pairs back to pending, and marks stale
-RUNNING pairs as failed. During graceful shutdown it stops accepting new
-submissions, drains terminal jobs one final time, stops the monitor, and
-preserves still-running Kubernetes Jobs for the next startup recovery pass.
+callback, and resets stale ENQUEUED pairs back to pending. A RUNNING pair
+whose Job no longer exists is left RUNNING and logged as
+`RECONCILIATION INTERVENTION REQUIRED`: no result is invented for it. Within
+three hours the periodic broken-pair check sets it to `ERROR_SUBMIT_FAIL`,
+which the automatic rerun does not retry; rerun such pairs by hand. During
+graceful shutdown it stops accepting new submissions, drains terminal jobs
+one final time, stops the monitor, and preserves still-running Kubernetes
+Jobs for the next startup recovery pass.
+
+Kubernetes deletes a finished Job `kubernetes.ttlSecondsAfterFinished`
+seconds after it ends (`STAREXEC_K8S_JOB_TTL_SECONDS`, default 3600). When
+a pair's Job finishes while StarExec is down and is deleted before StarExec
+starts again, the pair's result is never recorded and the pair ends up as
+above. To ride out a longer outage, raise the value above its length; every
+finished Job then stays in the namespace that much longer.
 
 ### Verified differences from the legacy backend
 
@@ -456,7 +475,57 @@ For local execution, follow the repository's CPU-pinning guidance: exclude
 logical CPU 0, use exactly one logical CPU per physical core, and derive
 concurrency from the selected core list. For Kubernetes, keep
 `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true` unless you have workload-specific
-validation that relaxing it preserves benchmark integrity.
+validation that relaxing it preserves benchmark integrity, and check the worker
+nodes as described below: on Kubernetes the isolation comes from the kubelet,
+not from StarExec.
+
+#### What Kubernetes needs for exclusive cores
+
+StarExec controls the pod. Job pods request exactly their limits, so they are
+in the `Guaranteed` QoS class, and with
+`STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true` StarExec refuses a
+`STAREXEC_K8S_CPU_LIMIT` that is not a whole number of CPUs. The kubelet on each
+worker decides the rest
+([Kubernetes: node resource managers](https://kubernetes.io/docs/concepts/resource-management/resource-managers/)).
+StarExec does not check it: reading a kubelet's configuration needs the
+`nodes/proxy` permission, which the chart does not grant.
+
+- **`cpuManagerPolicy: static`.** Only then does a container of a `Guaranteed`
+  pod with an integer CPU request get exclusive CPUs. Under the default `none`
+  policy its limit is enforced with a CFS quota, and it shares the node's CPUs
+  with other pods. The static policy also requires a CPU reservation
+  (`reservedSystemCPUs`, `kubeReserved` or `systemReserved`).
+- **`cpuManagerPolicyOptions: {full-pcpus-only: "true"}`, or SMT turned off.**
+  Without it, on an SMT machine the static policy can give two containers the
+  two hardware threads of one physical core. With it, the static policy gives
+  exclusive CPUs only as whole physical cores, and a pod fails with
+  `SMTAlignmentError` if a container's exclusive CPUs cannot be given as whole
+  cores. Containers that get no exclusive CPUs are not checked: they run on the
+  shared CPUs. `STAREXEC_K8S_CPU_LIMIT` must then be a multiple of the threads
+  per core, typically 2 on x86 machines with SMT on.
+
+Changing the policy of a node means draining it and removing the kubelet's
+`cpu_manager_state` file; follow
+[Changing the CPU Manager Policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#changing-the-cpu-manager-policy).
+
+To check a node, read the configuration its kubelet is running with. This
+needs `nodes/proxy` access, which a cluster administrator has:
+
+```bash
+kubectl get --raw "/api/v1/nodes/<node>/proxy/configz" \
+  | jq '.kubeletconfig | {cpuManagerPolicy, cpuManagerPolicyOptions, reservedSystemCPUs, kubeReserved, systemReserved}'
+```
+
+To check a run, read the pairs' job logs. Each log records the CPUs its pod was
+allowed to use, in the message
+`Container mode: using the CPUs this container is allowed: <list>`. Pairs that
+ran at the same time on one node must show disjoint lists, and with SMT on,
+each list must hold whole cores: compare it with
+`/sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list` on the node.
+Under the `none` policy no pair gets CPUs of its own, so the lists normally
+overlap, and usually each is the node's full CPU set. Disjoint lists alone do
+not show that the static policy is on: an inherited affinity, or a cpuset set
+outside Kubernetes, can also separate them, so check the node as well.
 
 ### Configuration
 
@@ -542,8 +611,22 @@ helm install starexec ./charts/starexec \
 - Worker nodes labeled: `starexec.org/worker=true`
 - (Optional) Queue labels: `starexec/queue=<queue-name>`
 - RBAC for the application's ServiceAccount, which the chart's `rbac.yaml`
-  provides: `batch/jobs` (`get, list, watch, create, delete`) and, read-only,
-  `pods` (`get, list`).
+  provides whenever the backend is Kubernetes:
+  - a Role in the release namespace: `batch/jobs` (`get, list, watch, create,
+    delete, deletecollection`), `pods` (`get, list`), and `get` on the
+    release's own Namespace object;
+  - a ClusterRole, `<fullname>-<namespace>-node-reader` (for release
+    `starexec` in namespace `starexec`, `starexec-starexec-node-reader`):
+    `nodes` (`get, list`). Nodes are cluster-scoped, so a Role cannot grant
+    this.
+
+  On a cluster that enforces RBAC, both reads are required: without the
+  namespace read the backend does not initialize, and without the node read it
+  never learns which queues have a schedulable node and holds every pair.
+  `deletecollection` is the admin "pause all", which deletes every managed Job
+  in one request. Changing node labels from StarExec (queue management) also
+  needs `kubernetes.nodeManagement.enabled: true`, which adds a ClusterRole
+  with `update` and `patch` on nodes.
 
   The pods rule is what separates a pod that is running from one that has never
   started — `JobStatus.active` is defined by Kubernetes as counting pending and
@@ -555,21 +638,36 @@ helm install starexec ./charts/starexec \
 
 ### Queue Management
 
-Worker labels are used for Kubernetes-native node selection, and queue labels
-are preserved for node grouping and queue administration APIs. The current
-backend does not yet add queue-specific selectors to submitted Job pods.
+Every pair's pod runs only on worker nodes (`starexec.org/worker=true`, set by
+`STAREXEC_K8S_WORKER_SELECTOR_KEY` and `STAREXEC_K8S_WORKER_SELECTOR_VALUE`), and
+its queue decides which ones, through the queue label
+(`STAREXEC_K8S_QUEUE_LABEL`, default `starexec/queue`):
+
+- A named queue's pods select nodes labelled with that queue, for example
+  `starexec/queue=fast-solvers`.
+- The default queue, `all.q`, runs on worker nodes with no queue label, or with
+  one of the default spellings: `all.q`, `all`, `default`, or an empty value.
+- A pair whose queue no worker node carries is not submitted. It ends with
+  status `ERROR_SGE_REJECT`, and the application log names the missing label.
+  Pairs wait rather than fail while all of a queue's nodes are cordoned or
+  NotReady, while `STAREXEC_K8S_CPU_LIMIT` is not smaller than the allocatable
+  CPU of the queue's largest schedulable node (the log says `Impossible CPU
+  configuration`), and until the backend has listed the nodes once.
+
+The backend reads queue labels only from worker nodes, so a node needs both
+labels:
 
 ```bash
 # Label worker nodes
 kubectl label nodes worker-1 starexec.org/worker=true
 kubectl label nodes worker-1 starexec/queue=fast-solvers
+kubectl label nodes worker-2 starexec.org/worker=true
 kubectl label nodes worker-2 starexec/queue=heavy-solvers
 ```
 
 ### Current limitations
 
 - End-to-end operator validation is still in progress.
-- Queue labels are not yet enforced in Job pod placement.
 - Monitoring is polling-based today; watch/informer integration is still future work.
 - No repository benchmark currently proves large-scale concurrency claims.
 - Treat Kubernetes support as controlled-use rather than fully mature production guidance.
@@ -652,7 +750,7 @@ export OAR_SERVER=oar-server.example.com
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME`     | 5       | Batch size per submission cycle                          |
 | `STAREXEC_NODE_MULTIPLIER`             | 16      | Queue depth = multiplier × nodes                         |
 | `STAREXEC_CONTAINER_POLL_INTERVAL_MS`  | 5000    | Poll interval for job completion                         |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048    | Podman cgroup memory ceiling per container               |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048    | Podman cgroup memory ceiling per container; caps every job's memory limit |
 | `STAREXEC_CPU_PARTITION_COUNT`         | `auto`  | `N > 1` creates topology-aware partitions; `auto` uses multiple NUMA nodes and otherwise remains unpinned |
 | `STAREXEC_CPU_PARTITIONS`              | unset   | Explicit cpusets; overrides the partition count          |
 | `STAREXEC_CONTAINER_CPU_QUOTA_CORES`   | 0       | Unpartitioned CFS cap; does not provide CPU affinity     |

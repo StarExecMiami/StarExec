@@ -93,10 +93,22 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           python3 scripts/check-chart-quota-resources.py
 
+      # With postgres.persistence.enabled false the embedded database lives in an
+      # emptyDir and is lost whenever the pod is recreated.
+      - name: Check the embedded database is persistent by default
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 scripts/check-chart-db-persistence.py
+
       - name: Check the database port is not published by a Service
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           python3 scripts/check-chart-service-exposure.py
+
+      - name: Check the chart's claims survive helm uninstall
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 scripts/check-chart-pvc-retention.py
 
       - name: Check chart version
         id: chart-info

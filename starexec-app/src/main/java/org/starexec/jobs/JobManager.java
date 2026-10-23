@@ -3,6 +3,7 @@ package org.starexec.jobs;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.starexec.backend.Backend;
 import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.DB;
@@ -681,11 +682,7 @@ public abstract class JobManager {
 								if (execUpdateResult == JobPairs.ConditionalPairUpdateResult.UPDATED) {
 									queueSize++;
 								} else if (execUpdateResult == JobPairs.ConditionalPairUpdateResult.STALE) {
-									cleanupSubmittedBackendWork(
-											pair.getId(),
-											execId,
-											"the pair is no longer submit-eligible after backend submission"
-									);
+									settleStaleSubmission(pair.getId(), execIdAtClaim, execId);
 								} else {
 									cleanupSubmittedBackendWork(
 											pair.getId(),
@@ -776,6 +773,49 @@ public abstract class JobManager {
 			R.BACKEND.clearPairTracking(pairId);
 		} catch (Exception clearException) {
 			log.warn("Failed to clear backend tracking for pair " + pairId, clearException);
+		}
+	}
+
+	/**
+	 * Stops the execution of a pair that stopped being submit-eligible while the backend was
+	 * starting it -- its job was killed, deleted or paused in between -- and records what became
+	 * of the pair.
+	 *
+	 * <p>The stop goes through {@link Backend#killPairConfirmed}, whose default still kills,
+	 * because the answer decides the pair's fate: {@link JobPairs#settleStaleSubmission} settles
+	 * the pair only after a confirmed stop, and otherwise records the execution id so that
+	 * {@code Jobs.kill} can confirm the stop later. Backend tracking is retired only after a
+	 * confirmed stop, as {@code Jobs.kill} does: an execution that may still be running stays
+	 * visible to its monitor and to the backend's concurrency accounting.
+	 *
+	 * <p>On Kubernetes the confirmation can wait up to STAREXEC_K8S_KILL_CONFIRM_SECONDS. That
+	 * holds up this pass, but only for a pair whose job changed during its own submission: a
+	 * pause, kill or deletion catches at most the one pair in flight.
+	 */
+	private static void settleStaleSubmission(int pairId, int execIdAtClaim, int execId) {
+		log.warn("Stopping execution " + execId + " of pair " + pairId +
+				" because the pair is no longer submit-eligible after backend submission");
+		boolean stopped = false;
+		try {
+			stopped = R.BACKEND.killPairConfirmed(execId) == Backend.KillOutcome.CONFIRMED_SAFE;
+		} catch (Exception e) {
+			log.warn("Stopping execution " + execId + " of pair " + pairId + " threw; treating the stop as unproven", e);
+		}
+		if (stopped) {
+			try {
+				R.BACKEND.clearPairTracking(pairId);
+			} catch (Exception e) {
+				log.warn("Failed to clear backend tracking for pair " + pairId, e);
+			}
+		}
+		JobPairs.StaleSubmissionOutcome outcome =
+				JobPairs.settleStaleSubmission(pairId, execIdAtClaim, execId, stopped);
+		if (outcome == JobPairs.StaleSubmissionOutcome.ERROR) {
+			log.error("submitJobs", "could not settle pair " + pairId + " after its submission went stale;" +
+					" it stays ENQUEUED without the id of execution " + execId);
+		} else {
+			log.info("submitJobs", "pair " + pairId + ": execution " + execId +
+					(stopped ? " confirmed stopped" : " not confirmed stopped") + "; " + outcome);
 		}
 	}
 

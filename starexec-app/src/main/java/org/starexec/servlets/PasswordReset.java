@@ -102,10 +102,12 @@ public class PasswordReset extends HttpServlet {
 					return;
 				}
 
-				// Email the password reset hyperlink to the user
-				Mail.sendPasswordReset(user, code);
-
-				response.sendRedirect(Util.docRoot("public/password_reset.jsp?result=success"));
+				// Email the password reset hyperlink to the user, and say it was sent only if it was
+				if (Mail.sendPasswordReset(user, code)) {
+					response.sendRedirect(Util.docRoot("public/password_reset.jsp?result=success"));
+				} else {
+					response.sendRedirect(Util.docRoot("public/password_reset.jsp?result=email_failed"));
+				}
 			} else {
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
 				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));

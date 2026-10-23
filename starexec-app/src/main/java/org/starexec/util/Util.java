@@ -1925,6 +1925,9 @@ public class Util {
         return cookieStringBuilder.toString();
     }
 
+    /** The largest archive a URL download accepts, whatever the caller's own limit. */
+    public static final long ARCHIVE_DOWNLOAD_MAX_BYTES = ArchiveUrlDownloader.MAX_BYTES;
+
     /**
      * Attempts to copy the file at the end of the given http or https URL to the
      * given file. Any other scheme is refused before a connection is opened.
@@ -2059,17 +2062,22 @@ public class Util {
      * resolve anywhere else. "." resolves to the parent itself and ".." to its parent, so a
      * user-chosen name used as a path component must be checked where the path is built, not
      * only where the name is validated: names already stored before that validation existed
-     * still reach here.
+     * still reach here. The name must be exactly the one component it resolves to, so that the
+     * result is the path that was checked: {@link java.nio.file.Path#resolve} takes an absolute
+     * name as it is, but {@code new File(parent, name)} appends it to the parent.
      *
      * @param parent the directory the result must be directly inside
      * @param name the path component, typically a user-chosen primitive name
      * @return {@code new File(parent, name)}, unchanged in form
-     * @throws IllegalArgumentException when the name does not resolve to a direct child
+     * @throws IllegalArgumentException when the name is not one component that resolves to a
+     *         direct child
      */
     public static File childWithin(File parent, String name) {
         java.nio.file.Path base = parent.toPath().toAbsolutePath().normalize();
         java.nio.file.Path child = base.resolve(name).normalize();
-        if (!base.equals(child.getParent())) {
+        // Comparing the name itself, not only a path built from it, is also what lets CodeQL's
+        // java/path-injection query see this guard.
+        if (!base.equals(child.getParent()) || !child.getFileName().toString().equals(name)) {
             throw new IllegalArgumentException(
                 "name [" + name + "] does not stay directly inside " + base
             );
@@ -2136,20 +2144,21 @@ public class Util {
     }
 
     /**
-     * Creates a cookie carrying an id or a comma-separated list of ids, with the same
-     * security attributes as {@link #createEncodedCookie(String, String)} but with the value
-     * left exactly as given.
+     * Creates a cookie carrying an id or a comma-separated list of ids, encoded and with the
+     * same security attributes as {@link #createEncodedCookie(String, String)}.
      *
-     * <p>The value is not URL-encoded: StarexecCommand reads these cookies straight from the
-     * response headers and splits them on commas ({@code HTMLParser.extractMultipartCookie}),
-     * so encoding the separator would change what the client parses.
+     * <p>RFC 6265 does not allow a comma in a cookie value, and Tomcat's cookie processor throws
+     * when such a cookie is added. Copying several items called this after the copy, so the
+     * user got a server error for a copy that had happened. A single id encodes to itself, so
+     * StarexecCommand releases from before the encoding still read it; the client decodes the
+     * value ({@code HTMLParser.extractCookie}) before it splits a list on commas.
      *
      * @param name  The cookie name
-     * @param value The cookie value, used verbatim
-     * @return A new Cookie with the value unchanged and the security attributes applied
+     * @param value An id, or ids separated by commas
+     * @return A new Cookie with the encoded value and the security attributes applied
      */
     public static Cookie createIdCookie(String name, String value) {
-        return withSecurityAttributes(new Cookie(name, value));
+        return createEncodedCookie(name, value);
     }
 
     /**

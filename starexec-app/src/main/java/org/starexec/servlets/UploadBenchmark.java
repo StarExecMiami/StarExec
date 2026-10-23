@@ -162,6 +162,7 @@ public class UploadBenchmark extends HttpServlet {
 		
 		// Save uploaded file
 		File archiveFile = null;
+		String sourceUrl = null;
 		if (localOrUrlOrGit.equals("local")) {
 			PartWrapper fileToUpload = (PartWrapper) form.get(BENCHMARK_FILE);
 			if (fileToUpload == null) {
@@ -174,9 +175,21 @@ public class UploadBenchmark extends HttpServlet {
 			fileToUpload.write(archiveFile);
 			
 		log.info(method, "Saved uploaded file to: " + archiveFile.getAbsolutePath());
+	} else if (localOrUrlOrGit.equals("URL")) {
+		// Downloaded by the upload worker, not here (#139): an archive can take minutes to fetch,
+		// which would hold this request, and the proxy in front of it, open. The job records the
+		// address and the file the worker writes it to; isRequestValid has checked the address.
+		URL url = new URI(((String) form.get(FILE_URL)).trim()).toURL();
+		String name = Util.archiveNameFromUrl(url);
+		if (name == null) {
+			throw new IllegalArgumentException(Util.ARCHIVE_NAME_REQUIRED);
+		}
+		archiveFile = new File(getDirectoryForBenchmarkUpload(userId, null), name);
+		sourceUrl = url.toString();
+		log.info(method, "Upload by URL will be downloaded by the upload worker to: " + archiveFile.getAbsolutePath());
 	} else {
-		// TODO: Handle URL and Git uploads
-		throw new UnsupportedOperationException("URL and Git uploads not yet supported in async mode");
+		// Git uploads are the last step of #139 and still need a design decision.
+		throw new UnsupportedOperationException("Git uploads not yet supported in async mode");
 	}
 	
 	// Enqueue job using the new immutable request builder.
@@ -188,10 +201,16 @@ public class UploadBenchmark extends HttpServlet {
 		.uploadMethod(uploadMethod)
 		.benchmarkTypeId(typeId)
 		.downloadable(downloadable)
-		.archiveSize(archiveFile.length())
+		// Jobs are claimed smallest first. An upload by URL is not downloaded yet, so its size is
+		// unknown: it is queued at the most it can be, rather than at 0, which would put every such
+		// job ahead of all others and let one user's downloads hold the worker.
+		.archiveSize(sourceUrl == null ? archiveFile.length() : Util.ARCHIVE_DOWNLOAD_MAX_BYTES)
 		.hasDependencies(hasDependencies)
 		.depRootSpaceId(depRootSpaceId)
 		.linked(linked)
+		.sourceUrl(sourceUrl)
+		// The default permissions of the spaces a "convert" upload creates, as the form chose them.
+		.spacePermissions(perm)
 		.build();
 
 	long jobId = UploadJobQueue.enqueueJob(uploadRequest);
@@ -687,18 +706,28 @@ public class UploadBenchmark extends HttpServlet {
 	 */
 	private Permission extractPermissions(HashMap<String, Object> form) {
 		Permission p = new Permission();
-		p.setAddBenchmark(form.containsKey(addBench));
-		p.setAddSolver(form.containsKey(addSolver));
-		p.setAddSpace(form.containsKey(addSpace));
-		p.setAddUser(form.containsKey(addUser));
-		p.setAddJob(form.containsKey(addJob));
-		p.setRemoveBench(form.containsKey(removeBench));
-		p.setRemoveSolver(form.containsKey(removeSolver));
-		p.setRemoveSpace(form.containsKey(removeSpace));
-		p.setRemoveUser(form.containsKey(removeUser));
-		p.setRemoveJob(form.containsKey(removeJob));
+		p.setAddBenchmark(granted(form, addBench));
+		p.setAddSolver(granted(form, addSolver));
+		p.setAddSpace(granted(form, addSpace));
+		p.setAddUser(granted(form, addUser));
+		p.setAddJob(granted(form, addJob));
+		p.setRemoveBench(granted(form, removeBench));
+		p.setRemoveSolver(granted(form, removeSolver));
+		p.setRemoveSpace(granted(form, removeSpace));
+		p.setRemoveUser(granted(form, removeUser));
+		p.setRemoveJob(granted(form, removeJob));
 
 		return p;
+	}
+
+	/**
+	 * Whether the form grants a permission. A checkbox is sent only when checked, as "on";
+	 * StarexecCommand sends every permission, as "true" or "false", so presence alone is not
+	 * enough: it turned every permission StarexecCommand withheld into one it granted.
+	 */
+	static boolean granted(HashMap<String, Object> form, String name) {
+		Object value = form.get(name);
+		return value != null && !"false".equalsIgnoreCase(value.toString().trim());
 	}
 
 	/**
@@ -761,6 +790,10 @@ public class UploadBenchmark extends HttpServlet {
 				fileName = (String) form.get(FILE_URL);
 				if (!Validator.isValidArchiveType(fileName)) {
 					return new ValidatorStatusCode(false, "Uploaded archives need to be either .zip, .tar, or .tgz");
+				}
+				String urlProblem = archiveUrlProblem(fileName);
+				if (urlProblem != null) {
+					return new ValidatorStatusCode(false, urlProblem);
 				}
 			}
 			else {
@@ -844,5 +877,34 @@ public class UploadBenchmark extends HttpServlet {
 			log.error(e.getMessage(), e);
 		}
 		return new ValidatorStatusCode(false, "There was an internal error uploading your benchmarks");
+	}
+
+	/**
+	 * Why an archive URL cannot be downloaded, or null when it can be tried (#139).
+	 *
+	 * <p>Checked when the upload is submitted, so a bad address is refused at once with a message
+	 * rather than becoming a failed job. Whether the host is reachable, and allowed, is left to the
+	 * download itself, which applies one policy to every redirect.
+	 */
+	static String archiveUrlProblem(String raw) {
+		URL url;
+		try {
+			url = new URI(raw == null ? "" : raw.trim()).toURL();
+		} catch (Exception e) {
+			return "The archive URL is not a valid URL";
+		}
+		String scheme = url.getProtocol();
+		if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+			return "Archive URLs must use http or https";
+		}
+		// The download never sends these as credentials, so all they could do is sit in the
+		// upload_jobs row and the logs.
+		if (url.getUserInfo() != null) {
+			return "Archive URLs must not contain a user name or password";
+		}
+		if (Util.archiveNameFromUrl(url) == null) {
+			return Util.ARCHIVE_NAME_REQUIRED;
+		}
+		return null;
 	}
 }

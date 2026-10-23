@@ -865,22 +865,27 @@ public class KubernetesNativeBackend implements Backend {
         // exhausting the node. Isolation by accident, and it disappears the moment the
         // memory limit is lowered.
         //
-        // The flag now means what its name says: assert that the request can yield
-        // exclusive cores, rather than shrink it to one. Kubernetes grants exclusive CPUs
-        // only for a Guaranteed pod whose cpu request is a whole number, and only when
-        // the kubelet runs --cpu-manager-policy=static. Requests already equal limits in
-        // buildKubernetesJob, so the remaining requirement is the integer.
+        // The flag now asserts that the request can yield exclusive CPUs, rather than
+        // shrink it to one. Kubernetes grants exclusive CPUs only for a Guaranteed pod
+        // whose cpu request is a whole number, and only when the kubelet runs
+        // --cpu-manager-policy=static; whole physical cores, rather than hardware
+        // threads, also need the full-pcpus-only policy option or SMT off. Requests
+        // already equal limits in buildKubernetesJob, so the remaining pod-side
+        // requirement is the integer.
         if (strictOnePairPerCpu) {
             cpuLimit = resolveCpuLimitForStrictMode(cpuLimit);
-            // Not detectable from the API -- kubelet configuration is not exposed on the
-            // Node object -- so it is stated rather than checked. Without it the request
-            // below is a quota and the pinning is a fiction.
+            // Not checked: kubelet configuration is not on the Node object, and reading it
+            // through the node proxy needs nodes/proxy, which the chart does not grant. So
+            // it is stated. Without the static policy the request below is a quota and the
+            // pinning is a fiction.
             log.info(
                 "STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true with cpu=" + cpuLimit +
-                ". This grants exclusive cores ONLY if worker nodes run kubelet with" +
-                " --cpu-manager-policy=static. Without it Kubernetes applies a CFS" +
-                " bandwidth quota instead, solver threads float across all cores, and" +
-                " recorded timings are perturbed by co-scheduled work."
+                ". This grants exclusive CPUs ONLY if worker nodes run kubelet with" +
+                " --cpu-manager-policy=static, and whole physical cores only if they" +
+                " also set --cpu-manager-policy-options=full-pcpus-only=true or have" +
+                " SMT off. StarExec does not check either. Without the static policy" +
+                " Kubernetes applies a CFS bandwidth quota instead, solver threads float" +
+                " across all cores, and recorded timings are perturbed by co-scheduled work."
             );
         }
 
