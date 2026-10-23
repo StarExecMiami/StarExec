@@ -141,20 +141,17 @@ public class UploadJobXML extends HttpServlet {
 			throws StarExecException {
 		final String method = "handleXMLFile";
 		log.entry(method);
+		// Only ever the directory this upload claimed: its parent holds other uploads' directories.
+		File uniqueDir = null;
 		try {
 			log.info(method, "Handling Upload of XML File from user with id=" + userId);
 			PartWrapper item = (PartWrapper) form.get(UploadJobXML.UPLOAD_FILE);
-			// Don't need to keep file long - just using download directory
-
-			File uniqueDir = new File(R.getBatchSpaceXMLDir(), "Job" + userId);
-			uniqueDir = new File(uniqueDir, "TEMP_JOB_XML_FOLDER_");
-			uniqueDir = new File(uniqueDir, Util.pathDate());
-
-			uniqueDir.mkdirs();
+			// The directory holds the archive and its XML only until the jobs are created.
+			File parent = new File(new File(R.getBatchSpaceXMLDir(), "Job" + userId), "TEMP_JOB_XML_FOLDER_");
+			uniqueDir = Util.claimNewDirectory(new File(parent, Util.pathDate()));
 			//Process the archive file and extract
 
 			File archiveFile = new File(uniqueDir, FilenameUtils.getName(item.getName()));
-			new File(archiveFile.getParent()).mkdir();
 			item.write(archiveFile);
 			ArchiveUtil.extractArchive(archiveFile.getAbsolutePath());
 			archiveFile.delete();
@@ -189,6 +186,10 @@ public class UploadJobXML extends HttpServlet {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			throw new StarExecException(e.getMessage());
+		} finally {
+			if (uniqueDir != null) {
+				Util.safeDeleteDirectory(uniqueDir.getAbsolutePath());
+			}
 		}
 	}
 

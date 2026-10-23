@@ -261,7 +261,7 @@ public class UploadSolver extends HttpServlet {
 			log.info("Handling upload of solver " + newSolver.getName());
 
 			//Set up the unique directory to store the solver
-			solverDir = Solvers.claimNewDirectory(Solvers.solverDirectory(
+			solverDir = Util.claimNewDirectory(Solvers.solverDirectory(
 					new File(R.getSolverPath()), userId, newSolver.getName(), Util.pathDate()));
 			File uniqueDir = solverDir;
 

@@ -12,6 +12,7 @@ import org.starexec.data.to.Solver;
 import org.starexec.data.to.Solver.ExecutableType;
 import org.starexec.data.to.SolverBuildStatus;
 import org.starexec.data.to.User;
+import org.starexec.util.Util;
 import org.starexec.util.Validator;
 
 import java.io.File;
@@ -62,41 +63,8 @@ public class SolverDirectoryCleanupTest {
 	}
 
 	@Test
-	public void aClaimCreatesTheDirectoryAndItsParents() throws Exception {
-		File dir = solverDir("z3");
-
-		assertEquals(dir, Solvers.claimNewDirectory(dir));
-		assertTrue(dir.isDirectory());
-	}
-
-	/** Two uploads of one name by one user in the same millisecond must not share a directory. */
-	@Test
-	public void aDirectoryThatExistsIsNeverReused() throws Exception {
-		File dir = solverDir("z3");
-		File first = Solvers.claimNewDirectory(dir);
-		write(new File(first, "theirs"));
-
-		File second = Solvers.claimNewDirectory(dir);
-
-		assertEquals(new File(dir.getPath() + "-1"), second);
-		assertArrayEquals(new String[0], second.list());
-		assertTrue("the other upload's file is untouched", new File(first, "theirs").isFile());
-		assertEquals(new File(dir.getPath() + "-2"), Solvers.claimNewDirectory(dir));
-	}
-
-	@Test
-	public void aClaimGivesUpAfterTheLastSuffix() throws Exception {
-		File dir = solverDir("z3");
-		for (int i = 0; i <= Solvers.MAX_DIRECTORY_SUFFIX; i++) {
-			Solvers.claimNewDirectory(dir);
-		}
-
-		assertThrows(FileAlreadyExistsException.class, () -> Solvers.claimNewDirectory(dir));
-	}
-
-	@Test
 	public void aSourceDirectoryIsNeverReused() throws Exception {
-		File dir = Solvers.claimNewDirectory(solverDir("z3"));
+		File dir = Util.claimNewDirectory(solverDir("z3"));
 
 		File src = Solvers.claimSourceDirectory(dir);
 
@@ -107,9 +75,9 @@ public class SolverDirectoryCleanupTest {
 
 	@Test
 	public void anUnaddedSolversDirectoriesAreDeletedAndNothingElse() throws Exception {
-		File other = Solvers.claimNewDirectory(solverDir("z3"));
+		File other = Util.claimNewDirectory(solverDir("z3"));
 		write(new File(other, "bin/starexec_run_default"));
-		File dir = Solvers.claimNewDirectory(solverDir("z3"));
+		File dir = Util.claimNewDirectory(solverDir("z3"));
 		File src = Solvers.claimSourceDirectory(dir);
 		write(new File(dir, "bin/starexec_run_default"));
 		write(new File(src, "src/main.c"));
@@ -128,7 +96,7 @@ public class SolverDirectoryCleanupTest {
 	 */
 	@Test
 	public void theDirectoriesAboveAreLeftForAnOwnerWhoExists() throws Exception {
-		File dir = Solvers.claimNewDirectory(solverDir("z3"));
+		File dir = Util.claimNewDirectory(solverDir("z3"));
 
 		deleteUnadded(dir);
 
@@ -143,7 +111,7 @@ public class SolverDirectoryCleanupTest {
 		write(neighbour);
 		File buildOutput = new File(root, "buildoutput/7.txt");
 		write(buildOutput);
-		File dir = Solvers.claimNewDirectory(solverDir("z3"));
+		File dir = Util.claimNewDirectory(solverDir("z3"));
 		File src = Solvers.claimSourceDirectory(dir);
 		write(new File(src, "src/main.c"));
 		ownerExists.set(false);
@@ -157,7 +125,7 @@ public class SolverDirectoryCleanupTest {
 
 	@Test
 	public void theSolverRootIsNeverDeleted() throws Exception {
-		File dir = Solvers.claimNewDirectory(solverDir("z3"));
+		File dir = Util.claimNewDirectory(solverDir("z3"));
 		ownerExists.set(false);
 
 		deleteUnadded(dir);
@@ -169,9 +137,9 @@ public class SolverDirectoryCleanupTest {
 	/** Another upload of the deleted owner is still running: its directory stays, and so do its parents. */
 	@Test
 	public void aDirectoryAboveThatIsNotEmptyIsKept() throws Exception {
-		File other = Solvers.claimNewDirectory(solverDir("z3"));
+		File other = Util.claimNewDirectory(solverDir("z3"));
 		write(new File(other, "solver.zip"));
-		File dir = Solvers.claimNewDirectory(solverDir("z3"));
+		File dir = Util.claimNewDirectory(solverDir("z3"));
 		ownerExists.set(false);
 
 		deleteUnadded(dir);
@@ -195,7 +163,7 @@ public class SolverDirectoryCleanupTest {
 	@Test
 	public void directoriesOutsideTheSolverRootAreNeverDeleted() throws Exception {
 		File outside = tmp.newFolder("elsewhere", "5", "z3");
-		File dir = Solvers.claimNewDirectory(new File(outside, DATE));
+		File dir = Util.claimNewDirectory(new File(outside, DATE));
 		ownerExists.set(false);
 
 		deleteUnadded(dir);
