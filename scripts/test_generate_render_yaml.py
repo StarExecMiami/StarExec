@@ -13,6 +13,7 @@ import re
 import shlex
 import shutil
 import socket
+import string
 import subprocess
 import tempfile
 import unittest
@@ -195,6 +196,13 @@ def chart_job_image():
 
 # JVM sizes, as in -Xmx2048m or -XX:MaxHeapSize=2g.
 HEAP_FLAG = re.compile(r"(?:-Xmx|-XX:MaxHeapSize=)(\d+)([kKmMgGtT]?)")
+# The characters JAVA_OPTS may hold. With these alone, shlex splits it as the shell's eval does. The shell also
+# expands "$" and backquotes, joins lines at a backslash-newline, ends a command at a newline or ";", reads "&",
+# "|", "<", ">" and parentheses as operators, "#" as a comment and "*", "?", "[" and "~" as patterns; shlex reads
+# all of them as plain text.
+JAVA_OPTS_CHARACTERS = frozenset(
+    string.ascii_letters + string.digits + " -_.,:=+/@%'\""
+)
 
 
 def java_heap_bytes(java_opts):
@@ -202,12 +210,15 @@ def java_heap_bytes(java_opts):
 
     catalina.sh passes JAVA_OPTS to java through eval, so the shell's quoting applies: a quoted
     "-Dx= -Xmx1g" is one property, not a heap flag. The JVM takes the last -Xmx or -XX:MaxHeapSize.
-    Raises ValueError when JAVA_OPTS holds a "$" or a backquote, which eval would expand, when it cannot
-    be split, when that flag cannot be read, or when an option reads more options from a file (an
+    Raises ValueError when JAVA_OPTS holds a character outside JAVA_OPTS_CHARACTERS, even quoted, when it
+    cannot be split, when that flag cannot be read, or when an option reads more options from a file (an
     @argfile, -XX:VMOptionsFile or -XX:Flags), which the test cannot see.
     """
-    if "$" in java_opts or "`" in java_opts:
-        raise ValueError(f"{java_opts!r} has a shell expansion")
+    others = sorted(set(java_opts) - JAVA_OPTS_CHARACTERS)
+    if others:
+        raise ValueError(
+            f"{java_opts!r} holds {''.join(others)!r}, which the shell may read otherwise"
+        )
     tokens = shlex.split(java_opts)
     files = [
         t for t in tokens if t.startswith(("@", "-XX:VMOptionsFile=", "-XX:Flags="))
@@ -221,6 +232,34 @@ def java_heap_bytes(java_opts):
     if not match:
         raise ValueError(f"cannot read the heap flag {flags[-1]!r}")
     return int(match[1]) * 1024 ** " kmgt".index(match[2].lower() or " ")
+
+
+# How the Dockerfile writes the two settings the memory test reads: JAVA_OPTS in double quotes, CATALINA_HOME as a
+# plain path.
+QUOTED = r'"([^"]*)"'
+PLAIN_PATH = r"([\w./-]+)(?=\s|$)"
+
+
+def dockerfile_setting(text, name, value):
+    """What the Dockerfile sets `name` to: the group of the regex `value`, written right after `name=`.
+
+    Docker skips comment lines, and so does this; `$name` and `${name}` use the setting, they do not set it.
+    Raises ValueError unless the lines outside comments name `name` once, uses aside, as `name=` followed by `value`.
+    """
+    settings = [
+        line[found.start() :]
+        for line in text.splitlines()
+        if not line.lstrip().startswith("#")
+        for found in re.finditer(rf"(?<![\w${{]){name}\b", line)
+    ]
+    if len(settings) != 1:
+        raise ValueError(
+            f"the Dockerfile sets {name} {len(settings)} times outside comments, not once"
+        )
+    match = re.match(rf"{name}=(?:{value})", settings[0])
+    if not match:
+        raise ValueError(f"cannot read the Dockerfile's {settings[0].strip()!r}")
+    return match[1]
 
 
 def memory_bytes(quantity):
@@ -498,8 +537,10 @@ class AppMemoryTests(unittest.TestCase):
         # What outgrows the limit goes to swap, as `podman kube play` sets no swap limit, or, on a host without swap,
         # the kernel kills Tomcat (OOMKilled) and no OutOfMemoryError is logged.
         # So the heap may take at most 75% of the limit.
-        image_opts = re.search(r'JAVA_OPTS="([^"]*)"', DOCKERFILE.read_text()).group(1)
-        tomcat = re.search(r"\bCATALINA_HOME=(\S+)", DOCKERFILE.read_text()).group(1)
+        # The settings in force: Docker skips comment lines.
+        dockerfile = DOCKERFILE.read_text()
+        image_opts = dockerfile_setting(dockerfile, "JAVA_OPTS", QUOTED)
+        tomcat = dockerfile_setting(dockerfile, "CATALINA_HOME", PLAIN_PATH)
         for backend in ("local", "podman"):
             with self.subTest(backend=backend):
                 r = Render(self, STAREXEC_BACKEND_TYPE=backend, PODMAN_CMD="podman")
@@ -550,13 +591,8 @@ class AppMemoryTests(unittest.TestCase):
                 if name in line and not line.lstrip().startswith("#")
             ]
 
-        java_opts = code_lines(DOCKERFILE, "JAVA_OPTS")
-        self.assertEqual(
-            1,
-            len(java_opts),
-            f"the Dockerfile must set JAVA_OPTS on one line: {java_opts}",
-        )
-        self.assertRegex(java_opts[0], r'JAVA_OPTS="[^"]*"')
+        # One setting outside comment lines, in double quotes: what the memory test reads.
+        dockerfile_setting(DOCKERFILE.read_text(), "JAVA_OPTS", QUOTED)
         for name in OTHER_JAVA_OPTIONS + ("setenv",):
             self.assertEqual(
                 [], code_lines(DOCKERFILE, name), f"the Dockerfile mentions {name}"
@@ -614,6 +650,62 @@ class HeapFlagTests(unittest.TestCase):
     def test_a_command_substitution_is_an_error(self):
         with self.assertRaises(ValueError):
             java_heap_bytes("-Xmx2g `cat /etc/heap`")
+
+    def test_a_line_continuation_is_an_error(self):
+        # The shell joins "-Xm" and "x4g" across the backslash-newline into -Xmx4g; shlex keeps the newline.
+        with self.assertRaises(ValueError):
+            java_heap_bytes("-Xmx1g -Xm\\\nx4g")
+
+    def test_shell_syntax_is_an_error(self):
+        for char in "\\\n\t;&|<>()#*?[~":
+            with self.subTest(char=char), self.assertRaises(ValueError):
+                java_heap_bytes(f"-Xmx2g {char} -Dx=1")
+
+    def test_plain_punctuation_is_read(self):
+        self.assertEqual(
+            2 << 30,
+            java_heap_bytes("-Xmx2g -Dnote='a b,c:d=e+f/g@h%i' -Dlog.dir=/app/logs"),
+        )
+
+
+class DockerfileSettingTests(unittest.TestCase):
+    """dockerfile_setting reads a setting as Docker does: comment lines and uses of the setting do not count."""
+
+    def test_a_comment_is_not_a_setting(self):
+        text = '# JAVA_OPTS="-Xmx1g"\nENV JAVA_OPTS="-Xmx4g"\n'
+        self.assertEqual("-Xmx4g", dockerfile_setting(text, "JAVA_OPTS", QUOTED))
+
+    def test_two_settings_on_one_line_are_an_error(self):
+        with self.assertRaises(ValueError):
+            dockerfile_setting(
+                'ENV JAVA_OPTS="-Xmx2g" JAVA_OPTS="-Xmx4g"\n', "JAVA_OPTS", QUOTED
+            )
+
+    def test_two_setting_lines_are_an_error(self):
+        with self.assertRaises(ValueError):
+            dockerfile_setting(
+                'ENV JAVA_OPTS="-Xmx2g"\nENV JAVA_OPTS="-Xmx4g"\n', "JAVA_OPTS", QUOTED
+            )
+
+    def test_no_setting_is_an_error(self):
+        with self.assertRaises(ValueError):
+            dockerfile_setting("ENV TZ=UTC\n", "JAVA_OPTS", QUOTED)
+
+    def test_an_unquoted_setting_is_an_error(self):
+        with self.assertRaises(ValueError):
+            dockerfile_setting("ENV JAVA_OPTS -Xmx4g\n", "JAVA_OPTS", QUOTED)
+
+    def test_uses_are_not_settings(self):
+        text = 'ENV CATALINA_HOME=/opt/tomcat \\\n    PATH="${CATALINA_HOME}/bin:$PATH"\nWORKDIR $CATALINA_HOME\n'
+        self.assertEqual(
+            "/opt/tomcat", dockerfile_setting(text, "CATALINA_HOME", PLAIN_PATH)
+        )
+
+    def test_a_commented_out_home_is_not_a_setting(self):
+        text = "# ENV CATALINA_HOME=/usr/local/tomcat\nENV CATALINA_HOME=/opt/tomcat\n"
+        self.assertEqual(
+            "/opt/tomcat", dockerfile_setting(text, "CATALINA_HOME", PLAIN_PATH)
+        )
 
 
 class MakefileContractTests(unittest.TestCase):
