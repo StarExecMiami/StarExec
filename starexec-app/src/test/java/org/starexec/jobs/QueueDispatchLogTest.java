@@ -200,4 +200,38 @@ public class QueueDispatchLogTest {
         assertEquals("each report says when the next one comes",
             2, logged(Level.WARN, "Reported again every 6 hours while it lasts, and at INFO when it ends."));
     }
+
+    @Test
+    public void aQueueWithNoNodesThatLastsIsReportedAgainWithItsLength() {
+        Queue q = queue("container.q");
+        long t0 = 5_000_000L;
+        when(backend.isQueueDispatchable(q.getName())).thenReturn(false);
+        JobManager.logQueueHasNoNodes(q, 0, t0);
+        JobManager.logQueueHasNoNodes(q, 0, t0 + QueueConditions.REPEAT_MILLIS);
+        assertEquals(2, logged(Level.WARN, "no nodes available"));
+        assertEquals(1, logged(Level.WARN, "no nodes available (first seen 360 minutes ago)"));
+    }
+
+    @Test
+    public void aNodeTableMismatchThatLastsIsReportedAgainWithItsLength() {
+        Queue q = queue("container.q");
+        long t0 = 5_000_000L;
+        when(backend.isQueueDispatchable(q.getName())).thenReturn(true);
+        JobManager.logQueueHasNoNodes(q, 0, t0);
+        JobManager.logQueueHasNoNodes(q, 0, t0 + QueueConditions.REPEAT_MILLIS);
+        assertEquals(2, logged(Level.ERROR, "no nodes associated with it"));
+        assertEquals(1, logged(Level.ERROR, "associated with it (first seen 360 minutes ago)"));
+    }
+
+    @Test
+    public void aBackendThatCannotAnswerIsReportedAgainWithItsLength() {
+        Queue q = queue("container.q");
+        long t0 = 5_000_000L;
+        when(backend.isQueueDispatchable(q.getName())).thenThrow(new IllegalStateException("no client"));
+        JobManager.logQueueHasNoNodes(q, 0, t0);
+        JobManager.logQueueHasNoNodes(q, 0, t0 + QueueConditions.REPEAT_MILLIS);
+        assertEquals(2, logged(Level.WARN, "Could not ask the backend about queue container.q"));
+        assertEquals(1, logged(Level.WARN,
+            "Could not ask the backend about queue container.q (first seen 360 minutes ago)"));
+    }
 }

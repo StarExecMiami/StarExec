@@ -411,15 +411,17 @@ public abstract class JobManager {
 	 * {@link QueueConditions#REPEAT_MILLIS} while it lasts, not on every pass:
 	 * {@code checkPendingJobs} logs the end, once, when the queue has nodes again.
 	 */
-	private static void logQueueHasNoNodes(Queue q, int queueSize, long now) {
+	static void logQueueHasNoNodes(Queue q, int queueSize, long now) {
 		String qname = q.getName();
 		boolean backendThinksItCanRun;
 		try {
 			backendThinksItCanRun = R.BACKEND.isQueueDispatchable(qname);
 		} catch (Exception e) {
 			// Never let a diagnostic break dispatch for the other queues.
-			if (queueConditions.report(q.getId(), QueueConditions.Kind.NO_NODES, "no answer", now) >= 0) {
-				log.warn("logQueueHasNoNodes", "Could not ask the backend about queue " + qname + "." + REPEATED, e);
+			long minutes = queueConditions.report(q.getId(), QueueConditions.Kind.NO_NODES, "no answer", now);
+			if (minutes >= 0) {
+				log.warn("logQueueHasNoNodes",
+						"Could not ask the backend about queue " + qname + lasting(minutes) + "." + REPEATED, e);
 			}
 			return;
 		}
