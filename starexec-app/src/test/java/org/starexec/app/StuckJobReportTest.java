@@ -67,6 +67,17 @@ public class StuckJobReportTest {
                 + " backend's own lines before it say why"));
     }
 
+    /**
+     * A queue with no nodes never reaches the line the report named: the dispatcher writes its
+     * no-nodes line instead, so the report must name that one too.
+     */
+    @Test
+    public void aRefusingBackendsReportAlsoNamesTheLineOfAQueueWithNoNodes() {
+        R.BACKEND = backend(false);
+        String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));
+        assertTrue(report, report.contains("'Queue container.q has no nodes available'"));
+    }
+
     @Test
     public void pendingPairsOnAQueueTheBackendAcceptsPointAtItsNodes() {
         String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));

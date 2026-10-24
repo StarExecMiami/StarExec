@@ -13,6 +13,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -84,15 +85,62 @@ public class QueueDispatchLogTest {
 
     /** One dispatcher pass over one active queue that has the given nodes and nothing pending. */
     private static void dispatch(Queue q, List<WorkerNode> nodes) {
+        dispatch(q, nodes, 0);
+    }
+
+    /**
+     * One dispatcher pass over one active queue that has the given nodes, no pair enqueued, and
+     * {@code pendingPairs} pairs waiting to be submitted.
+     */
+    private static void dispatch(Queue q, List<WorkerNode> nodes, int pendingPairs) {
         try (MockedStatic<Jobs> jobs = mockStatic(Jobs.class);
                 MockedStatic<Queues> queues = mockStatic(Queues.class);
                 MockedStatic<Common> common = mockStatic(Common.class)) {
             queues.when(Queues::getAllActive).thenReturn(Collections.singletonList(q));
             queues.when(() -> Queues.getNodes(q.getId())).thenReturn(nodes);
             queues.when(() -> Queues.getSizeOfQueue(q.getId())).thenReturn(0);
+            queues.when(() -> Queues.countPendingPairs(q.getId())).thenReturn(pendingPairs);
             queues.when(() -> Queues.getPendingJobs(q.getId())).thenReturn(Collections.emptyList());
             JobManager.checkPendingJobs();
         }
+    }
+
+    /** The one message logged at {@code level} that contains {@code text}. */
+    private String message(Level level, String text) {
+        List<String> found = appender.list.stream()
+            .filter(e -> e.getLevel() == level && e.getFormattedMessage().contains(text))
+            .map(ILoggingEvent::getFormattedMessage)
+            .collect(Collectors.toList());
+        assertEquals(found.toString(), 1, found.size());
+        return found.get(0);
+    }
+
+    /**
+     * A queue with no nodes never enqueues a pair, so the pairs waiting for it are pending, not
+     * enqueued. The line counted only enqueued pairs, and said "0 pair(s) waiting" while 24 pairs
+     * waited for the queue.
+     */
+    @Test
+    public void aQueueWithNoNodesCountsThePairsWaitingForIt() {
+        Queue q = queue("all.q");
+        when(backend.isQueueDispatchable(q.getName())).thenReturn(false);
+        dispatch(q, Collections.emptyList(), 24);
+        String line = message(Level.WARN, NO_NODES);
+        assertTrue(line, line.contains(
+            "Queue all.q has no nodes available (24 pair(s) waiting to be submitted, 0 enqueued);"
+                + " the backend confirms it cannot accept work."));
+    }
+
+    /** The same for the node table mismatch, which the line reports as an ERROR. */
+    @Test
+    public void aNodeTableMismatchCountsThePairsWaitingForTheQueue() {
+        Queue q = queue("container.q");
+        when(backend.isQueueDispatchable(q.getName())).thenReturn(true);
+        dispatch(q, Collections.emptyList(), 1);
+        String line = message(Level.ERROR, NO_NODES);
+        assertTrue(line, line.contains(
+            "Queue container.q has no nodes associated with it (1 pair(s) waiting to be submitted,"
+                + " 0 enqueued), yet the backend reports it can accept work."));
     }
 
     @Test

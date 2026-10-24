@@ -791,6 +791,28 @@ public class Queues {
 	}
 
 	/**
+	 * The pairs of the given queue's jobs that are waiting to be submitted (status 1), as the
+	 * dispatcher finds them. Not {@link #getSizeOfQueue}, which counts the pairs already enqueued
+	 * (status 2): a queue with no nodes never enqueues a pair, so its waiting pairs are these.
+	 *
+	 * @param queueId The queue in question
+	 * @return The number of pairs, or -1 when they cannot be counted
+	 */
+	public static int countPendingPairs(int queueId) {
+		final String query = "SELECT count(*) AS count FROM starexec.job_pairs jp"
+				+ " JOIN starexec.jobs j ON j.id = jp.job_id WHERE jp.status_code = 1 AND j.queue_id = ?";
+		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(query)) {
+			ps.setInt(1, queueId);
+			try (ResultSet results = ps.executeQuery()) {
+				return results.next() ? results.getInt("count") : -1;
+			}
+		} catch (Exception e) {
+			log.error("countPendingPairs", e);
+			return -1;
+		}
+	}
+
+	/**
 	 * Returns the number of job pairs enqueued in the given queue
 	 *
 	 * @param queueId The queue in question
