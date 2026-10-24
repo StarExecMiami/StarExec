@@ -1,6 +1,8 @@
 package org.starexec.jobs;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -159,5 +161,43 @@ public class QueueDispatchLogTest {
         dispatch(q, Collections.emptyList());
         assertEquals(1, logged(Level.WARN, NO_NODES));
         assertEquals(1, logged(Level.ERROR, NO_NODES));
+    }
+
+    @Test
+    public void aBackendThatCannotSayWhetherAQueueWithNoNodesCanRunIsReportedOnce() {
+        Queue q = queue("container.q");
+        when(backend.isQueueDispatchable(q.getName())).thenThrow(new IllegalStateException("no client"));
+        for (int pass = 0; pass < PASSES; pass++) {
+            dispatch(q, Collections.emptyList());
+        }
+        assertEquals(1, logged(Level.WARN, "Could not ask the backend about queue container.q"));
+    }
+
+    @Test
+    public void aQueueThatAcceptsWorkAgainSaysSoOnceAndIsReportedAgainIfItStopsAgain() {
+        Queue q = queue("container.q");
+        long t0 = 5_000_000L;
+        when(backend.isQueueDispatchable(q.getName())).thenReturn(false, true, true, false);
+        assertFalse(JobManager.queueAcceptsWork(q, t0));
+        assertTrue(JobManager.queueAcceptsWork(q, t0 + 3 * 60_000L));
+        assertTrue(JobManager.queueAcceptsWork(q, t0 + 4 * 60_000L));
+        assertFalse(JobManager.queueAcceptsWork(q, t0 + 5 * 60_000L));
+        assertEquals("each refusal that starts", 2, logged(Level.WARN, DEFERRED));
+        assertEquals("the end, once, with when the refusal was first seen", 1,
+            logged(Level.INFO, "accepts work again; it was first seen refusing work 3 minute(s) ago"));
+    }
+
+    @Test
+    public void aRefusalThatLastsIsReportedAgainWithItsLength() {
+        Queue q = queue("container.q");
+        long t0 = 5_000_000L;
+        when(backend.isQueueDispatchable(q.getName())).thenReturn(false);
+        JobManager.queueAcceptsWork(q, t0);
+        JobManager.queueAcceptsWork(q, t0 + QueueConditions.REPEAT_MILLIS - 1);
+        JobManager.queueAcceptsWork(q, t0 + QueueConditions.REPEAT_MILLIS);
+        assertEquals(2, logged(Level.WARN, DEFERRED));
+        assertEquals(1, logged(Level.WARN, DEFERRED + " (first seen 360 minutes ago)"));
+        assertEquals("each report says when the next one comes",
+            2, logged(Level.WARN, "Reported again every 6 hours while it lasts, and at INFO when it ends."));
     }
 }

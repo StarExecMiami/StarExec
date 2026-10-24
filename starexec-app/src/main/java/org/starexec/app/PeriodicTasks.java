@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.apache.commons.lang3.time.StopWatch;
+import org.starexec.backend.Backend;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.security.GeneralSecurity;
@@ -824,7 +825,11 @@ class PeriodicTasks {
         });
     }
 
-    /** One line naming what the database shows about a stuck job, and the likely cause. */
+    /**
+     * One line naming what the database shows about a stuck job, and the likely cause. For
+     * pending pairs on an ACTIVE queue it asks the backend whether that queue can take work
+     * now: a backend that did not start, or that holds dispatch, leaves the queue ACTIVE.
+     */
     public static String describeStuckJob(StuckJob job) {
         String state = String.format(
             "%d pending, %d enqueued, %d running, %d awaiting result processing",
@@ -839,6 +844,10 @@ class PeriodicTasks {
         } else if (job.enqueued + job.running > 0) {
             cause = "pairs are in flight but none has started or finished; check the backend" +
                 " and its job monitor";
+        } else if (job.pending > 0 && backendRefusesWork(job.queueName)) {
+            cause = "the backend is not accepting work on queue '" + job.queueName + "'; the log" +
+                " line 'Queue " + job.queueName + " cannot accept work at the moment' says since" +
+                " when, and the backend's own lines before it say why";
         } else if (job.pending > 0) {
             cause = "nothing is being dispatched from queue '" + job.queueName + "'; check that" +
                 " the queue has nodes the backend can use";
@@ -849,6 +858,23 @@ class PeriodicTasks {
             "Job %d (%s) has made no progress for %d minutes (%s): %s",
             job.jobId, job.name, job.idleMinutes, state, cause
         );
+    }
+
+    /**
+     * Whether the backend says queue {@code queueName} cannot take work now. False when there
+     * is no backend or it cannot answer: the report then gives the advice it gave before it
+     * asked, rather than a cause nobody established.
+     */
+    private static boolean backendRefusesWork(String queueName) {
+        Backend backend = R.BACKEND;
+        if (backend == null) {
+            return false;
+        }
+        try {
+            return !backend.isQueueDispatchable(queueName);
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     /** Whether a stuck job is due a report now; records the report when it is. */
