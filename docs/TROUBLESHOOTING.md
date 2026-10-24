@@ -728,13 +728,17 @@ seconds and skips a queue in these cases:
   already holds `STAREXEC_NODE_MULTIPLIER` (default 16) pairs per node in status 2, which are not starting.
   See status 2 below.
 - **The backend refuses new work.** Log: `Queue <q> cannot accept work at the moment; deferring its pairs to a
-  later pass rather than failing them`. The backend has not started or is shutting down; on Kubernetes it also
-  logs its own reason next to this line. A Podman backend that failed to start logged
-  `Failed to initialize backend` at start-up, with the reason, and is not started again until StarExec
-  restarts. The line is written when the refusal starts, again every 6 hours while pairs wait
-  (`(first seen <n> minutes ago)`), and `Queue <q> accepts work again` at INFO when the queue takes pairs again.
+  later pass rather than failing them`. The backend has not started or is shutting down, or, on Kubernetes,
+  holds dispatch for a reason it logs itself on every pass while pairs wait, just before the first of these
+  lines. A Podman backend that failed to start logged `Failed to initialize backend` at start-up, with the
+  reason, and is not started again until StarExec restarts. The line is written when the refusal starts, again
+  every 6 hours while pairs wait (`(first seen <n> minutes ago)`), and `Queue <q> accepts work again` at INFO
+  when the queue takes pairs again.
 - **Kubernetes is at its concurrency cap.** Log: `deferring pair <id> (...): at concurrency cap (<n>/<max>)`.
   At most `kubernetes.maxConcurrentJobs` pairs run at once; the rest wait in status 1.
+
+StarExec keeps the no-nodes and refusal conditions in memory, so after a restart one that lasts is reported again
+on the first pass that sees it.
 
 **Status 2 (enqueued): the backend has the pairs but no free slot.** How many pairs run at once:
 
