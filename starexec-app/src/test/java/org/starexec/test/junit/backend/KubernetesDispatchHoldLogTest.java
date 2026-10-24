@@ -200,6 +200,75 @@ public class KubernetesDispatchHoldLogTest {
         assertEquals(1, lines(Level.ERROR, "queue 'small.q'").size());
     }
 
+    /** A repeat starts six quiet hours again, and the end still counts from the first sighting. */
+    @Test
+    public void aRepeatIsFollowedBySixQuietHoursAndTheEndCountsFromTheStart() throws Exception {
+        KubernetesNativeBackend backend = backend(set(Q), set(), "1", 32_000L);
+        assertFalse(backend.isQueueDispatchable(Q));
+        advance(backend, SIX_HOURS);
+        assertFalse(backend.isQueueDispatchable(Q));
+        advance(backend, TimeUnit.SECONDS.toMillis(20));
+        assertFalse(backend.isQueueDispatchable(Q));
+        assertEquals("the start and the repeat, not the pass after the repeat", 2,
+            lines(Level.WARN, "none are schedulable right now").size());
+
+        advance(backend, TimeUnit.MINUTES.toMillis(5));
+        view(backend, set(Q), set(Q), 32_000L);
+        assertTrue(backend.isQueueDispatchable(Q));
+        List<ILoggingEvent> ended = lines(Level.INFO, ENDED + " '" + Q + "'");
+        assertEquals(1, ended.size());
+        String line = ended.get(0).getFormattedMessage();
+        assertTrue("6 h 5 min 20 s after the start, not 5 min after the repeat: " + line,
+            line.contains("first seen 365 minute(s) ago"));
+    }
+
+    @Test
+    public void aNewReasonCountsItsAgeFromWhenItStarted() throws Exception {
+        KubernetesNativeBackend backend = backend(set(Q), set(), "32", 32_000L);
+        assertFalse(backend.isQueueDispatchable(Q));
+        advance(backend, TimeUnit.HOURS.toMillis(1));
+        // The node is back, but it cannot fit a 32-CPU pod.
+        view(backend, set(Q), set(Q), 32_000L);
+        assertFalse(backend.isQueueDispatchable(Q));
+        advance(backend, SIX_HOURS);
+        assertFalse(backend.isQueueDispatchable(Q));
+
+        List<ILoggingEvent> impossible = lines(Level.ERROR, "Impossible CPU configuration");
+        assertEquals(2, impossible.size());
+        String again = impossible.get(1).getFormattedMessage();
+        assertTrue("six hours since this reason began, not seven since the hold did: " + again,
+            again.contains("(first seen 360 minutes ago)"));
+    }
+
+    /** The two CPU reasons are different holds: the request may fit once the capacity is known. */
+    @Test
+    public void aCapacityThatBecomesKnownButTooSmallIsLoggedAtOnce() throws Exception {
+        KubernetesNativeBackend backend = backend(set(Q), set(Q), "32", null);
+        assertFalse(backend.isQueueDispatchable(Q));
+        // The node's allocatable CPU can be read now: 32 CPUs, too few for a 32-CPU pod.
+        view(backend, set(Q), set(Q), 32_000L);
+        assertFalse(backend.isQueueDispatchable(Q));
+
+        assertEquals(1, lines(Level.WARN, "Cannot establish CPU capacity").size());
+        assertEquals("a different reason, so logged at once", 1,
+            lines(Level.ERROR, "Impossible CPU configuration").size());
+    }
+
+    @Test
+    public void theEndOfAHoldAfterTheClockSteppedBackSaysZeroMinutes() throws Exception {
+        KubernetesNativeBackend backend = backend(set(Q), set(), "1", 32_000L);
+        assertFalse(backend.isQueueDispatchable(Q));
+        // The wall clock steps back 7 minutes, then the node is uncordoned.
+        advance(backend, -TimeUnit.MINUTES.toMillis(7));
+        view(backend, set(Q), set(Q), 32_000L);
+        assertTrue(backend.isQueueDispatchable(Q));
+
+        List<ILoggingEvent> ended = lines(Level.INFO, ENDED + " '" + Q + "'");
+        assertEquals(1, ended.size());
+        String line = ended.get(0).getFormattedMessage();
+        assertTrue("never a negative age: " + line, line.contains("first seen 0 minute(s) ago"));
+    }
+
     @Test
     public void aDispatchableQueueLogsNothing() throws Exception {
         KubernetesNativeBackend backend = backend(set(Q), set(Q), "1", 32_000L);
@@ -265,6 +334,43 @@ public class KubernetesDispatchHoldLogTest {
         assertEquals(1, back.size());
         assertTrue(back.get(0).getFormattedMessage(), back.get(0).getFormattedMessage().contains("2 minute(s) ago"));
         assertEquals(1, lines(Level.WARN, REFRESH_FAILED).size());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aNodeListingThatWorksAgainAfterARepeatCountsFromTheFirstFailure() throws Exception {
+        KubernetesNativeBackend backend = backend(set(Q), set(Q), "1", 32_000L);
+        Mockito.when(nodeListing(backend).list())
+            .thenThrow(new RuntimeException("API server unreachable"))
+            .thenThrow(new RuntimeException("API server unreachable"))
+            .thenReturn(new NodeListBuilder().withItems(node("n021", Q, "32", false)).build());
+        setField(backend, "queueViewRefreshedAt", 0L);
+        assertTrue(backend.isQueueDispatchable(Q));
+        now.addAndGet(SIX_HOURS);
+        assertTrue(backend.isQueueDispatchable(Q));
+        now.addAndGet(TimeUnit.MINUTES.toMillis(2));
+        assertTrue(backend.isQueueDispatchable(Q));
+
+        assertEquals("the failure and its repeat", 2, lines(Level.WARN, REFRESH_FAILED).size());
+        List<ILoggingEvent> back = lines(Level.INFO, "Refreshed the Kubernetes queue view again");
+        assertEquals(1, back.size());
+        String line = back.get(0).getFormattedMessage();
+        assertTrue("362 minutes after the first failure, not 2 after the repeat: " + line,
+            line.contains("first seen failing 362 minute(s) ago"));
+    }
+
+    /** The view's age is read on the backend's clock, the one its holds are timed with. */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void theViewIsListedAgainOnceItIsTenSecondsOldOnTheBackendsClock() throws Exception {
+        KubernetesNativeBackend backend = backend(set(Q), set(Q), "1", 32_000L);
+        // Since the last listing, the queue's only node has been cordoned.
+        Mockito.when(nodeListing(backend).list())
+            .thenReturn(new NodeListBuilder().withItems(node("n021", Q, "32", true)).build());
+        now.addAndGet(TimeUnit.SECONDS.toMillis(10));
+
+        assertFalse("the view was listed again, and shows the node cordoned", backend.isQueueDispatchable(Q));
+        assertEquals(1, lines(Level.WARN, "none are schedulable right now").size());
     }
 
     // ---------------------------------------------------------------------
@@ -357,6 +463,20 @@ public class KubernetesDispatchHoldLogTest {
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static KubernetesNativeBackend listing(KubernetesNativeBackend backend, RuntimeException failure,
             Node node) throws Exception {
+        FilterWatchListDeletable workers = nodeListing(backend);
+        if (node == null) {
+            Mockito.when(workers.list()).thenThrow(failure);
+        } else {
+            NodeList list = new NodeListBuilder().withItems(node).build();
+            Mockito.when(workers.list()).thenThrow(failure).thenReturn(list);
+        }
+        setField(backend, "queueViewRefreshedAt", 0L);
+        return backend;
+    }
+
+    /** Gives the backend a client, and returns its worker-node listing for the caller to stub. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static FilterWatchListDeletable nodeListing(KubernetesNativeBackend backend) throws Exception {
         setField(backend, "queueLabelKey", "starexec.org/queue");
         setField(backend, "workerNodeSelectorKey", "starexec.org/worker");
         setField(backend, "workerNodeSelectorValue", "true");
@@ -365,24 +485,22 @@ public class KubernetesDispatchHoldLogTest {
         FilterWatchListDeletable workers = Mockito.mock(FilterWatchListDeletable.class);
         Mockito.when(client.nodes()).thenReturn(nodes);
         Mockito.when(nodes.withLabel("starexec.org/worker", "true")).thenReturn(workers);
-        if (node == null) {
-            Mockito.when(workers.list()).thenThrow(failure);
-        } else {
-            NodeList list = new NodeListBuilder().withItems(node).build();
-            Mockito.when(workers.list()).thenThrow(failure).thenReturn(list);
-        }
         setField(backend, "kubernetesClient", client);
-        setField(backend, "queueViewRefreshedAt", 0L);
-        return backend;
+        return workers;
     }
 
     private static Node schedulableNode(String name, String queue, String cpus) {
+        return node(name, queue, cpus, false);
+    }
+
+    /** A Ready worker node of {@code queue}, cordoned or not. */
+    private static Node node(String name, String queue, String cpus, boolean cordoned) {
         Map<String, String> labels = new HashMap<>();
         labels.put("starexec.org/worker", "true");
         labels.put("starexec.org/queue", queue);
         return new NodeBuilder()
             .withNewMetadata().withName(name).withLabels(labels).endMetadata()
-            .withNewSpec().withUnschedulable(false).endSpec()
+            .withNewSpec().withUnschedulable(cordoned).endSpec()
             .withNewStatus()
             .addNewCondition().withType("Ready").withStatus("True").endCondition()
             .addToAllocatable("cpu", new Quantity(cpus))
