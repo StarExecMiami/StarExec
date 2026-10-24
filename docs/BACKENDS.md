@@ -652,7 +652,10 @@ its queue decides which ones, through the queue label
   Pairs wait rather than fail while all of a queue's nodes are cordoned or
   NotReady, while `STAREXEC_K8S_CPU_LIMIT` is not smaller than the allocatable
   CPU of the queue's largest schedulable node (the log says `Impossible CPU
-  configuration`), and until the backend has listed the nodes once.
+  configuration`), and until the backend has listed the nodes once. The
+  backend logs why it holds a queue when the hold starts or its reason
+  changes, again every 6 hours while it lasts, and `Kubernetes no longer holds
+  dispatch for queue '<q>'` at INFO when it ends.
 
 The backend reads queue labels only from worker nodes, so a node needs both
 labels:
