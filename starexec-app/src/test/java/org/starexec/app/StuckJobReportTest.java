@@ -3,11 +3,18 @@ package org.starexec.app;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.Map;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.starexec.app.PeriodicTasks.StuckJob;
+import org.starexec.backend.Backend;
+import org.starexec.constants.R;
 
 /**
  * What the stuck-job check says about a job that has stopped making progress.
@@ -16,12 +23,90 @@ import org.starexec.app.PeriodicTasks.StuckJob;
  * missing status.json files, watch LocalJobMonitor -- whatever the backend and whatever was
  * actually wrong, and it said it every five minutes. On Quokka the job it reported had its
  * pairs pending on an inactive queue, which none of that advice mentions.
+ *
+ * <p>Each test sets {@code R.BACKEND}: the report asks the backend whether the job's queue can
+ * take work, and a backend that cannot is the cause, not the queue's nodes.
  */
 public class StuckJobReportTest {
+
+    private static final String NODES_ADVICE =
+        "nothing is being dispatched from queue 'container.q'; check that the queue has nodes"
+            + " the backend can use";
+
+    private Backend originalBackend;
+
+    @Before
+    public void useABackendThatAcceptsWork() {
+        originalBackend = R.BACKEND;
+        R.BACKEND = backend(true);
+    }
+
+    @After
+    public void restoreBackend() {
+        R.BACKEND = originalBackend;
+    }
+
+    private static Backend backend(boolean acceptsWork) {
+        Backend backend = mock(Backend.class);
+        when(backend.isQueueDispatchable(anyString())).thenReturn(acceptsWork);
+        return backend;
+    }
 
     private static StuckJob job(String queue, String status, int pending, int enqueued,
             int running, int processing) {
         return new StuckJob(1, "DRODI", queue, status, pending, enqueued, running, processing, 4321);
+    }
+
+    @Test
+    public void pendingPairsOnAQueueTheBackendRefusesNameTheBackend() {
+        R.BACKEND = backend(false);
+        String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));
+        assertTrue(report, report.endsWith(
+            "the backend is not accepting work on queue 'container.q'; the log line 'Queue"
+                + " container.q cannot accept work at the moment' says since when, and the"
+                + " backend's own lines before it say why"));
+    }
+
+    @Test
+    public void pendingPairsOnAQueueTheBackendAcceptsPointAtItsNodes() {
+        String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));
+        assertTrue(report, report.endsWith(NODES_ADVICE));
+    }
+
+    /** No answer is not a refusal: the report keeps the advice it gave before it asked. */
+    @Test
+    public void aBackendThatCannotAnswerLeavesTheNodesAdvice() {
+        Backend failing = mock(Backend.class);
+        when(failing.isQueueDispatchable(anyString())).thenThrow(new IllegalStateException("no client"));
+        R.BACKEND = failing;
+        String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));
+        assertTrue(report, report.endsWith(NODES_ADVICE));
+    }
+
+    @Test
+    public void noBackendLeavesTheNodesAdvice() {
+        R.BACKEND = null;
+        String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));
+        assertTrue(report, report.endsWith(NODES_ADVICE));
+    }
+
+    /** A backend that takes no new work does not explain pairs it already has. */
+    @Test
+    public void pairsInFlightOnARefusingBackendPointAtTheJobMonitor() {
+        R.BACKEND = backend(false);
+        String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 2, 0));
+        assertTrue(report, report.endsWith(
+            "pairs are in flight but none has started or finished; check the backend and its job"
+                + " monitor"));
+    }
+
+    /** The dispatcher reads only ACTIVE queues, so an inactive queue is the cause whatever the backend says. */
+    @Test
+    public void anInactiveQueueIsNamedEvenWhenTheBackendRefuses() {
+        R.BACKEND = backend(false);
+        String report = PeriodicTasks.describeStuckJob(job("default", "INACTIVE", 35, 0, 0, 0));
+        assertTrue(report, report.endsWith(
+            "its queue 'default' is INACTIVE, so its pending pairs cannot be dispatched"));
     }
 
     @Test
