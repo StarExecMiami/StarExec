@@ -60,6 +60,17 @@ public class QueueConditionsTest {
         assertEquals(-1, new QueueConditions().end(1, Kind.NO_NODES, T0));
     }
 
+    /**
+     * The wall clock can step back while a condition lasts. Its end is still reported, as lasting
+     * 0 minutes: a negative count would read as no condition, and the end would not be logged.
+     */
+    @Test
+    public void anEndAfterTheClockSteppedBackIsStillReported() {
+        QueueConditions conditions = new QueueConditions();
+        conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + 10 * MINUTE);
+        assertEquals(0, conditions.end(1, Kind.CANNOT_ACCEPT_WORK, T0 + 3 * MINUTE));
+    }
+
     @Test
     public void aConditionThatComesBackAfterItsEndIsReportedAtOnce() {
         QueueConditions conditions = new QueueConditions();

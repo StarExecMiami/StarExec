@@ -73,10 +73,12 @@ final class QueueConditions {
     /**
      * Records that the queue is in no condition of this kind at {@code now}.
      *
-     * @return the minutes the condition lasted, or -1 when there was none
+     * @return the minutes the condition lasted, or -1 when there was none. Never negative
+     *         otherwise: after the wall clock stepped back, a negative count would read as no
+     *         condition, and the end would not be logged.
      */
     long end(int queueId, Kind kind, long now) {
         Condition condition = current.remove(key(queueId, kind));
-        return condition == null ? -1 : TimeUnit.MILLISECONDS.toMinutes(now - condition.since);
+        return condition == null ? -1 : Math.max(0, TimeUnit.MILLISECONDS.toMinutes(now - condition.since));
     }
 }
