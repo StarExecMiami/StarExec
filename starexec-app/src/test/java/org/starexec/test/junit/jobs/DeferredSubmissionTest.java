@@ -64,6 +64,7 @@ public class DeferredSubmissionTest {
 	private Object originalTemplate;
 	private final List<Object[]> returnedToPending = new ArrayList<>();
 	private final List<String> statusWrites = new ArrayList<>();
+	private final List<Object> claimed = new ArrayList<>();
 
 	@Before
 	public void saveGlobals() throws Exception {
@@ -88,11 +89,45 @@ public class DeferredSubmissionTest {
 		assertDeferredPairReturned(CREATE_FAILED);
 	}
 
+	/**
+	 * A queue whose backend cannot take work is skipped before any pair is claimed, so its pairs
+	 * stay pending for a later pass. Claimed, they would reach a backend that cannot take them,
+	 * and a submission the backend answers with an error is recorded as a terminal
+	 * ERROR_SGE_REJECT.
+	 */
+	@Test
+	public void aQueueTheBackendRefusesKeepsItsPairsPending() throws Exception {
+		Backend backend = Mockito.mock(Backend.class);
+		Mockito.when(backend.isQueueDispatchable(Mockito.anyString())).thenReturn(false);
+
+		submitThreePendingPairs(backend);
+
+		Mockito.verify(backend, Mockito.never()).submitScript(Mockito.anyInt(), Mockito.anyString(), Mockito.any(),
+				Mockito.anyString(), Mockito.anyString());
+		assertTrue("no pair may be claimed, was " + claimed, claimed.isEmpty());
+		assertTrue("no status may be written, was " + statusWrites, statusWrites.isEmpty());
+		assertTrue("nothing was claimed, so nothing goes back", returnedToPending.isEmpty());
+	}
+
 	private void assertDeferredPairReturned(String deferral) throws Exception {
 		Backend backend = Mockito.mock(Backend.class);
 		Mockito.when(backend.isQueueDispatchable(Mockito.anyString())).thenReturn(true);
 		Mockito.when(backend.submitScript(Mockito.anyInt(), Mockito.anyString(), Mockito.any(), Mockito.anyString(),
 				Mockito.anyString())).thenThrow(new SubmissionDeferredException(deferral));
+
+		submitThreePendingPairs(backend);
+
+		Mockito.verify(backend, Mockito.times(1)).submitScript(Mockito.anyInt(), Mockito.anyString(), Mockito.any(),
+				Mockito.anyString(), Mockito.anyString());
+		assertEquals("the deferred pair, and only it, goes back to PENDING_SUBMIT", 1, returnedToPending.size());
+		assertEquals(101, returnedToPending.get(0)[0]);
+		assertEquals("fenced on the execution id it carried when claimed", STALE_EXEC_ID, returnedToPending.get(0)[1]);
+		assertTrue("a deferral is not a failure: no status may be written, was " + statusWrites,
+				statusWrites.isEmpty());
+	}
+
+	/** One {@code submitJobs} pass over a job with pending pairs 101 to 103, on queue all.q. */
+	private void submitThreePendingPairs(Backend backend) throws Exception {
 		R.BACKEND = backend;
 
 		User owner = new User();
@@ -140,14 +175,6 @@ public class DeferredSubmissionTest {
 
 			JobManager.submitJobs(Collections.singletonList(job), q, 0, 1);
 		}
-
-		Mockito.verify(backend, Mockito.times(1)).submitScript(Mockito.anyInt(), Mockito.anyString(), Mockito.any(),
-				Mockito.anyString(), Mockito.anyString());
-		assertEquals("the deferred pair, and only it, goes back to PENDING_SUBMIT", 1, returnedToPending.size());
-		assertEquals(101, returnedToPending.get(0)[0]);
-		assertEquals("fenced on the execution id it carried when claimed", STALE_EXEC_ID, returnedToPending.get(0)[1]);
-		assertTrue("a deferral is not a failure: no status may be written, was " + statusWrites,
-				statusWrites.isEmpty());
 	}
 
 	// ----------------------------------------------------------------- stubs
@@ -155,6 +182,7 @@ public class DeferredSubmissionTest {
 	private Object jobPairs(InvocationOnMock call) throws Throwable {
 		switch (call.getMethod().getName()) {
 			case "tryMarkPendingPairEnqueued":
+				claimed.add(call.getArgument(0));
 				return JobPairs.ConditionalPairUpdateResult.UPDATED;
 			case "getPairStatusLookup":
 				// setStatusForExistingPair's first step: any call means a status write was attempted.

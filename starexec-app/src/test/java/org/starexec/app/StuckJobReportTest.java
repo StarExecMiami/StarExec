@@ -145,6 +145,14 @@ public class StuckJobReportTest {
             .endsWith("its pairs are waiting for result processing"));
     }
 
+    /** With no pair pending there is nothing to dispatch, so a backend that refuses work is not the cause. */
+    @Test
+    public void onlyResultProcessingLeftOnARefusingBackendSaysSo() {
+        R.BACKEND = backend(false);
+        assertTrue(PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 0, 0, 0, 4))
+            .endsWith("its pairs are waiting for result processing"));
+    }
+
     /** An inactive queue explains pending pairs, not pairs already in flight on it. */
     @Test
     public void anInactiveQueueIsNotBlamedForPairsAlreadyInFlight() {
