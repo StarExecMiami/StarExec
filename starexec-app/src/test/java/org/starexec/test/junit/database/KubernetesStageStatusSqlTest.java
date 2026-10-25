@@ -10,6 +10,8 @@ import org.starexec.backend.ExecutionRef;
 import org.starexec.backend.KubernetesJobMonitor;
 import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.data.database.Common;
+import org.starexec.data.database.Queues;
+import org.starexec.data.to.JobPair;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
 
@@ -18,13 +20,17 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -120,6 +126,8 @@ public class KubernetesStageStatusSqlTest extends Common {
 				quietly(s, "DELETE FROM starexec.jobpair_stage_data WHERE jobpair_id=" + pair);
 				quietly(s, "DELETE FROM starexec.job_pairs WHERE id=" + pair);
 			}
+			// After the pairs, which reference it.
+			deleteProbeNode(con);
 			quietly(s, "DELETE FROM starexec.jobs WHERE id=" + JOB_ID);
 			quietly(s, "DELETE FROM starexec.configurations WHERE id=" + CONFIG_ID);
 			quietly(s, "DELETE FROM starexec.solvers WHERE id=" + SOLVER_ID);
@@ -458,11 +466,12 @@ public class KubernetesStageStatusSqlTest extends Common {
 				.build();
 	}
 
-	/** The fabric8 listing chain, stubbed to return exactly this Job on every poll. */
+	/** The fabric8 listing chain, stubbed to return exactly this Job and these pods on every poll. */
 	@SuppressWarnings({"unchecked", "rawtypes"})
 	private static KubernetesJobMonitor monitorOver(
 			io.fabric8.kubernetes.api.model.batch.v1.Job job,
-			KubernetesJobMonitor.JobCompletionCallback callback) {
+			KubernetesJobMonitor.JobCompletionCallback callback,
+			io.fabric8.kubernetes.api.model.Pod... podsOnTheCluster) {
 		KubernetesClient client = Mockito.mock(KubernetesClient.class);
 		io.fabric8.kubernetes.client.dsl.BatchAPIGroupDSL batch =
 				Mockito.mock(io.fabric8.kubernetes.client.dsl.BatchAPIGroupDSL.class);
@@ -496,10 +505,177 @@ public class KubernetesStageStatusSqlTest extends Common {
 		Mockito.when(pods.inNamespace(Mockito.any())).thenReturn(nsPods);
 		Mockito.when(nsPods.withLabel(Mockito.anyString(), Mockito.anyString()))
 				.thenReturn(filteredPods);
-		Mockito.when(filteredPods.list())
-				.thenReturn(new io.fabric8.kubernetes.api.model.PodList());
+		io.fabric8.kubernetes.api.model.PodList podList =
+				new io.fabric8.kubernetes.api.model.PodList();
+		podList.setItems(List.of(podsOnTheCluster));
+		Mockito.when(filteredPods.list()).thenReturn(podList);
 
 		return new KubernetesJobMonitor(client, "starexec-test", callback);
+	}
+
+	// ------------------------------------------------------- the running pair's node
+
+	private static final String NODE = TAG + "-node";
+
+	/**
+	 * A running pair is listed under the node its pod runs on (issue #56).
+	 *
+	 * <p>The cluster page's node view lists the pairs whose {@code node_id} names the node. A
+	 * Kubernetes pair got its node only from its statistics, once it had finished, so the view
+	 * never listed a running one. This is one real monitor poll over a running pod, read back
+	 * through the view's own query.
+	 */
+	@Test
+	public void aRunningPairIsListedUnderItsNode() throws Exception {
+		int nodeId = registerNode();
+		setPrimaryStage(PAIR_ID);
+
+		KubernetesNativeBackend backend = backendOwning(EXEC_ID, PAIR_ID, outputDir);
+		poll(monitorOver(activeJob(), callbackFor(backend), runningPodOn(NODE)));
+
+		assertEquals(RUNNING + "/" + nodeId, pairStatusAndNode(PAIR_ID));
+		assertEquals(List.of(PAIR_ID), pairsListedUnder(nodeId));
+		assertEquals("the other pair is not this pod's", ENQUEUED + "/null",
+				pairStatusAndNode(OTHER_PAIR_ID));
+	}
+
+	/**
+	 * A pod can start on a node before the periodic cluster refresh registers it. The node is
+	 * then recorded on the first poll after the refresh, not left out for the rest of the run.
+	 */
+	@Test
+	public void aNodeRegisteredAfterThePairStartedIsRecordedOnALaterPoll() throws Exception {
+		KubernetesNativeBackend backend = backendOwning(EXEC_ID, PAIR_ID, outputDir);
+		KubernetesJobMonitor monitor =
+				monitorOver(activeJob(), callbackFor(backend), runningPodOn(NODE));
+
+		poll(monitor);
+		assertEquals("running, on a node not registered yet", RUNNING + "/null",
+				pairStatusAndNode(PAIR_ID));
+
+		int nodeId = registerNode();
+		poll(monitor);
+
+		assertEquals(RUNNING + "/" + nodeId, pairStatusAndNode(PAIR_ID));
+	}
+
+	/** A pair that has already finished is given no node: the write is conditional. */
+	@Test
+	public void aFinishedPairIsGivenNoNode() throws Exception {
+		registerNode();
+		setPairStatus(PAIR_ID, COMPLETE);
+
+		KubernetesNativeBackend backend = backendOwning(EXEC_ID, PAIR_ID, outputDir);
+		poll(monitorOver(activeJob(), callbackFor(backend), runningPodOn(NODE)));
+
+		assertEquals(COMPLETE + "/null", pairStatusAndNode(PAIR_ID));
+	}
+
+	/** A Job its controller is still running: one active pod, no terminal condition. */
+	private static io.fabric8.kubernetes.api.model.batch.v1.Job activeJob() {
+		return new io.fabric8.kubernetes.api.model.batch.v1.JobBuilder()
+				.withNewMetadata()
+				.withName(JOB_NAME)
+				.withUid("uid-" + JOB_NAME)
+				.addToLabels("starexec.org/managed", "true")
+				.addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
+				.endMetadata()
+				.withNewStatus()
+				.withActive(1)
+				.endStatus()
+				.build();
+	}
+
+	/** That Job's pod, as its controller creates it, running on {@code nodeName}. */
+	private static io.fabric8.kubernetes.api.model.Pod runningPodOn(String nodeName) {
+		return new io.fabric8.kubernetes.api.model.PodBuilder()
+				.withNewMetadata()
+				.withName(JOB_NAME + "-pod")
+				.withCreationTimestamp("2026-10-25T12:00:00Z")
+				.addToLabels("starexec.org/managed", "true")
+				.addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
+				.withOwnerReferences(new io.fabric8.kubernetes.api.model.OwnerReferenceBuilder()
+						.withApiVersion("batch/v1")
+						.withKind("Job")
+						.withName(JOB_NAME)
+						.withUid("uid-" + JOB_NAME)
+						.withController(true)
+						.build())
+				.endMetadata()
+				.withNewSpec()
+				.withNodeName(nodeName)
+				.endSpec()
+				.withNewStatus()
+				.withPhase("Running")
+				.endStatus()
+				.build();
+	}
+
+	/** Registers {@link #NODE} as the cluster refresh does, by its Kubernetes Node name. */
+	private static int registerNode() throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"INSERT INTO starexec.nodes (name, status) VALUES (?, 'ACTIVE') RETURNING id")) {
+			ps.setString(1, NODE);
+			try (ResultSet rs = ps.executeQuery()) {
+				assertTrue(rs.next());
+				return rs.getInt(1);
+			}
+		}
+	}
+
+	/** The node, and the WARN rows StarLogger wrote about it while it was not registered. */
+	private static void deleteProbeNode(Connection con) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(
+				"DELETE FROM starexec.error_logs WHERE message LIKE ?")) {
+			ps.setString(1, "%" + NODE + "%");
+			ps.executeUpdate();
+		}
+		try (PreparedStatement ps = con.prepareStatement(
+				"DELETE FROM starexec.nodes WHERE name = ?")) {
+			ps.setString(1, NODE);
+			ps.executeUpdate();
+		}
+	}
+
+	/** The node view lists a pair under its primary stage, which the seed leaves unset. */
+	private static void setPrimaryStage(int pairId) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"UPDATE starexec.job_pairs SET primary_jobpair_data = 1 WHERE id = ?")) {
+			ps.setInt(1, pairId);
+			assertEquals(1, ps.executeUpdate());
+		}
+	}
+
+	private static void setPairStatus(int pairId, int status) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"UPDATE starexec.job_pairs SET status_code = ? WHERE id = ?")) {
+			ps.setInt(1, status);
+			ps.setInt(2, pairId);
+			assertEquals(1, ps.executeUpdate());
+		}
+	}
+
+	/** The pair's status and node, as "status/node_id", with "null" for no node. */
+	private static String pairStatusAndNode(int pairId) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement("SELECT status_code,"
+						+ " coalesce(node_id::text, 'null') FROM starexec.job_pairs WHERE id = ?")) {
+			ps.setInt(1, pairId);
+			try (ResultSet rs = ps.executeQuery()) {
+				assertTrue("no pair " + pairId, rs.next());
+				return rs.getInt(1) + "/" + rs.getString(2);
+			}
+		}
+	}
+
+	/** The pairs the node view lists under the node, through the view's own query. */
+	private static List<Integer> pairsListedUnder(int nodeId) {
+		List<JobPair> pairs = Queues.getPairsRunningOnNode(nodeId);
+		assertNotNull("the node view's query failed", pairs);
+		return pairs.stream().map(JobPair::getId).collect(Collectors.toList());
 	}
 
 	// ------------------------------------------------- stale attempt contamination
