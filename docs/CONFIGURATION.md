@@ -465,6 +465,8 @@ resources:
 
 Keep `-Xmx` well below `resources.app.limits.memory`: the JVM also uses memory outside the heap, and the container is killed when its total use reaches the limit. A `JAVA_OPTS` exported in your shell does not reach the container.
 
+Every values profile in the chart keeps the image's 2 GiB heap at or below 75% of the app's limit (the defaults, `values-local-dev.yaml` and `values-ci.yaml` set 3Gi), and `scripts/check-chart-app-heap.py` fails the Helm validation workflow when one does not. Size the heap with `-Xmx`, not `-XX:MaxRAMPercentage`: under rootless Podman the image's user cannot read the container's cgroup files, so the JVM reports `Memory Limit: Unlimited` and would take the percentage of the host's memory.
+
 ## Configuration Precedence
 
 From highest to lowest priority:

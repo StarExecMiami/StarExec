@@ -6,10 +6,16 @@ on:
     paths:
       - "charts/**"
       - ".github/workflows/helm-validate.yml"
+      - "Dockerfile"
+      - "scripts/check-chart-*.py"
+      - "scripts/test_check_chart_*.py"
   pull_request:
     branches: [UMprod, dev, containerised]
     paths:
       - "charts/**"
+      - "Dockerfile"
+      - "scripts/check-chart-*.py"
+      - "scripts/test_check_chart_*.py"
 
 permissions:
   contents: read
@@ -109,6 +115,16 @@ jobs:
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           python3 scripts/check-chart-pvc-retention.py
+
+      # The image's JAVA_OPTS sets an explicit -Xmx, which the JVM keeps whatever the
+      # container's memory limit is (under rootless Podman it cannot read the limit).
+      # A profile whose limit is not well above that heap gets the app killed by the
+      # kernel as the heap grows. helm lint and helm template pass such a chart.
+      - name: Check the app's heap fits its memory limit
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 -m unittest discover -s scripts -p 'test_check_chart_app_heap.py'
+          python3 scripts/check-chart-app-heap.py
 
       - name: Check chart version
         id: chart-info
