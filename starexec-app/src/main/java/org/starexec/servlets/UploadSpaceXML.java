@@ -124,22 +124,26 @@ public class UploadSpaceXML extends HttpServlet {
 					return; // the request has given this upload up and deleted its directory
 				}
 				try {
-					ArchiveUtil.extractArchive(archiveFile.getAbsolutePath());
+					boolean extracted = ArchiveUtil.extractArchive(archiveFile.getAbsolutePath());
 					archiveFile.delete();
 					Uploads.XMLFileUploadComplete(statusId);
+					if (!extracted) {
+						Uploads.setXMLErrorMessage(statusId, ArchiveUtil.NOT_EXTRACTED);
+					} else {
 //create new file reference for inside the scope of the Runnable, same as uniqueDir:
-					File archiveLocation = new File(archivePath);
-					//Typically there will just be 1 file, but might as well allow more
-					for (File file : archiveLocation.listFiles()) {
-						if (!file.isFile()) {
-							Uploads.setXMLErrorMessage(
-									statusId, "The file '" + file.getName() +
-											"' is not a regular file.  Only regular files containing space XML are " +
-											"allowed in the uploaded archive.");
-						} else {
-							List<Integer> current = batchUtil.createSpacesFromFile(file, userId, spaceId, statusId);
-							if (current == null) {
-								Uploads.setXMLErrorMessage(statusId, batchUtil.getErrorMessage());
+						File archiveLocation = new File(archivePath);
+						//Typically there will just be 1 file, but might as well allow more
+						for (File file : archiveLocation.listFiles()) {
+							if (!file.isFile()) {
+								Uploads.setXMLErrorMessage(
+										statusId, "The file '" + file.getName() +
+												"' is not a regular file.  Only regular files containing space XML are " +
+												"allowed in the uploaded archive.");
+							} else {
+								List<Integer> current = batchUtil.createSpacesFromFile(file, userId, spaceId, statusId);
+								if (current == null) {
+									Uploads.setXMLErrorMessage(statusId, batchUtil.getErrorMessage());
+								}
 							}
 						}
 					}
