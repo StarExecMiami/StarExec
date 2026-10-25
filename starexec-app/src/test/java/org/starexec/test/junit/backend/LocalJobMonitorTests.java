@@ -235,6 +235,27 @@ public class LocalJobMonitorTests {
         assertEquals(98.0, statDouble(stats, "cpuTime"), 0.0001);
     }
 
+    /**
+     * A time in exponent form is read whole. runsolver prints a time below 1e-4 s or from 1e6 s
+     * that way, and the job script writes it to stats.json as it is. There is no var.out here,
+     * so each value can only come from stats.json.
+     */
+    @Test
+    public void aTimeInExponentFormInStatsJsonIsReadWhole() throws Exception {
+        Object stats = parseRunSolverStats(outputDir(
+            null,
+            null,
+            "{\"wallclockTime\": 9.90467e-05, \"cpuTime\": 1.23457e+06,"
+                + " \"userTime\": 4.1e-05, \"systemTime\": 4.22E-05}"
+        ));
+
+        assertEquals(9.90467e-05, statDouble(stats, "wallclockTime"), 0.0);
+        assertEquals(1234570.0, statDouble(stats, "cpuTime"), 0.0);
+        assertEquals(4.1e-05, statDouble(stats, "userTime"), 0.0);
+        assertEquals("an upper-case E is an exponent in JSON too", 4.22e-05,
+            statDouble(stats, "systemTime"), 0.0);
+    }
+
     // ------------------------------------------------------------------
     // A malformed number in stats.json must not escape parseRunSolverStats
     //
