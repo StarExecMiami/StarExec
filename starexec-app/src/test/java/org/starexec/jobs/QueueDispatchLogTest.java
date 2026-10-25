@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
@@ -105,6 +106,18 @@ public class QueueDispatchLogTest {
         }
     }
 
+    /**
+     * Reports queue {@code q} as having no nodes at {@code now}, with {@code enqueued} pairs
+     * enqueued and {@code pending} pairs waiting to be submitted (-1: the count failed).
+     */
+    private static void noNodes(Queue q, int enqueued, int pending, long now) {
+        try (MockedStatic<Queues> queues = mockStatic(Queues.class);
+                MockedStatic<Common> common = mockStatic(Common.class)) {
+            queues.when(() -> Queues.countPendingPairs(q.getId())).thenReturn(pending);
+            JobManager.logQueueHasNoNodes(q, enqueued, now);
+        }
+    }
+
     /** The one message logged at {@code level} that contains {@code text}. */
     private String message(Level level, String text) {
         List<String> found = appender.list.stream()
@@ -141,6 +154,50 @@ public class QueueDispatchLogTest {
         assertTrue(line, line.contains(
             "Queue container.q has no nodes associated with it (1 pair(s) waiting to be submitted,"
                 + " 0 enqueued), yet the backend reports it can accept work."));
+    }
+
+    /**
+     * Pairs enqueued before the queue lost its nodes are counted apart from the pairs that wait to
+     * be submitted, and a count of 0 is a count, not an unknown one.
+     */
+    @Test
+    public void aQueueWithNoNodesCountsItsEnqueuedPairsApart() {
+        Queue q = queue("all.q");
+        when(backend.isQueueDispatchable(q.getName())).thenReturn(false);
+        noNodes(q, 3, 0, 5_000_000L);
+        String line = message(Level.WARN, NO_NODES);
+        assertTrue(line, line.contains("(0 pair(s) waiting to be submitted, 3 enqueued)"));
+    }
+
+    /** A count that failed says so; the line does not print the -1 it is given. */
+    @Test
+    public void aCountThatFailedIsReportedAsUnknown() {
+        Queue q = queue("all.q");
+        when(backend.isQueueDispatchable(q.getName())).thenReturn(false);
+        noNodes(q, 0, -1, 5_000_000L);
+        String line = message(Level.WARN, NO_NODES);
+        assertTrue(line, line.contains(
+            "(an unknown number of pairs waiting to be submitted, 0 enqueued)"));
+    }
+
+    /**
+     * The count is a query over job_pairs. It runs when a line is due, not on every 20 s pass
+     * while the queue has no nodes.
+     */
+    @Test
+    public void thePairsAreCountedOnlyWhenALineIsDue() {
+        Queue q = queue("all.q");
+        long t0 = 5_000_000L;
+        when(backend.isQueueDispatchable(q.getName())).thenReturn(false);
+        try (MockedStatic<Queues> queues = mockStatic(Queues.class);
+                MockedStatic<Common> common = mockStatic(Common.class)) {
+            queues.when(() -> Queues.countPendingPairs(q.getId())).thenReturn(24);
+            for (int pass = 0; pass < PASSES; pass++) {
+                JobManager.logQueueHasNoNodes(q, 0, t0 + pass * 20_000L);
+            }
+            queues.verify(() -> Queues.countPendingPairs(q.getId()), times(1));
+        }
+        assertEquals(1, logged(Level.WARN, NO_NODES));
     }
 
     @Test
@@ -254,8 +311,8 @@ public class QueueDispatchLogTest {
         Queue q = queue("container.q");
         long t0 = 5_000_000L;
         when(backend.isQueueDispatchable(q.getName())).thenReturn(false);
-        JobManager.logQueueHasNoNodes(q, 0, t0);
-        JobManager.logQueueHasNoNodes(q, 0, t0 + QueueConditions.REPEAT_MILLIS);
+        noNodes(q, 0, 0, t0);
+        noNodes(q, 0, 0, t0 + QueueConditions.REPEAT_MILLIS);
         assertEquals(2, logged(Level.WARN, "no nodes available"));
         assertEquals(1, logged(Level.WARN, "no nodes available (first seen 360 minutes ago)"));
     }
@@ -265,8 +322,8 @@ public class QueueDispatchLogTest {
         Queue q = queue("container.q");
         long t0 = 5_000_000L;
         when(backend.isQueueDispatchable(q.getName())).thenReturn(true);
-        JobManager.logQueueHasNoNodes(q, 0, t0);
-        JobManager.logQueueHasNoNodes(q, 0, t0 + QueueConditions.REPEAT_MILLIS);
+        noNodes(q, 0, 0, t0);
+        noNodes(q, 0, 0, t0 + QueueConditions.REPEAT_MILLIS);
         assertEquals(2, logged(Level.ERROR, "no nodes associated with it"));
         assertEquals(1, logged(Level.ERROR, "associated with it (first seen 360 minutes ago)"));
     }
