@@ -20,9 +20,7 @@ import org.postgresql.util.PSQLException;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
-import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.sql.*;
 import java.util.*;
@@ -129,32 +127,11 @@ public class Solvers {
 			Path root = new File(R.getSolverPath()).toPath().toAbsolutePath().normalize();
 			for (File dir : claimed) {
 				if (dir != null) {
-					deleteEmptyParents(root, dir.toPath().toAbsolutePath().normalize());
+					Util.deleteEmptyParents(root, dir.toPath().toAbsolutePath().normalize());
 				}
 			}
 		} catch (RuntimeException e) {
 			log.warn("Could not clean up after a solver that was not added", e);
-		}
-	}
-
-	/**
-	 * Deletes the parents of dir, nearest first, while they are empty and strictly inside root.
-	 * Only an empty directory can be deleted this way, so nothing else is ever removed.
-	 */
-	static void deleteEmptyParents(Path root, Path dir) {
-		for (Path parent = dir.getParent();
-		     parent != null && parent.startsWith(root) && !parent.equals(root);
-		     parent = parent.getParent()) {
-			try {
-				Files.delete(parent);
-			} catch (NoSuchFileException e) {
-				// Already gone; the one above may still be empty.
-			} catch (DirectoryNotEmptyException e) {
-				return;
-			} catch (IOException e) {
-				log.warn("Could not delete the empty directory " + parent, e);
-				return;
-			}
 		}
 	}
 
