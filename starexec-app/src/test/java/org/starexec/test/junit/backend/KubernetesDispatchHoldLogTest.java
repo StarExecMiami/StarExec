@@ -35,6 +35,7 @@ import org.junit.Test;
 import org.mockito.Mockito;
 import org.slf4j.LoggerFactory;
 import org.starexec.backend.KubernetesNativeBackend;
+import org.starexec.constants.R;
 
 /**
  * How often the Kubernetes backend logs why it holds dispatch for a queue.
@@ -52,6 +53,7 @@ import org.starexec.backend.KubernetesNativeBackend;
 public class KubernetesDispatchHoldLogTest {
 
     private static final String Q = "casc.q";
+    private static final String DEFAULT = R.DEFAULT_QUEUE_NAME;
     private static final int PASSES = 3;
     private static final long SIX_HOURS = TimeUnit.HOURS.toMillis(6);
     private static final String REPEATED =
@@ -132,6 +134,48 @@ public class KubernetesDispatchHoldLogTest {
         assertEquals(1, lines(Level.WARN, "Deferring dispatch for queue 'a.q'").size());
         assertEquals("one queue's hold does not silence another's", 1,
             lines(Level.WARN, "Deferring dispatch for queue 'b.q'").size());
+    }
+
+    /**
+     * A null or blank queue name means the default queue, as it does to submitScript, and a name
+     * is read without the spaces around it. Each of them is held as that one queue: one hold, logged
+     * once, under the default queue's name.
+     */
+    @Test
+    public void aQueueNamedByNullOrBlanksIsHeldAsTheDefaultQueue() throws Exception {
+        KubernetesNativeBackend backend = degraded(backend(set(DEFAULT), set(DEFAULT), "1", 32_000L));
+        for (String name : new String[]{null, "", "   ", DEFAULT, " " + DEFAULT + " "}) {
+            assertFalse("held: '" + name + "'", backend.isQueueDispatchable(name));
+        }
+
+        List<ILoggingEvent> held = lines(Level.WARN, "admission is degraded");
+        assertEquals("one hold for every name of the default queue: " + messages(), 1, held.size());
+        String line = held.get(0).getFormattedMessage();
+        assertTrue("under the default queue's name: " + line,
+            line.contains("Deferring dispatch for queue '" + DEFAULT + "'"));
+    }
+
+    /** ... and its end is logged once, under that name, whichever of them asks first. */
+    @Test
+    public void theDefaultQueuesHoldEndsOnceWhicheverNameAsks() throws Exception {
+        KubernetesNativeBackend backend = backend(set(DEFAULT), set(), "1", 32_000L);
+        for (String name : new String[]{null, "   ", DEFAULT}) {
+            assertFalse("held: '" + name + "'", backend.isQueueDispatchable(name));
+        }
+        assertEquals("one hold: " + messages(), 1, lines(Level.WARN, "none are schedulable right now").size());
+        advance(backend, TimeUnit.MINUTES.toMillis(5));
+        // The node is uncordoned.
+        view(backend, set(DEFAULT), set(DEFAULT), 32_000L);
+        assertTrue(backend.isQueueDispatchable(""));
+        assertEquals("ended by the first name that asks: " + messages(), 1, lines(Level.INFO, ENDED).size());
+        for (String name : new String[]{DEFAULT, null}) {
+            assertTrue("dispatches again: '" + name + "'", backend.isQueueDispatchable(name));
+        }
+
+        List<ILoggingEvent> ended = lines(Level.INFO, ENDED);
+        assertEquals("and only once: " + messages(), 1, ended.size());
+        String line = ended.get(0).getFormattedMessage();
+        assertTrue("under the default queue's name: " + line, line.contains(ENDED + " '" + DEFAULT + "'"));
     }
 
     @Test
