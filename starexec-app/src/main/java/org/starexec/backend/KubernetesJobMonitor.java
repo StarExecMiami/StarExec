@@ -325,6 +325,11 @@ public class KubernetesJobMonitor {
 
     /**
      * Polling loop until informer integration is enabled.
+     *
+     * <p>Every poll is followed by the interval, the polls that throw included. The client
+     * retries only a 429, a 5xx or an I/O failure, so a refusal such as RBAC's 403 or a revoked
+     * token's 401 fails at once and keeps failing until its cause is fixed. Without the wait
+     * the loop would poll again immediately, and each turn's ERROR is also an error_logs insert.
      */
     private void pollLoop() {
         log.info("Starting Kubernetes job monitor polling loop");
@@ -332,16 +337,18 @@ public class KubernetesJobMonitor {
         while (running.get()) {
             try {
                 pollJobsOnce();
+            } catch (Exception e) {
+                log.error("Error in polling loop", e);
+            }
+            try {
                 Thread.sleep(POLL_INTERVAL_MS);
             } catch (InterruptedException e) {
                 log.info("Polling loop interrupted");
                 Thread.currentThread().interrupt();
                 break;
-            } catch (Exception e) {
-                log.error("Error in polling loop", e);
             }
         }
-        
+
         log.info("Kubernetes job monitor polling loop exited");
     }
 
