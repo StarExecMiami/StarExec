@@ -863,6 +863,34 @@ public class KubernetesJobMonitorTests {
         assertFalse("dropped once it is given up", recorded.containsKey(execution()));
     }
 
+    /**
+     * A kill deletes a running Job, which then leaves the listing without the monitor seeing
+     * it finish. An execution the listing no longer holds is never polled again, so nothing is
+     * kept for it either.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void anExecutionWhoseJobIsGoneKeepsNoNodeRecord() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podOn(EXEC_ID, "Running", "node-a"));
+        when(callback.onJobPlaced(execution(), "node-a")).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
+        invokePollJobsOnce();
+
+        Field field = KubernetesJobMonitor.class.getDeclaredField("recordedNodes");
+        field.setAccessible(true);
+        Map<ExecutionRef, String> recorded = (Map<ExecutionRef, String>) field.get(monitor);
+        assertEquals("recorded while it runs", "node-a", recorded.get(execution()));
+
+        givenJobs();
+        givenPods();
+        invokePollJobsOnce();
+
+        verify(callback, never()).onJobComplete(any(ExecutionRef.class));
+        verify(callback, never()).onJobFailed(any(ExecutionRef.class), anyString());
+        assertFalse("dropped once its Job is gone", recorded.containsKey(execution()));
+    }
+
     @SuppressWarnings("unchecked")
     /** The identity of the Job every fixture in this class describes. */
     private static ExecutionRef execution() {

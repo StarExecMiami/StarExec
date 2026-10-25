@@ -403,6 +403,10 @@ public class KubernetesJobMonitor {
             cleanupPending.remove(execution);
         }
 
+        // An execution the listing no longer holds is never polled again. A kill deletes a
+        // running Job without the monitor seeing it finish, so its node is dropped here.
+        recordedNodes.keySet().retainAll(executionsInListing);
+
         drainCleanupPending(executionsInListing);
     }
 
