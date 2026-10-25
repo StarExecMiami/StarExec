@@ -120,17 +120,19 @@ public final class SolverBuildRecorder {
 			}
 		} else {
 			String builtPath = outcome == Outcome.BUILT ? build.getBuiltPath() : null;
-			if (Solvers.recordBuildOutcome(build.getSolverId(), build.getSolverPath(), builtPath)) {
-				log.info("recordFinishedBuilds", "recorded " + build + ": "
-						+ (outcome == Outcome.BUILT ? "built, at " + builtPath : "failed"));
-			} else {
+			if (!Solvers.recordBuildOutcome(build, builtPath)) {
+				// The solver or its build jobs changed after they were read. The job is not retired, so the next
+				// pass reads them again and decides from what it finds then.
 				log.info("recordFinishedBuilds", "solver " + build.getSolverId() + " changed while " + build
-						+ " was read, so it is not applied to it");
+						+ " was read; it is read again on the next pass");
+				return;
 			}
+			log.info("recordFinishedBuilds", "recorded " + build + ": "
+					+ (outcome == Outcome.BUILT ? "built, at " + builtPath : "failed"));
 		}
 
 		// Last, so that a pass that fails before this applies the job again. That is safe: the solver is only
-		// changed while it still waits for a build at the same path.
+		// changed while nothing its outcome was decided on has changed.
 		if (!Benchmarks.delete(build.getBenchmarkId())) {
 			log.warn("recordFinishedBuilds", "the helper benchmark " + build.getBenchmarkId() + " of " + build
 					+ " could not be deleted completely");

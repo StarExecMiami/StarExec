@@ -8,6 +8,9 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Solvers;
+import org.starexec.data.to.FinishedSolverBuild;
+import org.starexec.data.to.Solver;
+import org.starexec.data.to.SolverBuildStatus.SolverBuildStatusCode;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.jobs.SolverBuildRecorder;
 import org.starexec.test.util.DatabaseTestSupport;
@@ -24,6 +27,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -260,24 +264,114 @@ public class SolverBuildRecordSqlTest extends Common {
 
 	/** Read and applied in two steps: a solver that changed in between must keep what it changed to. */
 	@Test
-	public void theOutcomeIsOnlyAppliedWhileTheSolverWaitsAtTheSamePath() throws Exception {
+	public void theOutcomeIsOnlyAppliedWhileTheSolverIsAsItWasRead() throws Exception {
 		int alreadyBuilt = insertSolver(source, BUILT_BY_STAREXEC);
 		assertFalse("a solver built in between",
-				Solvers.recordBuildOutcome(alreadyBuilt, source.toString(), "/elsewhere"));
+				Solvers.recordBuildOutcome(asRead(alreadyBuilt, source, UNBUILT), "/elsewhere"));
 		assertEquals(BUILT_BY_STAREXEC, buildStatus(alreadyBuilt));
 		assertEquals(source.toString(), path(alreadyBuilt));
 
 		int moved = insertSolver(built, UNBUILT);
 		assertFalse("a solver whose path changed in between",
-				Solvers.recordBuildOutcome(moved, source.toString(), null));
+				Solvers.recordBuildOutcome(asRead(moved, source, UNBUILT), null));
 		assertEquals(UNBUILT, buildStatus(moved));
 		assertEquals(built.toString(), path(moved));
 
 		int rebuilt = insertSolver(source, BUILD_FAILED);
 		assertTrue("a failed solver being rebuilt waits for the rebuild",
-				Solvers.recordBuildOutcome(rebuilt, source.toString(), built.toString()));
+				Solvers.recordBuildOutcome(asRead(rebuilt, source, BUILD_FAILED), built.toString()));
 		assertEquals(BUILT_BY_STAREXEC, buildStatus(rebuilt));
 		assertEquals(built.toString(), path(rebuilt));
+	}
+
+	/** The three-hourly sweep can mark a build failed between the read and the update. The next pass decides. */
+	@Test
+	public void aStatusThatChangedAfterTheReadIsDecidedAgainOnTheNextPass() throws Exception {
+		Files.writeString(built.resolve("probe-solver"), "BUILT");
+		int solver = insertSolver(source, UNBUILT);
+		int bench = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, bench, StatusCode.STATUS_COMPLETE);
+		FinishedSolverBuild read = finishedBuildOf(solver);
+		setBuildStatus(solver, BUILD_FAILED);
+
+		assertFalse("the status read is not the solver's any more",
+				Solvers.recordBuildOutcome(read, read.getBuiltPath()));
+		assertEquals(BUILD_FAILED, buildStatus(solver));
+		assertEquals(source.toString(), path(solver));
+
+		SolverBuildRecorder.recordFinishedBuilds();
+
+		assertEquals("decided again, from the solver as it is now", BUILT_BY_STAREXEC, buildStatus(solver));
+		assertEquals(built.toString(), path(solver));
+		assertTrue(deleted(bench));
+	}
+
+	/**
+	 * A rebuild of a failed solver leaves the solver as it is and adds its build job afterwards. A pass that read
+	 * the older job before that must not apply it: the newer job decides.
+	 */
+	@Test
+	public void aBuildJobAddedAfterTheReadDecidesInsteadOfTheOlderOne() throws Exception {
+		Files.writeString(built.resolve("probe-solver"), "BUILT");
+		int solver = insertSolver(source, BUILD_FAILED);
+		int older = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, older, StatusCode.STATUS_COMPLETE);
+		FinishedSolverBuild read = finishedBuildOf(solver);
+		assertTrue("read as the newest", read.isNewestBuildOfSolver());
+		int newer = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, newer, StatusCode.STATUS_PENDING_SUBMIT);
+
+		assertFalse("a newer build job exists now", Solvers.recordBuildOutcome(read, read.getBuiltPath()));
+		assertEquals(BUILD_FAILED, buildStatus(solver));
+		assertEquals(source.toString(), path(solver));
+
+		SolverBuildRecorder.recordFinishedBuilds();
+
+		assertEquals("still waiting for the newer job", BUILD_FAILED, buildStatus(solver));
+		assertEquals(source.toString(), path(solver));
+		assertTrue("the older job is retired", deleted(older));
+		assertFalse("the newer one has not finished", deleted(newer));
+	}
+
+	/** Only the solver's own build jobs can be newer: a later build of another solver holds nothing up. */
+	@Test
+	public void aLaterBuildJobOfAnotherSolverDoesNotHoldUpThisOne() throws Exception {
+		Files.writeString(built.resolve("probe-solver"), "BUILT");
+		int solver = insertSolver(source, UNBUILT);
+		int bench = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, bench, StatusCode.STATUS_COMPLETE);
+		int other = insertSolver(source, UNBUILT);
+		int otherBench = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(other, otherBench, StatusCode.STATUS_PENDING_SUBMIT);
+
+		SolverBuildRecorder.recordFinishedBuilds();
+
+		assertEquals(BUILT_BY_STAREXEC, buildStatus(solver));
+		assertEquals(built.toString(), path(solver));
+		assertTrue(deleted(bench));
+		assertEquals("the other solver still waits for its own build", UNBUILT, buildStatus(other));
+		assertFalse(deleted(otherBench));
+	}
+
+	/**
+	 * A job can be created for a solver that is still being built: its pairs wait for the build. Such a job is
+	 * not a newer build, or the build it waits for would never be applied.
+	 */
+	@Test
+	public void aLaterOrdinaryJobOfTheSolverDoesNotHoldUpItsBuild() throws Exception {
+		Files.writeString(built.resolve("probe-solver"), "BUILT");
+		int solver = insertSolver(source, UNBUILT);
+		int bench = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, bench, StatusCode.STATUS_COMPLETE);
+		int problem = insertBenchmark("real-benchmark.p", benchmarkFile());
+		job(false, solver, problem, StatusCode.STATUS_PENDING_SUBMIT);
+
+		SolverBuildRecorder.recordFinishedBuilds();
+
+		assertEquals(BUILT_BY_STAREXEC, buildStatus(solver));
+		assertEquals(built.toString(), path(solver));
+		assertTrue(deleted(bench));
+		assertFalse("the ordinary job's benchmark is not a helper", deleted(problem));
 	}
 
 	// ---------------------------------------------------------------------------- fixture
@@ -340,6 +434,28 @@ public class SolverBuildRecordSqlTest extends Common {
 			ps.setInt(3, solver);
 			ps.executeUpdate();
 		}
+	}
+
+	/** The solver of a build job as getFinishedBuildsToRecord reads it, for the update to compare with. */
+	private static FinishedSolverBuild asRead(int solver, Path path, int buildStatus) {
+		return new FinishedSolverBuild(0, 0, StatusCode.STATUS_COMPLETE, 0, solver, path.toString(),
+				SolverBuildStatusCode.toStatusCode(buildStatus), true);
+	}
+
+	/** The one finished, unapplied build job of the solver, as a pass reads it. */
+	private static FinishedSolverBuild finishedBuildOf(int solver) throws SQLException {
+		List<FinishedSolverBuild> builds = Solvers.getFinishedBuildsToRecord().stream()
+				.filter(b -> b.getSolverId() == solver)
+				.collect(Collectors.toList());
+		assertEquals("finished build jobs of solver " + solver, 1, builds.size());
+		return builds.get(0);
+	}
+
+	/** What the three-hourly sweep does to the solver of a build pair it finds broken. */
+	private static void setBuildStatus(int solver, int buildStatus) {
+		Solver s = new Solver();
+		s.setId(solver);
+		Solvers.setSolverBuildStatus(s, buildStatus);
 	}
 
 	private int buildStatus(int solver) throws SQLException {
