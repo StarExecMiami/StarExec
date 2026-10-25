@@ -62,9 +62,10 @@ public class StuckJobReportTest {
         R.BACKEND = backend(false);
         String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));
         assertTrue(report, report.endsWith(
-            "the backend is not accepting work on queue 'container.q'; the log line 'Queue"
-                + " container.q cannot accept work at the moment' says since when, and the"
-                + " backend's own lines before it say why"));
+            "the backend is not accepting work on queue 'container.q'; the dispatcher's line"
+                + " for it ('Queue container.q cannot accept work at the moment', or 'Queue"
+                + " container.q has no nodes available' while it has no nodes) says since when, and"
+                + " the backend's own lines before it say why"));
     }
 
     /**

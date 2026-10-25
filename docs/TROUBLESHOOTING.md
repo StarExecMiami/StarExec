@@ -718,9 +718,10 @@ seconds and skips a queue in these cases:
   `ACTIVE`. Check with
   `SELECT q.name, q.status FROM jobs j JOIN queues q ON q.id = j.queue_id WHERE j.id = <JOB_ID>;`.
   Pause the job, use **Change Queue** on its page to pick an active queue, and resume it; or activate the queue.
-- **The queue has no nodes.** Log: `Queue <q> has <n> pair(s) waiting and no nodes ...`. As a WARN, the
-  backend agrees that no node serves the queue: attach one, or bring it back. As an ERROR (`... yet the backend
-  reports it can accept work`), StarExec's node table and the cluster disagree, usually because a node was
+- **The queue has no nodes.** Log: `Queue <q> has no nodes available (<n> pair(s) waiting to be submitted, <m>
+  enqueued)`. As a WARN, the backend agrees that no node serves the queue: attach one, or bring it back. As an
+  ERROR (`Queue <q> has no nodes associated with it (...), yet the backend reports it can accept work`),
+  StarExec's node table and the cluster disagree, usually because a node was
   never registered: nodes are registered by a periodic task that logs `Loading worker nodes into the db`, so
   look for a warning after that line. The line is written when the condition starts, again every 6 hours while
   it lasts (`(first seen <n> minutes ago)`), and `Queue <q> has nodes again` at INFO when it ends.
