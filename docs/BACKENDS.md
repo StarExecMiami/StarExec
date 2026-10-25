@@ -306,7 +306,8 @@ treat that directory as the protocol marker:
   `attributes.txt` is never read. A stage is recorded once it has finished (its
   `stage-status/<n>.json` is terminal, or it produced the pair's final status) and only if the
   pair has that stage. A finished stage with no file, because it ran no post-processor or its
-  post-processor failed, gets no attributes.
+  post-processor failed, gets no attributes; the monitors log that at DEBUG, since it is not a
+  fault (a failed post-processor is already the stage's status, `ERROR_POST_PROCESSOR`).
 - **Absent** (a job script from before this protocol): `attributes.txt` is recorded only for
   a single-stage pair, under its only stage. A multi-stage pair's `attributes.txt` is not
   recorded, because the stage that wrote it cannot be known.
