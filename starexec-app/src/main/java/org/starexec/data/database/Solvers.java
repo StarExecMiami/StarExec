@@ -2797,4 +2797,76 @@ public class Solvers {
 		}
 	}
 
+	/**
+	 * Every build job whose pair has a final result that has not been applied to its solver yet, oldest job
+	 * first, with the solver as it is now. A build job counts as applied once its pair's helper benchmark is
+	 * deleted, which is how the job script marked a build it had applied. It cannot apply one in container
+	 * mode, where it has no database connection.
+	 *
+	 * @return the build jobs to apply, possibly none
+	 * @throws SQLException if the query fails
+	 */
+	public static List<FinishedSolverBuild> getFinishedBuildsToRecord() throws SQLException {
+		// Driven from the build jobs: jobpair_stage_data has no index on solver_id. A build job's pair has a
+		// single stage, its primary one. "newest" counts applied jobs too: a newer build job always decides.
+		final String sql = "WITH builds AS ("
+				+ " SELECT j.id AS job_id, jp.id AS pair_id, jp.status_code, jp.bench_id, sd.solver_id"
+				+ " FROM starexec.jobs j"
+				+ " JOIN starexec.job_pairs jp ON jp.job_id = j.id"
+				+ " JOIN starexec.jobpair_stage_data sd"
+				+ " ON sd.jobpair_id = jp.id AND sd.stage_number = jp.primary_jobpair_data"
+				+ " WHERE j.buildjob)"
+				+ " SELECT b.job_id, b.pair_id, b.status_code, b.bench_id, b.solver_id, s.path, s.build_status,"
+				+ " b.job_id = (SELECT max(o.job_id) FROM builds o WHERE o.solver_id = b.solver_id) AS newest"
+				+ " FROM builds b"
+				+ " JOIN starexec.benchmarks bm ON bm.id = b.bench_id"
+				+ " JOIN starexec.solvers s ON s.id = b.solver_id"
+				+ " WHERE starexec.IsTerminalPairStatus(b.status_code) AND bm.deleted IS NOT TRUE AND bm.name = ?"
+				+ " ORDER BY b.job_id";
+		List<FinishedSolverBuild> builds = new ArrayList<>();
+		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+			ps.setString(1, R.SOLVER_BUILD_SCRIPT);
+			try (ResultSet rs = ps.executeQuery()) {
+				while (rs.next()) {
+					int buildStatus = rs.getInt("build_status");
+					SolverBuildStatus.SolverBuildStatusCode solverStatus = rs.wasNull()
+							? SolverBuildStatus.SolverBuildStatusCode.STATUS_UNKNOWN
+							: SolverBuildStatus.SolverBuildStatusCode.toStatusCode(buildStatus);
+					builds.add(new FinishedSolverBuild(rs.getInt("job_id"), rs.getInt("pair_id"),
+							Status.StatusCode.toStatusCode(rs.getInt("status_code")), rs.getInt("bench_id"),
+							rs.getInt("solver_id"), rs.getString("path"), solverStatus, rs.getBoolean("newest")));
+				}
+			}
+		}
+		return builds;
+	}
+
+	/**
+	 * Applies a build's outcome to its solver, if the solver still waits for a build at the same path. It
+	 * waits while it is unbuilt, and while it is failed: a rebuild leaves a failed solver failed until the
+	 * rebuild's outcome is applied.
+	 *
+	 * @param solverId the solver
+	 * @param sourcePath the solver's path when the build was read, which ends in "_src"
+	 * @param builtPath where the build copied the built solver, or null if the build failed
+	 * @return true if the solver was changed, false if it no longer waits for a build at that path
+	 * @throws SQLException if the update fails
+	 */
+	public static boolean recordBuildOutcome(int solverId, String sourcePath, String builtPath)
+			throws SQLException {
+		boolean built = builtPath != null;
+		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(
+				"UPDATE starexec.solvers SET build_status = ?, path = ? WHERE id = ? AND path = ?"
+						+ " AND build_status IN (?, ?)")) {
+			ps.setInt(1, built ? SolverBuildStatus.SolverBuildStatusCode.BUILT_BY_STAREXEC.getVal()
+					: SolverBuildStatus.SolverBuildStatusCode.BUILD_FAILED.getVal());
+			ps.setString(2, built ? builtPath : sourcePath);
+			ps.setInt(3, solverId);
+			ps.setString(4, sourcePath);
+			ps.setInt(5, SolverBuildStatus.SolverBuildStatusCode.UNBUILT.getVal());
+			ps.setInt(6, SolverBuildStatus.SolverBuildStatusCode.BUILD_FAILED.getVal());
+			return ps.executeUpdate() == 1;
+		}
+	}
+
 }

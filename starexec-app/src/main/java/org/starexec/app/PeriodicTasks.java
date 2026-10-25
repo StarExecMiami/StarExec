@@ -30,6 +30,7 @@ import org.starexec.data.to.tuples.PairIdJobId;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.jobs.JobManager;
 import org.starexec.jobs.ProcessingManager;
+import org.starexec.jobs.SolverBuildRecorder;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.Mail;
 import org.starexec.util.RobustRunnable;
@@ -64,6 +65,13 @@ class PeriodicTasks {
             POST_PROCESS_JOBS_TASK,
             0,
             () -> 45,
+            TimeUnit.SECONDS
+        ),
+        RECORD_SOLVER_BUILDS(
+            true,
+            RECORD_SOLVER_BUILDS_TASK,
+            0,
+            () -> 30,
             TimeUnit.SECONDS
         ),
         RERUN_FAILED_PAIRS(
@@ -569,6 +577,17 @@ class PeriodicTasks {
                 }
             }
         };
+
+    // Apply the outcome of finished solver builds, which the job script cannot record in container mode
+    private static final String recordSolverBuildsTaskName = "recordSolverBuildsTask";
+    private static final Runnable RECORD_SOLVER_BUILDS_TASK = new RobustRunnable(
+        recordSolverBuildsTaskName
+    ) {
+        @Override
+        protected void dorun() {
+            SolverBuildRecorder.recordFinishedBuilds();
+        }
+    };
 
     private static final String updateUserDiskSizesTaskName =
         "updateUserDiskSizesTask";
