@@ -146,7 +146,9 @@ spec:
       resources:
         limits:
           cpu: 1000m
-          memory: 1Gi
+          # The image lets the JVM heap grow to 2 GiB (-Xmx2048m in its JAVA_OPTS), and the JVM also uses memory
+          # outside the heap; the limit must hold both, or the heap goes to swap or the kernel kills Tomcat.
+          memory: 3Gi
         requests:
           cpu: 500m
           memory: 512Mi
