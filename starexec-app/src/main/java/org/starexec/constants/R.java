@@ -476,6 +476,10 @@ public class R {
 
     public static final int TIME_BETWEEN_SENDING_ERROR_LOGS = 1; // in days
 
+    // How long (in days) the error log report keeps a line that no one has received. Mail servers give
+    // up on an undeliverable message after 4 to 5 days (RFC 5321, section 4.5.4.1).
+    public static final int DAYS_TO_KEEP_UNSENT_ERROR_LOGS = 5;
+
     public static final int NO_TYPE_PROC_ID = 1;
 
     public static final String STATUS_MESSAGE_COOKIE = "STATUS_MESSAGE_STRING";

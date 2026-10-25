@@ -242,9 +242,11 @@ class PeriodicTasks {
                                 user.getId()
                             )
                         ) {
+                            // The id, not the address: email addresses stay out of the logs (#329).
                             log.error(
-                                "Found user who wasn't developer/admin while emailing error logs: " +
-                                    user.getEmail()
+                                "Not emailing the error log report to user " +
+                                    user.getId() +
+                                    ", who is subscribed to it but is not an admin or developer"
                             );
                         }
                     }
@@ -258,13 +260,49 @@ class PeriodicTasks {
 
                     // Gather the error logs and send them.
                     List<ErrorLog> allLogs = ErrorLogs.getAll();
-                    Mail.sendErrorLogEmails(
+                    int accepted = Mail.sendErrorLogEmails(
                         allLogs,
                         usersSubscribedToErrorLogs
                     );
 
-                    // Delete all the error logs, in the future we may keep some until they get too old.
-                    ErrorLogs.deleteAll();
+                    if (accepted == 0 && !usersSubscribedToErrorLogs.isEmpty()) {
+                        // No one has seen these lines, so they wait for the next report. Not for
+                        // ever: like an undeliverable mail, a line is given up after a few days, so
+                        // that a mail outage cannot grow the table and the report without bound.
+                        Calendar giveUp = Calendar.getInstance();
+                        giveUp.add(
+                            Calendar.DAY_OF_YEAR,
+                            -R.DAYS_TO_KEEP_UNSENT_ERROR_LOGS
+                        );
+                        Timestamp giveUpBefore = new Timestamp(
+                            giveUp.getTime().getTime()
+                        );
+                        List<ErrorLog> givenUp = allLogs
+                            .stream()
+                            .filter(l -> l.getTime().before(giveUpBefore))
+                            .collect(Collectors.toList());
+                        ErrorLogs.delete(givenUp);
+                        String kept =
+                            "The error log report reached no one; " +
+                            (allLogs.size() - givenUp.size()) +
+                            " of its " +
+                            allLogs.size() +
+                            " line(s) are kept for the next report";
+                        log.warn(
+                            givenUp.isEmpty()
+                                ? kept
+                                : kept +
+                                    ", and " +
+                                    givenUp.size() +
+                                    " line(s) older than " +
+                                    R.DAYS_TO_KEEP_UNSENT_ERROR_LOGS +
+                                    " days are deleted unsent"
+                        );
+                    } else {
+                        // Only the lines the report contained. A line logged since, such as a
+                        // failure to send the report, waits for the next one.
+                        ErrorLogs.delete(allLogs);
+                    }
                 } else {
                     log.info(
                         "No error logs from " +

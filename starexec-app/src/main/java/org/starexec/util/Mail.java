@@ -445,7 +445,15 @@ public class Mail {
 	}
 
 
-	public static void sendErrorLogEmails(List<ErrorLog> errorLogs, List<User> usersToEmail) {
+	/**
+	 * Emails the error log report to each of the given users.
+	 *
+	 * @param errorLogs the error logs the report lists
+	 * @param usersToEmail the users to email it to
+	 * @return how many of the users' addresses the SMTP server accepted the report for (see
+	 *     {@link #mail(String, String, Collection)})
+	 */
+	public static int sendErrorLogEmails(List<ErrorLog> errorLogs, List<User> usersToEmail) {
 		StringBuilder message = new StringBuilder();
 
 		message.append(getYesterdayRunscriptErrors());
@@ -466,6 +474,7 @@ public class Mail {
 		if (sent < emails.size()) {
 			log.warn("The error log report was emailed to " + sent + " of " + emails.size() + " recipient(s)");
 		}
+		return sent;
 	}
 
 	private static String getYesterdayRunscriptErrors() {
