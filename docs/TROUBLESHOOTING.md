@@ -663,7 +663,7 @@ reaches that environment only when the deployment passes it on:
 | How StarExec was started | Where its settings live |
 |---|---|
 | `make start` with Helm installed | The values file: `charts/starexec/values-local-dev.yaml` for the default `ENV=dev`, `charts/starexec/values-<ENV>.yaml` for another `ENV`, or the file named by `VALS=`. `make start` also passes Helm the fixed `--set` options listed under `deploy-podman-helm` in the `Makefile`, such as the image, the port and the socket; no `STAREXEC_*` variable from your shell is among them. This path always runs the Podman backend. |
-| `make start` without Helm | `render.yaml.template`. Only the variables that `scripts/generate-render-yaml.sh` substitutes come from your shell: the database settings, the port, the backend type, the volume names and the image. |
+| `make start` without Helm | `render.yaml.template`. Only the variables that `scripts/generate-render-yaml.sh` substitutes come from your shell: the database settings, the port, the backend type, the volume names, the image and, with the Podman backend, the container engine's socket (`PODMAN_SOCKET_PATH`), the job image (`STAREXEC_CONTAINER_JOB_IMAGE`) and the data volume's path on the host (`STAREXEC_CONTAINER_HOST_DATA_PATH`, read from the volume when unset). |
 | `docker compose up` | The `environment:` of the `starexec` service in `docker-compose.yml` (Local backend). Docker Compose also merges a `docker-compose.override.yml` next to it, which keeps your changes out of the tracked file. |
 | Kubernetes | The values file the release is deployed from, applied by upgrading the release. On Quokka that file is in git and Jenkins deploys it. |
 
