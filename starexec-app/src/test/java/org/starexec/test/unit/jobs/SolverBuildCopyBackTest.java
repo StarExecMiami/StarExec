@@ -195,6 +195,59 @@ public class SolverBuildCopyBackTest {
 		assertFalse(Files.exists(h.bench));
 	}
 
+	/**
+	 * Saving the build log is best effort: a log that cannot be saved is reported, and the build goes on. The
+	 * helpers run under {@code set -e}, and copySolverBack saves the log before it copies the solver, so a failure
+	 * let through would end a build whose solver was built as ERROR_RUNSCRIPT, with nothing copied back. A file
+	 * where the solver's build log directory goes makes {@code mkdir -p} fail, for root too.
+	 */
+	@Test
+	public void aBuildLogDirectoryThatCannotBeCreatedStillLetsTheSolverBeCopiedBack() throws Exception {
+		Harness h = new Harness(folder, false);
+		Files.writeString(h.buildLog.getParent(), "NOT A DIRECTORY");
+
+		Result r = h.run("copySolverBack");
+
+		r.assertFinished();
+		assertBuildLogNotSaved(h, r);
+		assertEquals("BUILT", Files.readString(h.built.resolve("bin/probe-solver")));
+		assertTrue(r.out, r.out.contains("T-LOG|solver copied back to " + h.built + "\n"));
+		assertFalse("the dummy benchmark's file is deleted", Files.exists(h.bench));
+	}
+
+	/** The copy fails instead: the log's path is a directory that holds a directory named as the copy would be. */
+	@Test
+	public void aBuildLogThatCannotBeCopiedStillLetsTheSolverBeCopiedBack() throws Exception {
+		Harness h = new Harness(folder, false);
+		Files.createDirectories(h.buildLog.resolve(h.output.getFileName()));
+
+		Result r = h.run("copySolverBack");
+
+		r.assertFinished();
+		assertBuildLogNotSaved(h, r);
+		assertEquals("BUILT", Files.readString(h.built.resolve("bin/probe-solver")));
+		assertTrue(r.out, r.out.contains("T-LOG|solver copied back to " + h.built + "\n"));
+		assertFalse("the dummy benchmark's file is deleted", Files.exists(h.bench));
+	}
+
+	/** A failed build's cleanup saves its log the same way, and still deletes the build's helper benchmark. */
+	@Test
+	public void aFailedBuildWhoseLogCannotBeSavedStillCleansUp() throws Exception {
+		Harness h = new Harness(folder, false);
+		Files.writeString(h.buildLog.getParent(), "NOT A DIRECTORY");
+
+		Result r = h.run("cleanUpAfterKilledBuildJob");
+
+		r.assertFinished();
+		assertBuildLogNotSaved(h, r);
+		assertFalse("the dummy benchmark's file is deleted", Files.exists(h.bench));
+	}
+
+	private static void assertBuildLogNotSaved(Harness h, Result r) {
+		assertTrue("a build log that cannot be saved must be reported:\n" + r.out,
+				r.out.contains("T-LOG|the build log could not be saved in " + h.buildLog.getParent() + "\n"));
+	}
+
 	private static final class Harness {
 		final Path root;
 		final Path shared;
