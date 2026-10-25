@@ -44,7 +44,9 @@ import java.util.TreeMap;
  *       It is recorded under the stage it names, never under the terminal stage.</li>
  * </ul>
  *
- * <p>Like {@link StageStatusSnapshots} this holds no database connection and writes nothing.
+ * <p>Like {@link StageStatusSnapshots} this holds no database connection of its own and writes
+ * no files. StarLogger stores its WARN lines as {@code error_logs} rows, so it warns only about a
+ * loss, such as a finished stage without its measurements.
  */
 public final class StageStatsFiles {
 
@@ -124,6 +126,7 @@ public final class StageStatsFiles {
                 outputDir.resolve(DIRECTORY),
                 ".json",
                 "measurements",
+                StageResultFiles.Absence.LOSS,
                 pairId,
                 finishedEarlier,
                 terminalStage,

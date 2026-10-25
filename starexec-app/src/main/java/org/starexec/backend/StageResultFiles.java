@@ -45,6 +45,18 @@ final class StageResultFiles {
         T parse(String content, int stage) throws IOException;
     }
 
+    /**
+     * What a finished stage without its file means, which decides the level it is logged at.
+     * StarLogger stores every WARN as an {@code error_logs} row, and this is said once per finished
+     * stage, so only a lost result may be a WARN.
+     */
+    enum Absence {
+        /** The stage may have none: attributes come only from a post-processor that succeeded. DEBUG. */
+        NORMAL,
+        /** Every stage that ran writes one, so the stage's result is lost. WARN. */
+        LOSS
+    }
+
     private StageResultFiles() {
     }
 
@@ -54,6 +66,7 @@ final class StageResultFiles {
      * @param dir            the per-stage directory, known to be declared
      * @param suffix         the file name after the stage number, such as {@code ".txt"}
      * @param what           what the files carry, for log messages, such as "attributes"
+     * @param absence        what a finished stage without its file means
      * @param finishedEarlier stages before the terminal one whose snapshots are terminal
      * @param terminalStage  the stage that produced the terminal result, or below 1 while the
      *                       pair is still running
@@ -63,6 +76,7 @@ final class StageResultFiles {
         Path dir,
         String suffix,
         String what,
+        Absence absence,
         int pairId,
         Set<Integer> finishedEarlier,
         int terminalStage,
@@ -95,10 +109,13 @@ final class StageResultFiles {
                 // Only said once the pair is complete: a Local monitor sees this state on every
                 // poll between a stage finishing and the pair finishing.
                 if (atCompletion) {
-                    log.warn(
-                        "Pair " + pairId + " stage " + stage + " finished without a per-stage"
-                            + " " + what + " file; recording no " + what + " for it"
-                    );
+                    String missing = "Pair " + pairId + " stage " + stage + " finished without a"
+                        + " per-stage " + what + " file; recording no " + what + " for it";
+                    if (absence == Absence.NORMAL) {
+                        log.debug(missing);
+                    } else {
+                        log.warn(missing);
+                    }
                 }
                 continue;
             }
