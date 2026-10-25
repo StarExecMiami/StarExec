@@ -1473,11 +1473,11 @@ function updateStats {
 		# format (RunSolverSource/Watcher.hh:453-463), which is exponent form below 1e-4 s
 		# and from 1e6 s: WCTIME=9.90467e-05. Read as digits and dots only, such a time
 		# was empty, stats.json was not valid JSON, and the stage lost all its
-		# measurements. A time is read only as digits with an optional fraction and an
-		# optional exponent. That covers every time runsolver prints, and JSON and SQL
-		# accept each one (JSON would refuse an integer part such as 007, but runsolver
-		# never prints one); anything else is still read as empty. MAXVM is an integer
-		# (KiB).
+		# measurements. A time is now read only as digits with an optional fraction and
+		# an optional exponent, the form in which that format prints a non-negative
+		# number; JSON and SQL both accept it (JSON would refuse an integer part such as
+		# 007, which the format never prints). Anything else is read as empty. MAXVM is
+		# an integer (KiB).
 		local RUNSOLVER_TIME='[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?'
 		WALLCLOCK_TIME=$(sed -n -E "s/^WCTIME=($RUNSOLVER_TIME)\$/\1/p" $1)
 		CPU_TIME=$(sed -n -E "s/^CPUTIME=($RUNSOLVER_TIME)\$/\1/p" $1)
