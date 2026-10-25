@@ -693,6 +693,12 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	# This appears to be the idiomatic Bash way to test if a value is false.
 	if [ "$ERROR_DETECTED" = false ]; then
+		# A build job's solver goes back before any status says the pair is complete: the server
+		# records the build from that status, and a monitor can end the pair once it reads it.
+		# A copy that fails ends the script here, and the pair with it, as ERROR_RUNSCRIPT.
+		if [ $BUILD_JOB == "true" ]; then
+			copySolverBack
+		fi
 		log "execution on $HOSTNAME complete"
 		sendStageStatus "$STATUS_COMPLETE" "${STAGE_NUMBERS[STAGE_INDEX]}"
 
@@ -714,10 +720,6 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		# executing them wastes compute and produces uninterpretable results.
 		# LocalJobMonitor will mark unseen stages as STATUS_NOT_REACHED.
 		break
-	fi
-
-	if [ $BUILD_JOB == "true" ]; then
-		copySolverBack
 	fi
 
 	# The last stage's completion is the pair's result, and a build job's solver is back: only

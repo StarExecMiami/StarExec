@@ -1878,6 +1878,13 @@ function sandboxWorkspace {
 
 #will see if a solver is cached and change the SOLVER_PATH to the cache if so
 function checkCache {
+	# Never for a build job. It builds the solver from its source, at the solver's path, which
+	# ends in "_src"; copySolverBack copies the build next to that path. A cached copy is what a
+	# run pair of the same solver copied: the built solver, or the source of a solver whose build
+	# failed. Build jobs never store one: copyDependencies skips them.
+	if [ "$BUILD_JOB" == "true" ]; then
+		return 0
+	fi
 	if [ -d "$SOLVER_CACHE_PATH" ]; then
 		if [ -d "$SOLVER_CACHE_PATH/finished.lock" ]; then
 			log "solver exists in cache at $SOLVER_CACHE_PATH"
@@ -1887,54 +1894,57 @@ function checkCache {
 	fi
 }
 
-#this is run after a solver is built on starexec
+# Saves a build job's output as its solver's build log, where the solver's page reads it, in
+# place of the last build's log. Best effort: a build killed before its output was saved has
+# no log to save, and the build's outcome does not depend on its log.
+function saveBuildLog {
+	local output="$PAIR_OUTPUT_DIRECTORY/$PAIR_ID.txt"
+	local dir="$SHARED_DIR/Solvers/buildoutput/$SOLVER_ID"
+	if [ ! -f "$output" ]; then
+		log "no build output at $output, so there is no build log to save"
+		return 0
+	fi
+	log "saving the build output $output as the build log in $dir"
+	if ! { mkdir -p "$dir" && cp "$output" "$dir/starexec_build_log"; }; then
+		log "the build log could not be saved in $dir"
+	fi
+	return 0
+}
+
+# Run once a build job's starexec_build has finished without error, before anything reports
+# the pair complete: the server records the build from that status, and looks for the built
+# solver at the solver's path without "_src". Nothing here touches the database.
 function copySolverBack {
-	NEW_SOLVER_PATH="${SOLVER_PATH/%????/}"
+	if [[ "$SOLVER_PATH" != *_src ]]; then
+		log "the solver path $SOLVER_PATH does not end in _src, so there is no built path to copy the solver to"
+		return 1
+	fi
+	NEW_SOLVER_PATH="${SOLVER_PATH%_src}"
 
 	log "OLD solver path: $SOLVER_PATH"
 	log "NEW solver path: $NEW_SOLVER_PATH"
 
-	if [ -e $LOCAL_RUNSOLVER_PATH ]; then
-		rm $LOCAL_RUNSOLVER_PATH
+	saveBuildLog
+
+	# The build script is not part of the built solver.
+	if [ -e "$LOCAL_CONFIG_PATH" ]; then
+		rm "$LOCAL_CONFIG_PATH"
 	fi
 
-	if [ -e $LOCAL_CONFIG_PATH ]; then
-		rm $LOCAL_CONFIG_PATH
-	fi
-
-	mkdir $SHARED_DIR/Solvers/buildoutput/$SOLVER_ID
-	log "the output to be copied back $PAIR_OUTPUT_DIRECTORY/$PAIR_ID.txt"
-	log "the directory copying to: $SHARED_DIR/Solvers/buildoutput/$SOLVER_ID"
-	cp "$PAIR_OUTPUT_DIRECTORY/$PAIR_ID.txt" $SHARED_DIR/Solvers/buildoutput/$SOLVER_ID/starexec_build_log
-
+	mkdir -p "$NEW_SOLVER_PATH"
 	safeCpAll "copying solver back" "$LOCAL_SOLVER_DIR" "$NEW_SOLVER_PATH"
-	log "solver copied back to head node"
+	log "solver copied back to $NEW_SOLVER_PATH"
 
-	log "updating build status to built and changing path for solver to $NEW_SOLVER_PATH"
-	log "set build status to built on starexec for $SOLVER_ID"
-	log "deleting build configuration from db for solver: $SOLVER_ID"
-	log "removing benchmark bench name: $BENCH_NAME id: $BENCH_ID from the db"
-	dbExec "
-		CALL SetSolverPath($((SOLVER_ID)), '$(dbEscape $NEW_SOLVER_PATH)');
-		CALL SetSolverBuildStatus($((SOLVER_ID)), 2);
-		CALL DeleteBuildConfig($((SOLVER_ID)));
-		CALL RemoveBenchmarkFromDatabase($((BENCH_ID)));
-	"
-
-	rm $BENCH_PATH
+	# The server deletes the build's helper benchmark when it records the build.
+	rm -f "$BENCH_PATH" || log "could not delete the build's helper benchmark $BENCH_PATH"
 }
 
-# For build jobs this cleans up files used in the build script.
+# For build jobs this cleans up files used in the build script. The server records the failed
+# build from the pair's status.
 function cleanUpAfterKilledBuildJob {
 	if [ $BUILD_JOB == "true" ]; then
 		log "Build job has been failed, cleaning up:"
-		log "deleting build configuration from db for solver: $SOLVER_ID"
-		log "removing benchmark bench name: $BENCH_NAME id: $BENCH_ID from the db"
-		dbExec "
-			CALL SetSolverBuildStatus($((SOLVER_ID)), 3);
-			CALL DeleteBuildConfig($((SOLVER_ID)));
-			CALL RemoveBenchmarkFromDatabase($((BENCH_ID)));
-		"
+		saveBuildLog
 
 		BENCH_PATH_DIR=$(dirname "$BENCH_PATH")
 		log "Deleting benchmark directory: $BENCH_PATH_DIR"

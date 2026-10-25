@@ -1641,8 +1641,9 @@ public abstract class JobManager {
 		stage.setNoOp(false);
 		stage.setSolver(s);
 		stage.setConfiguration(c);
-		int bench = UploadBenchmark
-				.addBenchmarkFromText("dummy benchmark", "starexec_build", s.getUserId(), R.NO_TYPE_PROC_ID, true);
+		// SolverBuildRecorder finds the build job's helper benchmark by this name.
+		int bench = UploadBenchmark.addBenchmarkFromText("dummy benchmark", R.SOLVER_BUILD_SCRIPT, s.getUserId(),
+				R.NO_TYPE_PROC_ID, true);
 		pair.addStage(stage);
 		pair.setBench(Benchmarks.get(bench)); // This hard coded value should be changed before feature is used.
 		pair.setSpace(Spaces.get(spaceId));
