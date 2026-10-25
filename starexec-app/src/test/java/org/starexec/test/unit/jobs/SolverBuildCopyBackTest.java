@@ -133,6 +133,41 @@ public class SolverBuildCopyBackTest {
 		assertTrue("nothing is deleted", Files.exists(h.bench));
 	}
 
+	/**
+	 * A run pair of the solver leaves a copy of it in the solver cache, under the key a build job of the same
+	 * solver looks up too: the solver's id and its configurations' newest timestamp, which no build changes.
+	 * A build job builds from the source at the solver's path. A cached copy is the built solver, or the
+	 * source as a run pair copied it while the build had failed, and its path leaves copySolverBack nowhere
+	 * to copy the build to.
+	 */
+	@Test
+	public void aBuildJobBuildsFromItsSourceWhenTheSolverIsCached() throws Exception {
+		Harness h = new Harness(folder, false);
+		h.cacheSolver();
+
+		Result r = h.run("checkCache; printf 'T-PATH|%s|%s\\n' \"$SOLVER_PATH\" \"$SOLVER_CACHED\"; copySolverBack");
+
+		r.assertFinished();
+		assertTrue("the build must read its solver from the source:\n" + r.out,
+				r.out.contains("T-PATH|" + h.solverSrc + "|0\n"));
+		assertEquals("BUILT", Files.readString(h.built.resolve("bin/probe-solver")));
+		assertEquals("the cached copy is left as it was", "CACHED RUN",
+				Files.readString(h.cache.resolve("bin/starexec_run_default")));
+	}
+
+	/** A run pair still copies its solver from the cache. */
+	@Test
+	public void aRunPairStillCopiesItsSolverFromTheCache() throws Exception {
+		Harness h = new Harness(folder, false);
+		h.cacheSolver();
+		h.buildJob = false;
+
+		Result r = h.run("checkCache; printf 'T-PATH|%s|%s\\n' \"$SOLVER_PATH\" \"$SOLVER_CACHED\"");
+
+		r.assertFinished();
+		assertTrue("a run pair must use the cached copy:\n" + r.out, r.out.contains("T-PATH|" + h.cache + "|1\n"));
+	}
+
 	@Test
 	public void aFailedBuildSavesItsBuildLogAndMakesNoDatabaseCall() throws Exception {
 		Harness h = new Harness(folder, false);
@@ -170,7 +205,9 @@ public class SolverBuildCopyBackTest {
 		final Path runsolver;
 		final Path output;
 		final Path bench;
+		final Path cache;
 		Path solverPath;
+		boolean buildJob = true;
 
 		/** Laid out as an upload and a finished starexec_build leave it, for solver 7 and pair 42. */
 		Harness(TemporaryFolder folder, boolean spaces) throws Exception {
@@ -205,6 +242,16 @@ public class SolverBuildCopyBackTest {
 
 			bench = Files.createDirectory(root.resolve("build" + s + "input")).resolve("starexec_build");
 			Files.writeString(bench, "dummy benchmark");
+
+			// Where the jobscript looks for the solver's cached copy; absent unless cacheSolver() runs.
+			cache = root.resolve("solver" + s + "cache/7");
+		}
+
+		/** A run pair's copy of the solver in the cache, as copyDependencies leaves it. */
+		void cacheSolver() throws Exception {
+			Files.createDirectories(cache.resolve("bin"));
+			Files.writeString(cache.resolve("bin/starexec_run_default"), "CACHED RUN");
+			Files.createDirectory(cache.resolve("finished.lock"));
 		}
 
 		Result run(String operation) throws Exception {
@@ -220,7 +267,7 @@ public class SolverBuildCopyBackTest {
 			env.put("BENCH_PATH", encode(bench));
 			env.put("PAIR_OUTPUT_DIRECTORY", encode(output.getParent()));
 			env.put("CONTAINER_MODE", "true");
-			env.put("BUILD_JOB", "true");
+			env.put("BUILD_JOB", buildJob ? "true" : "false");
 			env.put("PAIR_ID", "42");
 			env.put("SOLVER_ID", "7");
 			env.put("BENCH_ID", "12");
@@ -230,6 +277,8 @@ public class SolverBuildCopyBackTest {
 			env.put("LOCAL_SOLVER_DIR", sandbox.toString());
 			env.put("LOCAL_CONFIG_PATH", sandbox.resolve("starexec_build").toString());
 			env.put("LOCAL_RUNSOLVER_PATH", runsolver.toString());
+			env.put("SOLVER_CACHE_PATH", cache.toString());
+			env.put("SOLVER_CACHED", "0");
 			Path log = root.resolve("run-" + System.nanoTime() + ".log");
 			builder.directory(root.toFile()).redirectErrorStream(true).redirectOutput(log.toFile());
 			Process process = builder.start();

@@ -1868,6 +1868,13 @@ function sandboxWorkspace {
 
 #will see if a solver is cached and change the SOLVER_PATH to the cache if so
 function checkCache {
+	# Never for a build job. It builds the solver from its source, at the solver's path, which
+	# ends in "_src"; copySolverBack copies the build next to that path. A cached copy is what a
+	# run pair of the same solver copied: the built solver, or the source of a solver whose build
+	# failed. Build jobs never store one: copyDependencies skips them.
+	if [ "$BUILD_JOB" == "true" ]; then
+		return 0
+	fi
 	if [ -d "$SOLVER_CACHE_PATH" ]; then
 		if [ -d "$SOLVER_CACHE_PATH/finished.lock" ]; then
 			log "solver exists in cache at $SOLVER_CACHE_PATH"
