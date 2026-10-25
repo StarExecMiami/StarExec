@@ -1469,10 +1469,20 @@ function updateStats {
 		VOL_CONTEXT_SWITCHES=0
 		INVOL_CONTEXT_SWITCHES=0
 	else
-		WALLCLOCK_TIME=$(sed -n 's/^WCTIME=\([0-9\.]*\)$/\1/p' $1)
-		CPU_TIME=$(sed -n 's/^CPUTIME=\([0-9\.]*\)$/\1/p' $1)
-		CPU_USER_TIME=$(sed -n 's/^USERTIME=\([0-9\.]*\)$/\1/p' $1)
-		SYSTEM_TIME=$(sed -n 's/^SYSTEMTIME=\([0-9\.]*\)$/\1/p' $1)
+		# runsolver keeps its times as floats and prints them in the stream's default
+		# format (RunSolverSource/Watcher.hh:453-463), which is exponent form below 1e-4 s
+		# and from 1e6 s: WCTIME=9.90467e-05. Read as digits and dots only, such a time
+		# was empty, stats.json was not valid JSON, and the stage lost all its
+		# measurements. A time is now read only as digits with an optional fraction and
+		# an optional exponent, the form in which that format prints a non-negative
+		# number; JSON and SQL both accept it (JSON would refuse an integer part such as
+		# 007, which the format never prints). Anything else is read as empty. MAXVM is
+		# an integer (KiB).
+		local RUNSOLVER_TIME='[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?'
+		WALLCLOCK_TIME=$(sed -n -E "s/^WCTIME=($RUNSOLVER_TIME)\$/\1/p" $1)
+		CPU_TIME=$(sed -n -E "s/^CPUTIME=($RUNSOLVER_TIME)\$/\1/p" $1)
+		CPU_USER_TIME=$(sed -n -E "s/^USERTIME=($RUNSOLVER_TIME)\$/\1/p" $1)
+		SYSTEM_TIME=$(sed -n -E "s/^SYSTEMTIME=($RUNSOLVER_TIME)\$/\1/p" $1)
 		MAX_VIRTUAL_MEMORY=$(sed -n 's/^MAXVM=\([0-9\.]*\)$/\1/p' $1)
 
 		log "the max virtual memory was $MAX_VIRTUAL_MEMORY"

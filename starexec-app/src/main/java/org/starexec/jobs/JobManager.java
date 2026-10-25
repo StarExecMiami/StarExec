@@ -430,10 +430,11 @@ public abstract class JobManager {
 		if (minutes < 0) {
 			return;
 		}
+		String waiting = pairsWaiting(q.getId(), queueSize);
 		if (backendThinksItCanRun) {
 			log.error("logQueueHasNoNodes",
-					"Queue " + qname + " has " + queueSize + " pair(s) waiting and no nodes" +
-					" associated with it" + lasting(minutes) + ", yet the backend reports it can accept" +
+					"Queue " + qname + " has no nodes associated with it" + lasting(minutes) + " (" +
+					waiting + "), yet the backend reports it can accept" +
 					" work. StarExec's node table and the cluster disagree: most likely a node exists" +
 					" in the cluster but was never registered here, so associating it fails every" +
 					" cycle. Pairs finishing on such a node also lose their recorded" +
@@ -441,11 +442,24 @@ public abstract class JobManager {
 					REPEATED);
 		} else {
 			log.warn("logQueueHasNoNodes",
-					"Queue " + qname + " has " + queueSize + " pair(s) waiting and no nodes" +
-					" available" + lasting(minutes) + "; the backend confirms it cannot accept work. No" +
+					"Queue " + qname + " has no nodes available" + lasting(minutes) + " (" + waiting +
+					"); the backend confirms it cannot accept work. No" +
 					" pairs will be dispatched to this queue until a node is attached or comes back." +
 					REPEATED);
 		}
+	}
+
+	/**
+	 * What waits for a queue that has no nodes, for its line:
+	 * {@code "<n> pair(s) waiting to be submitted, <m> enqueued"}. {@code enqueued} is the count
+	 * checkPendingJobs reads for its full-queue check, which only counts pairs already enqueued;
+	 * a queue with no nodes never enqueues one, so the pairs that wait for it are the pending
+	 * ones, counted here, only when a line is due.
+	 */
+	private static String pairsWaiting(int queueId, int enqueued) {
+		int pending = Queues.countPendingPairs(queueId);
+		return (pending < 0 ? "an unknown number of pairs" : pending + " pair(s)") +
+				" waiting to be submitted, " + enqueued + " enqueued";
 	}
 
 	/**

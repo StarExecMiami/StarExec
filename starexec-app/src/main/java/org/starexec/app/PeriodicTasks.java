@@ -902,9 +902,10 @@ class PeriodicTasks {
             cause = "pairs are in flight but none has started or finished; check the backend" +
                 " and its job monitor";
         } else if (job.pending > 0 && backendRefusesWork(job.queueName)) {
-            cause = "the backend is not accepting work on queue '" + job.queueName + "'; the log" +
-                " line 'Queue " + job.queueName + " cannot accept work at the moment' says since" +
-                " when, and the backend's own lines before it say why";
+            cause = "the backend is not accepting work on queue '" + job.queueName + "'; the" +
+                " dispatcher's line for it ('Queue " + job.queueName + " cannot accept work at the" +
+                " moment', or 'Queue " + job.queueName + " has no nodes available' while it has no" +
+                " nodes) says since when, and the backend's own lines before it say why";
         } else if (job.pending > 0) {
             cause = "nothing is being dispatched from queue '" + job.queueName + "'; check that" +
                 " the queue has nodes the backend can use";

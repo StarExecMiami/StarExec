@@ -235,13 +235,35 @@ public class LocalJobMonitorTests {
         assertEquals(98.0, statDouble(stats, "cpuTime"), 0.0001);
     }
 
+    /**
+     * A time in exponent form is read whole. runsolver prints a time below 1e-4 s or from 1e6 s
+     * that way, and the job script writes it to stats.json as it is. There is no var.out here,
+     * so each value can only come from stats.json.
+     */
+    @Test
+    public void aTimeInExponentFormInStatsJsonIsReadWhole() throws Exception {
+        Object stats = parseRunSolverStats(outputDir(
+            null,
+            null,
+            "{\"wallclockTime\": 9.90467e-05, \"cpuTime\": 1.23457e+06,"
+                + " \"userTime\": 4.1e-05, \"systemTime\": 4.22E-05}"
+        ));
+
+        assertEquals(9.90467e-05, statDouble(stats, "wallclockTime"), 0.0);
+        assertEquals(1234570.0, statDouble(stats, "cpuTime"), 0.0);
+        assertEquals(4.1e-05, statDouble(stats, "userTime"), 0.0);
+        assertEquals("an upper-case E is an exponent in JSON too", 4.22e-05,
+            statDouble(stats, "systemTime"), 0.0);
+    }
+
     // ------------------------------------------------------------------
     // A malformed number in stats.json must not escape parseRunSolverStats
     //
-    // extractDoubleOr matches [0-9.]+ and extractLongOr/extractIntOr match
-    // [0-9]+, so "1.2.3", ".", "1..2" and digit strings past Integer/Long range
-    // all match the regex and then throw out of the parse. The enclosing catch
-    // took IOException only, so the NumberFormatException left the monitor.
+    // extractDoubleOr matches a digit or dot followed by digits, dots and exponent
+    // characters, and extractLongOr/extractIntOr match [0-9]+, so "1.2.3", ".",
+    // "1..2", "1e" and digit strings past Integer/Long range all match the regex and
+    // then throw out of the parse. The enclosing catch took IOException only, so the
+    // NumberFormatException left the monitor.
     //
     // Both tests below turn on one witness: hostname is applied last, at the very
     // end of the stats.json block. A malformed value that merely failed to match
@@ -318,6 +340,8 @@ public class LocalJobMonitorTests {
                 "{\"cpuTime\": ., \"hostname\": \"node7\"}"},
             {"a doubled dot reaches Double.parseDouble",
                 "{\"cpuTime\": 1..2, \"hostname\": \"node7\"}"},
+            {"a dangling exponent reaches Double.parseDouble",
+                "{\"cpuTime\": 1e, \"hostname\": \"node7\"}"},
             {"a value past Long range reaches Long.parseLong",
                 "{\"maxResidentSetSize\": 99999999999999999999,"
                     + " \"hostname\": \"node7\"}"},

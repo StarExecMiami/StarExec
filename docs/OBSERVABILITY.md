@@ -175,7 +175,7 @@ reported. The report is one WARN line, written to the app log and to the `error_
 ```bash
 make logs-app | grep "has made no progress"
 # Job 42 (my-job) has made no progress for 1440 minutes (35 pending, 0 enqueued, 0 running, 0 awaiting result processing): its queue 'default' is INACTIVE, so its pending pairs cannot be dispatched
-# Job 7 (sweep) has made no progress for 45 minutes (24 pending, 0 enqueued, 0 running, 0 awaiting result processing): the backend is not accepting work on queue 'container.q'; the log line 'Queue container.q cannot accept work at the moment' says since when, and the backend's own lines before it say why
+# Job 7 (sweep) has made no progress for 45 minutes (24 pending, 0 enqueued, 0 running, 0 awaiting result processing): the backend is not accepting work on queue 'container.q'; the dispatcher's line for it ('Queue container.q cannot accept work at the moment', or 'Queue container.q has no nodes available' while it has no nodes) says since when, and the backend's own lines before it say why
 ```
 
 For pending pairs on an `ACTIVE` queue, the report asks the backend whether that queue can take work. A backend
