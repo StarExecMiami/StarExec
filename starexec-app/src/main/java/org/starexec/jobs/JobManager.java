@@ -33,6 +33,7 @@ import java.io.IOException;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.nio.charset.StandardCharsets;
 
@@ -47,6 +48,23 @@ public abstract class JobManager {
 	private static String mainTemplate = null; // initialized below
 
 	private static ConcurrentHashMap<Integer, LoadBalanceMonitor> queueToMonitor = new ConcurrentHashMap<>();
+
+	/** The conditions that keep a queue from dispatching, so each is reported when it starts, not on every pass. */
+	private static final QueueConditions queueConditions = new QueueConditions();
+
+	/** Ends every report of a condition that lasts, so an operator knows when to expect the next one. */
+	private static final String REPEATED = " Reported again every "
+			+ TimeUnit.MILLISECONDS.toHours(QueueConditions.REPEAT_MILLIS)
+			+ " hours while it lasts, and at INFO when it ends.";
+
+	/**
+	 * " (first seen N minutes ago)" for a condition reported again, nothing for one that starts.
+	 * "First seen", not "for N minutes": the dispatcher looks only on its passes, and a deferral
+	 * only while pairs wait.
+	 */
+	private static String lasting(long minutes) {
+		return minutes > 0 ? " (first seen " + minutes + " minutes ago)" : "";
+	}
 
 	/**
 	 * Returns the string representation of the LoadBalanceMonitor for the given
@@ -118,6 +136,14 @@ public abstract class JobManager {
 				int queueSize = Queues.getSizeOfQueue(qId);
 				log.debug("trying to submit on queue " + qId + " with " + nodeCount + " nodes and " + queueSize +
 						" pairs");
+				if (nodeCount > 0) {
+					long withoutNodes = queueConditions.end(qId, QueueConditions.Kind.NO_NODES,
+							System.currentTimeMillis());
+					if (withoutNodes >= 0) {
+						log.info("checkPendingJobs", "Queue " + qname + " has nodes again; it was first seen without"
+								+ " nodes " + withoutNodes + " minute(s) ago");
+					}
+				}
 				if (queueSize < R.NODE_MULTIPLIER * nodeCount) {
 					List<Job> joblist;
 					if (devJobsOnly) {
@@ -149,7 +175,7 @@ public abstract class JobManager {
 					// Nothing else reports this either. Queue-level warnings live in
 					// submitJobs, which is never reached from here, so a queue with no
 					// nodes simply stopped dispatching in silence.
-					logQueueHasNoNodes(qname, queueSize);
+					logQueueHasNoNodes(q, queueSize, System.currentTimeMillis());
 				} else {
 					log.info("Not adding more job pairs to queue " + qname + ", which has " + queueSize +
 							" pairs enqueued.");
@@ -379,31 +405,73 @@ public abstract class JobManager {
 	 * its runsolver measurements, because {@code UpdatePairRunSolverStats} resolves the
 	 * node by name and raises when it is missing. Pointing at it here saves an operator
 	 * from staring at a queue that mysteriously never moves.
+	 *
+	 * <p>Each cause is reported when it starts and again every
+	 * {@link QueueConditions#REPEAT_MILLIS} while it lasts, not on every pass:
+	 * {@code checkPendingJobs} logs the end, once, when the queue has nodes again.
 	 */
-	private static void logQueueHasNoNodes(String qname, int queueSize) {
+	static void logQueueHasNoNodes(Queue q, int queueSize, long now) {
+		String qname = q.getName();
 		boolean backendThinksItCanRun;
 		try {
 			backendThinksItCanRun = R.BACKEND.isQueueDispatchable(qname);
 		} catch (Exception e) {
 			// Never let a diagnostic break dispatch for the other queues.
-			log.warn("logQueueHasNoNodes", "Could not ask the backend about queue " + qname, e);
+			long minutes = queueConditions.report(q.getId(), QueueConditions.Kind.NO_NODES, "no answer", now);
+			if (minutes >= 0) {
+				log.warn("logQueueHasNoNodes",
+						"Could not ask the backend about queue " + qname + lasting(minutes) + "." + REPEATED, e);
+			}
 			return;
 		}
 
+		long minutes = queueConditions.report(q.getId(), QueueConditions.Kind.NO_NODES,
+				backendThinksItCanRun ? "backend accepts work" : "backend refuses work", now);
+		if (minutes < 0) {
+			return;
+		}
 		if (backendThinksItCanRun) {
 			log.error("logQueueHasNoNodes",
 					"Queue " + qname + " has " + queueSize + " pair(s) waiting and no nodes" +
-					" associated with it, yet the backend reports it can accept work. StarExec's" +
-					" node table and the cluster disagree: most likely a node exists in the" +
-					" cluster but was never registered here, so associating it fails every" +
+					" associated with it" + lasting(minutes) + ", yet the backend reports it can accept" +
+					" work. StarExec's node table and the cluster disagree: most likely a node exists" +
+					" in the cluster but was never registered here, so associating it fails every" +
 					" cycle. Pairs finishing on such a node also lose their recorded" +
-					" measurements. No pairs will be dispatched to this queue until it is fixed.");
+					" measurements. No pairs will be dispatched to this queue until it is fixed." +
+					REPEATED);
 		} else {
 			log.warn("logQueueHasNoNodes",
 					"Queue " + qname + " has " + queueSize + " pair(s) waiting and no nodes" +
-					" available; the backend confirms it cannot accept work. No pairs will be" +
-					" dispatched to this queue until a node is attached or comes back.");
+					" available" + lasting(minutes) + "; the backend confirms it cannot accept work. No" +
+					" pairs will be dispatched to this queue until a node is attached or comes back." +
+					REPEATED);
 		}
+	}
+
+	/**
+	 * Whether the backend can take pairs from queue {@code q} on this pass. A refusal is
+	 * reported when it starts and again every {@link QueueConditions#REPEAT_MILLIS} while it
+	 * lasts, and its end once at INFO: on every pass, a backend that stayed unable to run
+	 * anything wrote an error_logs row every 20 seconds.
+	 */
+	static boolean queueAcceptsWork(Queue q, long now) {
+		final String methodName = "submitJobs";
+		if (R.BACKEND.isQueueDispatchable(q.getName())) {
+			// The backend is asked only while pairs wait, so this counts from the first
+			// refusal seen, not from when the backend recovered.
+			long minutes = queueConditions.end(q.getId(), QueueConditions.Kind.CANNOT_ACCEPT_WORK, now);
+			if (minutes >= 0) {
+				log.info(methodName, "Queue " + q.getName() + " accepts work again; it was first seen refusing work "
+						+ minutes + " minute(s) ago");
+			}
+			return true;
+		}
+		long minutes = queueConditions.report(q.getId(), QueueConditions.Kind.CANNOT_ACCEPT_WORK, "refused", now);
+		if (minutes >= 0) {
+			log.warn(methodName, "Queue " + q.getName() + " cannot accept work at the moment" + lasting(minutes) +
+					"; deferring its pairs to a later pass rather than failing them." + REPEATED);
+		}
+		return false;
 	}
 
 	public static void submitJobs(final List<Job> joblist, final Queue q, int queueSize, final int nodeCount) {
@@ -426,9 +494,7 @@ public abstract class JobManager {
 			//
 			// A permanently unroutable queue is a different case and is still rejected at
 			// submission: it will not fix itself and should be visible.
-			if (!R.BACKEND.isQueueDispatchable(q.getName())) {
-				log.warn(methodName, "Queue " + q.getName() + " cannot accept work at the" +
-						" moment; deferring its pairs to a later pass rather than failing them");
+			if (!queueAcceptsWork(q, System.currentTimeMillis())) {
 				return;
 			}
 
