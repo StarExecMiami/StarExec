@@ -106,6 +106,7 @@ public class KubernetesPairPlacementTests {
                     callback.onJobPlaced(execution(), NODE)
                 );
             }
+            cluster.verify(() -> Cluster.getNodeIdByName(NODE), Mockito.times(3));
             jobPairs.verifyNoInteractions();
         }
 
@@ -158,6 +159,7 @@ public class KubernetesPairPlacementTests {
                 "finished, or its job is paused, killed or deleted: nothing to record",
                 callback.onJobPlaced(execution(), NODE)
             );
+            jobPairs.verify(() -> JobPairs.tryUpdatePairExecutionHost(PAIR_ID, NODE_ID));
         }
         assertEquals(List.of(), messagesAt(Level.WARN));
     }
@@ -172,8 +174,14 @@ public class KubernetesPairPlacementTests {
                 .thenReturn(ConditionalPairUpdateResult.ERROR);
 
             assertFalse(callback.onJobPlaced(execution(), NODE));
+            jobPairs.verify(() -> JobPairs.tryUpdatePairExecutionHost(PAIR_ID, NODE_ID));
         }
-        assertEquals(1, messagesAt(Level.WARN).size());
+        List<String> warnings = messagesAt(Level.WARN);
+        assertEquals(warnings.toString(), 1, warnings.size());
+        assertTrue(
+            warnings.get(0),
+            warnings.get(0).startsWith("Failed to record node " + NODE + " for pair " + PAIR_ID)
+        );
     }
 
     @Test
