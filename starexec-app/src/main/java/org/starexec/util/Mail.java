@@ -41,85 +41,118 @@ public class Mail {
 	 */
 	public static boolean mail(String message, String subject, String to) {
 		final List<String> toList = Collections.singletonList(to);
-		return mail(message, subject, toList);
+		return mail(message, subject, toList) == 1;
 	}
 
 	/**
-	 * Sends an e-mail from the configured SMTP server
+	 * Sends an e-mail from the configured SMTP server to each address, as a message of its own.
+	 *
+	 * <p>One message per address: an address commons-email cannot use (the seeded admin account's is
+	 * the bare word {@code admin}), or one the SMTP server refuses, fails the message it is on, so a
+	 * message shared by all the addresses reached none of them. Separate messages also keep the
+	 * recipients' addresses from each other.
 	 *
 	 * @param message The body of the message
 	 * @param subject The subject of the message
-	 * @param to The list of e-mail addresses to send the message to
-	 * @return true if the SMTP server accepted the message, false if nothing was sent. Acceptance is
-	 *     all SMTP reports: an accepted message can still bounce later, and the bounce goes to the
-	 *     sender address, not back to this call (RFC 5321, section 6.1).
+	 * @param to The e-mail addresses to send the message to
+	 * @return how many of the addresses the SMTP server accepted a message for, 0 if there are none.
+	 *     Acceptance is all SMTP reports: an accepted message can still bounce later, and the bounce
+	 *     goes to the sender address, not back to this call (RFC 5321, section 6.1).
 	 */
-	public static boolean mail(String message, String subject, Collection<String> to) {
+	public static int mail(String message, String subject, Collection<String> to) {
+		final List<String> addresses;
 		try {
 			if (to == null || to.isEmpty()) {
-				return false;
+				return 0;
 			}
-			
-			// Counted once, before sending: a collection call after send() could throw and turn an
-			// accepted message into a reported failure.
-			final int recipients = to.size();
-			log.info("Sending email to " + recipients + " recipient(s)");
-
-			try {
-				// Try to send using normal SMTP with fast timeouts
-				final Email email = new SimpleEmail();
-				email.setHostName(R.EMAIL_SMTP);
-				email.setSmtpPort(R.EMAIL_SMTP_PORT);
-				email.setSubject(subject);
-				email.setMsg(message);
-				
-				// Set short timeouts to fail fast if email server is not available
-				email.setSocketConnectionTimeout(5000); // 5 seconds to connect
-				email.setSocketTimeout(10000); // 10 seconds to send
-
-				if (!R.EMAIL_USER.isEmpty() && !R.EMAIL_PWD.isEmpty()) {
-					email.setAuthenticator(new DefaultAuthenticator(R.EMAIL_USER, R.EMAIL_PWD));
-					email.setStartTLSEnabled(true);
-				}
-
-				String fromAddress = !R.EMAIL_USER.isEmpty() ? R.EMAIL_USER : R.EMAIL_FROM;
-				email.setFrom(fromAddress);
-
-				for (String s : to) {
-					email.addTo(s);
-				}
-
-				email.send();
-				log.info("Email sent successfully to " + recipients + " recipient(s)");
-				return true;
-			} catch (Exception e) {
-				// Transport failures can echo recipients; omit exception details.
-				log.warn("Failed to send email via SMTP");
-				log.debug("Email sending failed - content not logged for security reasons");
-			}
+			// Copied once, before sending: a collection call after a send could throw and turn accepted
+			// messages into a reported failure.
+			addresses = new ArrayList<>(to);
 		} catch (Exception e) {
-			// Address parsing and collection failures can echo recipients; omit exception details.
+			// Collection failures can echo recipients; omit exception details.
 			log.warn("Error in mail function");
+			return 0;
 		}
-		return false;
+
+		log.info("Sending email to " + addresses.size() + " recipient(s)");
+		int accepted = 0;
+		for (String address : addresses) {
+			if (send(message, subject, address)) {
+				accepted++;
+			}
+		}
+		if (accepted == addresses.size()) {
+			log.info("Email sent successfully to " + accepted + " recipient(s)");
+		} else {
+			log.info("Email sent to " + accepted + " of " + addresses.size() + " recipient(s)");
+		}
+		return accepted;
 	}
 
 	/**
-	 * Sends an acceptance email to the leaders of a given community s
-	 * they can approve/decline a new user's request to join
+	 * Sends one message to one address.
+	 *
+	 * @return true if the SMTP server accepted the message
+	 */
+	private static boolean send(String message, String subject, String address) {
+		try {
+			// Try to send using normal SMTP with fast timeouts
+			final Email email = new SimpleEmail();
+			email.setHostName(R.EMAIL_SMTP);
+			email.setSmtpPort(R.EMAIL_SMTP_PORT);
+			email.setSubject(subject);
+			email.setMsg(message);
+
+			// Set short timeouts to fail fast if email server is not available
+			email.setSocketConnectionTimeout(5000); // 5 seconds to connect
+			email.setSocketTimeout(10000); // 10 seconds to send
+
+			if (!R.EMAIL_USER.isEmpty() && !R.EMAIL_PWD.isEmpty()) {
+				email.setAuthenticator(new DefaultAuthenticator(R.EMAIL_USER, R.EMAIL_PWD));
+				email.setStartTLSEnabled(true);
+			}
+
+			String fromAddress = !R.EMAIL_USER.isEmpty() ? R.EMAIL_USER : R.EMAIL_FROM;
+			email.setFrom(fromAddress);
+			email.addTo(address);
+			email.send();
+			return true;
+		} catch (Exception e) {
+			// Address parsing and transport failures can echo the recipient; omit exception details.
+			log.warn("Failed to send email via SMTP");
+			log.debug("Email sending failed - content not logged for security reasons");
+			return false;
+		}
+	}
+
+	/**
+	 * Emails a user's request to join a community to each of the community's leaders, so they can
+	 * approve or decline it. Each leader gets a message of their own (see
+	 * {@link #mail(String, String, Collection)}), and the log says how many of them it reached.
 	 *
 	 * @param user the user trying to join the community
 	 * @param comReq The community request containing the information to construct the e-mail
 	 * @author Todd Elvers
 	 */
 	public static void sendCommunityRequest(User user, CommunityRequest comReq) {
+		final int communityId = comReq.getCommunityId();
+		final List<User> leaders = Spaces.getLeaders(communityId);
+		if (leaders == null) {
+			log.warn(String.format("The request of user [%d] to join community [%d] was not emailed: could not"
+					+ " read the community's leaders", user.getId(), communityId));
+			return;
+		}
+		if (leaders.isEmpty()) {
+			log.warn(String.format("The request of user [%d] to join community [%d] was not emailed: the"
+					+ " community has no leader", user.getId(), communityId));
+			return;
+		}
 		try {
-			String communityName = Spaces.getName(comReq.getCommunityId());
+			String communityName = Spaces.getName(communityId);
 
-			// Figure out the email addresses of the leaders of the space
 			List<String> leaderEmails = new ArrayList<>();
-			for (User u : Spaces.getLeaders(comReq.getCommunityId())) {
-				leaderEmails.add(u.getEmail());
+			for (User leader : leaders) {
+				leaderEmails.add(leader.getEmail());
 			}
 
 			final String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/community_request_email.txt"), StandardCharsets.UTF_8)
@@ -136,11 +169,15 @@ public class Mail {
 					.format("public/verification/email?%s=%s&%s=%s", Mail.EMAIL_CODE, comReq
 							.getCode(), Mail.LEADER_RESPONSE, "decline")));
 
-			// Send email
-			Mail.mail(email, "STAREXEC - Request to join " + communityName, leaderEmails);
-			log.info(String
-					.format("Acceptance email sent to leaders of [%s] to approve/decline %s's request",
-						communityName, user.getFullName()));
+			final int sent = Mail.mail(email, "STAREXEC - Request to join " + communityName, leaderEmails);
+			final String outcome = String.format(
+					"The request of user [%d] to join community [%d] was emailed to %d of its %d leader(s)",
+					user.getId(), communityId, sent, leaders.size());
+			if (sent == leaders.size()) {
+				log.info(outcome);
+			} else {
+				log.warn(outcome);
+			}
 		} catch (IOException e) {
 			log.warn("Could not send community request email because the template file could not be read.", e);
 		}
@@ -425,7 +462,10 @@ public class Mail {
 		List<String> emails = usersToEmail.stream().map(User::getEmail).collect(Collectors.toList());
 
 		log.info("Emailing error log reports to " + emails.size() + " recipient(s)");
-		Mail.mail(message.toString(), "Error Reports", emails);
+		final int sent = Mail.mail(message.toString(), "Error Reports", emails);
+		if (sent < emails.size()) {
+			log.warn("The error log report was emailed to " + sent + " of " + emails.size() + " recipient(s)");
+		}
 	}
 
 	private static String getYesterdayRunscriptErrors() {
