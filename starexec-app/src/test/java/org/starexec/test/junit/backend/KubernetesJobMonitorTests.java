@@ -835,6 +835,34 @@ public class KubernetesJobMonitorTests {
         verify(callback, times(1)).onJobRunning(execution());
     }
 
+    /**
+     * A Job allowed to retry can lose its running pod and wait on a replacement no node takes.
+     * When that execution is given up as stuck, nothing is kept for it either.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void anExecutionGivenUpAsStuckKeepsNoNodeRecord() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podOn(EXEC_ID, "Running", "node-a"));
+        when(callback.onJobPlaced(execution(), "node-a")).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
+        invokePollJobsOnce();
+
+        Field field = KubernetesJobMonitor.class.getDeclaredField("recordedNodes");
+        field.setAccessible(true);
+        Map<ExecutionRef, String> recorded = (Map<ExecutionRef, String>) field.get(monitor);
+        assertEquals("recorded while it runs", "node-a", recorded.get(execution()));
+
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(61);
+        when(callback.onJobStuckPending(eq(execution()), anyString())).thenReturn(true);
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobStuckPending(eq(execution()), anyString());
+        assertTrue(getCompletedExecutions().contains(execution()));
+        assertFalse("dropped once it is given up", recorded.containsKey(execution()));
+    }
+
     @SuppressWarnings("unchecked")
     /** The identity of the Job every fixture in this class describes. */
     private static ExecutionRef execution() {
