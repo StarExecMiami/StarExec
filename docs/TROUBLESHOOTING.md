@@ -729,16 +729,17 @@ seconds and skips a queue in these cases:
   See status 2 below.
 - **The backend refuses new work.** Log: `Queue <q> cannot accept work at the moment; deferring its pairs to a
   later pass rather than failing them`. The backend has not started or is shutting down, or, on Kubernetes,
-  holds dispatch for a reason it logs itself on every pass while pairs wait, just before the first of these
-  lines. A Podman backend that failed to start logged `Failed to initialize backend` at start-up, with the
-  reason, and is not started again until StarExec restarts. The line is written when the refusal starts, again
-  every 6 hours while pairs wait (`(first seen <n> minutes ago)`), and `Queue <q> accepts work again` at INFO
-  when the queue takes pairs again.
+  holds dispatch for a reason it logs itself just before the first of these lines: when the hold starts or its
+  reason changes, again every 6 hours while it lasts, and `Kubernetes no longer holds dispatch for queue
+  '<q>'` at INFO when it ends. A Podman backend that failed to start logged `Failed to initialize backend` at
+  start-up, with the reason, and is not started again until StarExec restarts. The line is written when the
+  refusal starts, again every 6 hours while pairs wait (`(first seen <n> minutes ago)`), and `Queue <q>
+  accepts work again` at INFO when the queue takes pairs again.
 - **Kubernetes is at its concurrency cap.** Log: `deferring pair <id> (...): at concurrency cap (<n>/<max>)`.
   At most `kubernetes.maxConcurrentJobs` pairs run at once; the rest wait in status 1.
 
-StarExec keeps the no-nodes and refusal conditions in memory, so after a restart one that lasts is reported again
-on the first pass that sees it.
+StarExec keeps the no-nodes and refusal conditions, and the Kubernetes backend its holds, in memory, so after a
+restart one that lasts is reported again on the first pass that sees it.
 
 **Status 2 (enqueued): the backend has the pairs but no free slot.** How many pairs run at once:
 
@@ -1104,7 +1105,7 @@ sudo systemctl enable --now nfs-health.timer
 ```bash
 # What the application says it is waiting on
 kubectl logs -n starexec deploy/<release> | grep -E \
-  "Admission deferred|Admission still deferred|Deferring dispatch for queue|OPERATOR ACTION|could not be confirmed stopped|withholding its reset"
+  "Admission deferred|Admission still deferred|Deferring dispatch for queue|no longer holds dispatch|OPERATOR ACTION|could not be confirmed stopped|withholding its reset"
 ```
 
 **Common causes:**
