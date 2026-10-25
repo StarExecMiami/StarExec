@@ -161,6 +161,9 @@ public class KubernetesJobMonitor {
     /** Tracks jobs already transitioned to STATUS_RUNNING */
     private final Set<ExecutionRef> runningExecutions = ConcurrentHashMap.newKeySet();
 
+    /** The node the callback has recorded for each execution, see {@link #recordPlacement} */
+    private final Map<ExecutionRef, String> recordedNodes = new ConcurrentHashMap<>();
+
     /** When each stuck-pending execution was last warned about, for throttling */
     private final Map<ExecutionRef, Long> pendingWarnedAt = new ConcurrentHashMap<>();
 
@@ -395,6 +398,7 @@ public class KubernetesJobMonitor {
             }
 
             runningExecutions.remove(execution);
+            recordedNodes.remove(execution);
             pendingWarnedAt.remove(execution);
             cleanupPending.remove(execution);
         }
@@ -446,6 +450,7 @@ public class KubernetesJobMonitor {
         }
 
         if (isRunningOnANode(job, execution, pods)) {
+            recordPlacement(execution, pods);
             if (!runningExecutions.contains(execution) && callback.onJobRunning(execution)) {
                 runningExecutions.add(execution);
             }
@@ -493,11 +498,32 @@ public class KubernetesJobMonitor {
         if (callback.onJobStuckPending(execution, reason)) {
             completedExecutions.add(execution);
             runningExecutions.remove(execution);
+            recordedNodes.remove(execution);
             pendingWarnedAt.remove(execution);
             cleanupPending.remove(execution);
             return;
         }
         cleanupPending.put(execution, reason);
+    }
+
+    /**
+     * Passes the callback the node this execution's pod runs on, until it has recorded it.
+     *
+     * <p>Called before the running transition, in the Podman backend's order, so that the
+     * pair has its node by the time it shows as running. Called on every poll that finds the
+     * pod running, not only on the first: the node is known only from a pod listing, which
+     * can fail on the poll that makes the pair running; the callback can report that it
+     * could not record the node yet; and a Job allowed to retry can run its next pod on
+     * another node.
+     */
+    private void recordPlacement(ExecutionRef execution, PodPhaseView pods) {
+        String nodeName = pods.nodeNameFor(execution);
+        if (nodeName == null || nodeName.equals(recordedNodes.get(execution))) {
+            return;
+        }
+        if (callback.onJobPlaced(execution, nodeName)) {
+            recordedNodes.put(execution, nodeName);
+        }
     }
 
     private void warnAboutStuckPod(
@@ -708,6 +734,21 @@ public class KubernetesJobMonitor {
          * @return true when the running transition was handled and should not be retried
          */
         boolean onJobRunning(ExecutionRef execution);
+
+        /**
+         * Called when a job's pod is found running on a node, before {@link #onJobRunning},
+         * and again on later polls until it returns true.
+         *
+         * <p>Deliberately not a default method, for the reason given at
+         * {@link #onJobStuckPending}: a default would let a future implementor inherit
+         * silence, and the node view would again list no running pair.
+         *
+         * @param execution the Kubernetes execution this event belongs to
+         * @param nodeName  the pod's {@code spec.nodeName}, the Node's {@code metadata.name}
+         * @return true when the node was recorded or there is nothing to record; false to be
+         *         called again on the next poll
+         */
+        boolean onJobPlaced(ExecutionRef execution, String nodeName);
 
         /**
          * Called when a job completes successfully.

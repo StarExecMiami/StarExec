@@ -131,6 +131,7 @@ import java.util.concurrent.TimeUnit;
 import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
+import org.starexec.data.database.Cluster;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.database.StageStatusBatchResult;
@@ -625,6 +626,13 @@ public class KubernetesNativeBackend implements Backend {
      * two are being told apart rather than conflated.
      */
     private final Set<Integer> legacyKilledExecIds = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Nodes a running pod was found on that the nodes table did not hold, each warned about
+     * once until it is registered. The monitor asks again on every poll, and StarLogger writes
+     * every WARN to error_logs, so a line per poll would fill that table.
+     */
+    private final Set<String> unregisteredNodesWarned = ConcurrentHashMap.newKeySet();
 
     /**
      * Guards the compound (jobsHoldingSlot, activeJobCount) reservation so the set and
@@ -4688,6 +4696,70 @@ public class KubernetesNativeBackend implements Backend {
 
             return markPairRunningSafely(pairId, "Kubernetes active-job polling") !=
                 JobPairs.ConditionalPairUpdateResult.ERROR;
+        }
+
+        /**
+         * Records the node a running pair's pod is on, which is what lists the pair in the
+         * cluster page's node view while it runs.
+         *
+         * <p>Without it a Kubernetes pair got its node only from its statistics, once it had
+         * finished. The write is the one the Podman backend makes when a container starts,
+         * and it changes nothing for a pair that has finished or whose job is paused, killed
+         * or deleted. The pair is found the way {@link #onJobRunning} finds it.
+         *
+         * <p>The node is looked up by name, as the statistics are. A name the nodes table does
+         * not hold yet is warned about once, and the monitor asks again on its next poll: the
+         * periodic cluster refresh registers new nodes.
+         */
+        @Override
+        public boolean onJobPlaced(ExecutionRef execution, String nodeName) {
+            if (isStopped(execution)) {
+                log.debug("Skipping node update for stopped " + execution);
+                return true;
+            }
+
+            Integer pairId = resolvePairId(execution);
+            if (pairId == null) {
+                // onJobRunning and resolvePairId report why; nothing is lost by asking again.
+                log.debug("No pair resolved for " + execution + " yet; recording its node later");
+                return false;
+            }
+
+            int nodeId = Cluster.getNodeIdByName(nodeName);
+            if (nodeId <= 0) {
+                if (unregisteredNodesWarned.add(nodeName)) {
+                    log.warn(
+                        "Pair " + pairId + " runs on node " + nodeName + " (" + execution +
+                        "), which the nodes table does not hold, so the node view does not" +
+                        " list it. Its node is recorded once the cluster refresh registers" +
+                        " the node. Logged once per node."
+                    );
+                }
+                return false;
+            }
+            if (unregisteredNodesWarned.remove(nodeName)) {
+                log.info("Node " + nodeName + " is registered now; recording it for pair " + pairId);
+            }
+
+            JobPairs.ConditionalPairUpdateResult result =
+                JobPairs.tryUpdatePairExecutionHost(pairId, nodeId);
+            switch (result) {
+                case UPDATED:
+                    log.debug("Recorded node " + nodeName + " for pair " + pairId);
+                    return true;
+                case STALE:
+                    log.debug(
+                        "Not recording node " + nodeName + " for pair " + pairId +
+                        ": it has finished, or its job is paused, killed or deleted"
+                    );
+                    return true;
+                default:
+                    log.warn(
+                        "Failed to record node " + nodeName + " for pair " + pairId + " (" +
+                        execution + "); retrying on the next poll"
+                    );
+                    return false;
+            }
         }
 
         @Override
