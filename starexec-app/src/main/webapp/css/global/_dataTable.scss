@@ -437,6 +437,9 @@ table.dataTable {
 
 		input {
 			margin-left: 0.5em;
+
+			// On a narrow screen it wraps below its label; keep it inside the table area.
+			max-width: calc(100% - 0.5em);
 		}
 	}
 

@@ -6,7 +6,7 @@
 %>
 <star:template title="Users Admin"
                js="admin/user, lib/jquery-ui.min, lib/jquery.dataTables.min"
-               css="admin/user, common/table, explore/common, admin/admin, jqueryui/jquery-ui">
+               css="common/table, explore/common, admin/admin, jqueryui/jquery-ui">
 	<star:panel title="users" withCount="true" expandable="false">
 		<c:if test="${sessionScope.regSuccess}">
 			<c:remove var="regSuccess" scope="session" />

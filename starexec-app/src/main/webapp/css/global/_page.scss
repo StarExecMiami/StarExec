@@ -9,7 +9,8 @@
 	padding-top: 10px;
 
 	@include mobile {
-		width: 100%;
+		// Auto, not 100%: with the side padding the page was wider than the screen.
+		width: auto;
 		height: inherit;
 		margin: 0;
 		padding: 0 10px;
@@ -27,7 +28,6 @@
 	clear: right;
 
 	@include mobile {
-		width: inherit;
 		min-height: auto;
 	}
 
