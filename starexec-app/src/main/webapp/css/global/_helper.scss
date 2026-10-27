@@ -1,5 +1,13 @@
 //noinspection CssUnknownTarget
 @import "../properties";
+@import "icon-data";
+
+// Draws a vendored icon in the current text colour. Icons are data URIs, so
+// they also work in the offline job page opened from file://.
+@mixin icon-mask($name) {
+	background-color: currentcolor;
+	mask: icon($name) no-repeat center / contain;
+}
 
 @function stylesheet-url($path) {
 	@return url($rootUrl + "css/" + $path);
