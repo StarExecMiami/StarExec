@@ -19,8 +19,8 @@ ul.horizontal {
 	}
 }
 
-// Link icon. The SVG is used as a mask filled with the text colour, so the
-// icon follows the theme and stays sharp at any pixel density.
+// Link icon, drawn in the text colour so it follows the theme and stays sharp
+// at any pixel density. A data-URI icon, so it also shows in the offline job page.
 .ext-link-icon {
 	display: inline-block;
 	margin-left: 0.4em;
@@ -30,8 +30,8 @@ ul.horizontal {
 		display: inline-block;
 		width: 0.75em;
 		height: 0.75em;
-		background-color: currentcolor;
-		mask: image-url("icons/external.svg") no-repeat center / contain;
+
+		@include icon-mask("external-link");
 	}
 }
 

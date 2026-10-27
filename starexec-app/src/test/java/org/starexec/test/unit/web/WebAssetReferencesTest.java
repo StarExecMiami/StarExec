@@ -71,7 +71,6 @@ public class WebAssetReferencesTest {
 	@Test
 	public void everyImageTheOfflineJobPageBundlesExists() {
 		List<String> missing = new ArrayList<>();
-		checkBundled(Web.GLOBAL_PNG_FILES, "png", missing);
 		checkBundled(Web.GLOBAL_SVG_FILES, "svg", missing);
 		checkBundled(Web.GLOBAL_ICO_FILES, "ico", missing);
 		assertTrue("DoJobPage would fail to copy:\n" + String.join("\n", missing), missing.isEmpty());

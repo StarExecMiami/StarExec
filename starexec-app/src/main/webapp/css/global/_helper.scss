@@ -24,10 +24,6 @@
 	animation: loading-spinner-rotate 0.75s linear infinite;
 }
 
-@function image-url($path) {
-	@return url($rootUrl + "images/" + $path);
-}
-
 @mixin mobile {
 	@media only screen and (max-width: 767px) {
 		@content;
@@ -66,8 +62,8 @@ $helper-first-include: true !default;
 			width: 0.75em;
 			height: 0.75em;
 			margin-left: .5em;
-			background-color: currentcolor;
-			mask: image-url("icons/external.svg") no-repeat center / contain;
+
+			@include icon-mask("external-link");
 		}
 	}
 
