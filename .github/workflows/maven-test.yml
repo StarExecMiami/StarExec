@@ -45,6 +45,11 @@ jobs:
       - name: Verify Maven version
         run: mvn -version
 
+      # CI never compiles SCSS, so nothing else notices a vendored icon that
+      # changed without regenerating css/global/_icon-data.scss.
+      - name: Check generated icon data
+        run: python3 scripts/build-icon-data.py --check
+
       - name: Run unit tests
         run: mvn clean test -pl starexec-app
 

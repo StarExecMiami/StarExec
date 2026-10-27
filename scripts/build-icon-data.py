@@ -64,8 +64,12 @@ def render() -> str:
 
 
 def main() -> int:
+    args = sys.argv[1:]
+    if args not in ([], ["--check"]):
+        print(f"usage: {sys.argv[0]} [--check]", file=sys.stderr)
+        return 2
     content = render()
-    if "--check" in sys.argv[1:]:
+    if args == ["--check"]:
         current = OUTPUT.read_text() if OUTPUT.exists() else ""
         if current != content:
             print(
