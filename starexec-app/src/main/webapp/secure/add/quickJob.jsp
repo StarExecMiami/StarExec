@@ -114,7 +114,7 @@
 					<td>
 						<select id="settingProfile">
 							<c:if test="${empty defaultSettings}">
-								<option value=""/>
+								<option value=""></option>
 							</c:if>
 							<c:forEach var="setting" items="${defaultSettings}">
 								<option value="${setting.getId()}">${setting.name}</option>
@@ -222,7 +222,7 @@
 					<td>
 						<select id="workerQueue" name="queue">
 							<c:if test="${empty queues}">
-								<option value=""/>
+								<option value=""></option>
 							</c:if>
 							<c:forEach var="q" items="${queues}">
 								<option cpumax="${q.cpuTimeout}"
