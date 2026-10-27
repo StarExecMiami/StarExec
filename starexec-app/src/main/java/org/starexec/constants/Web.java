@@ -73,11 +73,8 @@ public final class Web {
         "details/pair",
         "prettify/prettify",
     };
-    public static final String[] GLOBAL_PNG_FILES = {
-        "loadingGraph",
-        "external",
-    };
-    public static final String[] GLOBAL_SVG_FILES = { "starlogo" };
+    public static final String[] GLOBAL_PNG_FILES = { "external" };
+    public static final String[] GLOBAL_SVG_FILES = { "starlogo", "loadingGraph", "noDisplayGraph" };
     public static final String[] GLOBAL_ICO_FILES = { "favicon" };
 
     public static final String COPY_TO_STARDEV_BUTTON_TEXT = "copy to stardev";

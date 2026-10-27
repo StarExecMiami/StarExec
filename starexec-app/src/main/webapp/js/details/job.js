@@ -464,9 +464,9 @@ function reloadTables(id) {
 			$("#solverChoice2").empty();
 			$("#spaceOverviewSelections").empty();
 			$("#spaceOverview")
-			.attr("src", starexecRoot + "images/loadingGraph.png");
+			.attr("src", starexecRoot + "images/loadingGraph.svg");
 			$("#solverComparison")
-			.attr("src", starexecRoot + "images/loadingGraph.png");
+			.attr("src", starexecRoot + "images/loadingGraph.svg");
 
 			//tell the tables to display a "loading" indicator
 			summaryTable.fnProcessingIndicator(true);
@@ -1177,7 +1177,7 @@ function updatePairJobTimeGraph() {
 					$("#pairTimeGraph").attr("src", returnCode);
 					$("#bigPairTimeGraph").attr("src", returnCode + "800");
 				} else {
-					$("#pairTimeGraph").attr("src", starexecRoot + "images/noDisplayGraph.png");
+					$("#pairTimeGraph").attr("src", starexecRoot + "images/noDisplayGraph.svg");
 				}
 			},
 			"text"
@@ -1224,7 +1224,7 @@ function updateSpaceOverviewGraph() {
 				}
 			} else {
 			$("#spaceOverview")
-			.attr("src", starexecRoot + "images/noDisplayGraph.png");
+			.attr("src", starexecRoot + "images/noDisplayGraph.svg");
 			}
 		},
 		"text"
@@ -1264,7 +1264,7 @@ function updateSolverComparison(size, color) {
 				}
 			} else {
 			$("#solverComparison300")
-			.attr("src", starexecRoot + "images/noDisplayGraph.png");
+			.attr("src", starexecRoot + "images/noDisplayGraph.svg");
 			}
 		},
 		"text"
