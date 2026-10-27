@@ -263,15 +263,14 @@ public class RESTHelpers {
 	}
 
 	/**
-	 * Add tag for the image representing a link that will popout.
+	 * Add the link icon and close the open anchor. The icon is drawn by CSS
+	 * ({@code .ext-link-icon} in global/_common.scss).
 	 *
 	 * @param sb the StringBuilder to add the tag with.
 	 * @author Aaron Stump
 	 */
 	public static void addImg(StringBuilder sb) {
-		sb.append("<img class=\"extLink\" src=\"");
-		sb.append(Util.docRoot("images/external.png"));
-		sb.append("\"/></a>");
+		sb.append("<span class=\"ext-link-icon\"></span></a>");
 	}
 
 	/**

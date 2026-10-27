@@ -145,8 +145,7 @@
 						</c:when>
 						<c:otherwise>
 							<td><a href="${starexecRoot}/secure/explore/cluster.jsp">${pair.node.name}
-								<img class="extLink"
-									 src="${starexecRoot}/images/external.png"/></a>
+								<span class="ext-link-icon"></span></a>
 						</td>
 						</c:otherwise>
 					</c:choose>

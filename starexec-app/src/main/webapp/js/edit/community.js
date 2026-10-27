@@ -37,8 +37,8 @@ function populateDetails(jsonData) {
 	leaderTable.fnClearTable();
 	$.each(jsonData.leaders, function(i, user) {
 		var fullName = user.firstName + ' ' + user.lastName;
-		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
-		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
+		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<span class="ext-link-icon"></span></a>';
+		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<span class="ext-link-icon"></span></a>';
 		var deleteUser = '<input type="button" onclick="removeUser(' + user.id + ', ' + id + ')" value="X"/>';
 		var demoteUser = '<input type="button" onclick="demoteUser(' + user.id + ', ' + id + ')" value="Demote"/>';
 
@@ -60,8 +60,8 @@ function populateDetails(jsonData) {
 	$.each(jsonData.space.users, function(i, user) {
 		var hiddenUserId = '<input type="hidden" value="' + user.id + '" >';
 		var fullName = user.firstName + ' ' + user.lastName;
-		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>' + hiddenUserId;
-		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
+		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<span class="ext-link-icon"></span></a>' + hiddenUserId;
+		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<span class="ext-link-icon"></span></a>';
 		var deleteUser = '<input type="button" onclick="removeUser(' + user.id + ', ' + id + ')" value="X"/>';
 		var promoteUser = '<input type="button" onclick="promoteUser(' + user.id + ', ' + id + ')" value="Promote"/>';
 
@@ -442,7 +442,7 @@ function refreshSpaceWebsites() {
 	// Injects the clickable delete button that's always present
 	$('#websiteTable tr').remove();
 	$.each(jsonData, function(i, site) {
-		$('#websiteTable').append('<tr><td><a href="' + site.url + '">' + site.name + '<img class="extLink" src=starexecRoot+"images/external.png"/></a></td><td><a class="delWebsite" id="' + site.id + '">delete</a></td></tr>');
+		$('#websiteTable').append('<tr><td><a href="' + site.url + '">' + site.name + '<span class="ext-link-icon"></span></a></td><td><a class="delWebsite" id="' + site.id + '">delete</a></td></tr>');
 	});
 }*/
 

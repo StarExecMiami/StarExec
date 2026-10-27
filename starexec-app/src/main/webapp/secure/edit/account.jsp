@@ -230,8 +230,7 @@
 				<tbody>
 				<c:forEach items="${sites}" var="s">
 					<tr>
-						<td><a href="${fn:escapeXml(s.url)}" rel="external">${fn:escapeXml(s.name)}<img class="extLink"
-						                                     src="${starexecRoot}/images/external.png" alt="External link"/></a>
+						<td><a href="${fn:escapeXml(s.url)}" rel="external">${fn:escapeXml(s.name)}<span class="ext-link-icon"></span></a>
 						</td>
 						<td><button class="btn btn-secondary delWebsite" data-id="${s.id}" type="button">Delete</button></td>
 					</tr>

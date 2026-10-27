@@ -127,8 +127,7 @@
 							<td id="configItem">
 								<a href="${starexecRoot}/secure/details/configuration.jsp?id=${c.id}">
 										${c.name}
-									<img class="extLink"
-									     src="${starexecRoot}/images/external.png"/>
+									<span class="ext-link-icon"></span>
 								</a>
 							</td>
 							<td>
@@ -155,9 +154,7 @@
 				<c:forEach var="site" items="${sites}">
 					<tr>
 						<td>${site[0]}</td>
-						<td><a href="${site[1]}">${site[2]}</a><img
-								class="extLink"
-								src="${starexecRoot}/images/external.png"/></td>
+						<td><a href="${site[1]}">${site[2]}</a><span class="ext-link-icon"></span></td>
 
 					</tr>
 				</c:forEach>

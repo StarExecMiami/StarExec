@@ -170,9 +170,7 @@
 
 			<c:forEach var="site" items="${sites}">
 				<tr>
-					<td><a href="${fn:escapeXml(site.url)}" target="_blank" rel="noopener">${fn:escapeXml(site.name)} <img
-							class="extLink"
-							src="${starexecRoot}/images/external.png"/></a></td>
+					<td><a href="${fn:escapeXml(site.url)}" target="_blank" rel="noopener">${fn:escapeXml(site.name)} <span class="ext-link-icon"></span></a></td>
 					<td><a class="delWebsite" id="${site.id}">delete</a></td>
 				</tr>
 
@@ -204,8 +202,7 @@
 				<tr id="proc_${proc.id}">
 					<td>
 						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}
-							<img class="extLink"
-							     src="${starexecRoot}/images/external.png"/>
+							<span class="ext-link-icon"></span>
 						</a></td>
 					<td>${proc.description}</td>
 					<td>${proc.fileName}</td>
@@ -404,8 +401,7 @@
 				<tr id="proc_${proc.id}">
 					<td>
 						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}
-							<img class="extLink"
-							     src="${starexecRoot}/images/external.png"/>
+							<span class="ext-link-icon"></span>
 						</a></td>
 					<td>${proc.description}</td>
 					<td>${proc.fileName}</td>
@@ -479,9 +475,7 @@
 			<c:forEach var="proc" items="${post_proc}">
 				<tr id="proc_${proc.id}">
 					<td>
-						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}<img
-								class="extLink"
-								src="${starexecRoot}/images/external.png"/> </a>
+						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}<span class="ext-link-icon"></span> </a>
 					</td>
 					<td>${proc.description}</td>
 					<td>${proc.fileName}</td>
@@ -555,9 +549,7 @@
 			<c:forEach var="proc" items="${update_proc}">
 				<tr id="proc_${proc.id}">
 					<td>
-						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}<img
-								class="extLink"
-								src="${starexecRoot}/images/external.png"/> </a>
+						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}<span class="ext-link-icon"></span> </a>
 					</td>
 					<td>${proc.description}</td>
 					<td>${proc.fileName}</td>

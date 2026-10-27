@@ -42,8 +42,13 @@ $helper-first-include: true !default;
 
 	%popup-links {
 		[target="_blank"]::after {
+			content: "";
+			display: inline-block;
+			width: 0.75em;
+			height: 0.75em;
 			margin-left: .5em;
-			content: image-url("external.png");
+			background-color: currentcolor;
+			mask: image-url("icons/external.svg") no-repeat center / contain;
 		}
 	}
 
