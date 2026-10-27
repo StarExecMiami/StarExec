@@ -220,12 +220,19 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
 // =============================================================================
 // TABLE WRAPPER COMPONENT
 // =============================================================================
-// Use this for responsive tables that need horizontal scrolling
+// Scrolls a wide table horizontally inside its own box, so the table never
+// stretches its container. master.js puts every DataTable in one.
 
 .table-wrapper {
   @include table-responsive;
   margin-top: 1em;
   margin-bottom: 1em;
+}
+
+// No outer spacing: master.js uses it for DataTables, whose layout spaces the table.
+.table-wrapper--flush {
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 // =============================================================================

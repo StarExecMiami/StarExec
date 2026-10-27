@@ -340,6 +340,23 @@ jQuery(function ($) {
   });
 
   /**
+   * Wide tables scroll inside their own box (.table-wrapper) instead of
+   * stretching their container. Skip tables that DataTables already scrolls
+   * (scrollX/scrollY) and tables a page has wrapped itself.
+   */
+  $(document).on("preInit.dt", function (e, settings) {
+    var table = $(settings.nTable);
+    if (
+      settings.oScroll.sX ||
+      settings.oScroll.sY ||
+      table.closest(".table-wrapper").length
+    ) {
+      return;
+    }
+    table.wrap('<div class="table-wrapper table-wrapper--flush"></div>');
+  });
+
+  /**
    * DataTables configuration
    * @constructor
    * @dict
