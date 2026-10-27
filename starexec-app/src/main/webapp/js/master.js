@@ -466,8 +466,7 @@ function showMessageLegacy(type, message, duration) {
   var messageSpan = $("<div></div>").html(message);
 
   // Create a new DOM element to insert to display the message, and inject its classes and message
-  var tmp =
-    "<div><img src='" + starexecRoot + "images/icons/exclaim.png' /></div>";
+  var tmp = "<div><span class='message__icon' aria-hidden='true'></span></div>";
   log(starexecRoot);
   var msg = $(tmp).attr("class", type + " message");
   $(msg).append(messageSpan);

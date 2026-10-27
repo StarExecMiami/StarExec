@@ -269,10 +269,7 @@ public class DoJobPage {
 			File sandboxCssJqueryUiDirectory = new File(sandboxDirectory, "css/jqueryui");
 			FileUtils.copyDirectoryToDirectory(serverCssJqueryUiImagesDirectory, sandboxCssJqueryUiDirectory);
 
-			File serverCssImagesDirectory = new File(R.STAREXEC_ROOT + "css/images");
 			File sandboxCssDirectory = new File(sandboxDirectory, "css/");
-			FileUtils.copyDirectoryToDirectory(serverCssImagesDirectory, sandboxCssDirectory);
-
 			File serverCssJstreeDirectory = new File(R.STAREXEC_ROOT + "css/jstree");
 			FileUtils.copyDirectoryToDirectory(serverCssJstreeDirectory, sandboxCssDirectory);
 

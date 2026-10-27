@@ -45,26 +45,43 @@ table.dataTable {
 		}
 	}
 
+	// Sort indicator, drawn in the header's text colour inside its right padding.
 	thead {
-		.sorting_asc, .sorting_desc, .sorting {
+		.sorting, .sorting_asc, .sorting_desc, .sorting_asc_disabled, .sorting_desc_disabled {
+			position: relative;
+
+			&::after {
+				@include icon-mask("chevrons-up-down");
+
+				content: "";
+				position: absolute;
+				top: 50%;
+				right: 4px;
+				width: 12px;
+				height: 12px;
+				margin-top: -6px;
+				opacity: 0.5;
+			}
+		}
+
+		.sorting, .sorting_asc, .sorting_desc {
 			cursor: pointer;
-			background: stylesheet-url("images/sort_both.png") no-repeat center right;
 		}
 
-		.sorting_asc {
-			background-image: stylesheet-url("images/sort_asc.png");
+		.sorting_asc::after, .sorting_asc_disabled::after {
+			mask-image: icon("chevron-up");
 		}
 
-		.sorting_desc {
-			background-image: stylesheet-url("images/sort_desc.png");
+		.sorting_desc::after, .sorting_desc_disabled::after {
+			mask-image: icon("chevron-down");
 		}
 
-		.sorting_asc_disabled {
-			background-image: stylesheet-url("images/sort_asc_disabled.png");
+		.sorting_asc::after, .sorting_desc::after {
+			opacity: 1;
 		}
 
-		.sorting_desc_disabled {
-			background-image: stylesheet-url("images/sort_desc_disabled.png");
+		.sorting_asc_disabled::after, .sorting_desc_disabled::after {
+			opacity: 0.25;
 		}
 	}
 

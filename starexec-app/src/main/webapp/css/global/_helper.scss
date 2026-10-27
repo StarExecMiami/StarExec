@@ -24,10 +24,6 @@
 	animation: loading-spinner-rotate 0.75s linear infinite;
 }
 
-@function stylesheet-url($path) {
-	@return url($rootUrl + "css/" + $path);
-}
-
 @function image-url($path) {
 	@return url($rootUrl + "images/" + $path);
 }
