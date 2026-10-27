@@ -309,7 +309,10 @@ fieldset ul li {
 
 #uploadPicture {
 	margin: 1rem;
-	width: 107px;
+
+	// The picture column's width, or more when the label needs it (phones pad
+	// buttons more).
+	min-width: 107px;
 }
 
 .selectPrim {
@@ -349,9 +352,12 @@ fieldset ul li {
 			width: 100%;
 		}
 
+		// Each row stacks its cells; a label takes 40% of it, or more when a
+		// word needs it ("Attribute" on a 320px screen).
 		#personal tr > * {
 			&:nth-child(1) {
-				width: 40%;
+				width: auto;
+				min-width: 40%;
 			}
 
 			&:nth-child(2) {

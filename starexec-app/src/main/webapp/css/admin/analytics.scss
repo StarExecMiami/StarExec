@@ -87,9 +87,13 @@
         display: flex;
         width: 100%;
 
+        // Equal widths in a row, each label on one line; rows wrap. The
+        // shared button rule sets min-width: 48px on phones; auto keeps each
+        // button as wide as its label.
         .btn-preset {
             flex: 1;
-            min-width: 80px;
+            min-width: auto;
+            white-space: nowrap;
         }
     }
 }

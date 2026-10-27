@@ -19,7 +19,7 @@
           <span class="breadcrumb-current" aria-current="page">StarExecCommand</span>
         </nav>
 
-        <h1 class="page-title">StarExecCommand</h1>
+        <h1 class="page-title">StarExec<wbr>Command</h1>
         <p class="lead">
           A powerful command-line interface for automating StarExec workflows
         </p>
@@ -156,7 +156,7 @@
 
           </div>
 
-          <h3>Running StarExecCommand</h3>
+          <h3>Running StarExec<wbr>Command</h3>
           <pre><code>java -jar StarexecCommand.jar</code></pre>
           <p>
             After starting, you'll enter an interactive shell. Your first

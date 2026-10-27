@@ -587,8 +587,11 @@ pre {
   }
 }
 
+// The title sits beside the icon, and drops below it when its longest word
+// does not fit there.
 .feature-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: $spacing-md;
   margin-bottom: $spacing-md;
@@ -614,6 +617,7 @@ pre {
 }
 
 .feature-title {
+  flex: 1;
   font-size: $font-size-lg;
   font-weight: $font-weight-semibold;
   color: $text-main-color;
@@ -789,6 +793,11 @@ pre {
 @include m.mobile {
   .starexeccommand-container {
     padding: $spacing-md;
+  }
+
+  // A card is too narrow for terms and descriptions side by side.
+  .command dl {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .page-header {

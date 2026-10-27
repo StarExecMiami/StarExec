@@ -811,11 +811,15 @@ kbd {
   font-family: $font-family-mono;
   font-size: $font-size-sm;
   margin: $spacing-sm 0;
+
+  // File names stay whole, as in a terminal; a tree wider than the box scrolls.
+  overflow-x: auto;
 }
 
 .tree-item {
   color: $text-secondary;
   padding: $spacing-2xs 0;
+  white-space: nowrap;
 
   &--folder {
     color: $accent-blue;
