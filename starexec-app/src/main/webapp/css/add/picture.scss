@@ -7,12 +7,6 @@ fieldset {
 	margin: s.$spacing-xl auto 0 auto;
 }
 
-@media only screen and (max-width: 767px) {
-	fieldset {
-		width: 95%;
-	}
-}
-
 fieldset table {
 	width: 100%;
 }
