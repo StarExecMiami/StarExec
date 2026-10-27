@@ -276,10 +276,6 @@ public class DoJobPage {
 			File serverCssJstreeDirectory = new File(R.STAREXEC_ROOT + "css/jstree");
 			FileUtils.copyDirectoryToDirectory(serverCssJstreeDirectory, sandboxCssDirectory);
 
-			File serverImagesJstreeDirectory = new File(R.STAREXEC_ROOT + "images/jstree");
-			File sandboxImagesDirectory = new File(sandboxDirectory, "images/");
-			FileUtils.copyDirectoryToDirectory(serverImagesJstreeDirectory, sandboxImagesDirectory);
-
 		} catch (Exception e) {
 			String msg = e.getMessage();
 			log.error("could not get dependencies for the main page: " + msg);

@@ -41,7 +41,7 @@
 	<span id="userId" value="${userId}" hidden></span>
 	<div id="explorer">
 		<h3>Official</h3>
-		<ul id="exploreList">
+		<ul id="exploreList" class="community-tree">
 		</ul>
 	</div>
 

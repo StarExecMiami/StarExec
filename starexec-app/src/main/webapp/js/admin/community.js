@@ -22,10 +22,7 @@ jQuery(function($) {
 			"valid_children": ["space"],
 			"types": {
 				"space": {
-					"valid_children": ["space"],
-					"icon": {
-						"image": starexecRoot + "images/jstree/users.png"
-					}
+					"valid_children": ["space"]
 				}
 			}
 		},

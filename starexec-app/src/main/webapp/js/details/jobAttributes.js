@@ -92,10 +92,7 @@ function initSpaceExplorer(
 			"valid_children": ["space"],
 			"types": {
 				"space": {
-					"valid_children": ["space"],
-					"icon": {
-						"image": starexecRoot + "images/jstree/db.png"
-					}
+					"valid_children": ["space"]
 				}
 			}
 		},
