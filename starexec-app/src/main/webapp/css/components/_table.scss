@@ -249,6 +249,28 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
   }
 }
 
+// Forms lay out label/field pairs in a table inside a fieldset. On phones the
+// fixed widths of fields (often 200px or more) and of label cells (140px,
+// 160px) set the columns' minimum widths, so the form ran off screen. There,
+// fields fill their column and labels take their own width and may wrap, so
+// the table fits. DataTables keep their own layout. The #content id outweighs
+// the page rules that set those widths (#tblSpace input, #loginForm input,
+// .label). $breakpoint-mobile is 768px, as in global.css; @include mobile here
+// comes from global/helper and stops at 767px.
+#content :is(form fieldset, fieldset form) table:not(.dataTable) {
+  @media (max-width: $breakpoint-mobile) {
+    :is(input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="image"]), select, textarea) {
+      width: 100%;
+    }
+
+    td:first-child {
+      width: auto;
+      min-width: 0;
+      white-space: normal;
+    }
+  }
+}
+
 // =============================================================================
 // BASE TABLE STYLES
 // =============================================================================

@@ -42,6 +42,13 @@ input, textarea, select {
 		border-color: $accent-orange;
 		background-color: $input-background-selected;
 	}
+
+	// Page styles give many fields a fixed width (200px, 460px...). On phones,
+	// never let one be wider than its container.
+	@include mobile {
+		box-sizing: border-box;
+		max-width: 100%;
+	}
 }
 
 input[type="text"],
