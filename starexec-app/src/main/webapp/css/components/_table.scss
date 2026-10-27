@@ -176,8 +176,7 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
 // Responsive table wrapper
 @mixin table-responsive {
   overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  
+
   @media (max-width: 768px) {
     display: block;
     width: 100%;
