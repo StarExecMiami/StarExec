@@ -168,8 +168,7 @@ $spacing-2xs: s.$spacing-2xs;
   @include m.transition-default;
   display: flex;
   flex-direction: column;
-  height: 100%;
-  
+
   &:hover {
     border-color: $accent-blue;
     @include m.card-shadow;
