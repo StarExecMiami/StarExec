@@ -1,3 +1,4 @@
+@use "../global/mixins" as m;
 @import "../common/_pass_strength_meter";
 @import "../global/colors";
 
@@ -20,7 +21,10 @@
 // Section layout (replaces fieldset in this page)
 .account-edit {
 	> section {
+		// Like fieldsets: the width includes padding and border, never past the page.
+		box-sizing: border-box;
 		width: 600px;
+		max-width: 100%;
 		margin: 0 auto 30px;
 		border: 3px solid $background-color;
 		border-radius: 3px;
@@ -214,10 +218,18 @@ fieldset ul li {
 .account-edit section input[type="text"],
 .account-edit section input[type="email"],
 .account-edit section input[type="url"],
-.account-edit section input[type="number"] {
+.account-edit section input[type="number"],
+.account-edit section input[type="password"] {
 	min-width: 200px;
 	width: auto;
 	max-width: 400px;
+
+	// On phones the cell is narrower than 200px: fill it instead.
+	@include m.mobile {
+		box-sizing: border-box;
+		min-width: 0;
+		width: 100%;
+	}
 }
 
 #toggleWebsite {
@@ -316,6 +328,7 @@ fieldset ul li {
 
 	#wrapper #picSection {
 		margin-bottom: 1rem;
+		box-sizing: border-box;
 		width: 100%;
 		text-align: center;
 	}
@@ -332,6 +345,7 @@ fieldset ul li {
 
 	#wrapper {
 		#userDetail {
+			box-sizing: border-box;
 			width: 100%;
 		}
 
