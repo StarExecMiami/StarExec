@@ -396,6 +396,17 @@ pre {
 // Tables
 // ============================================================================
 
+// starexeccommand.jsp puts each table in a .table-wrapper scroll box. Margins
+// do not collapse through a scroll box, so the box takes the table's spacing
+// and the table drops its own.
+.documentation .table-wrapper {
+  margin: $spacing-lg 0;
+
+  > :is(.param-table, .command-table) {
+    margin: 0;
+  }
+}
+
 .param-table,
 .command-table {
   width: 100%;
@@ -403,7 +414,6 @@ pre {
   margin: $spacing-lg 0;
   font-size: $font-size-sm;
   background: $foreground-color;
-  overflow-x: auto;
 
   th,
   td {

@@ -265,78 +265,80 @@ getjobinfo id=472 out=somefilelocation.zip</pre
 
           <p>Common parameters used across various commands:</p>
 
-          <table class="param-table">
-            <thead>
-              <tr>
-                <th>Parameter</th>
-                <th>Description</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><code>id</code></td>
-                <td>ID of the primitive (space, job, benchmark, etc.)</td>
-              </tr>
-              <tr>
-                <td><code>u</code></td>
-                <td>
-                  Username for login, or flag for listing user's own primitives
-                </td>
-              </tr>
-              <tr>
-                <td><code>p</code></td>
-                <td>Password (not required if u=guest)</td>
-              </tr>
-              <tr>
-                <td><code>out</code></td>
-                <td>Output file path</td>
-              </tr>
-              <tr>
-                <td><code>f</code></td>
-                <td>Path to local file</td>
-              </tr>
-              <tr>
-                <td><code>url</code></td>
-                <td>URL of remote file</td>
-              </tr>
-              <tr>
-                <td><code>n</code></td>
-                <td>Name (defaults to current date if not specified)</td>
-              </tr>
-              <tr>
-                <td><code>d</code></td>
-                <td>Description text</td>
-              </tr>
-              <tr>
-                <td><code>limit</code></td>
-                <td>Maximum number of items to retrieve/print</td>
-              </tr>
-              <tr>
-                <td><code>cpu</code></td>
-                <td>CPU timeout in seconds for new jobs</td>
-              </tr>
-              <tr>
-                <td><code>w</code></td>
-                <td>Wallclock timeout in seconds</td>
-              </tr>
-              <tr>
-                <td><code>mem</code></td>
-                <td>Maximum memory in GB per job pair</td>
-              </tr>
-              <tr>
-                <td><code>qid</code></td>
-                <td>Queue ID</td>
-              </tr>
-              <tr>
-                <td><code>pid</code></td>
-                <td>Post processor ID</td>
-              </tr>
-              <tr>
-                <td><code>preid</code></td>
-                <td>Pre processor ID</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="table-wrapper">
+            <table class="param-table">
+              <thead>
+                <tr>
+                  <th>Parameter</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>id</code></td>
+                  <td>ID of the primitive (space, job, benchmark, etc.)</td>
+                </tr>
+                <tr>
+                  <td><code>u</code></td>
+                  <td>
+                    Username for login, or flag for listing user's own primitives
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>p</code></td>
+                  <td>Password (not required if u=guest)</td>
+                </tr>
+                <tr>
+                  <td><code>out</code></td>
+                  <td>Output file path</td>
+                </tr>
+                <tr>
+                  <td><code>f</code></td>
+                  <td>Path to local file</td>
+                </tr>
+                <tr>
+                  <td><code>url</code></td>
+                  <td>URL of remote file</td>
+                </tr>
+                <tr>
+                  <td><code>n</code></td>
+                  <td>Name (defaults to current date if not specified)</td>
+                </tr>
+                <tr>
+                  <td><code>d</code></td>
+                  <td>Description text</td>
+                </tr>
+                <tr>
+                  <td><code>limit</code></td>
+                  <td>Maximum number of items to retrieve/print</td>
+                </tr>
+                <tr>
+                  <td><code>cpu</code></td>
+                  <td>CPU timeout in seconds for new jobs</td>
+                </tr>
+                <tr>
+                  <td><code>w</code></td>
+                  <td>Wallclock timeout in seconds</td>
+                </tr>
+                <tr>
+                  <td><code>mem</code></td>
+                  <td>Maximum memory in GB per job pair</td>
+                </tr>
+                <tr>
+                  <td><code>qid</code></td>
+                  <td>Queue ID</td>
+                </tr>
+                <tr>
+                  <td><code>pid</code></td>
+                  <td>Post processor ID</td>
+                </tr>
+                <tr>
+                  <td><code>preid</code></td>
+                  <td>Pre processor ID</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
           <div class="tip-box">
             <div class="tip-icon">💡</div>
@@ -412,100 +414,104 @@ resumejob id=123</code></pre>
             <code>ow</code> flag to overwrite existing files.
           </p>
 
-          <table class="command-table">
-            <thead>
-              <tr>
-                <th>Command</th>
-                <th>Description</th>
-                <th>Required</th>
-                <th>Optional</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><code>getjobinfo</code></td>
-                <td>Download job CSV</td>
-                <td>id, out</td>
-                <td>ow, incids, comp</td>
-              </tr>
-              <tr>
-                <td><code>getjobout</code></td>
-                <td>Download all job pair outputs</td>
-                <td>id, out</td>
-                <td>ow</td>
-              </tr>
-              <tr>
-                <td><code>getjobpair</code></td>
-                <td>Download single job pair output</td>
-                <td>id, out</td>
-                <td>ow, longpath</td>
-              </tr>
-              <tr>
-                <td><code>getsolver</code></td>
-                <td>Download a solver</td>
-                <td>id, out</td>
-                <td>ow</td>
-              </tr>
-              <tr>
-                <td><code>getbench</code></td>
-                <td>Download a benchmark</td>
-                <td>id, out</td>
-                <td>ow</td>
-              </tr>
-              <tr>
-                <td><code>getspacexml</code></td>
-                <td>Download space hierarchy as XML</td>
-                <td>id, out</td>
-                <td>ow, attr, pid</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="table-wrapper">
+            <table class="command-table">
+              <thead>
+                <tr>
+                  <th>Command</th>
+                  <th>Description</th>
+                  <th>Required</th>
+                  <th>Optional</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>getjobinfo</code></td>
+                  <td>Download job CSV</td>
+                  <td>id, out</td>
+                  <td>ow, incids, comp</td>
+                </tr>
+                <tr>
+                  <td><code>getjobout</code></td>
+                  <td>Download all job pair outputs</td>
+                  <td>id, out</td>
+                  <td>ow</td>
+                </tr>
+                <tr>
+                  <td><code>getjobpair</code></td>
+                  <td>Download single job pair output</td>
+                  <td>id, out</td>
+                  <td>ow, longpath</td>
+                </tr>
+                <tr>
+                  <td><code>getsolver</code></td>
+                  <td>Download a solver</td>
+                  <td>id, out</td>
+                  <td>ow</td>
+                </tr>
+                <tr>
+                  <td><code>getbench</code></td>
+                  <td>Download a benchmark</td>
+                  <td>id, out</td>
+                  <td>ow</td>
+                </tr>
+                <tr>
+                  <td><code>getspacexml</code></td>
+                  <td>Download space hierarchy as XML</td>
+                  <td>id, out</td>
+                  <td>ow, attr, pid</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
           <!-- Upload Commands -->
           <h3 id="push-commands">Upload Commands</h3>
 
-          <table class="command-table">
-            <thead>
-              <tr>
-                <th>Command</th>
-                <th>Description</th>
-                <th>Required</th>
-                <th>Optional</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><code>pushsolver</code></td>
-                <td>Upload a solver</td>
-                <td>(f OR url), id</td>
-                <td>n, d, df, downloadable, run, set, type</td>
-              </tr>
-              <tr>
-                <td><code>pushbenchmarks</code></td>
-                <td>Upload benchmarks</td>
-                <td>(f OR url), id, bt</td>
-                <td>d, df, dep, downloadable, hier, link, allPerm</td>
-              </tr>
-              <tr>
-                <td><code>pushconfig</code></td>
-                <td>Upload solver configuration</td>
-                <td>f, id</td>
-                <td>n, d</td>
-              </tr>
-              <tr>
-                <td><code>pushspacexml</code></td>
-                <td>Upload space XML</td>
-                <td>f, id</td>
-                <td>-</td>
-              </tr>
-              <tr>
-                <td><code>pushjobxml</code></td>
-                <td>Upload job XML</td>
-                <td>f, id</td>
-                <td>-</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="table-wrapper">
+            <table class="command-table">
+              <thead>
+                <tr>
+                  <th>Command</th>
+                  <th>Description</th>
+                  <th>Required</th>
+                  <th>Optional</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>pushsolver</code></td>
+                  <td>Upload a solver</td>
+                  <td>(f OR url), id</td>
+                  <td>n, d, df, downloadable, run, set, type</td>
+                </tr>
+                <tr>
+                  <td><code>pushbenchmarks</code></td>
+                  <td>Upload benchmarks</td>
+                  <td>(f OR url), id, bt</td>
+                  <td>d, df, dep, downloadable, hier, link, allPerm</td>
+                </tr>
+                <tr>
+                  <td><code>pushconfig</code></td>
+                  <td>Upload solver configuration</td>
+                  <td>f, id</td>
+                  <td>n, d</td>
+                </tr>
+                <tr>
+                  <td><code>pushspacexml</code></td>
+                  <td>Upload space XML</td>
+                  <td>f, id</td>
+                  <td>-</td>
+                </tr>
+                <tr>
+                  <td><code>pushjobxml</code></td>
+                  <td>Upload job XML</td>
+                  <td>f, id</td>
+                  <td>-</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
           <!-- List Commands -->
           <h3 id="list-commands">List Commands</h3>
@@ -514,54 +520,56 @@ resumejob id=123</code></pre>
             <code>id</code> to list your own primitives.
           </p>
 
-          <table class="command-table">
-            <thead>
-              <tr>
-                <th>Command</th>
-                <th>Description</th>
-                <th>Required</th>
-                <th>Optional</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><code>lsbenchmarks</code></td>
-                <td>List benchmarks</td>
-                <td>id OR u</td>
-                <td>limit</td>
-              </tr>
-              <tr>
-                <td><code>lsjobs</code></td>
-                <td>List jobs</td>
-                <td>id OR u</td>
-                <td>limit</td>
-              </tr>
-              <tr>
-                <td><code>lssolvers</code></td>
-                <td>List solvers</td>
-                <td>id OR u</td>
-                <td>limit</td>
-              </tr>
-              <tr>
-                <td><code>lsconfigs</code></td>
-                <td>List solver configurations</td>
-                <td>id (solver)</td>
-                <td>limit</td>
-              </tr>
-              <tr>
-                <td><code>lssubspaces</code></td>
-                <td>List subspaces</td>
-                <td>id</td>
-                <td>limit</td>
-              </tr>
-              <tr>
-                <td><code>lsusers</code></td>
-                <td>List users in space</td>
-                <td>id</td>
-                <td>limit</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="table-wrapper">
+            <table class="command-table">
+              <thead>
+                <tr>
+                  <th>Command</th>
+                  <th>Description</th>
+                  <th>Required</th>
+                  <th>Optional</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>lsbenchmarks</code></td>
+                  <td>List benchmarks</td>
+                  <td>id OR u</td>
+                  <td>limit</td>
+                </tr>
+                <tr>
+                  <td><code>lsjobs</code></td>
+                  <td>List jobs</td>
+                  <td>id OR u</td>
+                  <td>limit</td>
+                </tr>
+                <tr>
+                  <td><code>lssolvers</code></td>
+                  <td>List solvers</td>
+                  <td>id OR u</td>
+                  <td>limit</td>
+                </tr>
+                <tr>
+                  <td><code>lsconfigs</code></td>
+                  <td>List solver configurations</td>
+                  <td>id (solver)</td>
+                  <td>limit</td>
+                </tr>
+                <tr>
+                  <td><code>lssubspaces</code></td>
+                  <td>List subspaces</td>
+                  <td>id</td>
+                  <td>limit</td>
+                </tr>
+                <tr>
+                  <td><code>lsusers</code></td>
+                  <td>List users in space</td>
+                  <td>id</td>
+                  <td>limit</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
           <div class="example-box">
             <div class="example-header">
