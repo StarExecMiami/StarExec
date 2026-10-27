@@ -170,7 +170,9 @@ $container-max-width: s.$container-max-width;
 
 .links-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+
+  // min(..., 100%): a card column is never wider than a narrow screen.
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   gap: $spacing-md;
 }
 
@@ -261,11 +263,12 @@ $container-max-width: s.$container-max-width;
 
 .tools-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr));
   gap: $spacing-lg;
 
   @include m.mobile {
-    grid-template-columns: 1fr;
+    // minmax(0, 1fr), not 1fr: long content wraps or scrolls instead of widening the column.
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -351,7 +354,7 @@ $container-max-width: s.$container-max-width;
 
 .community-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   gap: $spacing-md;
 }
 
@@ -482,11 +485,11 @@ $container-max-width: s.$container-max-width;
 
 .status-details {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
   gap: $spacing-md;
 
   @include m.mobile {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: $spacing-md;
   }
 }

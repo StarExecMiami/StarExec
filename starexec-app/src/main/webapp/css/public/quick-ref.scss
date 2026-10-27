@@ -143,13 +143,15 @@ $container-max-width: s.$container-max-width;
 
 .guide-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+
+  // minmax(0, 1fr), not 1fr: long content scrolls instead of widening the page.
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: $spacing-2xl;
   align-items: start;
   margin-bottom: $spacing-3xl;
 
   @include m.tablet {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: $spacing-xl;
   }
 }
@@ -339,7 +341,9 @@ $container-max-width: s.$container-max-width;
 
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+
+  // min(..., 100%): a card column is never wider than a narrow screen.
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: $spacing-md;
   margin-bottom: $spacing-lg;
 }
@@ -460,7 +464,7 @@ kbd {
 
 .resource-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr));
   gap: $spacing-md;
 }
 

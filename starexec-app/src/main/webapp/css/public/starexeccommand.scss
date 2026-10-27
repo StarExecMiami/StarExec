@@ -192,17 +192,19 @@ $container-max-width: s.$container-max-width;
 
 .guide-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+
+  // minmax(0, 1fr), not 1fr: long code lines scroll instead of widening the page.
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: $spacing-xl;
   margin-bottom: auto;
   align-items: start;
 
   @include m.tablet {
-    grid-template-columns: 240px 1fr;
+    grid-template-columns: 240px minmax(0, 1fr);
   }
 
   @include m.mobile {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -475,7 +477,9 @@ pre {
 
   dl {
     display: grid;
-    grid-template-columns: auto 1fr;
+
+    // minmax(0, 1fr), not 1fr: long content wraps or scrolls instead of widening the column.
+    grid-template-columns: auto minmax(0, 1fr);
     gap: $spacing-sm $spacing-lg;
     margin: $spacing-md 0;
   }
@@ -497,6 +501,9 @@ pre {
 
 .command-grid {
   display: grid;
+
+  // One column that may shrink below its longest code line (the pre scrolls).
+  grid-template-columns: minmax(0, 1fr);
   gap: $spacing-lg;
   margin: $spacing-lg 0;
 }
@@ -557,7 +564,9 @@ pre {
 
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+
+  // min(..., 100%): a card column is never wider than a narrow screen.
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: $spacing-lg;
   margin: $spacing-lg 0 $spacing-2xl 0;
 }
@@ -728,7 +737,7 @@ pre {
 
 .mode-comparison {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   gap: $spacing-lg;
   margin: $spacing-lg 0 $spacing-2xl 0;
 }
@@ -811,24 +820,20 @@ pre {
   }
 
   .feature-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .mode-comparison {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .guide-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: $spacing-md;
   }
 
   .doc-nav {
     position: static;
     margin-bottom: $spacing-lg;
-  }
-
-  .command-grid {
-    grid-template-columns: 1fr;
   }
 }

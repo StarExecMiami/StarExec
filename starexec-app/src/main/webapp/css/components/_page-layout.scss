@@ -268,18 +268,21 @@
 
 .guide-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+
+  // minmax(0, 1fr), not 1fr: a long code line or table scrolls inside the
+  // column instead of widening it past the page.
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: s.$spacing-2xl;
   align-items: start;
   margin-bottom: s.$spacing-3xl;
 
   @include m.tablet {
-    grid-template-columns: 240px 1fr;
+    grid-template-columns: 240px minmax(0, 1fr);
     gap: s.$spacing-xl;
   }
 
   @include m.mobile {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: s.$spacing-xl;
   }
 }
@@ -406,7 +409,9 @@
 .links-grid,
 .resources-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+
+  // min(..., 100%): a card column is never wider than a narrow screen.
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: s.$spacing-lg;
   margin-top: s.$spacing-xl;
 }
@@ -414,7 +419,7 @@
 .tools-grid,
 .community-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(350px, 100%), 1fr));
   gap: s.$spacing-lg;
 }
 
