@@ -367,29 +367,3 @@ function updateButton(dataTable, button) {
 		}
 	}
 }
-
-/**
- * Updates a table by removing selected rows and updating the table's legend to match the new table size.
- * NOTE: This way of updating a given table is preferable to re-querying the database for the space's details
- * (i.e. calling getCommunityDetails(id)) because:
- * - The fields don't minimize
- * - Doesn't ever desync (sometimes re-querying the database for a space's details didn't show that users had been removed)
- * @param dataTable the dataTable to update
- */
-function updateTable(dataTable) {
-	var rowsToRemove = $(dataTable)
-	.children('tbody')
-	.children('tr.row_selected');
-	var rowsRemaining = $(dataTable)
-	.children('tbody')
-	.children(':not(tr.row_selected)');
-	$(dataTable)
-	.parent()
-	.parent()
-	.children('legend')
-	.children('span:first-child')
-	.text(rowsRemaining.length);
-	$.each(rowsToRemove, function(i, row) {
-		dataTable.fnDeleteRow(row);
-	});
-}
