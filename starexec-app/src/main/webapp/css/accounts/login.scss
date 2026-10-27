@@ -1,11 +1,11 @@
 #loginForm {
-	width: 370px;
-	height: 140px;
+	// As wide and tall as its fields: a fixed 370x140px box, which the fieldset
+	// and table filled, was smaller than them, so they ran past its border.
+	width: fit-content;
 	margin: 50px auto auto;
 
 	table {
 		width: 100%;
-		height: 100%;
 	}
 
 	button {
@@ -18,7 +18,6 @@
 
 	fieldset {
 		width: 100%;
-		height: 100%;
 		padding: 30px;
 	}
 

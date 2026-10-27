@@ -59,10 +59,24 @@ textarea {
 }
 
 fieldset {
+	// Page styles give fieldsets a width (75%, 100%, 600px...). Count the
+	// padding and border in it, and never exceed the container. Browsers give
+	// fieldsets min-width: min-content, which beats max-width, so a wide table
+	// or a long word stretched them; reset it, as for any other block.
+	box-sizing: border-box;
+	min-width: 0;
+	max-width: 100%;
 	border: 3px solid $background-color;
 	border-radius: 3px;
 	margin: auto;
 	padding: 10px;
+
+	// On phones a fieldset fills its container: the 75% to 95% widths that
+	// page styles set there left forms less room than they need. A min-width
+	// outranks those widths, whatever their selectors.
+	@include mobile {
+		min-width: 100%;
+	}
 }
 
 legend {

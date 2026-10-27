@@ -420,6 +420,9 @@ table.dataTable {
 	position: relative;
 	clear: both;
 	zoom: 1;
+
+	// width: 100% includes any padding (the job page panels add some).
+	box-sizing: border-box;
 	width: 100%;
 	min-width: 0; // Prevent flex container collapse
 
