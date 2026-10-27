@@ -209,6 +209,9 @@ $container-max-width: s.$container-max-width;
 }
 
 .sidebar {
+  // Fill the grid row: the sticky .doc-nav can only move inside its parent.
+  align-self: stretch;
+
   @include m.mobile {
     order: 2;
   }

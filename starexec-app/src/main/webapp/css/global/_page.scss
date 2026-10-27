@@ -21,10 +21,12 @@
 	background-color: $foreground-color;
 	min-height: 350px;
 	padding: 15px 15px 35px 15px;
-	display: block;
+
+	// flow-root contains the floated explorer and detail panels without making
+	// #content a scroll box, which cut off wide content and stopped the guide
+	// sidebars from sticking. Wide tables scroll in their own .table-wrapper.
+	display: flow-root;
 	position: relative;
-	overflow: auto;
-	overflow-x: hidden;
 	clear: right;
 
 	// A long word (a URL, a file name) breaks at the edge of its box instead of
