@@ -3,7 +3,9 @@
 @import "icon-data";
 
 // Draws a vendored icon in the current text colour. Icons are data URIs, so
-// they also work in the offline job page opened from file://.
+// they also work in the offline job page opened from file://. Unprefixed
+// mask needs Chrome/Edge 120, Firefox 53 or Safari 15.4; older browsers show a
+// solid square. No -webkit- fallback: .stylelintrc forbids vendor prefixes.
 @mixin icon-mask($name) {
 	background-color: currentcolor;
 	mask: icon($name) no-repeat center / contain;
