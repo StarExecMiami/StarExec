@@ -1,6 +1,6 @@
 $(document).ready(function() {
 	// Hide loading images by default
-	$('legend img').hide();
+	$('legend .loading-spinner').hide();
 
 	$('.popoutLink').button({
 		icons: {

@@ -23,14 +23,11 @@
 		border: 1px solid #333;
 
 		&::after {
-			/* The spinner image */
+			@include loading-spinner(25px);
+
+			content: "";
 			display: block;
 			margin: 0 auto 10px;
-			background-image: image-url("ajaxloader.gif");
-			background-size: 25px;
-			width: 25px;
-			height: 25px;
-			content: ""
 		}
 	}
 }

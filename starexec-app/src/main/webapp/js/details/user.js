@@ -12,7 +12,7 @@ var spaceName;
 $(document).ready(function() {
 	userId = $("#userId").data("user-id");
 	// Hide loading images by default
-	$('legend img').hide();
+	$('legend .loading-spinner').hide();
 
 	$("#explorer").hide();
 

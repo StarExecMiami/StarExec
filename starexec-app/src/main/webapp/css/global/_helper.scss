@@ -9,6 +9,21 @@
 	mask: icon($name) no-repeat center / contain;
 }
 
+// Rotating ring in the current text colour. The keyframes live in
+// components/_loading-spinner.scss (part of global.css, loaded on every page);
+// the global reduced-motion rule in _design-tokens.scss stops the rotation.
+@mixin loading-spinner($size: 1rem) {
+	display: inline-block;
+	box-sizing: border-box;
+	width: $size;
+	height: $size;
+	vertical-align: -0.125em;
+	border: 2px solid currentcolor;
+	border-right-color: transparent;
+	border-radius: 50%;
+	animation: loading-spinner-rotate 0.75s linear infinite;
+}
+
 @function stylesheet-url($path) {
 	@return url($rootUrl + "css/" + $path);
 }

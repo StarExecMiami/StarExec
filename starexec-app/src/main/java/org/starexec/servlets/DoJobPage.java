@@ -27,7 +27,6 @@ public class DoJobPage {
     private static final String JS_FILE_TYPE = "js";
 	private static final String CSS_FILE_TYPE = "css";
 	private static final String PNG_FILE_TYPE = "png";
-	private static final String GIF_FILE_TYPE = "gif";
 	private static final String SVG_FILE_TYPE = "svg";
 	private static final String ICO_FILE_TYPE = "ico";
 	private static final String IMAGES_DIRECTORY_NAME = "images";
@@ -189,7 +188,6 @@ public class DoJobPage {
 			filetypeDirectoryName = filetype;
 			break;
 		case PNG_FILE_TYPE:
-		case GIF_FILE_TYPE:
 		case SVG_FILE_TYPE:
 		case ICO_FILE_TYPE:
 			filetypeDirectoryName = IMAGES_DIRECTORY_NAME;
@@ -251,7 +249,6 @@ public class DoJobPage {
 			addFilesInDirectory(sandboxDirectory, CSS_FILE_TYPE, Web.JOB_DETAILS_CSS_FILES);
 			addFilesInDirectory(sandboxDirectory, CSS_FILE_TYPE, Web.CSS_FILES_FOR_LOCAL_JOB);
 			addFilesInDirectory(sandboxDirectory, PNG_FILE_TYPE, Web.GLOBAL_PNG_FILES);
-			addFilesInDirectory(sandboxDirectory, GIF_FILE_TYPE, Web.GLOBAL_GIF_FILES);
 			addFilesInDirectory(sandboxDirectory, SVG_FILE_TYPE, Web.GLOBAL_SVG_FILES);
 			addFilesInDirectory(sandboxDirectory, ICO_FILE_TYPE, Web.GLOBAL_ICO_FILES);
 			File csspath = new File(sandboxDirectory, "css/global.css");

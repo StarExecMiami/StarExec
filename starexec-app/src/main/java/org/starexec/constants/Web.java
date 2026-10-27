@@ -78,7 +78,6 @@ public final class Web {
         "external",
     };
     public static final String[] GLOBAL_SVG_FILES = { "starlogo" };
-    public static final String[] GLOBAL_GIF_FILES = { "ajaxloader", "loader" };
     public static final String[] GLOBAL_ICO_FILES = { "favicon" };
 
     public static final String COPY_TO_STARDEV_BUTTON_TEXT = "copy to stardev";
