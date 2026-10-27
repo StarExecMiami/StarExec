@@ -27,6 +27,10 @@
 	overflow-x: hidden;
 	clear: right;
 
+	// A long word (a URL, a file name) breaks at the edge of its box instead of
+	// widening the page.
+	overflow-wrap: break-word;
+
 	@include mobile {
 		min-height: auto;
 	}

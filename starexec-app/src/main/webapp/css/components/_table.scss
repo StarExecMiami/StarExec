@@ -235,6 +235,20 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
   margin-bottom: 0;
 }
 
+// Detail pages and forms list label/value pairs in two-cell rows. A long word in
+// a value (a URL, a file name) set the table's minimum width and widened the
+// page, so values may break anywhere; labels keep whole words. A button or a
+// table in a value (the user and solver details, the permission grid) keeps
+// whole words too, or its text and labels would inherit the breaks; a nested
+// table's own values break anywhere by this same rule.
+#content table:not(.dataTable) td:nth-child(2):last-child {
+  overflow-wrap: anywhere;
+
+  :is(table, button) {
+    overflow-wrap: break-word;
+  }
+}
+
 // =============================================================================
 // BASE TABLE STYLES
 // =============================================================================
