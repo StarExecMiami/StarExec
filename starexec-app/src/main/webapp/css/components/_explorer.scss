@@ -269,6 +269,12 @@ $tree-node-icons: (
   }
 }
 
+// While a node loads, the jstree theme paints throbber.gif on this icon
+// (with !important); drop the mask so the throbber shows unclipped.
+.jstree li[rel] > a.jstree-loading > .jstree-icon {
+  mask: none;
+}
+
 .jstree li[rel="inactive_queue"] > a > .jstree-icon,
 .jstree li[rel="disabled_node"] > a > .jstree-icon {
   opacity: 0.55;
