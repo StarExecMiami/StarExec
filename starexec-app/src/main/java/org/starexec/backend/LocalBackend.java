@@ -182,8 +182,9 @@ public class LocalBackend implements Backend {
     // Job completion monitor (reads status files and updates database)
     private LocalJobMonitor jobMonitor;
 
-    // Cached node ID for database updates to avoid N+1 queries
-    private int cachedNodeId = -1;
+    // Cached node ID for database updates to avoid N+1 queries. Written by the worker
+    // threads that look it up again while it is unknown (recordExecutionHost).
+    private volatile int cachedNodeId = -1;
 
     // Core leasing for physical isolation
     private LinkedBlockingQueue<Integer> availableCores;
@@ -317,9 +318,9 @@ public class LocalBackend implements Backend {
      * Removes the previous attempt's results so this one cannot be judged on them.
      *
      * <p>Output directories are keyed by pair, not by attempt --
-     * {@code new File(job.logPath).getParentFile()}, where {@code logPath} comes from
-     * {@code JobPairs.getStdout(pairId)} -- so a rerun writes into exactly the tree its
-     * predecessor left behind.
+     * {@code new File(job.logPath).getParentFile()}, where {@code logPath} is the
+     * {@code JobPairs.getLogFilePath(pair)} JobManager submits with -- so a rerun writes into
+     * exactly the tree its predecessor left behind.
      *
      * @return true when nothing from a previous attempt can still be read
      */
@@ -606,13 +607,17 @@ public class LocalBackend implements Backend {
             // Start the job process
             job.process = startJobProcess(job);
 
+            // Record when the pair started. Outside container mode the job script does it
+            // through SetPairStartTime; in container mode it cannot reach the database and
+            // leaves the stamp to the host, as PodmanBackend and KubernetesNativeBackend do.
+            // setStartTime only fills an empty start_time, and a rerun clears it.
+            if (pairId > 0) {
+                org.starexec.data.database.JobPairs.setStartTime(pairId);
+            }
+
             // Update execution host mapping now that the process is alive
-            if (job.process != null && job.process.isAlive() && pairId > 0 && cachedNodeId > 0) {
-                try {
-                    org.starexec.data.database.JobPairs.updatePairExecutionHost(pairId, cachedNodeId);
-                } catch (Exception e) {
-                    log.error("Failed to update pair execution host for pair " + pairId, e);
-                }
+            if (job.process != null && job.process.isAlive() && pairId > 0) {
+                recordExecutionHost(pairId);
             }
 
             // Wait for completion with timeout and zombie detection
@@ -759,6 +764,34 @@ public class LocalBackend implements Backend {
             // still owe this pair an ingestion (see getActiveExecutionIds).
             retainForIngestion(job);
             activeJobs.remove(job.execId, job);
+        }
+    }
+
+    /**
+     * Records that this pair runs on this host, which is what lists it in the cluster page's
+     * node view while it runs.
+     *
+     * <p>The node id is looked up again while it is unknown. {@link #initialize} looks it up
+     * once, but on a fresh database or a new host name the node is only registered by the first
+     * cluster refresh, which runs after initialization; caching that miss left every pair of
+     * the lifetime without an execution host until its statistics were written.
+     */
+    private void recordExecutionHost(int pairId) {
+        int nodeId = cachedNodeId;
+        if (nodeId <= 0) {
+            nodeId = org.starexec.data.database.Cluster.getNodeIdByName(nodeName);
+            if (nodeId <= 0) {
+                log.warn("Could not find nodeId for " + nodeName + ". Pair " + pairId
+                        + " has no execution host until its statistics are recorded; the lookup"
+                        + " is retried when the next pair starts.");
+                return;
+            }
+            cachedNodeId = nodeId;
+        }
+        try {
+            org.starexec.data.database.JobPairs.updatePairExecutionHost(pairId, nodeId);
+        } catch (Exception e) {
+            log.error("Failed to update pair execution host for pair " + pairId, e);
         }
     }
 

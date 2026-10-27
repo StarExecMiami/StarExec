@@ -23,7 +23,7 @@ This guide covers:
 | `STAREXEC_LOCAL_CONCURRENCY` | `min(4, CPU cores)` | Match physical cores; prefer `STAREXEC_LOCAL_CORE_LIST` |
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` | 5 | Keep queue 50-100 deep |
 | `STAREXEC_CONTAINER_POLL_INTERVAL_MS` | 5000 | Lower for latency, higher for scale |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048 | Podman cgroup memory ceiling; match solver requirements |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048 | Podman cgroup memory ceiling; above the largest job memory limit, which it caps |
 | `STAREXEC_CPU_PARTITION_COUNT` | `auto` | `N > 1` creates topology-aware partitions; `auto` leaves a single-NUMA host unpinned |
 | `STAREXEC_CONTAINER_CPU_QUOTA_CORES` | 0 | Optional CFS cap for unpartitioned containers; not a substitute for affinity |
 
@@ -59,10 +59,14 @@ When live log streaming is enabled, protect benchmark throughput with these goal
 | Non-stream API p95 latency | < +20% vs baseline | > +50% vs baseline |
 | Benchmark pair throughput | >= 95% of baseline | < 90% of baseline |
 
-**Overhead model (rough):**
+**Overhead model (rough), for streams that have caught up with their logs:**
 - File polls/sec ≈ `activeStreams / (POLL_INTERVAL_MS / 1000)`
-- Status DB QPS ≈ `activeStreams / (STATUS_POLL_INTERVAL_MS / 1000)`
-- Max stream egress ≈ `activeStreams × READ_CHUNK_BYTES / (POLL_INTERVAL_MS / 1000)`
+- Status DB QPS ≈ `runningPairStreams / (STATUS_POLL_INTERVAL_MS / 1000)`; a finished pair's status is read once
+- Stream egress ≈ the rate at which the streamed logs grow
+
+A stream more than 32 chunks behind its log, such as one that starts at byte 0 of a long log, sends 32
+chunks of `READ_CHUNK_BYTES` per poll and polls again at once, so it sends as fast as its client reads
+until it has caught up. Each stream worker thread (4 to 16, by CPU count) sends one chunk at a time.
 
 ---
 

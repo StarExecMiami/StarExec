@@ -15,6 +15,7 @@ import org.starexec.util.ArchiveExtractor;
 import org.starexec.util.ArchiveUtil;
 import org.starexec.util.UploadArtifactFileSystem;
 import org.starexec.util.UploadArtifactPathGuard;
+import org.starexec.util.Util;
 
 import javax.servlet.ServletContextEvent;
 import javax.servlet.ServletContextListener;
@@ -31,6 +32,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -70,6 +72,27 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
      * advance time explicitly rather than sleeping.
      */
     java.util.function.LongSupplier nanoTime = System::nanoTime;
+
+    /** Downloads an archive of at most maxBytes to a file; true on success. Tests replace it. */
+    interface ArchiveFetcher {
+        boolean fetch(java.net.URL url, File target, long maxBytes);
+    }
+
+    /**
+     * How an upload by URL gets its archive. Package-private and replaceable so tests need no
+     * server; the real one applies ArchiveUrlDownloader's policy (http or https only, every
+     * redirect hop checked, a size cap and a deadline).
+     */
+    ArchiveFetcher archiveFetcher = Util::copyFileFromURLUsingProxy;
+
+    /** Keeps a job's heartbeat fresh while its archive downloads; nothing else writes it then. */
+    private static final ScheduledExecutorService DOWNLOAD_HEARTBEAT =
+        Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "upload-download-heartbeat");
+            t.setDaemon(true);
+            return t;
+        });
+    private static final long DOWNLOAD_HEARTBEAT_SECONDS = 60;
     static final String TEMP_EXTRACTION_SUFFIX = ".extracting";
     
     private final AtomicBoolean running = new AtomicBoolean(true);
@@ -470,9 +493,14 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             UploadJobQueue.failJob(job.getId(), errorMessage);
             
         } finally {
-            // Only delete the extraction directory when processing FAILED — the files
-            // were never registered in the DB so there is nothing to preserve.
-            if (!processingSucceeded && !preserveArtifactsForRetry && extractDir != null && safeToDeleteExtractDir) {
+            if (!processingSucceeded && UploadBenchmark.isDeletedUser(job.getUserId())) {
+                // The user was deleted while this job ran. The job's row went with the user, so it is
+                // never retried, and no row refers to its files: whatever it wrote, including the
+                // user's directory the download or the extraction created again, is deleted (#275).
+                deleteFilesOfDeletedUser(job);
+            } else if (!processingSucceeded && !preserveArtifactsForRetry && extractDir != null && safeToDeleteExtractDir) {
+                // Only delete the extraction directory when processing FAILED — the files
+                // were never registered in the DB so there is nothing to preserve.
                 try {
                     Path safeExtractDir = getUploadPathGuard().validateExtractionDirectoryPath(
                         extractDir.getAbsolutePath(),
@@ -486,6 +514,51 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                 }
             }
         }
+    }
+
+    /**
+     * Deletes everything an upload job wrote for a user who no longer exists: its extraction
+     * directories, finished or not, its archive, and then the directories above them while they are
+     * empty. Each path is checked by the upload path guard first, and symbolic links are refused,
+     * not followed. Each is deleted on its own, so one that cannot be deleted does not keep the
+     * others. Never throws, so it cannot replace the exception that ended the job.
+     */
+    private void deleteFilesOfDeletedUser(UploadJob job) {
+        String method = "deleteFilesOfDeletedUser";
+        UploadArtifactPathGuard pathGuard;
+        Path archive;
+        try {
+            pathGuard = getUploadPathGuard();
+            archive = pathGuard.validateSourceArchivePath(job.getArchivePath(), job.getUserId());
+        } catch (IOException | RuntimeException e) {
+            log.warn(method, "Not deleting the files of upload job " + job.getId()
+                + ": its archive path is not one an upload writes", e);
+            return;
+        }
+        Path directory = archive.getParent();
+        if (Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+            try (DirectoryStream<Path> extractions =
+                     Files.newDirectoryStream(directory, "upload_" + job.getId() + "_*")) {
+                for (Path extraction : extractions) {
+                    try {
+                        UploadArtifactFileSystem.deleteDirectoryWithoutFollowingLinks(
+                            pathGuard.validateExtractionDirectoryPath(
+                                extraction.toString(), job.getId(), job.getUserId()));
+                    } catch (IOException | RuntimeException e) {
+                        log.warn(method, "Could not delete " + extraction, e);
+                    }
+                }
+            } catch (IOException | RuntimeException e) {
+                log.warn(method, "Could not list " + directory, e);
+            }
+        }
+        try {
+            UploadArtifactFileSystem.deleteFileWithoutFollowingLinks(archive);
+        } catch (IOException | RuntimeException e) {
+            log.warn(method, "Could not delete " + archive, e);
+        }
+        Util.deleteEmptyParents(pathGuard.getBenchmarkRoot(), archive);
+        log.info(method, "Cleaned up the files of upload job " + job.getId() + ", whose user no longer exists");
     }
 
     /**
@@ -564,6 +637,24 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
      * Handles 'convert' method using legacy synchronous code that creates subspaces.
      * This is required because the async BoundedUploadProcessor doesn't support subspace creation.
      */
+    /**
+     * The default permissions of the spaces a "convert" upload creates: the ones the upload form
+     * chose. A job queued before they were stored has none, and keeps the default every created
+     * space used to get whatever the form said: the five "add" permissions and no "remove" ones.
+     */
+    static Permission spacePermissionsFor(UploadJob job) {
+        if (job.getSpacePermissions() != null) {
+            return job.getSpacePermissions();
+        }
+        Permission perm = new Permission();
+        perm.setAddSolver(true);
+        perm.setAddBenchmark(true);
+        perm.setAddUser(true);
+        perm.setAddSpace(true);
+        perm.setAddJob(true);
+        return perm;
+    }
+
     private void handleConvertMethod(UploadJob job, File extractDir) throws Exception {
         String method = "handleConvertMethod";
         
@@ -573,15 +664,8 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         int typeId = job.getBenchmarkTypeId();
         boolean downloadable = job.isDownloadable();
         
-        // Get default permissions for new spaces
-        // Default: add solver, bench, user, space, job permissions
-        Permission perm = new Permission();
-        perm.setAddSolver(true);
-        perm.setAddBenchmark(true);
-        perm.setAddUser(true);
-        perm.setAddSpace(true);
-        perm.setAddJob(true);
-        
+        Permission perm = spacePermissionsFor(job);
+
         log.info(method, "Converting directory structure to spaces for job " + job.getId());
         
         // Create progress listener for real-time updates
@@ -712,6 +796,66 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         };
     }
 
+    /**
+     * Downloads the archive of an upload by URL to the path the job was enqueued with (#139).
+     *
+     * <p>Done here rather than in the request: an archive can take minutes to fetch, and the
+     * request would hold the proxy in front of it open that long. The job's heartbeat is kept
+     * fresh meanwhile, because the upload page marks a job stale after five minutes without
+     * one. The address is left out of the error: it is the uploader's own input, and the
+     * download has already logged why it failed.
+     */
+    void fetchArchive(UploadJob job, File archiveFile) throws IOException {
+        java.net.URL url;
+        try {
+            url = new java.net.URI(job.getSourceUrl()).toURL();
+        } catch (Exception e) {
+            throw new IOException("The archive URL is not a valid URL", e);
+        }
+        // The quota is otherwise checked only at extraction, after the download: without this,
+        // a user with no room left could still write a full-size archive to the shared volume,
+        // again on every attempt.
+        User user = Users.get(job.getUserId());
+        if (user == null) {
+            throw new IOException("Failed to load upload user for quota validation");
+        }
+        long remainingQuotaBytes = Math.max(0L, user.getDiskQuota() - user.getDiskUsage());
+        if (remainingQuotaBytes <= 0L) {
+            throw new IOException("Not enough disk quota to download this archive: no bytes remain in"
+                + " your quota. Empty your recycle bin to reclaim space, or ask an administrator to"
+                + " raise your quota.");
+        }
+        long maxBytes = Math.min(remainingQuotaBytes, Util.ARCHIVE_DOWNLOAD_MAX_BYTES);
+        log.info("fetchArchive", "Downloading the archive of upload job " + job.getId() + " from "
+            + redacted(url) + ", at most " + maxBytes + " bytes");
+        ScheduledFuture<?> heartbeat = DOWNLOAD_HEARTBEAT.scheduleAtFixedRate(
+            () -> UploadJobQueue.touchJob(job.getId()),
+            DOWNLOAD_HEARTBEAT_SECONDS, DOWNLOAD_HEARTBEAT_SECONDS, TimeUnit.SECONDS);
+        boolean fetched;
+        try {
+            fetched = archiveFetcher.fetch(url, archiveFile, maxBytes);
+        } finally {
+            heartbeat.cancel(false);
+        }
+        if (!fetched) {
+            throw new IOException("Could not download the archive from its URL: check that the address"
+                + " is reachable over http or https, and that the archive fits both the "
+                + remainingQuotaBytes + " bytes left in your quota and the "
+                + Util.ARCHIVE_DOWNLOAD_MAX_BYTES + "-byte download limit");
+        }
+    }
+
+    /**
+     * The URL reduced to where it points: scheme, host and port. Every part of the path can carry
+     * a secret -- a presigned signature in the query, a share link's token in a directory, a path
+     * parameter in the file name -- and the log is read more widely than the upload it came from.
+     * The upload job's id, logged with it, leads to the full address in upload_jobs.source_url.
+     */
+    static String redacted(java.net.URL url) {
+        String port = url.getPort() == -1 ? "" : ":" + url.getPort();
+        return url.getProtocol() + "://" + url.getHost() + port;
+    }
+
     File prepareExtraction(UploadJob job, File archiveFile, AtomicInteger extractedCount) throws Exception {
         String method = "prepareExtraction";
         UploadArtifactPathGuard pathGuard = getUploadPathGuard();
@@ -734,6 +878,11 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         }
 
         archiveFile = safeArchivePath.toFile();
+        // An upload by URL arrives without its archive: the request only recorded where to
+        // fetch it. A retry finds the file already there and does not download it again.
+        if (job.getSourceUrl() != null && !archiveFile.exists()) {
+            fetchArchive(job, archiveFile);
+        }
         if (!archiveFile.exists()) {
             throw new IOException("Archive file not found: " + job.getArchivePath());
         }

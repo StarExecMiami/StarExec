@@ -91,9 +91,11 @@ Use a secrets management solution:
 #### Option 1: Kubernetes Secrets
 
 ```bash
-# Create secret
+# Create secret: the chart reads the keys user, password and database
 kubectl create secret generic starexec-db-secret \
+  --from-literal=user=starexec \
   --from-literal=password="$(openssl rand -base64 32)" \
+  --from-literal=database=starexec \
   -n starexec
 
 # Reference in Helm values
@@ -125,20 +127,24 @@ export STAREXEC_DB_PASSWORD_FILE=/etc/starexec/db-password
 
 ### Secret Rotation
 
-Rotate secrets regularly (every 90 days):
+Rotate secrets regularly (every 90 days). On Quokka, Jenkins rewrites the secret
+`starexec-postgres-credentials` from its own credential on every deploy: change the password
+in that Jenkins credential too, or the next deploy restores the old password and the app can no
+longer log in.
 
 ```bash
 # 1. Generate new password
 NEW_PASSWORD="$(openssl rand -base64 32)"
 
-# 2. Update database
-make db-shell
-ALTER USER starexec WITH PASSWORD 'new-password';
+# 2. Update the database role (embedded PostgreSQL; psql substitutes :'pw')
+kubectl -n starexec exec -i deploy/starexec -c postgres -- \
+  psql -U starexec -d starexec -v ON_ERROR_STOP=1 -v pw="$NEW_PASSWORD" <<'SQL'
+ALTER USER starexec WITH PASSWORD :'pw';
+SQL
 
-# 3. Update secret
-kubectl create secret generic starexec-db-secret \
-  --from-literal=password="$NEW_PASSWORD" \
-  --dry-run=client -o yaml | kubectl apply -f -
+# 3. Update only the password key: recreating the secret from one literal drops user and database
+kubectl -n starexec patch secret starexec-db-secret --type merge \
+  -p "{\"stringData\":{\"password\":\"$NEW_PASSWORD\"}}"
 
 # 4. Restart application
 kubectl rollout restart deployment/starexec -n starexec
@@ -279,13 +285,14 @@ Enforce container resource limits:
 ```yaml
 # Helm values
 resources:
-  limits:
-    memory: 4Gi
-    cpu: 2
-    ephemeral-storage: 10Gi
-  requests:
-    memory: 2Gi
-    cpu: 1
+  app:
+    limits:
+      memory: 4Gi
+      cpu: 2
+      ephemeral-storage: 10Gi
+    requests:
+      memory: 2Gi
+      cpu: 1
 ```
 
 ### Image Security
@@ -550,24 +557,38 @@ sudo usermod -aG backup starexec
 
 ### Response Plan
 
-1. **Isolate the system**
+1. **Preserve evidence first.** The application log (`/var/log/starexec`) and the console log exist
+   only inside the app container, on no volume. `make stop` and scaling the deployment to zero
+   delete that container, so copy the logs out before you stop anything.
    ```bash
-   # Stop all services
-   make stop
-   
-   # Block network access
-   sudo iptables -A INPUT -j DROP
-   sudo iptables -A OUTPUT -j DROP
-   ```
+   mkdir -p forensics
 
-2. **Preserve evidence**
-   ```bash
-   # Snapshot volumes
-   make volumes-backup ENV=prod
-   
-   # Copy logs
-   cp -r /var/log/starexec /forensics/logs-$(date +%Y%m%d)
+   # Kubernetes (namespace starexec)
+   kubectl -n starexec logs deploy/starexec -c app --timestamps > forensics/app-console.log
+   kubectl -n starexec exec deploy/starexec -c app -- tar -C /var/log -cf - starexec > forensics/app-logs.tar
+   kubectl -n starexec get pods,jobs,events -o wide > forensics/cluster-state.txt
+
+   # Podman: the app container is starexec-app, or starexec-pod-app when deployed with Helm
+   APP=$(podman ps --format '{{.Names}}' | grep -E '^starexec(-pod)?-app$')
+   podman logs --timestamps "$APP" > forensics/app-console.log
+   podman cp "$APP":/var/log/starexec forensics/app-logs
    ```
+   Then dump the database. On Podman, `make volumes-backup ENV=...` must use the `ENV` you
+   deployed with: a volume that does not exist under that name is created empty, and its archive
+   holds only `EMPTY_VOLUME.txt`. List each archive with `tar -tzf` before you rely on it.
+
+2. **Isolate the system** without cutting off your own access.
+   ```bash
+   # Kubernetes: stops the app and its embedded PostgreSQL; the data stays on its claims
+   kubectl -n starexec scale deploy/starexec --replicas=0
+
+   # Podman: removes the pod; named volumes are kept
+   make stop
+   ```
+   Pair Jobs that are already running keep running; list them with `kubectl -n starexec get jobs`.
+   Do not append `iptables -A INPUT -j DROP` and `iptables -A OUTPUT -j DROP` on a host you reach
+   over the network: they also drop your SSH session, and on a cluster node the cluster's own
+   traffic. Block access at the proxy or firewall in front of StarExec, or from the console.
 
 3. **Investigate**
    - Review logs for unauthorized access
@@ -606,6 +627,21 @@ sudo usermod -aG backup starexec
 - CCPA (California)
 - FERPA (education)
 - Export control (solver distribution)
+
+## Dependency Scanning
+
+`.github/workflows/security-scan.yml` scans dependencies on every pull request:
+
+- **Java**: OWASP Dependency-Check fails on CVSS 7 or higher. Suppressions live in
+  `dependency-check-suppressions.xml`, each with a note saying why the finding does not apply.
+- **Node** (build tooling, and the jQuery files the web app ships): `npm audit`, passed through
+  `.github/scripts/npm_audit_gate.py`, fails on high and critical advisories. `npm audit` cannot
+  set one advisory aside, so an advisory is excepted in `.github/npm-audit-exceptions.json`, with
+  a reason and a `review_by` date. An exception holds only while the package is reached through
+  development dependencies alone, npm reports no fix for it, and its date has not passed;
+  otherwise the scan fails again.
+- Both scans always run: a failing Node audit no longer skips the Java scan, and the job fails
+  if either fails.
 
 ## Security Checklist
 

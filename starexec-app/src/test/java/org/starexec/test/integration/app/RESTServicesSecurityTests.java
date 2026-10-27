@@ -352,10 +352,19 @@ public class RESTServicesSecurityTests extends TestSequence {
 
 	@StarexecTest
 	private void getJobPairLogTest() {
-		Assert.assertTrue(services.getJobPairLog(job.getJobPairs().get(0).getId(),
-				TestUtil.getMockHttpRequest(user.getId())).contains("does not have access"));
-		Assert.assertTrue(services.getJobPairLog(-1,
-				TestUtil.getMockHttpRequest(admin.getId())).contains("does not have access"));
+		// A pair the user may not see and a pair that does not exist get the same answer as a missing log.
+		try {
+			services.getJobPairLog(job.getJobPairs().get(0).getId(), TestUtil.getMockHttpRequest(user.getId()));
+			Assert.fail("No exception raised");
+		} catch (RESTException e) {
+			Assert.assertEquals("not available", e.getResponse().getEntity());
+		}
+		try {
+			services.getJobPairLog(-1, TestUtil.getMockHttpRequest(admin.getId()));
+			Assert.fail("No exception raised");
+		} catch (RESTException e) {
+			Assert.assertEquals("not available", e.getResponse().getEntity());
+		}
 	}
 
 	@StarexecTest

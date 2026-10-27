@@ -24,7 +24,8 @@ kubectl get pods -n starexec
 # Restart everything
 make stop && make start
 
-# Complete reset (⚠️ deletes data)
+# Complete reset: deletes every volume of the environment (database and
+# files) and the image. Back up first: make stop && make volumes-backup ENV=dev
 make reset ENV=dev
 
 # Check configuration
@@ -317,9 +318,13 @@ make: *** [Makefile:231: build] Error 125
    ```bash
    make cache-images
    ```
-3. Retry your build:
+3. Retry the build, then deploy it. `LOCAL=1` deploys the image you just
+   built; without it, `make start` replaces it with the registry's `latest`
+   whenever the registry is reachable:
    ```bash
-   make stop nuke build start status ENV=dev FORCE=1
+   make build
+   make start ENV=dev LOCAL=1
+   make status
    ```
 
 **If you have already run `make cache-images`:**
@@ -412,9 +417,11 @@ podman inspect starexec-app | grep -A 5 State
    # Check volume exists
    podman volume ls | grep starexec
    
-   # Recreate volumes
-   make volumes-delete ENV=dev
+   # Create any missing volumes; existing volumes keep their data
    make volumes-create ENV=dev
+
+   # Give the PostgreSQL volume back to the postgres user (999:999)
+   make volumes-fix-permissions ENV=dev
    ```
 
 ## Database Issues
@@ -452,25 +459,34 @@ podman exec starexec-app bash -c '
 
 ### Authentication Failed
 
-**Problem:** `FATAL: password authentication failed`
+**Problem:** `FATAL: password authentication failed for user "starexec"`
 
-**Cause:** Password mismatch between app and database
+**Cause:** The client sends a password other than the one PostgreSQL stores for the role. The PostgreSQL image
+sets that password only when it creates an empty data directory. Changing `postgres.password`, the Secret or
+`STAREXEC_DB_PASSWORD` later does not change the stored one, so exporting a new password and restarting
+cannot fix this error.
 
-**Solution:**
+The embedded database checks passwords only for connections from other hosts: its `pg_hba.conf` trusts the
+socket and loopback (`127.0.0.1`, `::1`). The application reaches it at `localhost` from the same pod, so it
+never fails this way, and neither does `make db-shell`, which runs `psql` inside the PostgreSQL container.
+Expect this error from an external database (`postgres.host` other than `localhost`), which the application
+logs in to with the password, or from a client outside the pod.
+
+**Solution:** set the stored password to the configured one, from a session that needs no password:
 
 ```bash
-# Check password is set
-echo $STAREXEC_DB_PASSWORD
-
-# Verify it matches database
 make db-shell
-# Try logging in - if it works, password is correct
-
-# If password is wrong, reset:
-make stop
-export STAREXEC_DB_PASSWORD="new-password"
-make start
+\password starexec
+\q
 ```
+
+`\password` asks twice and sends only a hash, so the password stays out of the shell history and the server
+log. Type the password from the values file (`postgres.password`) or from the Secret named by
+`postgres.existingSecret`. On an external database, run `\password` as an administrator of that server.
+
+To change the password, change it with `\password` first, then in the values file or the Secret, then restart
+the application: `make stop && make start` on Podman; on Kubernetes, upgrade the release from the changed
+values file, or run `kubectl rollout restart` on its Deployment after changing the Secret.
 
 ### Migration Failures
 
@@ -537,23 +553,33 @@ Only terminate sessions you recognize as stale/non-critical.
 # 1) Stop deployment
 make stop
 
-# 2) Restore known-good backup (preferred)
-make volumes-restore ENV=dev
+# 2) Keep a file-level copy of the damaged volumes: the restore writes over
+#    them, and they hold everything written since the last backup
+make volumes-backup ENV=dev
 
-# 3) Start again
-make start
+# 3) Restore a known-good backup (preferred). The copy from step 2 is now
+#    the newest set, so name the good one
+make volumes-restore ENV=dev RESTORE_TIMESTAMP=<timestamp of the last good set>
+
+# 4) Start again with the same image
+make start ENV=dev LOCAL=1
 ```
 
 If no valid backup exists, inspect logs first (`make logs-postgres`). Use `pg_resetwal` only as a last resort and only with full awareness of data-loss risk.
 
-**For corrupted state:**
+**To start over with empty volumes:** this deletes every volume of the
+environment, so the uploaded solvers, benchmarks and job output go with the
+database. It also removes the legacy `starexec-data` and `starexec-postgres`
+volumes if they exist, whatever `ENV` is. There is no database-only reset:
+the files on the data volume belong to rows in the database. Keep a copy of
+the damaged volumes first:
 
 ```bash
-# ⚠️ DESTRUCTIVE: Complete database reset
 make stop
-make volumes-delete ENV=dev
+make volumes-backup ENV=dev    # file-level copy of all five volumes
+make volumes-delete ENV=dev    # asks you to type DELETE
 make volumes-create ENV=dev
-make start  # Migrations run automatically
+make start ENV=dev             # migrations run on startup
 ```
 
 ### Database Locked
@@ -606,9 +632,11 @@ podman volume inspect starexec-dev-data
 **Solution:**
 
 ```bash
-# Recreate volumes
-make volumes-delete ENV=dev
+# Create any missing volumes; existing volumes keep their data
 make volumes-create ENV=dev
+
+# Give the PostgreSQL volume back to the postgres user (999:999)
+make volumes-fix-permissions ENV=dev
 ```
 
 ### Port Already in Use
@@ -625,43 +653,119 @@ sudo lsof -i :7827
 make deploy-podman APP_PORT=8080
 ```
 
+### A setting has no effect
+
+**Problem:** You exported a `STAREXEC_*` variable and restarted, but StarExec behaves as before.
+
+**Cause:** StarExec reads these settings only from its container's environment, and an exported variable
+reaches that environment only when the deployment passes it on:
+
+| How StarExec was started | Where its settings live |
+|---|---|
+| `make start` with Helm installed | The values file: `charts/starexec/values-local-dev.yaml` for the default `ENV=dev`, `charts/starexec/values-<ENV>.yaml` for another `ENV`, or the file named by `VALS=`. `make start` also passes Helm the fixed `--set` options listed under `deploy-podman-helm` in the `Makefile`, such as the image, the port and the socket; no `STAREXEC_*` variable from your shell is among them. This path always runs the Podman backend. |
+| `make start` without Helm | `render.yaml.template`. Only the variables that `scripts/generate-render-yaml.sh` substitutes come from your shell: the database settings, the port, the backend type, the volume names, the image and, with the Podman backend, the container engine's socket (`PODMAN_SOCKET_PATH`), the job image (`STAREXEC_CONTAINER_JOB_IMAGE`) and the data volume's path on the host (`STAREXEC_CONTAINER_HOST_DATA_PATH`, read from the volume when unset). |
+| `docker compose up` | The `environment:` of the `starexec` service in `docker-compose.yml` (Local backend). Docker Compose also merges a `docker-compose.override.yml` next to it, which keeps your changes out of the tracked file. |
+| Kubernetes | The values file the release is deployed from, applied by upgrading the release. On Quokka that file is in git and Jenkins deploys it. |
+
+**Solution:** put the setting where your deployment reads it, then restart. In a values file:
+
+```yaml
+podman:
+  maxConcurrentJobs: 2       # STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS (Podman backend)
+backend:
+  local:
+    concurrency: 4           # STAREXEC_LOCAL_CONCURRENCY (Local backend)
+env:                         # any variable without a key of its own
+  STAREXEC_CPU_PARTITION_COUNT: "2"
+```
+
+```bash
+make stop && make start
+# What the application now sees (never print a password this way)
+APP=$(podman ps --format '{{.Names}}' | grep -E '^starexec(-pod)?-app$')
+podman exec "$APP" printenv STAREXEC_CPU_PARTITION_COUNT
+```
+
+Where `charts/starexec/templates/deployment.yaml` sets a variable from a key, use that key: the same name
+under `env:` gives the container the variable twice. The `scalability.*` keys reach the Kubernetes backend only;
+on Podman, set `STAREXEC_NODE_MULTIPLIER` or `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` under `env:`.
+
 ## Job Execution Issues
 
 ### Jobs Stuck in ENQUEUED
 
 **Problem:** Jobs never start running
 
-**Diagnostics:**
+**Diagnostics:** count the job's pairs by status. A pair waits in one of two states, and each has its own causes:
 
 ```bash
-# Check backend logs
-make logs-app | grep Backend
-
-# Query job status
 make db-shell
-SELECT jp.id, jp.status_code, jp.start_time 
-FROM job_pairs jp 
-WHERE jp.job_id = <JOB_ID>;
+SELECT status_code, COUNT(*) FROM job_pairs WHERE job_id = <JOB_ID> GROUP BY status_code;
 ```
 
-**Common causes:**
+Then search the application log (`make logs-app`) for the lines named below. A backend takes no work until it
+has started, which the Local and Kubernetes backends log as `LocalBackend initialized successfully` and
+`KubernetesNativeBackend initialized successfully`, and the Podman backend as `ContainerJobMonitor started`.
+Use that line for Podman: some versions log `PodmanBackend initialized successfully` as soon as the container
+engine answers, before start-up has finished.
 
-1. **Backend not initialized**
-   - Check logs for `PodmanBackend initialized`
+**Status 1 (pending submission): the dispatcher has not handed the pairs to the backend.** It runs every 20
+seconds and skips a queue in these cases:
 
-2. **No compute capacity**
-   ```bash
-   # Check concurrency limit
-   grep STAREXEC_LOCAL_CONCURRENCY render.yaml
-   ```
+- **The system is paused.** Log: `Not adding more job pairs to any queues, as the system is paused`. Resume
+  with **Resume all** on the admin job page (`/secure/admin/job.jsp`).
+- **The job's queue is not active.** Nothing is logged: the dispatcher reads only queues whose status is
+  `ACTIVE`. Check with
+  `SELECT q.name, q.status FROM jobs j JOIN queues q ON q.id = j.queue_id WHERE j.id = <JOB_ID>;`.
+  Pause the job, use **Change Queue** on its page to pick an active queue, and resume it; or activate the queue.
+- **The queue has no nodes.** Log: `Queue <q> has no nodes available (<n> pair(s) waiting to be submitted, <m>
+  enqueued)`. As a WARN, the backend agrees that no node serves the queue: attach one, or bring it back. As an
+  ERROR (`Queue <q> has no nodes associated with it (...), yet the backend reports it can accept work`),
+  StarExec's node table and the cluster disagree, usually because a node was
+  never registered: nodes are registered by a periodic task that logs `Loading worker nodes into the db`, so
+  look for a warning after that line. The line is written when the condition starts, again every 6 hours while
+  it lasts (`(first seen <n> minutes ago)`), and `Queue <q> has nodes again` at INFO when it ends.
+- **The queue is full.** Log: `Not adding more job pairs to queue <q>, which has <n> pairs enqueued.` The queue
+  already holds `STAREXEC_NODE_MULTIPLIER` (default 16) pairs per node in status 2, which are not starting.
+  See status 2 below.
+- **The backend refuses new work.** Log: `Queue <q> cannot accept work at the moment; deferring its pairs to a
+  later pass rather than failing them`. The backend has not started or is shutting down, or, on Kubernetes,
+  holds dispatch for a reason it logs itself just before the first of these lines: when the hold starts or its
+  reason changes, again every 6 hours while it lasts, and `Kubernetes no longer holds dispatch for queue
+  '<q>'` at INFO when it ends. A Podman backend that failed to start logged `Failed to initialize backend` at
+  start-up, with the reason, and is not started again until StarExec restarts. The line is written when the
+  refusal starts, again every 6 hours while pairs wait (`(first seen <n> minutes ago)`), and `Queue <q>
+  accepts work again` at INFO when the queue takes pairs again.
+- **Kubernetes is at its concurrency cap.** Log: `deferring pair <id> (...): at concurrency cap (<n>/<max>)`.
+  At most `kubernetes.maxConcurrentJobs` pairs run at once; the rest wait in status 1.
 
-3. **Script path invalid**
+StarExec keeps the no-nodes and refusal conditions, and the Kubernetes backend its holds, in memory, so after a
+restart one that lasts is reported again on the first pass that sees it.
+
+**Status 2 (enqueued): the backend has the pairs but no free slot.** How many pairs run at once:
+
+- **Podman:** `podman.maxConcurrentJobs` (default 1) per CPU partition, or `STAREXEC_PARTITION_MAX_JOBS` when
+  set. The partitions come from `STAREXEC_CPU_PARTITIONS`, else `STAREXEC_CPU_PARTITION_COUNT` (default `auto`:
+  one per NUMA node, so one on a single-node host). The startup log prints both numbers,
+  `CpuPartitionManager: <n> partition(s) from ...` and `Container max concurrent jobs per CPU partition: <m>`,
+  and a pair waiting for a slot logs `Podman submission waiting for available partition slot (...)`.
+- **Local:** `STAREXEC_LOCAL_CONCURRENCY` (the chart sets it from `backend.local.concurrency`, default 1;
+  unset, it is the smaller of 4 and the number of CPUs), or one per CPU in `STAREXEC_LOCAL_CORE_LIST` when that
+  is set. The startup log prints `Max concurrency: <n>`.
+- **Kubernetes:** the pair's pod is Pending. See [Pods Pending](#pods-pending) and
+  [Kubernetes pair will not rerun or new work remains queued](#kubernetes-pair-will-not-rerun-or-new-work-remains-queued).
+
+To change these settings, see [A setting has no effect](#a-setting-has-no-effect).
+
+**Other causes:**
+
+1. **Script path invalid**
    ```bash
    # Verify solver script exists
    podman exec starexec-app ls -la /app/data/solvers/
    ```
 
-4. **[ROOT CAUSE — FIXED in jobscript] `(( ))` arithmetic kills script before EXIT trap**
+2. **[ROOT CAUSE — FIXED in jobscript] `(( ))` arithmetic kills script before EXIT trap**
 
    **Symptom:** LocalJobMonitor shows `checked N pairs, found 0 status files` indefinitely. Job watcher file shows `Child status: 1`, `Real time: ~0.011s`. The pair log (e.g. `1.txt`) is empty.
 
@@ -715,12 +819,12 @@ podman exec starexec-app sh -c 'cat "${STAREXEC_DATA_DIR:-/var/starexec/data}/ou
 
 **Solution:**
 
-1. **Job timeout hit**
-   ```bash
-   # Increase timeout
-   export STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS=7200
-   make stop && make start
-   ```
+1. **The Local backend's job timeout fired** (Local backend only)
+   - The log carries `exceeded timeout of <N> seconds, killing process`. The Local backend stops every job
+     script after `STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS` (default 3600, printed at startup as `Job timeout:`),
+     whatever the pair's own limits.
+   - Fix: raise it above the longest wallclock limit your jobs use, as described in
+     [A setting has no effect](#a-setting-has-no-effect), and restart.
 
 2. **Monitor crashed**
    ```bash
@@ -805,7 +909,11 @@ podman exec -e CONTAINER_MODE=true -e STAREXEC_OUTPUT_DIR=/tmp/out starexec-pod-
    - Fix: Install runsolver in the image or set `STAREXEC_LOCAL_USE_RUNSOLVER=false` and ensure script/solver paths exist inside the container.
 
 2. **Jobs blocked in executor** (e.g. few worker threads and scripts hang).
-   - Fix: Set `STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS` so stuck jobs are killed; check `STAREXEC_LOCAL_CONCURRENCY`.
+   - Fix: a hung script holds its slot until `STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS` (default 3600) stops it, so
+     lower that to free slots sooner; the number of slots is `STAREXEC_LOCAL_CONCURRENCY`
+     (`backend.local.concurrency` in the chart), or the number of CPUs in `STAREXEC_LOCAL_CORE_LIST` when that
+     is set. Both are printed at startup (`Job timeout:`,
+     `Max concurrency:`); to change them, see [A setting has no effect](#a-setting-has-no-effect).
 
 3. **Queue full so no new submissions:** `Not adding more job pairs to queue X, which has N pairs enqueued` — those N pairs are already submitted but not completing.
    - Fix: Resolve why they don’t write status (above); or reset pairs to PENDING and fix environment, then re-run.
@@ -830,8 +938,8 @@ kubectl describe pod <pod-name> -n starexec
    kubectl top nodes
    
    # Reduce resource requests
-   helm upgrade starexec starexec/starexec \
-     --set resources.requests.memory=1Gi
+   helm upgrade starexec starexec/starexec --reuse-values \
+     --set resources.app.requests.memory=1Gi
    ```
 
 2. **PVC not bound**
@@ -998,7 +1106,7 @@ sudo systemctl enable --now nfs-health.timer
 ```bash
 # What the application says it is waiting on
 kubectl logs -n starexec deploy/<release> | grep -E \
-  "Admission deferred|Admission still deferred|Deferring dispatch for queue|OPERATOR ACTION|could not be confirmed stopped|withholding its reset"
+  "Admission deferred|Admission still deferred|Deferring dispatch for queue|no longer holds dispatch|OPERATOR ACTION|could not be confirmed stopped|withholding its reset"
 ```
 
 **Common causes:**
@@ -1039,6 +1147,25 @@ kubectl logs -n starexec deploy/<release> | grep -E \
 
 Deleting pods is not the normal remediation, and the backend deliberately holds no permission to do it. A pair that will not rerun is reporting that the cluster still cannot account for its previous execution — resolve that, and the pair proceeds on the next pass.
 
+### Podman pair will not rerun, or a job or user cannot be deleted
+
+**Problem:** A manual rerun reports that it did not complete, deleting a job leaves its pairs recorded as running, or deleting a user reports that one or more active jobs could not be safely stopped and retired.
+
+**Cause:** A rerun, a job deletion and a user deletion each retire a pair's execution, so StarExec first asks the backend to stop it and to confirm that it can no longer run or write a result. The Podman backend stops the container it started for that execution, then lists every container labelled with the execution id. It withholds the confirmation while one of them is running, paused, restarting or cannot be inspected, or has exited without a `starexec.attempt` label and its result is not recorded yet. The pair is then left as it was, so a replacement never runs beside a container that may still write.
+
+**Diagnostics:**
+
+```bash
+# What the application is waiting on
+podman logs starexec-app 2>&1 | grep -E "is not confirmed stopped|could not be confirmed stopped|refusing to delete job"
+
+# The containers the log line names (use its execution id)
+podman ps -a --filter label=starexec.exec.id=<execId> \
+  --format '{{.Names}} {{.Status}} pair={{index .Labels "starexec.pair.id"}} attempt={{index .Labels "starexec.attempt"}}'
+```
+
+The backend does not stop a container it is not tracking, even one that carries the execution id: execution ids start again with each application start, so that container may belong to another pair. Its `starexec.pair.id` label says which pair it runs. Once it has exited and its result is recorded, or it is gone, a rerun or user deletion asked for again proceeds, and a refused job deletion completes on its own: it is retried every five minutes. An exited container without an attempt label clears as soon as the monitor records its result.
+
 ## Performance Issues
 
 ### Slow Startup
@@ -1067,16 +1194,26 @@ make logs-postgres | grep migration
 # Check memory usage
 podman stats starexec-app
 
-# Check JVM heap
-podman exec starexec-app jstat -gc 1
+# Check the container's memory limit, its use of memory and of swap, how often it reached the limit (max)
+# and how many processes the kernel killed for it (oom_kill) (cgroup v2)
+podman exec starexec-app sh -c 'cd /sys/fs/cgroup; cat memory.max memory.current memory.swap.current; grep -E "^(max|oom_kill) " memory.events'
+
+# On Kubernetes, a container the kernel killed shows "Reason: OOMKilled" under "Last State"
+# once it has restarted, or under "State" until it does
+kubectl describe pod <pod-name> -n starexec
 ```
+
+The image ships a JRE, without `jstat` or `jcmd`. Its JVM heap may grow to 2048 MiB (`-Xmx2048m`), so a memory limit at or below that leaves nothing for the memory the JVM uses outside the heap.
+
+Under Podman, the pod has no swap limit. On a host with swap, a container that reaches its memory limit is not killed while swap has room: the kernel moves what does not fit to swap, so `memory.swap.current` and `max` grow while `oom_kill` stays 0.
 
 **Solution:**
 
+Raise the limit, or lower `-Xmx` through `env.JAVA_OPTS` (see [Java System Properties](CONFIGURATION.md#java-system-properties)), so that the limit stays well above the heap:
+
 ```bash
-# Tune JVM settings
-helm upgrade starexec starexec/starexec \
-  --set javaOpts="-Xmx2g -XX:+UseG1GC"
+helm upgrade starexec starexec/starexec --reuse-values \
+  --set resources.app.limits.memory=4Gi
 ```
 
 ### Jobs Running Slowly
@@ -1093,16 +1230,19 @@ podman inspect starexec-job-<id> | grep -A 10 Resources
 podman stats
 ```
 
-**Solution:**
+**Solution:** set these in the values file's `env:` map (see [A setting has no effect](#a-setting-has-no-effect)),
+then run `make stop && make start`:
 
-```bash
-# Increase the Podman cgroup memory ceiling
-export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
-
-# Example for a 16-physical-core host: four cores per solver partition
-export STAREXEC_CPU_PARTITION_COUNT=4
-make stop && make start
+```yaml
+env:
+  # The Podman cgroup memory ceiling of every job container (default 2048)
+  STAREXEC_CONTAINER_DEFAULT_MEMORY_MB: "8192"
+  # Example for a 16-physical-core host: four cores per solver partition
+  STAREXEC_CPU_PARTITION_COUNT: "4"
 ```
+
+Each partition runs `podman.maxConcurrentJobs` pairs at once, so four partitions also run four times as many
+pairs.
 
 CPU-time and wallclock budgets must be changed in the StarExec queue/job. For
 scientific runs, derive partitions from the host topology as described in
@@ -1151,8 +1291,8 @@ make stop
 # Restore
 make volumes-restore ENV=dev
 
-# Start fresh
-make start
+# Start again with the same image
+make start ENV=dev LOCAL=1
 ```
 
 ## Known Issues
@@ -1218,17 +1358,16 @@ Temporary extraction directories now end with `.extracting` and are safe to clea
 
 ### Enable Debug Logging
 
-Edit `/WEB-INF/classes/logback.xml`:
+StarExec's own classes (`org.starexec`) already log at DEBUG, except `SessionFilter`, `SessionUtil` and
+`Permissions`, which log at INFO. The lines go to the container log (`make logs-app`, `podman logs`,
+`kubectl logs`) and to `/var/log/starexec/starexec.log` inside the application container.
 
-```xml
-<logger name="org.starexec" level="DEBUG"/>
-```
-
-Or set environment variable:
-
-```bash
-export LOGGING_LEVEL_ORG_STAREXEC=DEBUG
-```
+Everything else logs at the root level, INFO, unless `logback.xml` names it (Hibernate logs at WARN). The root
+level is fixed when the WAR is built: `logback.xml` takes it from the `LOGGING_LEVEL` property in `pom.xml`, and
+the file is not reloaded while Tomcat runs. No environment variable
+changes it; `LOG_LEVEL`, which the chart sets, is not read by the application. To raise it, change
+`<LOGGING_LEVEL>` in `pom.xml` and rebuild the image (`make build`): the image runs Maven itself, so a `-D`
+option on your own Maven command does not reach it. A WAR you build yourself takes `-DLOGGING_LEVEL=DEBUG`.
 
 ### Collect Diagnostic Info
 

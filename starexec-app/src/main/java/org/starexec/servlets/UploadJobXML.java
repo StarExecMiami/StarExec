@@ -21,10 +21,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 
@@ -43,7 +40,6 @@ public class UploadJobXML extends HttpServlet {
 
 	private static final StarLogger log = StarLogger.getLogger(UploadJobXML.class);
 	private static final String UPLOAD_FILE = "f";
-	private static final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 	private static final String SPACE_ID = R.SPACE;
 
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
@@ -145,22 +141,22 @@ public class UploadJobXML extends HttpServlet {
 			throws StarExecException {
 		final String method = "handleXMLFile";
 		log.entry(method);
+		// Only ever the directory this upload claimed: its parent holds other uploads' directories.
+		File uniqueDir = null;
 		try {
 			log.info(method, "Handling Upload of XML File from user with id=" + userId);
 			PartWrapper item = (PartWrapper) form.get(UploadJobXML.UPLOAD_FILE);
-			// Don't need to keep file long - just using download directory
-
-			File uniqueDir = new File(R.getBatchSpaceXMLDir(), "Job" + userId);
-			uniqueDir = new File(uniqueDir, "TEMP_JOB_XML_FOLDER_");
-			uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
-
-			uniqueDir.mkdirs();
+			// The directory holds the archive and its XML only until the jobs are created.
+			File parent = new File(new File(R.getBatchSpaceXMLDir(), "Job" + userId), "TEMP_JOB_XML_FOLDER_");
+			uniqueDir = Util.claimNewDirectory(new File(parent, Util.pathDate()));
 			//Process the archive file and extract
 
 			File archiveFile = new File(uniqueDir, FilenameUtils.getName(item.getName()));
-			new File(archiveFile.getParent()).mkdir();
 			item.write(archiveFile);
-			ArchiveUtil.extractArchive(archiveFile.getAbsolutePath());
+			if (!ArchiveUtil.extractArchive(archiveFile.getAbsolutePath())) {
+				jobUtil.setErrorMessage(ArchiveUtil.NOT_EXTRACTED);
+				return null;
+			}
 			archiveFile.delete();
 
 			//Typically there will just be 1 file, but might as well allow more
@@ -193,6 +189,10 @@ public class UploadJobXML extends HttpServlet {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			throw new StarExecException(e.getMessage());
+		} finally {
+			if (uniqueDir != null) {
+				Util.safeDeleteDirectory(uniqueDir.getAbsolutePath());
+			}
 		}
 	}
 

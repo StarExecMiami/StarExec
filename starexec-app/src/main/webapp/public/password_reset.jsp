@@ -52,6 +52,12 @@
 					expired and no longer exists
 				</div>
 			</c:if>
+			<c:if test="${not empty param.result and param.result == 'email_failed'}">
+				<div class='error message' role="alert">Sorry, the password reset email could not be
+					sent. Please try again later, or contact
+					<a href="mailto:<c:out value='${contactEmail}'/>"><c:out value="${contactEmail}"/></a>
+				</div>
+			</c:if>
 		</section>
 	</main>
 </star:template>

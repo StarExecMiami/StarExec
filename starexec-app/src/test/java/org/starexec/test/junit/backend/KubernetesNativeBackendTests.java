@@ -41,6 +41,7 @@ import org.starexec.backend.KubernetesJobMonitor;
 import org.starexec.backend.PodPhaseView;
 import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.to.JobPair;
 import org.starexec.data.database.JobPairs.NeverStartedRetryResult;
 import org.starexec.data.database.JobPairs.PairStatusLookupState;
 import org.starexec.data.database.PairStatusResult;
@@ -327,6 +328,108 @@ public class KubernetesNativeBackendTests {
         assertEquals("starexec-job-77", execToJob.get(77));
         assertEquals(Integer.valueOf(707), execToPair.get(77));
         assertEquals(Path.of("/tmp/starexec/out/707"), execToOut.get(77));
+    }
+
+    /**
+     * The test above reads an output-dir annotation that production never wrote, so after a
+     * restart every rebuilt execution fell back to recomputing its directory, and got it
+     * wrong. A submitted Job now records the directory it was submitted with.
+     */
+    @Test
+    public void aSubmittedJobRecordsItsOutputDirectory() throws Exception {
+        Job job = buildSubmittedJob(707, 77, "/data/joblogs/5/12/pair_707/707.txt");
+        assertEquals("/data/joblogs/5/12/pair_707",
+            job.getMetadata().getAnnotations().get("starexec.org/output-dir"));
+    }
+
+    /**
+     * The round trip a restart takes: the Job a submission built, read back by a process
+     * that tracks nothing, yields the directory the pod writes status.json to -- with no
+     * database lookup, since the Job says it.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void trackingRebuiltFromASubmittedJobFindsItsOutputDirectory() throws Exception {
+        Job job = buildSubmittedJob(707, 77, "/data/joblogs/5/12/pair_707/707.txt");
+        job.setStatus(new io.fabric8.kubernetes.api.model.batch.v1.JobStatusBuilder()
+            .withActive(1).build());
+        KubernetesNativeBackend restarted = new KubernetesNativeBackend();
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.trySetPairRunning(707))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
+            rebuildTrackingFromJob(restarted, job, viewWithPod(77, "Running"));
+            jobPairsMock.verify(() -> JobPairs.getPair(Mockito.anyInt()), Mockito.never());
+        }
+
+        assertEquals(Path.of("/data/joblogs/5/12/pair_707"),
+            ((Map<Integer, Path>) getField(restarted, "execIdToOutputDir")).get(77));
+    }
+
+    /**
+     * A Job submitted before the annotation existed -- every one running at the first deploy
+     * of this fix -- is rebuilt with the directory submission chose: the parent of the pair's
+     * log file. It used to be the parent of the pair's stdout, a directory in another tree,
+     * and the 48 pairs of the job 5 rerun in flight across one deploy on Quokka lost their
+     * results to it.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aJobWithoutTheAnnotationIsRebuiltWithTheSubmissionDirectory() throws Exception {
+        Job job = new JobBuilder()
+            .withNewMetadata()
+                .withName("starexec-job-78")
+                .addToLabels("starexec.org/managed", "true")
+                .addToLabels("starexec.org/exec-id", "78")
+                .addToLabels("starexec.org/pair-id", "708")
+            .endMetadata()
+            .withNewStatus()
+                .withActive(1)
+            .endStatus()
+            .build();
+        JobPair pair = new JobPair();
+        pair.setId(708);
+        pair.setJobId(5);
+        pair.setJobSpaceId(12);
+        KubernetesNativeBackend restarted = new KubernetesNativeBackend();
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock.when(() -> JobPairs.getPair(708)).thenReturn(pair);
+            jobPairsMock
+                .when(() -> JobPairs.getLogFilePath(pair))
+                .thenReturn("/data/joblogs/5/12/pair_708/708.txt");
+            // Where the old code looked: the pair's stdout, in the job output tree.
+            jobPairsMock
+                .when(() -> JobPairs.getStdout(708))
+                .thenReturn("/data/joboutput/5/space/bench/708.txt");
+            jobPairsMock
+                .when(() -> JobPairs.trySetPairRunning(708))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
+            rebuildTrackingFromJob(restarted, job, viewWithPod(78, "Running"));
+        }
+
+        assertEquals(Path.of("/data/joblogs/5/12/pair_708"),
+            ((Map<Integer, Path>) getField(restarted, "execIdToOutputDir")).get(78));
+    }
+
+    /** A Job as submission builds it, for the given pair, execution and log file. */
+    private Job buildSubmittedJob(int pairId, int execId, String logPath) throws Exception {
+        KubernetesNativeBackend backend = backendWithCpu("31");
+        Method build = KubernetesNativeBackend.class.getDeclaredMethod(
+            "buildKubernetesJob",
+            int.class, int.class, String.class, String.class, String.class, String.class);
+        build.setAccessible(true);
+        return (Job) build.invoke(
+            backend, pairId, execId, "starexec-job-" + execId, "/script.sh", "/work", logPath);
+    }
+
+    private static void rebuildTrackingFromJob(
+        KubernetesNativeBackend backend, Job job, PodPhaseView pods) throws Exception {
+        Method rebuild = KubernetesNativeBackend.class
+            .getDeclaredMethod("rebuildTrackingFromJob", Job.class, PodPhaseView.class);
+        rebuild.setAccessible(true);
+        rebuild.invoke(backend, job, pods);
     }
 
     /**
@@ -2632,6 +2735,84 @@ public class KubernetesNativeBackendTests {
     ) throws Exception {
         ((Map<Integer, Path>) getField(backend, "execIdToOutputDir")).put(execId, emptyOutputDir());
         ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).put(execId, attempt);
+    }
+
+    /**
+     * After a restart the cluster still holds the finished Jobs of pairs the previous process
+     * already recorded (they live for ttlSecondsAfterFinished), and this process tracks none
+     * of them. Re-ingesting one used to report an ingestion intervention for a pair that
+     * already held its result: 122 of them after one deploy on Quokka during the job 5 rerun.
+     */
+    @Test
+    public void aJobRecordedBeforeARestartIsNotReportedAgain() throws Exception {
+        List<String> messages = completeUntrackedJob(61, StatusCode.STATUS_COMPLETE);
+        assertTrue(messages.toString(),
+            messages.stream().noneMatch(m -> m.contains("INTERVENTION")));
+        assertTrue(messages.toString(), messages.stream().anyMatch(
+            m -> m.contains("Not ingesting") && m.contains("already holds terminal status 7")));
+    }
+
+    /** Any terminal status means the pair was settled, by whichever writer settled it. */
+    @Test
+    public void aJobWhosePairWasFiledAsASubmitFailureIsNotReportedAgain() throws Exception {
+        List<String> messages = completeUntrackedJob(63, StatusCode.ERROR_SUBMIT_FAIL);
+        assertTrue(messages.toString(),
+            messages.stream().noneMatch(m -> m.contains("INTERVENTION")));
+    }
+
+    /**
+     * The same untracked Job whose pair is still waiting did lose its result, and that is
+     * worth an intervention: the guard is for settled pairs only.
+     */
+    @Test
+    public void anUntrackedJobWhosePairIsUnresolvedIsStillReported() throws Exception {
+        List<String> messages = completeUntrackedJob(62, StatusCode.STATUS_ENQUEUED);
+        assertTrue(messages.toString(), messages.stream()
+            .anyMatch(m -> m.contains("INGESTION INTERVENTION REQUIRED")));
+    }
+
+    /**
+     * Completes a finished Job this process does not track, as after a restart: no tracking
+     * maps, so the pair comes from the Job's own label (pair id = exec id x 10). Returns
+     * everything the backend logged meanwhile.
+     */
+    private List<String> completeUntrackedJob(int execId, StatusCode pairStatus) throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        givenJobDeletion(backend, "job-" + execId, true, jobWithNoConditions(execId));
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(KubernetesNativeBackend.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+            new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        ch.qos.logback.classic.Level original = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.INFO);
+        logger.addAppender(appender);
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(execId * 10))
+                .thenReturn(foundLookup(pairStatus.getVal()));
+
+            assertTrue("handled, not retried forever",
+                callback.onJobComplete(execution(execId, "job-" + execId)));
+            // Nothing is written either way: no evidence is read for an untracked execution.
+            jobPairsMock.verify(
+                () -> JobPairs.setPairStatusPreciseResult(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                    Mockito.anyInt(), Mockito.anyBoolean()),
+                Mockito.never()
+            );
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(original);
+            appender.stop();
+        }
+        return appender.list.stream()
+            .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+            .toList();
     }
 
     /**

@@ -2,6 +2,10 @@ package org.starexec.data.to;
 
 import java.io.Serializable;
 import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -27,6 +31,9 @@ public class UploadJob {
         private final Integer depRootSpaceId; // Nullable internally
         private final boolean linked;
         private final Long uploadSessionId;
+        private final String sourceUrl; // Set only for an upload by URL
+        // Encoded, so the request stays serializable: Permission is not.
+        private final String spacePermissions;
 
         private UploadJobRequest(Builder builder) {
             this.archivePath = builder.archivePath;
@@ -41,6 +48,8 @@ public class UploadJob {
             this.depRootSpaceId = builder.depRootSpaceId;
             this.linked = builder.linked;
             this.uploadSessionId = builder.uploadSessionId;
+            this.sourceUrl = builder.sourceUrl;
+            this.spacePermissions = builder.spacePermissions;
         }
 
         public String getArchivePath() { return archivePath; }
@@ -55,6 +64,9 @@ public class UploadJob {
         public Optional<Integer> getDepRootSpaceId() { return Optional.ofNullable(depRootSpaceId); }
         public boolean isLinked() { return linked; }
         public Optional<Long> getUploadSessionId() { return Optional.ofNullable(uploadSessionId); }
+        public Optional<String> getSourceUrl() { return Optional.ofNullable(sourceUrl); }
+        /** The upload form's permissions for the spaces the upload creates, as stored. */
+        public Optional<String> getSpacePermissions() { return Optional.ofNullable(spacePermissions); }
 
         public static class Builder {
             private String archivePath;
@@ -69,6 +81,8 @@ public class UploadJob {
             private Integer depRootSpaceId;
             private boolean linked = false;
             private Long uploadSessionId;
+            private String sourceUrl;
+            private String spacePermissions;
 
             public Builder archivePath(String val) { this.archivePath = val; return this; }
             public Builder userId(int val) { this.userId = val; return this; }
@@ -82,6 +96,11 @@ public class UploadJob {
             public Builder depRootSpaceId(Integer val) { this.depRootSpaceId = val; return this; }
             public Builder linked(boolean val) { this.linked = val; return this; }
             public Builder uploadSessionId(Long val) { this.uploadSessionId = val; return this; }
+            public Builder sourceUrl(String val) { this.sourceUrl = val; return this; }
+            public Builder spacePermissions(Permission val) {
+                this.spacePermissions = encodeSpacePermissions(val);
+                return this;
+            }
 
             public UploadJobRequest build() {
                 if (archivePath == null) throw new IllegalStateException("archivePath required");
@@ -103,7 +122,9 @@ public class UploadJob {
     private Integer depRootSpaceId;
     private boolean linked;
     private Long uploadSessionId;
-    
+    private String sourceUrl;
+    private Permission spacePermissions;
+
     private String status; // PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED
     private int totalFilesFound;
     private int totalFilesProcessed;
@@ -158,6 +179,71 @@ public class UploadJob {
 
     public Long getUploadSessionId() { return uploadSessionId; }
     public void setUploadSessionId(Long uploadSessionId) { this.uploadSessionId = uploadSessionId; }
+    /** Where an upload by URL is downloaded from; null for every other upload. */
+    public String getSourceUrl() { return sourceUrl; }
+    public void setSourceUrl(String sourceUrl) { this.sourceUrl = sourceUrl; }
+    /**
+     * The default permissions the upload form chose for the spaces this upload creates; null for a
+     * job queued before they were stored, which keeps the old default.
+     */
+    public Permission getSpacePermissions() { return spacePermissions; }
+    public void setSpacePermissions(Permission spacePermissions) { this.spacePermissions = spacePermissions; }
+
+    /**
+     * Encodes permissions as the upload_jobs.space_permissions column stores them: the granted
+     * names as {@link Permission#getOnPermissions()} gives them, sorted and comma-separated. An
+     * empty string grants none.
+     *
+     * @param permissions The permissions to store, or null
+     * @return The stored form, or null for null
+     */
+    public static String encodeSpacePermissions(Permission permissions) {
+        if (permissions == null) {
+            return null;
+        }
+        List<String> granted = new ArrayList<>(permissions.getOnPermissions());
+        Collections.sort(granted);
+        return String.join(",", granted);
+    }
+
+    /**
+     * Encodes permissions given by name, as the upload form's checkboxes name them. A name that is
+     * not a permission grants nothing, so only the ten known names are ever stored.
+     *
+     * @param names The granted names, or null when none were sent
+     * @return The stored form, or null for null
+     */
+    public static String encodeSpacePermissionNames(Collection<String> names) {
+        if (names == null) {
+            return null;
+        }
+        Permission permissions = new Permission();
+        for (String name : names) {
+            if (name != null) {
+                permissions.setPermissionOn(name);
+            }
+        }
+        return encodeSpacePermissions(permissions);
+    }
+
+    /**
+     * The reverse of {@link #encodeSpacePermissions(Permission)}.
+     *
+     * @param stored The column's value
+     * @return The permissions it grants, or null for a job queued before the column existed
+     */
+    public static Permission decodeSpacePermissions(String stored) {
+        if (stored == null) {
+            return null;
+        }
+        Permission permissions = new Permission();
+        for (String name : stored.split(",")) {
+            if (!name.isEmpty()) {
+                permissions.setPermissionOn(name);
+            }
+        }
+        return permissions;
+    }
     
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }

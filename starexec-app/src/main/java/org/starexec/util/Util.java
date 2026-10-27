@@ -13,12 +13,17 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.AccessDeniedException;
+import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.text.DecimalFormat;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -55,6 +60,8 @@ import org.starexec.logger.StarLogger;
 public class Util {
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    // Immutable and thread-safe, unlike SimpleDateFormat, so every request thread can share it.
+    private static final DateTimeFormatter PATH_DATE = DateTimeFormatter.ofPattern(R.PATH_DATE_FORMAT);
     private static final Pattern UNSAFE_SHELL_META_CHARS = Pattern.compile(
         "[;|&><`\\r\\n]"
     );
@@ -1785,6 +1792,77 @@ public class Util {
     }
 
     /**
+     * The current local time as a directory name, in {@link R#PATH_DATE_FORMAT}: the time to the
+     * millisecond. Uploads and copies name the directories they create with it. The hour runs
+     * from 01 to 24, so 00:05:09.017 on 18 October 2026 is 20261018-24.05.09.017.
+     *
+     * @return the directory name for the current time
+     */
+    public static String pathDate() {
+        return pathDate(LocalDateTime.now());
+    }
+
+    /** {@link #pathDate()} for the given time. */
+    static String pathDate(LocalDateTime time) {
+        return PATH_DATE.format(time);
+    }
+
+    /**
+     * Deletes the parents of dir, nearest first, while they are empty and strictly inside root.
+     * Only an empty directory can be deleted this way, so nothing else is ever removed. An upload
+     * whose user was deleted meanwhile uses it to remove the directories it created again above
+     * its own (#275).
+     *
+     * @param root the directory to stop below; it is never deleted
+     * @param dir the path whose parents are deleted; it is not deleted itself
+     */
+    public static void deleteEmptyParents(Path root, Path dir) {
+        for (Path parent = dir.getParent();
+             parent != null && parent.startsWith(root) && !parent.equals(root);
+             parent = parent.getParent()) {
+            try {
+                Files.delete(parent);
+            } catch (NoSuchFileException e) {
+                // Already gone; the one above may still be empty.
+            } catch (DirectoryNotEmptyException e) {
+                return;
+            } catch (IOException e) {
+                log.warn("Could not delete the empty directory " + parent, e);
+                return;
+            }
+        }
+    }
+
+    /** How many suffixed names {@link #claimNewDirectory} tries after the one it was given. */
+    public static final int MAX_DIRECTORY_SUFFIX = 100;
+
+    /**
+     * Creates a new, empty directory that belongs to one upload or copy, creating its parents as
+     * needed. A directory that already exists is never reused: then dir-1, dir-2, ... are tried.
+     * These directories are named by the time to the millisecond, so two uploads by one user can be
+     * given the same name. Sharing it would mix their files, and the first to clean up would delete
+     * the other's.
+     *
+     * @param dir the directory to create
+     * @return the directory created: dir, or dir with a suffix
+     * @throws IOException if no directory could be created
+     */
+    public static File claimNewDirectory(File dir) throws IOException {
+        Files.createDirectories(dir.toPath().getParent());
+        for (int suffix = 0; ; suffix++) {
+            File candidate = suffix == 0 ? dir : new File(dir.getPath() + "-" + suffix);
+            try {
+                Files.createDirectory(candidate.toPath());
+                return candidate;
+            } catch (FileAlreadyExistsException e) {
+                if (suffix == MAX_DIRECTORY_SUFFIX) {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    /**
      * Creates and returns a unique, empty directory immediately inside
      * of the sandbox directory on the head node
      *
@@ -1925,6 +2003,9 @@ public class Util {
         return cookieStringBuilder.toString();
     }
 
+    /** The largest archive a URL download accepts, whatever the caller's own limit. */
+    public static final long ARCHIVE_DOWNLOAD_MAX_BYTES = ArchiveUrlDownloader.MAX_BYTES;
+
     /**
      * Attempts to copy the file at the end of the given http or https URL to the
      * given file. Any other scheme is refused before a connection is opened.
@@ -2059,17 +2140,22 @@ public class Util {
      * resolve anywhere else. "." resolves to the parent itself and ".." to its parent, so a
      * user-chosen name used as a path component must be checked where the path is built, not
      * only where the name is validated: names already stored before that validation existed
-     * still reach here.
+     * still reach here. The name must be exactly the one component it resolves to, so that the
+     * result is the path that was checked: {@link java.nio.file.Path#resolve} takes an absolute
+     * name as it is, but {@code new File(parent, name)} appends it to the parent.
      *
      * @param parent the directory the result must be directly inside
      * @param name the path component, typically a user-chosen primitive name
      * @return {@code new File(parent, name)}, unchanged in form
-     * @throws IllegalArgumentException when the name does not resolve to a direct child
+     * @throws IllegalArgumentException when the name is not one component that resolves to a
+     *         direct child
      */
     public static File childWithin(File parent, String name) {
         java.nio.file.Path base = parent.toPath().toAbsolutePath().normalize();
         java.nio.file.Path child = base.resolve(name).normalize();
-        if (!base.equals(child.getParent())) {
+        // Comparing the name itself, not only a path built from it, is also what lets CodeQL's
+        // java/path-injection query see this guard.
+        if (!base.equals(child.getParent()) || !child.getFileName().toString().equals(name)) {
             throw new IllegalArgumentException(
                 "name [" + name + "] does not stay directly inside " + base
             );
@@ -2136,20 +2222,21 @@ public class Util {
     }
 
     /**
-     * Creates a cookie carrying an id or a comma-separated list of ids, with the same
-     * security attributes as {@link #createEncodedCookie(String, String)} but with the value
-     * left exactly as given.
+     * Creates a cookie carrying an id or a comma-separated list of ids, encoded and with the
+     * same security attributes as {@link #createEncodedCookie(String, String)}.
      *
-     * <p>The value is not URL-encoded: StarexecCommand reads these cookies straight from the
-     * response headers and splits them on commas ({@code HTMLParser.extractMultipartCookie}),
-     * so encoding the separator would change what the client parses.
+     * <p>RFC 6265 does not allow a comma in a cookie value, and Tomcat's cookie processor throws
+     * when such a cookie is added. Copying several items called this after the copy, so the
+     * user got a server error for a copy that had happened. A single id encodes to itself, so
+     * StarexecCommand releases from before the encoding still read it; the client decodes the
+     * value ({@code HTMLParser.extractCookie}) before it splits a list on commas.
      *
      * @param name  The cookie name
-     * @param value The cookie value, used verbatim
-     * @return A new Cookie with the value unchanged and the security attributes applied
+     * @param value An id, or ids separated by commas
+     * @return A new Cookie with the encoded value and the security attributes applied
      */
     public static Cookie createIdCookie(String name, String value) {
-        return withSecurityAttributes(new Cookie(name, value));
+        return createEncodedCookie(name, value);
     }
 
     /**

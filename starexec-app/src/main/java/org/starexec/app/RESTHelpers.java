@@ -331,19 +331,34 @@ public class RESTHelpers {
 		return gson.toJson(nextDataTablesPage);
 	}
 
+	/** The answer to a space overview request that selects no configuration. */
+	static final String NO_CONFIGURATION_SELECTED =
+			"Select at least one solver configuration to draw the space overview graph.";
+
+	/** The answer to a solver comparison request with nothing to plot, which is not a failure. */
+	static final String NO_COMPARABLE_PAIRS =
+			"Nothing to compare: the graph plots only completed pairs whose result matches the benchmark's"
+					+ " expected result, and one of the two configurations has none in this space and stage.";
+
+	/** The answer to a solver comparison request that names one configuration twice. */
+	static final String SAME_CONFIGURATION_TWICE = "Choose two different configurations to compare.";
+
 	/**
-	 * Gets the space overview graph for a given jobspace.
+	 * Gets the graph of completed pairs over time for a given job.
 	 *
 	 * @param jobId the job to get the graph for.
 	 */
 	protected static String getPairTimeGraphJson(int jobId) {
 		String chartPath = Statistics.makeJobTimeGraph(jobId);
+		if (chartPath == null) {
+			return gson.toJson(RESTServices.ERROR_DATABASE);
+		}
 		if (chartPath.equals(Statistics.OVERSIZED_GRAPH_ERROR)) {
 			return gson.toJson(RESTServices.ERROR_TOO_MANY_JOB_PAIRS);
 		}
 
 		log.debug("chartPath = " + chartPath);
-		return chartPath == null ? gson.toJson(RESTServices.ERROR_DATABASE) : chartPath;
+		return chartPath;
 	}
 
 	/**
@@ -370,10 +385,17 @@ public class RESTHelpers {
 				logY = true;
 			}
 		}
+		if (configIds.isEmpty()) {
+			// makeSpaceOverviewChart returns null for an empty selection, which used to end in a 500.
+			return gson.toJson(new ValidatorStatusCode(false, NO_CONFIGURATION_SELECTED));
+		}
 		String chartPath = null;
 		if (configIds.size() <= R.MAXIMUM_SOLVER_CONFIG_PAIRS) {
 			chartPath = Statistics.makeSpaceOverviewChart(jobSpaceId, logX, logY, configIds, stageNumber,
 					primitivesToAnonymize);
+			if (chartPath == null) {
+				return gson.toJson(RESTServices.ERROR_DATABASE);
+			}
 			if (chartPath.equals(Statistics.OVERSIZED_GRAPH_ERROR)) {
 				return gson.toJson(RESTServices.ERROR_TOO_MANY_JOB_PAIRS);
 			}
@@ -382,7 +404,7 @@ public class RESTHelpers {
 		}
 
 		log.debug("chartPath = " + chartPath);
-		return chartPath == null ? gson.toJson(RESTServices.ERROR_DATABASE) : chartPath;
+		return chartPath;
 	}
 
 	/**
@@ -2350,6 +2372,11 @@ public class RESTHelpers {
 					"The given size is not valid: please choose an integer from 1-2000"));
 
 		}
+		if (config1 == config2) {
+			// The pairs are split by configuration, so a configuration given twice fills only one side,
+			// and the answer would wrongly say that it has no pairs to plot.
+			return gson.toJson(new ValidatorStatusCode(false, SAME_CONFIGURATION_TWICE));
+		}
 
 		chartPath = Statistics.makeSolverComparisonChart(config1, config2, jobSpaceId, edgeLengthInPixels, c,
 				stageNumber, primitivesToAnonymize);
@@ -2358,6 +2385,9 @@ public class RESTHelpers {
 		}
 		if (chartPath.get(0).equals(Statistics.OVERSIZED_GRAPH_ERROR)) {
 			return gson.toJson(RESTServices.ERROR_TOO_MANY_JOB_PAIRS);
+		}
+		if (chartPath.get(0).equals(Statistics.NO_COMPARABLE_PAIRS_ERROR)) {
+			return gson.toJson(new ValidatorStatusCode(false, NO_COMPARABLE_PAIRS));
 		}
 		JsonObject json = new JsonObject();
 		json.addProperty("src", chartPath.get(0));
