@@ -195,28 +195,7 @@ a.ui-button:active,
 // ICON STATES
 // =============================================================================
 
-// Icons use sprite images, we'll keep the default icons for now
-// but adjust them for better visibility on dark backgrounds
-.ui-icon,
-.ui-widget-content .ui-icon {
-  background-image: url("jqueryui/images/ui-icons_ffffff_256x240.png") !important;
-}
-
-.ui-widget-header .ui-icon {
-  background-image: url("jqueryui/images/ui-icons_ffffff_256x240.png") !important;
-}
-
-.ui-state-hover .ui-icon,
-.ui-state-focus .ui-icon,
-.ui-button:hover .ui-icon,
-.ui-button:focus .ui-icon {
-  background-image: url("jqueryui/images/ui-icons_ffffff_256x240.png") !important;
-}
-
-.ui-state-active .ui-icon,
-.ui-button:active .ui-icon {
-  background-image: url("jqueryui/images/ui-icons_ffffff_256x240.png") !important;
-}
+// Icons are SVG masks in the text colour; see _ui-icons.scss.
 
 // =============================================================================
 // DISABLED STATE
