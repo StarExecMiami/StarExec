@@ -5,10 +5,10 @@
 	<div id="starexecLogoWrapper">
 		<c:choose>
 		<c:when test="${!isLocalJobPage}">
-			<a href="${starexecRoot}/secure/index.jsp"><img src="${starexecRoot}/images/starlogo.png" alt="StarExec Logo"></a>
+			<a href="${starexecRoot}/secure/index.jsp"><img src="${starexecRoot}/images/starlogo.svg" alt="StarExec" width="293" height="70"></a>
 		</c:when>
 		<c:otherwise>
-			<img src="${starexecRoot}/images/starlogo.png" alt="StarExec Logo">
+			<img src="${starexecRoot}/images/starlogo.svg" alt="StarExec" width="293" height="70">
 		</c:otherwise>
 		</c:choose> 
 		

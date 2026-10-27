@@ -75,9 +75,9 @@ public final class Web {
     };
     public static final String[] GLOBAL_PNG_FILES = {
         "loadingGraph",
-        "starlogo",
         "external",
     };
+    public static final String[] GLOBAL_SVG_FILES = { "starlogo" };
     public static final String[] GLOBAL_GIF_FILES = { "ajaxloader", "loader" };
     public static final String[] GLOBAL_ICO_FILES = { "favicon" };
 

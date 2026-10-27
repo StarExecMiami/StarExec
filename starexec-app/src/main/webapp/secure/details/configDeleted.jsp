@@ -30,7 +30,7 @@
 
     <header id="pageHeader">
     <div id="starexecLogoWrapper">
-        <a href="<c:url value='/secure/index.jsp'/>"><img src="<c:url value='/images/starlogo.png'/>" alt="StarExec Logo"></a>
+        <a href="<c:url value='/secure/index.jsp'/>"><img src="<c:url value='/images/starlogo.svg'/>" alt="StarExec" width="293" height="70"></a>
     </div>
 
     <div id="starexecNavWrapper">
