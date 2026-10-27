@@ -271,6 +271,35 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
   }
 }
 
+// The permission grid (add space, edit space, add benchmarks, user permissions)
+// shows one checkbox column per resource. On phones the headers shorten (the
+// pages use .hideMobile/.showMobile) and the columns shrink to fit.
+#tblDefaultPerm {
+  @include mobile {
+    table-layout: auto;
+    width: 100%;
+  }
+}
+
+#wrapper #tblDefaultPerm {
+  @include mobile {
+    th,
+    td {
+      width: 11px;
+      text-align: center;
+    }
+
+    tr > *:nth-child(1) {
+      width: 55px;
+      text-align: left;
+    }
+
+    tr td {
+      padding-right: 0;
+    }
+  }
+}
+
 // =============================================================================
 // BASE TABLE STYLES
 // =============================================================================
