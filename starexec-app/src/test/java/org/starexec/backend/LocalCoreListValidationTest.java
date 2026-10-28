@@ -1,9 +1,9 @@
 package org.starexec.backend;
 
 import static org.awaitility.Awaitility.await;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -15,7 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.config.EnvironmentConfig;
@@ -405,12 +405,12 @@ public class LocalCoreListValidationTest {
                     .until(() -> Files.exists(output) && !Files.readString(output).trim().isEmpty());
             int actualCpu = Integer.parseInt(Files.readString(output).trim());
             assertTrue(
+                    effectiveAffinity.contains(actualCpu),
                     "Job CPU " + actualCpu + " must be inside inherited affinity " +
-                            effectiveAffinity,
-                    effectiveAffinity.contains(actualCpu));
+                            effectiveAffinity);
             assertTrue(
-                    "Job CPU " + actualCpu + " must be online " + onlineCpus,
-                    onlineCpus.contains(actualCpu));
+                    onlineCpus.contains(actualCpu),
+                    "Job CPU " + actualCpu + " must be online " + onlineCpus);
         } finally {
             backend.destroyIf();
         }
@@ -445,8 +445,8 @@ public class LocalCoreListValidationTest {
             }
         }
         assertTrue(
-                "The test process must have an effective CPU affinity",
-                !requestedAffinity.isEmpty());
+                !requestedAffinity.isEmpty(),
+                "The test process must have an effective CPU affinity");
 
         Process lookup = new ProcessBuilder("bash", "-c", "command -v taskset")
                 .redirectErrorStream(true)
@@ -454,10 +454,10 @@ public class LocalCoreListValidationTest {
         String taskset = new String(lookup.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
                 .trim();
         assertEquals(
-                "Requires taskset to exercise the kernel affinity boundary",
                 0,
-                lookup.waitFor());
-        assertTrue("taskset path must not be empty", !taskset.isEmpty());
+                lookup.waitFor(),
+                "Requires taskset to exercise the kernel affinity boundary");
+        assertTrue(!taskset.isEmpty(), "taskset path must not be empty");
 
         String affinity = requestedAffinity.get(0) + "," + requestedAffinity.get(1);
         Path helper = Path.of("src/main/java/org/starexec/config/sge/functions.bash")
@@ -494,16 +494,16 @@ public class LocalCoreListValidationTest {
                 process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         int exit = process.waitFor();
 
-        assertEquals("Affinity harness failed: " + processOutput, 0, exit);
+        assertEquals(0, exit, "Affinity harness failed: " + processOutput);
         List<String> actual = Files.readAllLines(output);
         assertEquals(
-                "initSandbox CORES must preserve the inherited affinity",
                 affinity,
-                actual.get(0));
+                actual.get(0),
+                "initSandbox CORES must preserve the inherited affinity");
         assertEquals(
-                "runexec's requested CPUs must not widen process affinity",
                 affinity,
-                actual.get(1));
+                actual.get(1),
+                "runexec's requested CPUs must not widen process affinity");
     }
 
     private static Map<Integer, List<Integer>> singletonTopology(Integer... cpus) {
@@ -525,7 +525,7 @@ public class LocalCoreListValidationTest {
             operation.run();
             fail("Expected IllegalArgumentException containing: " + messageFragment);
         } catch (IllegalArgumentException expected) {
-            assertTrue(expected.getMessage(), expected.getMessage().contains(messageFragment));
+            assertTrue(expected.getMessage().contains(messageFragment), expected.getMessage());
         }
     }
 
@@ -534,7 +534,7 @@ public class LocalCoreListValidationTest {
             operation.run();
             fail("Expected IllegalStateException containing: " + messageFragment);
         } catch (IllegalStateException expected) {
-            assertTrue(expected.getMessage(), expected.getMessage().contains(messageFragment));
+            assertTrue(expected.getMessage().contains(messageFragment), expected.getMessage());
         }
     }
 
