@@ -1,6 +1,6 @@
 package org.starexec.test.unit.web;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.Web;
 
 import java.io.IOException;
@@ -17,9 +17,9 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Guards the web assets that CI cannot otherwise check: the build skips Sass
@@ -65,7 +65,7 @@ public class WebAssetReferencesTest {
 				}
 			}
 		}
-		assertTrue("Image references with no file behind them:\n" + String.join("\n", missing), missing.isEmpty());
+		assertTrue(missing.isEmpty(), "Image references with no file behind them:\n" + String.join("\n", missing));
 	}
 
 	@Test
@@ -73,7 +73,7 @@ public class WebAssetReferencesTest {
 		List<String> missing = new ArrayList<>();
 		checkBundled(Web.GLOBAL_SVG_FILES, "svg", missing);
 		checkBundled(Web.GLOBAL_ICO_FILES, "ico", missing);
-		assertTrue("DoJobPage would fail to copy:\n" + String.join("\n", missing), missing.isEmpty());
+		assertTrue(missing.isEmpty(), "DoJobPage would fail to copy:\n" + String.join("\n", missing));
 	}
 
 	@Test
@@ -89,7 +89,7 @@ public class WebAssetReferencesTest {
 		}
 		used.removeAll(NOT_ICONS);
 		used.removeAll(uiIconMap().keySet());
-		assertTrue("ui-icon-* classes with no entry in " + UI_ICON_MAP + ": " + used, used.isEmpty());
+		assertTrue(used.isEmpty(), "ui-icon-* classes with no entry in " + UI_ICON_MAP + ": " + used);
 	}
 
 	@Test
@@ -102,7 +102,7 @@ public class WebAssetReferencesTest {
 			}
 		}
 		names.removeAll(vendoredIcons());
-		assertTrue("Icons used in SCSS but missing from " + ICON_SOURCES + ": " + names, names.isEmpty());
+		assertTrue(names.isEmpty(), "Icons used in SCSS but missing from " + ICON_SOURCES + ": " + names);
 	}
 
 	@Test
@@ -112,8 +112,8 @@ public class WebAssetReferencesTest {
 		while (m.find()) {
 			generated.add(m.group(1));
 		}
-		assertFalse("No icons found in " + ICON_DATA, generated.isEmpty());
-		assertEquals("Rerun scripts/build-icon-data.py", vendoredIcons(), generated);
+		assertFalse(generated.isEmpty(), "No icons found in " + ICON_DATA);
+		assertEquals(vendoredIcons(), generated, "Rerun scripts/build-icon-data.py");
 	}
 
 	/**
@@ -141,7 +141,7 @@ public class WebAssetReferencesTest {
 	private static Map<String, String> uiIconMap() throws IOException {
 		String scss = Files.readString(UI_ICON_MAP);
 		int start = scss.indexOf("$ui-icons: (");
-		assertTrue("No $ui-icons map in " + UI_ICON_MAP, start >= 0);
+		assertTrue(start >= 0, "No $ui-icons map in " + UI_ICON_MAP);
 		String block = scss.substring(start, scss.indexOf(");", start));
 		Map<String, String> map = new TreeMap<>();
 		Matcher m = MAP_ENTRY.matcher(block);
