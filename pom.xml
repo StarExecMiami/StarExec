@@ -189,13 +189,6 @@
                 <version>${junit-jupiter.version}</version>
                 <scope>test</scope>
             </dependency>
-            <!-- JUnit 5 Vintage Engine for JUnit 4 backward compatibility -->
-            <dependency>
-                <groupId>org.junit.vintage</groupId>
-                <artifactId>junit-vintage-engine</artifactId>
-                <version>${junit-jupiter.version}</version>
-                <scope>test</scope>
-            </dependency>
             <!-- JUnit Platform -->
             <dependency>
                 <groupId>org.junit.platform</groupId>
@@ -224,9 +217,42 @@
                 <groupId>org.owasp</groupId>
                 <artifactId>dependency-check-maven</artifactId>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+            </plugin>
         </plugins>
         <pluginManagement>
             <plugins>
+                <!-- Tests are JUnit 5 (Jupiter) only. No engine runs JUnit 4 tests any more, so
+                     with junit:junit on the classpath a JUnit 4 test would compile and then
+                     silently never run. This fails the build instead, including when a new
+                     dependency brings junit:junit in transitively. -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-enforcer-plugin</artifactId>
+                    <version>3.6.3</version>
+                    <executions>
+                        <execution>
+                            <id>ban-junit4</id>
+                            <goals>
+                                <goal>enforce</goal>
+                            </goals>
+                            <configuration>
+                                <rules>
+                                    <bannedDependencies>
+                                        <excludes>
+                                            <exclude>junit:junit</exclude>
+                                            <exclude>org.junit.vintage:junit-vintage-engine</exclude>
+                                        </excludes>
+                                        <message>Tests use JUnit 5 (Jupiter) only. Write tests with org.junit.jupiter.api, and exclude junit:junit from any dependency that brings it in.</message>
+                                    </bannedDependencies>
+                                </rules>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
