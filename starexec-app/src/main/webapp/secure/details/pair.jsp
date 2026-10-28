@@ -145,8 +145,7 @@
 						</c:when>
 						<c:otherwise>
 							<td><a href="${starexecRoot}/secure/explore/cluster.jsp">${pair.node.name}
-								<img class="extLink"
-									 src="${starexecRoot}/images/external.png"/></a>
+								<span class="ext-link-icon"></span></a>
 						</td>
 						</c:otherwise>
 					</c:choose>
@@ -273,7 +272,7 @@
 			</c:choose>
 		</fieldset>
 		<fieldset class="fieldOutput">
-			<legend><img alt="loading" src="${starexecRoot}/images/loader.gif">
+			<legend><span class="loading-spinner" role="status"><span class="sr-only">Loading</span></span>
 				output
 			</legend>
 			<textarea class=contentTextarea id="jpStdout"
@@ -300,7 +299,7 @@
 	<c:choose>
 		<c:when test="${!isLocalJobPage}">
 			<fieldset id="fieldLog">
-				<legend><img alt="loading" src="${starexecRoot}/images/loader.gif"> job
+				<legend><span class="loading-spinner" role="status"><span class="sr-only">Loading</span></span> job
 					log
 				</legend>
 				<div id="liveLogControls">

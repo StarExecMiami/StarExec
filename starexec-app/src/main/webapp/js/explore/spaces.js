@@ -1781,7 +1781,7 @@ function getTooltipConfig(type, message) {
 						function(theResponse) {
 							s = parseReturnCode(theResponse);
 							if (s) {
-								// Replace current content (current = loader.gif)
+								// Replace the placeholder content
 								$(tooltip).qtip('option', 'content.text', ' ');
 								if (theResponse.requester.role == "admin") {
 									$(tooltip)

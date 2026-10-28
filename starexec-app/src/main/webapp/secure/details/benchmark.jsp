@@ -165,7 +165,7 @@
 
 	<c:if test="${downloadable}">
 		<fieldset id="fieldContents">
-			<legend><img alt="loading" src="${starexecRoot}/images/loader.gif">
+			<legend><span class="loading-spinner" role="status"><span class="sr-only">Loading</span></span>
 				contents
 			</legend>
 			<star:displayTextContents text="${content}" lang="${lang}"/>

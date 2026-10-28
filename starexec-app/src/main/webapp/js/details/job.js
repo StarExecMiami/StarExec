@@ -386,10 +386,7 @@ function initSpaceExplorer() {
 			"valid_children": ["space"],
 			"types": {
 				"space": {
-					"valid_children": ["space"],
-					"icon": {
-						"image": starexecRoot + "images/jstree/db.png"
-					}
+					"valid_children": ["space"]
 				}
 			}
 		},
@@ -467,9 +464,9 @@ function reloadTables(id) {
 			$("#solverChoice2").empty();
 			$("#spaceOverviewSelections").empty();
 			$("#spaceOverview")
-			.attr("src", starexecRoot + "images/loadingGraph.png");
+			.attr("src", starexecRoot + "images/loadingGraph.svg");
 			$("#solverComparison")
-			.attr("src", starexecRoot + "images/loadingGraph.png");
+			.attr("src", starexecRoot + "images/loadingGraph.svg");
 
 			//tell the tables to display a "loading" indicator
 			summaryTable.fnProcessingIndicator(true);
@@ -1205,16 +1202,16 @@ function onGraphRequestError(isLatest, clearGraph, announce) {
 }
 
 function clearPairTimeGraph() {
-	$("#pairTimeGraph, #bigPairTimeGraph").attr("src", starexecRoot + "images/noDisplayGraph.png");
+	$("#pairTimeGraph, #bigPairTimeGraph").attr("src", starexecRoot + "images/noDisplayGraph.svg");
 }
 
 function clearSpaceOverviewGraph() {
-	$("#spaceOverview, #bigSpaceOverview").attr("src", starexecRoot + "images/noDisplayGraph.png");
+	$("#spaceOverview, #bigSpaceOverview").attr("src", starexecRoot + "images/noDisplayGraph.svg");
 }
 
 // Clears both sizes and their image maps, so that no link points at a benchmark of an earlier chart.
 function clearSolverComparison() {
-	$("#solverComparison300, #solverComparison800").attr("src", starexecRoot + "images/noDisplayGraph.png");
+	$("#solverComparison300, #solverComparison800").attr("src", starexecRoot + "images/noDisplayGraph.svg");
 	$("#solverComparisonMap300, #solverComparisonMap800").remove();
 }
 

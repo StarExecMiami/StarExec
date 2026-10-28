@@ -19,9 +19,27 @@ ul.horizontal {
 	}
 }
 
-.extLink {
-	margin-left: 8px;
-	margin-bottom: 2px;
+// Link icon, drawn in the text colour so it follows the theme and stays sharp
+// at any pixel density. A data-URI icon, so it also shows in the offline job page.
+.ext-link-icon {
+	display: inline-block;
+	margin-left: 0.4em;
+
+	&::before {
+		content: "";
+		display: inline-block;
+		width: 0.75em;
+		height: 0.75em;
+
+		@include icon-mask("external-link");
+	}
+}
+
+// Screen readers cannot see the icon, so say it in words for new-tab links.
+a[target="_blank"] .ext-link-icon::after {
+	content: "(opens in a new tab)";
+
+	@include sr-only;
 }
 
 .hidden {

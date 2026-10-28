@@ -44,10 +44,7 @@ $(document).ready(function() {
 			"valid_children": ["space"],
 			"types": {
 				"space": {
-					"valid_children": ["space"],
-					"icon": {
-						"image": starexecRoot + "images/jstree/users.png"
-					}
+					"valid_children": ["space"]
 				}
 			}
 		},
@@ -205,8 +202,8 @@ function populateDetails(jsonData) {
 
 		var hiddenUserId = '<input type="hidden" value="' + user.id + '" >';
 		var fullName = user.firstName + ' ' + user.lastName;
-		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>' + hiddenUserId;
-		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
+		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<span class="ext-link-icon"></span></a>' + hiddenUserId;
+		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<span class="ext-link-icon"></span></a>';
 		if (!user.isPublic) {
 			memberTable.fnAddData([userLink, user.institution, emailLink]);
 		} else {
@@ -223,8 +220,8 @@ function populateDetails(jsonData) {
 	leaderTable.fnClearTable();
 	$.each(jsonData.leaders, function(i, user) {
 		var fullName = user.firstName + ' ' + user.lastName;
-		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
-		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
+		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<span class="ext-link-icon"></span></a>';
+		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<span class="ext-link-icon"></span></a>';
 		leaderTable.fnAddData([userLink, user.institution, emailLink]);
 	});
 

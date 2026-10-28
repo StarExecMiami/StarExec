@@ -95,8 +95,7 @@
 						<c:if test="${not empty job.queue}">
 							<td>
 								<a href="${starexecRoot}/secure/explore/cluster.jsp">${job.queue.name}
-									<img class="extLink"
-									     src="${starexecRoot}/images/external.png" alt="external link"/></a>
+									<span class="ext-link-icon"></span></a>
 							</td>
 						</c:if>
 						<c:if test="${empty job.queue}">

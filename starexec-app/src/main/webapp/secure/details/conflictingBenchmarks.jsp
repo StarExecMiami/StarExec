@@ -65,8 +65,7 @@
 				<td>
 					<a href="${starexecRoot}/secure/details/conflictingSolvers.jsp?jobId=${jobId}&benchId=${bench.id}&stageNumber=${stageNumber}">
 							${bench.name}
-						<img class="extLink"
-						     src="${starexecRoot}/images/external.png"/>
+						<span class="ext-link-icon"></span>
 					</a>
 				</td>
 			</tr>

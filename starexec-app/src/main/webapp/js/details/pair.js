@@ -47,7 +47,7 @@ jQuery(function($) {
 	$('#fieldLog').expandable(true);
 
 	// Hide loading images by default
-	$('legend img').hide();
+	$('legend .loading-spinner').hide();
 
 	initLiveJobLogStream();
 });

@@ -248,6 +248,43 @@ $detail-panel-padding-mobile: $space-sm !default;
   margin-right: $tree-icon-margin-right;
 }
 
+// Node icons by jstree type (the "rel" attribute the server sends, see
+// JSTreeAttribute). Drawn here rather than through the types plugin's
+// icon.image so they follow the text colour; the theme sprite is cleared.
+$tree-node-icons: (
+  "space": "database",
+  "active_queue": "toggle-right",
+  "enabled_node": "toggle-right",
+  "inactive_queue": "toggle-left",
+  "disabled_node": "toggle-left",
+);
+
+@each $type, $icon in $tree-node-icons {
+  .jstree li[rel="#{$type}"] > a > .jstree-icon {
+    // jstree draws icons with <ins>, which the HTML5 reset paints black.
+    color: inherit;
+    background-image: none;
+
+    @include icon-mask($icon);
+  }
+}
+
+// While a node loads, the jstree theme paints throbber.gif on this icon
+// (with !important); drop the mask so the throbber shows unclipped.
+.jstree li[rel] > a.jstree-loading > .jstree-icon {
+  mask: none;
+}
+
+.jstree li[rel="inactive_queue"] > a > .jstree-icon,
+.jstree li[rel="disabled_node"] > a > .jstree-icon {
+  opacity: 0.55;
+}
+
+// Community trees list spaces too, but show them as groups of people.
+.community-tree li[rel="space"] > a > .jstree-icon {
+  mask-image: icon("users");
+}
+
 // =============================================================================
 // CONTEXT MENU DARK THEME
 // =============================================================================
