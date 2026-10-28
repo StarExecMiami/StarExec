@@ -198,7 +198,7 @@ $(document).ready(function () {
         var $this = $(this);
         var $legend = $this.children("legend:first");
 
-        $legend.siblings().wrapAll('<div class="expdContainer" />');
+        $legend.siblings().wrapAll('<div class="expdContainer"></div>');
         $legend.css("cursor", "pointer");
         $legend.data("open", isOpen);
 

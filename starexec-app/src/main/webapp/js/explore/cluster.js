@@ -529,7 +529,7 @@ function getDetails(id, type, parent_node) {
 	
 	if (type == 'active_queue' || type == 'inactive_queue') {
 		var $jobs = $("#jobs");
-		$("#clusterExpd").html("<span class='list-count'/> Enqueued Job Pairs <span>(+)</span>");
+		$("#clusterExpd").html("<span class='list-count'></span> Enqueued Job Pairs <span>(+)</span>");
 		$("#jobsContainer").show();
 		url = starexecRoot + "services/cluster/queues/details/" + id;
 		qid = id;
@@ -546,7 +546,7 @@ function getDetails(id, type, parent_node) {
 		$("#detailField .expdContainer").css("display", "none");
 		$("#descriptionContainer").show();
 	} else if (type == 'enabled_node' || type == 'disabled_node') {
-		$("#clusterExpd").html("<span class='list-count'/> Running Job Pairs");
+		$("#clusterExpd").html("<span class='list-count'></span> Running Job Pairs");
 		$("#jobsContainer").hide();
 		url = starexecRoot + "services/cluster/nodes/details/" + id;
 		qid = parent_node.attr("id");
