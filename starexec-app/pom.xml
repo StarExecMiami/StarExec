@@ -224,17 +224,6 @@
             <artifactId>junit-jupiter-params</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- JUnit Platform for running tests -->
-        <dependency>
-            <groupId>org.junit.platform</groupId>
-            <artifactId>junit-platform-suite-api</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.junit.platform</groupId>
-            <artifactId>junit-platform-suite-engine</artifactId>
-            <scope>test</scope>
-        </dependency>
         <!-- LegacyTestSequenceEngineTest runs the legacy engine through the launcher -->
         <dependency>
             <groupId>org.junit.platform</groupId>
