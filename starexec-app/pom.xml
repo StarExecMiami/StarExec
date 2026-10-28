@@ -248,12 +248,6 @@
             <version>5.23.0</version>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>org.testng</groupId>
-            <artifactId>testng</artifactId>
-            <version>7.5</version>
-            <scope>test</scope>
-        </dependency>
         <!-- Awaitility for deterministic async test assertions (replaces Thread.sleep) -->
         <dependency>
             <groupId>org.awaitility</groupId>
