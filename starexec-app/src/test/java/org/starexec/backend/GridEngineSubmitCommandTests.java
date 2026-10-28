@@ -1,11 +1,11 @@
 package org.starexec.backend;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The qsub call is argv, not a command line.
@@ -47,12 +47,12 @@ public class GridEngineSubmitCommandTests {
 		String[] argv = GridEngineBackend.submitCommand(
 				"/s/my script.bash", "/w space", "/var/log dir/out.log");
 
-		assertTrue("the script path must survive as one argument",
-				Arrays.asList(argv).contains("/s/my script.bash"));
-		assertTrue("the log path must survive as one argument",
-				Arrays.asList(argv).contains("/var/log dir/out.log"));
-		assertTrue("TMPDIR must carry the whole path",
-				Arrays.asList(argv).contains("TMPDIR=/w space"));
+		assertTrue(Arrays.asList(argv).contains("/s/my script.bash"),
+				"the script path must survive as one argument");
+		assertTrue(Arrays.asList(argv).contains("/var/log dir/out.log"),
+				"the log path must survive as one argument");
+		assertTrue(Arrays.asList(argv).contains("TMPDIR=/w space"),
+				"TMPDIR must carry the whole path");
 	}
 
 	/**
@@ -66,11 +66,11 @@ public class GridEngineSubmitCommandTests {
 		String[] argv = GridEngineBackend.submitCommand(
 				"/s/job.bash", "/tmp/x;touch owned", "/l/out.log");
 
-		assertTrue("the metacharacter must stay inside one argument",
-				Arrays.asList(argv).contains("TMPDIR=/tmp/x;touch owned"));
+		assertTrue(Arrays.asList(argv).contains("TMPDIR=/tmp/x;touch owned"),
+				"the metacharacter must stay inside one argument");
 		for (String element : argv) {
-			assertTrue("no element may be a bare injected command: " + element,
-					!element.equals("touch") && !element.equals("owned"));
+			assertTrue(!element.equals("touch") && !element.equals("owned"),
+					"no element may be a bare injected command: " + element);
 		}
 	}
 
@@ -78,9 +78,9 @@ public class GridEngineSubmitCommandTests {
 	@Test
 	public void noArgumentIsNull() {
 		String[] argv = GridEngineBackend.submitCommand("/s/job.bash", "/w", "/l/out.log");
-		assertEquals("the qsub argv has a fixed shape", 9, argv.length);
+		assertEquals(9, argv.length, "the qsub argv has a fixed shape");
 		for (String element : argv) {
-			assertTrue("null argument in argv", element != null);
+			assertTrue(element != null, "null argument in argv");
 		}
 	}
 }

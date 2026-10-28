@@ -1,17 +1,16 @@
 package org.starexec.test.junit;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.util.Util;
 
 import java.io.File;
 import java.io.IOException;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * A one-element command array must never be handed to a shell.
@@ -37,8 +36,8 @@ import static org.junit.Assert.fail;
  */
 public class UtilShellBranchTests {
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	/**
 	 * The discriminating test: a shell would create the file, argv cannot.
@@ -49,7 +48,7 @@ public class UtilShellBranchTests {
 	 */
 	@Test
 	public void aOneElementArrayIsNotInterpretedByAShell() throws IOException {
-		File marker = new File(folder.getRoot(), "shell-ran");
+		File marker = new File(folder, "shell-ran");
 		String command = "echo pwned > " + marker.getAbsolutePath();
 
 		try {
@@ -60,8 +59,8 @@ public class UtilShellBranchTests {
 		}
 
 		assertFalse(
-				"the shell interpreted '>' and created " + marker + "; argv was not honoured",
-				marker.exists());
+				marker.exists(),
+				"the shell interpreted '>' and created " + marker + "; argv was not honoured");
 	}
 
 	/** The same refusal must not depend on which metacharacter is used. */
@@ -72,9 +71,9 @@ public class UtilShellBranchTests {
 			fail("a one-element array must be refused regardless of its content");
 		} catch (IllegalArgumentException expected) {
 			assertTrue(
-					"the message should point the caller at the right overload",
 					expected.getMessage().toLowerCase().contains("shell")
-							|| expected.getMessage().toLowerCase().contains("argument"));
+							|| expected.getMessage().toLowerCase().contains("argument"),
+					"the message should point the caller at the right overload");
 		} catch (IOException e) {
 			fail("refusal must be an IllegalArgumentException, not an IOException: " + e);
 		}
@@ -100,12 +99,12 @@ public class UtilShellBranchTests {
 	 */
 	@Test
 	public void metacharactersInAnArgumentAreDataNotSyntax() throws IOException {
-		File marker = new File(folder.getRoot(), "argv-shell-ran");
+		File marker = new File(folder, "argv-shell-ran");
 		String output = Util.executeCommand(
 				new String[] { "echo", ">", marker.getAbsolutePath() });
 
-		assertTrue("the redirection characters must be echoed, not obeyed",
-				output.contains(">"));
-		assertFalse("a shell interpreted the redirection", marker.exists());
+		assertTrue(output.contains(">"),
+				"the redirection characters must be echoed, not obeyed");
+		assertFalse(marker.exists(), "a shell interpreted the redirection");
 	}
 }
