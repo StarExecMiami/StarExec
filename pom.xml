@@ -212,17 +212,18 @@
         </plugins>
         <pluginManagement>
             <plugins>
-                <!-- Tests are JUnit 5 (Jupiter) only. No engine runs JUnit 4 tests any more, so
-                     with junit:junit on the classpath a JUnit 4 test would compile and then
-                     silently never run. This fails the build instead, including when a new
-                     dependency brings junit:junit in transitively. -->
+                <!-- Tests are JUnit 5 (Jupiter) only. No engine runs JUnit 4 or TestNG tests, so
+                     with junit:junit or TestNG on the classpath such a test would compile and
+                     then silently never run. This fails the build instead, including when a new
+                     dependency brings one of them in transitively. tomcat-credential-handler
+                     has no parent, so it repeats this rule. -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-enforcer-plugin</artifactId>
                     <version>3.6.3</version>
                     <executions>
                         <execution>
-                            <id>ban-junit4</id>
+                            <id>jupiter-only</id>
                             <goals>
                                 <goal>enforce</goal>
                             </goals>
@@ -232,8 +233,9 @@
                                         <excludes>
                                             <exclude>junit:junit</exclude>
                                             <exclude>org.junit.vintage:junit-vintage-engine</exclude>
+                                            <exclude>org.testng:testng</exclude>
                                         </excludes>
-                                        <message>Tests use JUnit 5 (Jupiter) only. Write tests with org.junit.jupiter.api, and exclude junit:junit from any dependency that brings it in.</message>
+                                        <message>Tests use JUnit 5 (Jupiter) only: a JUnit 4 or TestNG test would compile and never run. Write tests with org.junit.jupiter.api, and exclude the banned artifact from any dependency that brings it in.</message>
                                     </bannedDependencies>
                                 </rules>
                             </configuration>

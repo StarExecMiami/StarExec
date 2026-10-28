@@ -50,6 +50,33 @@
 
     <build>
         <plugins>
+            <!-- The root pom.xml's rule, repeated because this module has no parent: tests are
+                 JUnit 5 (Jupiter) only, so a JUnit 4 or TestNG test would compile and never run. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.6.3</version>
+                <executions>
+                    <execution>
+                        <id>jupiter-only</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>junit:junit</exclude>
+                                        <exclude>org.junit.vintage:junit-vintage-engine</exclude>
+                                        <exclude>org.testng:testng</exclude>
+                                    </excludes>
+                                    <message>Tests use JUnit 5 (Jupiter) only: a JUnit 4 or TestNG test would compile and never run. Write tests with org.junit.jupiter.api, and exclude the banned artifact from any dependency that brings it in.</message>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
