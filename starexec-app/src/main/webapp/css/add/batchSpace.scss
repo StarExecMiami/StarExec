@@ -98,10 +98,6 @@ label.error {
 }
 
 @media only screen and (max-width: 767px) {
-	fieldset {
-		width: 95%;
-	}
-	
 	input[type="text"], textarea, input[type="file"] {
 		width: 100%;
 	}

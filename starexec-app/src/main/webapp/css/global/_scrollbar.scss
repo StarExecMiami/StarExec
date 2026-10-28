@@ -98,10 +98,3 @@ code,
     background: rgba($accent-orange, 0.8);
   }
 }
-
-// Main content area
-#content {
-  &::-webkit-scrollbar-track {
-    background: $foreground-color; // #222222
-  }
-}

@@ -296,19 +296,6 @@ $nav-transition-timing: ease-out !default;
 // ACCESSIBILITY ENHANCEMENTS
 // =============================================================================
 
-// Screen reader only text for dropdown indicators
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 // Skip navigation link (add to HTML for full accessibility)
 .skip-nav {
   position: absolute;

@@ -83,7 +83,8 @@
 		</fieldset>
 
 		<c:if test="${!hideCommunityRequests}">
-			<fieldset id="communityField">
+			<%-- Hidden until communities.js finds the user leads the selected community. --%>
+			<fieldset id="communityField" hidden>
 				<legend class="expd" id="communityExpd"><span class="list-count"></span> pending
 					community requests
 				</legend>

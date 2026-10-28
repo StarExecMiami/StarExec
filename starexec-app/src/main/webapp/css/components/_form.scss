@@ -74,11 +74,13 @@
 
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+
+  // minmax(0, 1fr), not 1fr: long content wraps or scrolls instead of widening the column.
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: s.$spacing-lg;
 
   @include m.mobile {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

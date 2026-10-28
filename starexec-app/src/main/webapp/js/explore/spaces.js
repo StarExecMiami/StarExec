@@ -1624,10 +1624,9 @@ function updateTable(dataTable) {
 	$.each(rowsToRemove, function(i, row) {
 		dataTable.fnDeleteRow(row);
 	});
+	// closest(), not a parent() chain: the table sits inside wrapper divs.
 	$(dataTable)
-	.parent()
-	.parent()
-	.parent()
+	.closest('fieldset')
 	.children('legend')
 	.children('span:first-child')
 	.text(rowsRemaining.length);
