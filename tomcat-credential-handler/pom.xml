@@ -20,6 +20,7 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <tomcat.version>9.0.120</tomcat.version>
+        <junit-jupiter.version>5.10.1</junit-jupiter.version>
     </properties>
 
     <dependencies>
@@ -40,9 +41,9 @@
 
         <!-- Tests run in the image build (Dockerfile: mvn clean package), the only build of this module -->
         <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <version>4.13.2</version>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit-jupiter.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
