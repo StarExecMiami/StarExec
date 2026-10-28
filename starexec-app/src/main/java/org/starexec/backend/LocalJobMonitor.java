@@ -1154,8 +1154,9 @@ public class LocalJobMonitor {
                 log.debug("Parsed stats from stats.json: " + stats);
             } catch (IOException | NumberFormatException e) {
                 // NumberFormatException for the same reason var.out and watcher.out catch
-                // it above. The ...Or helpers match on [0-9.]+ / [0-9]+, which admits
-                // "1.2.3", "." and digit strings past Integer/Long range -- a garbled
+                // it above. The ...Or helpers match a digit or dot followed by digits,
+                // dots and exponent characters, or [0-9]+ for the integers, which admits
+                // "1.2.3", ".", "1e" and digit strings past Integer/Long range -- a garbled
                 // value throws out of the parse instead of failing to match, so without
                 // this it escapes parseRunSolverStats entirely. Aborting here leaves every
                 // remaining field at the value var.out and watcher.out already established
@@ -1176,10 +1177,16 @@ public class LocalJobMonitor {
      *
      * <p>Distinct from {@link #extractDouble}, which cannot tell "absent" from "zero"
      * and so would overwrite a good value with 0 when a field is missing.
+     *
+     * <p>The value may be in exponent form: runsolver prints a time below 1e-4 s or
+     * from 1e6 s that way, and the job script writes it to stats.json as it is. Digits
+     * and dots alone read 9.90467e-05 as 9.90467. The exponent's letters and signs are
+     * matched along with the digits, so a garbled value such as "1e" still reaches
+     * Double.parseDouble and throws rather than being cut short.
      */
     private double extractDoubleOr(String json, String key, double fallback) {
         Matcher m = Pattern.compile(
-                "\"" + key + "\"\\s*:\\s*([0-9.]+)").matcher(json);
+                "\"" + key + "\"\\s*:\\s*([0-9.][0-9.eE+-]*)").matcher(json);
         return m.find() ? Double.parseDouble(m.group(1)) : fallback;
     }
 

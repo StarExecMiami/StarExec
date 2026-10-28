@@ -127,6 +127,7 @@ import java.util.concurrent.TimeUnit;
 import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
+import org.starexec.data.database.Cluster;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.database.StageStatusBatchResult;
@@ -417,9 +418,6 @@ public class KubernetesNativeBackend implements Backend {
      */
     private volatile Map<String, Long> queueMaxAllocatableCpuMillis = Collections.emptyMap();
 
-    /** Human-readable reason the CPU capacity gate is holding dispatch, or "" when clear. */
-    private volatile String cpuCapacityBlockDetail = "";
-
     private volatile long queueViewRefreshedAt = 0L;
 
     /**
@@ -435,6 +433,105 @@ public class KubernetesNativeBackend implements Backend {
     private volatile boolean queueViewLoaded = false;
 
     private final Object queueViewLock = new Object();
+
+    /**
+     * How long a dispatch hold, or a node listing that keeps failing, goes before it is logged
+     * again: the interval of JobManager's queue conditions and of the stuck-job report.
+     */
+    private static final long HOLD_REPEAT_MILLIS = TimeUnit.HOURS.toMillis(6);
+
+    /** Ends each line that reports a dispatch hold or a failing node listing. */
+    private static final String HOLD_REPEATED =
+        " Reported again every 6 hours while it lasts, and at INFO when it ends.";
+
+    // Why dispatch is held for a queue: what a hold is keyed on, and what its end names.
+    private static final String HOLD_ADMISSION = "admission is degraded";
+    private static final String HOLD_VIEW_NEVER_LOADED = "the queue view has never loaded";
+    private static final String HOLD_CPU_UNKNOWN = "CPU capacity is unknown";
+    private static final String HOLD_CPU_TOO_LARGE = "no node can fit the CPU request";
+    private static final String HOLD_NO_SCHEDULABLE_NODE = "no node is schedulable";
+
+    /** The one key of {@link #queueViewFailures}. */
+    private static final String QUEUE_VIEW_LISTING = "node listing";
+
+    /**
+     * What holds dispatch for each queue that is held, keyed by queue name.
+     *
+     * <p>JobManager asks {@link #isQueueDispatchable} on every pass, every 20 seconds by default,
+     * for each queue with pairs waiting, and StarLogger writes every WARN and ERROR to the
+     * error_logs table. Logged on every call, a hold that lasted wrote three rows a minute per
+     * queue. A hold is logged when it starts or its reason changes, again every
+     * {@link #HOLD_REPEAT_MILLIS} while it lasts, and its end once at INFO.
+     */
+    private final LastingConditions dispatchHolds = new LastingConditions();
+
+    /**
+     * The node listing behind the queue view, while it keeps failing. A failed listing leaves the
+     * view stale, so the next check lists again: logged on every one, an API outage wrote a WARN
+     * with its stack trace per check.
+     */
+    private final LastingConditions queueViewFailures = new LastingConditions();
+
+    /**
+     * When to log a condition that can last: when it starts or its cause changes, again every
+     * {@link #HOLD_REPEAT_MILLIS} while it lasts, and its end once.
+     *
+     * <p>The policy of JobManager's queue conditions. This package cannot use that class:
+     * {@code org.starexec.jobs} depends on {@code org.starexec.backend}, not the other way round.
+     */
+    private static final class LastingConditions {
+
+        private static final class Condition {
+            final String cause;
+            final long since;
+            long lastLogged;
+
+            Condition(String cause, long now) {
+                this.cause = cause;
+                this.since = now;
+                this.lastLogged = now;
+            }
+        }
+
+        private final Map<String, Condition> current = new ConcurrentHashMap<>();
+
+        /**
+         * Records that {@code key} is in a condition with this cause at {@code now}.
+         *
+         * @return -1 when nothing is due; otherwise the minutes the condition has lasted, which
+         *         is 0 when it starts or its cause changes
+         */
+        long report(String key, String cause, long now) {
+            long[] due = {-1};
+            current.compute(key, (k, condition) -> {
+                if (condition == null || !condition.cause.equals(cause)) {
+                    due[0] = 0;
+                    return new Condition(cause, now);
+                }
+                if (now - condition.lastLogged >= HOLD_REPEAT_MILLIS) {
+                    condition.lastLogged = now;
+                    due[0] = TimeUnit.MILLISECONDS.toMinutes(now - condition.since);
+                }
+                return condition;
+            });
+            return due[0];
+        }
+
+        /** Ends the condition of {@code key}: returns it, or null when there was none. */
+        Condition end(String key) {
+            return current.remove(key);
+        }
+    }
+
+    /** " (first seen N minutes ago)" for a condition that has lasted, and "" when it starts. */
+    private static String lasting(long minutes) {
+        return minutes > 0 ? " (first seen " + minutes + " minutes ago)" : "";
+    }
+
+    /** Whole minutes from {@code since} to {@code now}; never negative after the clock steps back. */
+    private static long minutesSince(long since, long now) {
+        return Math.max(0L, TimeUnit.MILLISECONDS.toMinutes(now - since));
+    }
 
     /** Hard concurrency cap to prevent unbounded K8s Job creation */
     private int maxConcurrentJobs = 50;
@@ -525,6 +622,13 @@ public class KubernetesNativeBackend implements Backend {
      * two are being told apart rather than conflated.
      */
     private final Set<Integer> legacyKilledExecIds = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Nodes a running pod was found on that the nodes table did not hold, each warned about
+     * once until it is registered. The monitor asks again on every poll, and StarLogger writes
+     * every WARN to error_logs, so a line per poll would fill that table.
+     */
+    private final Set<String> unregisteredNodesWarned = ConcurrentHashMap.newKeySet();
 
     /**
      * Guards the compound (jobsHoldingSlot, activeJobCount) reservation so the set and
@@ -1593,13 +1697,13 @@ public class KubernetesNativeBackend implements Backend {
      * at all, and which can take work now — so the two never cost separate API calls.
      */
     private void refreshQueueViewIfStale() {
-        if (System.currentTimeMillis() - queueViewRefreshedAt < QUEUE_VIEW_TTL_MS) {
+        if (clock.getAsLong() - queueViewRefreshedAt < QUEUE_VIEW_TTL_MS) {
             return;
         }
         synchronized (queueViewLock) {
             // Re-checked inside the lock: several dispatch threads can arrive together
             // and only the first should pay for the refresh.
-            if (System.currentTimeMillis() - queueViewRefreshedAt < QUEUE_VIEW_TTL_MS) {
+            if (clock.getAsLong() - queueViewRefreshedAt < QUEUE_VIEW_TTL_MS) {
                 return;
             }
             try {
@@ -1636,14 +1740,28 @@ public class KubernetesNativeBackend implements Backend {
                 labelledQueues = Collections.unmodifiableSet(labelled);
                 schedulableQueues = Collections.unmodifiableSet(schedulable);
                 queueMaxAllocatableCpuMillis = Collections.unmodifiableMap(maxCpu);
-                queueViewRefreshedAt = System.currentTimeMillis();
+                queueViewRefreshedAt = clock.getAsLong();
                 queueViewLoaded = true;
+                LastingConditions.Condition failing = queueViewFailures.end(QUEUE_VIEW_LISTING);
+                if (failing != null) {
+                    log.info(
+                        "Refreshed the Kubernetes queue view again; it was first seen failing " +
+                            minutesSince(failing.since, queueViewRefreshedAt) + " minute(s) ago"
+                    );
+                }
             } catch (Exception e) {
                 // Leave the previous view in place rather than emptying it. Treating an
                 // API blip as "no queue can run anything" would stall all dispatch, and
                 // treating it as "every queue is fine" would resume the pending-pod
                 // black hole. The stale view is the least wrong of the three.
-                log.warn("Could not refresh the Kubernetes queue view; reusing the previous one", e);
+                long minutes = queueViewFailures.report(QUEUE_VIEW_LISTING, "failing", clock.getAsLong());
+                if (minutes >= 0) {
+                    log.warn(
+                        "Could not refresh the Kubernetes queue view" + lasting(minutes) +
+                            "; reusing the previous one." + HOLD_REPEATED,
+                        e
+                    );
+                }
             }
         }
     }
@@ -1653,32 +1771,39 @@ public class KubernetesNativeBackend implements Backend {
         if (!initialized || shuttingDown) {
             return false;
         }
+        String name = (queueName == null || queueName.trim().isEmpty())
+            ? DEFAULT_QUEUE_NAME
+            : queueName.trim();
         // A managed pod exists that StarExec cannot account for, so it may be occupying a
         // node that no capacity check knows about. Deferring through this channel is
         // deliberate: pairs stay enqueued and dispatch resumes on its own once a successful
         // inventory shows the object is gone. It must never surface as ERROR_SGE_REJECT or
         // ERROR_SUBMIT_FAIL — this is a transient safety hold, not a rejected submission.
         if (admissionDegraded.get()) {
-            log.warn(
-                "Deferring dispatch for queue '" + queueName + "': admission is degraded" +
-                    " because a managed pod cannot be accounted for (" +
-                    admissionDegradedDetail + ")"
-            );
+            long minutes = holdDue(name, HOLD_ADMISSION);
+            if (minutes >= 0) {
+                log.warn(
+                    "Deferring dispatch for queue '" + name + "'" + lasting(minutes) +
+                        ": admission is degraded because a managed pod cannot be accounted for (" +
+                        admissionDegradedDetail + ")." + HOLD_REPEATED
+                );
+            }
             return false;
         }
         refreshQueueViewIfStale();
-        String name = (queueName == null || queueName.trim().isEmpty())
-            ? DEFAULT_QUEUE_NAME
-            : queueName.trim();
 
         // Never seen the cluster. An empty view is not evidence of anything, and the
         // branch below reads it as permanent misconfiguration, so defer instead: the
         // pairs stay enqueued and dispatch resumes as soon as a listing succeeds.
         if (!queueViewLoaded) {
-            log.warn(
-                "The Kubernetes queue view has never loaded, so whether queue '" + name +
-                "' has nodes is unknown; deferring its pairs rather than failing them"
-            );
+            long minutes = holdDue(name, HOLD_VIEW_NEVER_LOADED);
+            if (minutes >= 0) {
+                log.warn(
+                    "The Kubernetes queue view has never loaded, so whether queue '" + name +
+                        "' has nodes is unknown; deferring its pairs rather than failing them" +
+                        lasting(minutes) + "." + HOLD_REPEATED
+                );
+            }
             return false;
         }
 
@@ -1699,48 +1824,72 @@ public class KubernetesNativeBackend implements Backend {
             if (requestMillis < 0 || maxAllocatable == null || maxAllocatable <= 0) {
                 // Unreadable quantities are not evidence of room. Defer rather than dispatch
                 // into a cluster whose capacity could not be established.
-                log.warn(
-                    "Cannot establish CPU capacity for queue '" + name + "' (request=" +
-                        cpuLimit + ", parsed=" + requestMillis + "m, maxAllocatable=" +
-                        maxAllocatable + "); deferring dispatch rather than assuming it fits"
-                );
+                long minutes = holdDue(name, HOLD_CPU_UNKNOWN);
+                if (minutes >= 0) {
+                    log.warn(
+                        "Cannot establish CPU capacity for queue '" + name + "' (request=" +
+                            cpuLimit + ", parsed=" + requestMillis + "m, maxAllocatable=" +
+                            maxAllocatable + "); deferring dispatch rather than assuming it fits" +
+                            lasting(minutes) + "." + HOLD_REPEATED
+                    );
+                }
                 return false;
             }
             if (requestMillis >= maxAllocatable) {
-                cpuCapacityBlockDetail =
-                    "queue '" + name + "' requests " + cpuLimit + " (" + requestMillis +
-                    "m) but its largest schedulable node allocates only " + maxAllocatable + "m";
-                log.error(
-                    "Impossible CPU configuration: STAREXEC_K8S_CPU_LIMIT=" + cpuLimit +
-                        " (" + requestMillis + "m) is not smaller than the largest" +
-                        " allocatable CPU on any schedulable node of queue '" + name +
-                        "' (" + maxAllocatable + "m). Every pod would stay Pending for ever," +
-                        " so dispatch is being held and pairs remain enqueued rather than" +
-                        " failed. Remediation: lower STAREXEC_K8S_CPU_LIMIT below " +
-                        maxAllocatable + "m (chart key kubernetes.resources.limits.cpu)," +
-                        " leaving room for node DaemonSets, or add a node with more CPU."
-                );
+                long minutes = holdDue(name, HOLD_CPU_TOO_LARGE);
+                if (minutes >= 0) {
+                    log.error(
+                        "Impossible CPU configuration" + lasting(minutes) + ": STAREXEC_K8S_CPU_LIMIT=" +
+                            cpuLimit + " (" + requestMillis + "m) is not smaller than the largest" +
+                            " allocatable CPU on any schedulable node of queue '" + name +
+                            "' (" + maxAllocatable + "m). Every pod would stay Pending for ever," +
+                            " so dispatch is being held and pairs remain enqueued rather than" +
+                            " failed. Remediation: lower STAREXEC_K8S_CPU_LIMIT below " +
+                            maxAllocatable + "m (chart key kubernetes.resources.limits.cpu)," +
+                            " leaving room for node DaemonSets, or add a node with more CPU." +
+                            HOLD_REPEATED
+                    );
+                }
                 return false;
             }
-            if (!cpuCapacityBlockDetail.isEmpty()) {
-                log.info("CPU capacity gate cleared for queue '" + name + "'");
-                cpuCapacityBlockDetail = "";
-            }
+            endHold(name);
             return true;
         }
         if (labelledQueues.contains(name)) {
             // Nodes carry this queue but none can take work: a drain, or nodes that have
             // gone NotReady. Transient, so defer rather than fail the pairs.
-            log.warn(
-                "Queue '" + name + "' has nodes but none are schedulable right now" +
-                " (cordoned or NotReady); deferring dispatch"
-            );
+            long minutes = holdDue(name, HOLD_NO_SCHEDULABLE_NODE);
+            if (minutes >= 0) {
+                log.warn(
+                    "Queue '" + name + "' has nodes but none are schedulable right now" +
+                        " (cordoned or NotReady); deferring dispatch" + lasting(minutes) + "." +
+                        HOLD_REPEATED
+                );
+            }
             return false;
         }
         // No node carries this queue at all. Permanent until someone fixes it, so let the
         // pairs reach submitScript and be rejected there where the failure is visible,
-        // rather than silently deferring for ever.
+        // rather than silently deferring for ever. The backend no longer holds the queue,
+        // which is all the line that ends a hold says.
+        endHold(name);
         return true;
+    }
+
+    /** Records that dispatch for {@code queue} is held for {@code reason}; see {@link LastingConditions#report}. */
+    private long holdDue(String queue, String reason) {
+        return dispatchHolds.report(queue, reason, clock.getAsLong());
+    }
+
+    /** Ends the hold on {@code queue}, if it has one, and logs that once. */
+    private void endHold(String queue) {
+        LastingConditions.Condition hold = dispatchHolds.end(queue);
+        if (hold != null) {
+            log.info(
+                "Kubernetes no longer holds dispatch for queue '" + queue + "'; the hold (" + hold.cause +
+                    ") was first seen " + minutesSince(hold.since, clock.getAsLong()) + " minute(s) ago"
+            );
+        }
     }
 
     @Override
@@ -4543,6 +4692,70 @@ public class KubernetesNativeBackend implements Backend {
 
             return markPairRunningSafely(pairId, "Kubernetes active-job polling") !=
                 JobPairs.ConditionalPairUpdateResult.ERROR;
+        }
+
+        /**
+         * Records the node a running pair's pod is on, which is what lists the pair in the
+         * cluster page's node view while it runs.
+         *
+         * <p>Without it a Kubernetes pair got its node only from its statistics, once it had
+         * finished. The write is the one the Podman backend makes when a container starts,
+         * and it changes nothing for a pair that has finished or whose job is paused, killed
+         * or deleted. The pair is found the way {@link #onJobRunning} finds it.
+         *
+         * <p>The node is looked up by name, as the statistics are. A name the nodes table does
+         * not hold yet is warned about once, and the monitor asks again on its next poll: the
+         * periodic cluster refresh registers new nodes.
+         */
+        @Override
+        public boolean onJobPlaced(ExecutionRef execution, String nodeName) {
+            if (isStopped(execution)) {
+                log.debug("Skipping node update for stopped " + execution);
+                return true;
+            }
+
+            Integer pairId = resolvePairId(execution);
+            if (pairId == null) {
+                // onJobRunning and resolvePairId report why; nothing is lost by asking again.
+                log.debug("No pair resolved for " + execution + " yet; recording its node later");
+                return false;
+            }
+
+            int nodeId = Cluster.getNodeIdByName(nodeName);
+            if (nodeId <= 0) {
+                if (unregisteredNodesWarned.add(nodeName)) {
+                    log.warn(
+                        "Pair " + pairId + " runs on node " + nodeName + " (" + execution +
+                        "), which the nodes table does not hold, so the node view does not" +
+                        " list it. Its node is recorded once the cluster refresh registers" +
+                        " the node. Logged once per node."
+                    );
+                }
+                return false;
+            }
+            if (unregisteredNodesWarned.remove(nodeName)) {
+                log.info("Node " + nodeName + " is registered now; recording it for pair " + pairId);
+            }
+
+            JobPairs.ConditionalPairUpdateResult result =
+                JobPairs.tryUpdatePairExecutionHost(pairId, nodeId);
+            switch (result) {
+                case UPDATED:
+                    log.debug("Recorded node " + nodeName + " for pair " + pairId);
+                    return true;
+                case STALE:
+                    log.debug(
+                        "Not recording node " + nodeName + " for pair " + pairId +
+                        ": it has finished, or its job is paused, killed or deleted"
+                    );
+                    return true;
+                default:
+                    log.warn(
+                        "Failed to record node " + nodeName + " for pair " + pairId + " (" +
+                        execution + "); retrying on the next poll"
+                    );
+                    return false;
+            }
         }
 
         @Override

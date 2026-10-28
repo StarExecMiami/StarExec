@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.apache.commons.lang3.time.StopWatch;
+import org.starexec.backend.Backend;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.security.GeneralSecurity;
@@ -29,6 +30,7 @@ import org.starexec.data.to.tuples.PairIdJobId;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.jobs.JobManager;
 import org.starexec.jobs.ProcessingManager;
+import org.starexec.jobs.SolverBuildRecorder;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.Mail;
 import org.starexec.util.RobustRunnable;
@@ -63,6 +65,13 @@ class PeriodicTasks {
             POST_PROCESS_JOBS_TASK,
             0,
             () -> 45,
+            TimeUnit.SECONDS
+        ),
+        RECORD_SOLVER_BUILDS(
+            true,
+            RECORD_SOLVER_BUILDS_TASK,
+            0,
+            () -> 30,
             TimeUnit.SECONDS
         ),
         RERUN_FAILED_PAIRS(
@@ -242,9 +251,11 @@ class PeriodicTasks {
                                 user.getId()
                             )
                         ) {
+                            // The id, not the address: email addresses stay out of the logs (#329).
                             log.error(
-                                "Found user who wasn't developer/admin while emailing error logs: " +
-                                    user.getEmail()
+                                "Not emailing the error log report to user " +
+                                    user.getId() +
+                                    ", who is subscribed to it but is not an admin or developer"
                             );
                         }
                     }
@@ -258,13 +269,49 @@ class PeriodicTasks {
 
                     // Gather the error logs and send them.
                     List<ErrorLog> allLogs = ErrorLogs.getAll();
-                    Mail.sendErrorLogEmails(
+                    int accepted = Mail.sendErrorLogEmails(
                         allLogs,
                         usersSubscribedToErrorLogs
                     );
 
-                    // Delete all the error logs, in the future we may keep some until they get too old.
-                    ErrorLogs.deleteAll();
+                    if (accepted == 0 && !usersSubscribedToErrorLogs.isEmpty()) {
+                        // No one has seen these lines, so they wait for the next report. Not for
+                        // ever: like an undeliverable mail, a line is given up after a few days, so
+                        // that a mail outage cannot grow the table and the report without bound.
+                        Calendar giveUp = Calendar.getInstance();
+                        giveUp.add(
+                            Calendar.DAY_OF_YEAR,
+                            -R.DAYS_TO_KEEP_UNSENT_ERROR_LOGS
+                        );
+                        Timestamp giveUpBefore = new Timestamp(
+                            giveUp.getTime().getTime()
+                        );
+                        List<ErrorLog> givenUp = allLogs
+                            .stream()
+                            .filter(l -> l.getTime().before(giveUpBefore))
+                            .collect(Collectors.toList());
+                        ErrorLogs.delete(givenUp);
+                        String kept =
+                            "The error log report reached no one; " +
+                            (allLogs.size() - givenUp.size()) +
+                            " of its " +
+                            allLogs.size() +
+                            " line(s) are kept for the next report";
+                        log.warn(
+                            givenUp.isEmpty()
+                                ? kept
+                                : kept +
+                                    ", and " +
+                                    givenUp.size() +
+                                    " line(s) older than " +
+                                    R.DAYS_TO_KEEP_UNSENT_ERROR_LOGS +
+                                    " days are deleted unsent"
+                        );
+                    } else {
+                        // Only the lines the report contained. A line logged since, such as a
+                        // failure to send the report, waits for the next one.
+                        ErrorLogs.delete(allLogs);
+                    }
                 } else {
                     log.info(
                         "No error logs from " +
@@ -530,6 +577,17 @@ class PeriodicTasks {
                 }
             }
         };
+
+    // Apply the outcome of finished solver builds, which the job script cannot record in container mode
+    private static final String recordSolverBuildsTaskName = "recordSolverBuildsTask";
+    private static final Runnable RECORD_SOLVER_BUILDS_TASK = new RobustRunnable(
+        recordSolverBuildsTaskName
+    ) {
+        @Override
+        protected void dorun() {
+            SolverBuildRecorder.recordFinishedBuilds();
+        }
+    };
 
     private static final String updateUserDiskSizesTaskName =
         "updateUserDiskSizesTask";
@@ -824,7 +882,11 @@ class PeriodicTasks {
         });
     }
 
-    /** One line naming what the database shows about a stuck job, and the likely cause. */
+    /**
+     * One line naming what the database shows about a stuck job, and the likely cause. For
+     * pending pairs on an ACTIVE queue it asks the backend whether that queue can take work
+     * now: a backend that did not start, or that holds dispatch, leaves the queue ACTIVE.
+     */
     public static String describeStuckJob(StuckJob job) {
         String state = String.format(
             "%d pending, %d enqueued, %d running, %d awaiting result processing",
@@ -839,6 +901,11 @@ class PeriodicTasks {
         } else if (job.enqueued + job.running > 0) {
             cause = "pairs are in flight but none has started or finished; check the backend" +
                 " and its job monitor";
+        } else if (job.pending > 0 && backendRefusesWork(job.queueName)) {
+            cause = "the backend is not accepting work on queue '" + job.queueName + "'; the" +
+                " dispatcher's line for it ('Queue " + job.queueName + " cannot accept work at the" +
+                " moment', or 'Queue " + job.queueName + " has no nodes available' while it has no" +
+                " nodes) says since when, and the backend's own lines before it say why";
         } else if (job.pending > 0) {
             cause = "nothing is being dispatched from queue '" + job.queueName + "'; check that" +
                 " the queue has nodes the backend can use";
@@ -849,6 +916,23 @@ class PeriodicTasks {
             "Job %d (%s) has made no progress for %d minutes (%s): %s",
             job.jobId, job.name, job.idleMinutes, state, cause
         );
+    }
+
+    /**
+     * Whether the backend says queue {@code queueName} cannot take work now. False when there
+     * is no backend or it cannot answer: the report then gives the advice it gave before it
+     * asked, rather than a cause nobody established.
+     */
+    private static boolean backendRefusesWork(String queueName) {
+        Backend backend = R.BACKEND;
+        if (backend == null) {
+            return false;
+        }
+        try {
+            return !backend.isQueueDispatchable(queueName);
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     /** Whether a stuck job is due a report now; records the report when it is. */

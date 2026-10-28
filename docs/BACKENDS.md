@@ -286,8 +286,8 @@ Jobs write results to mounted volumes:
 | `status.json`    | Job status updates    |
 | `stats.json`     | Runtime statistics    |
 | `attributes.txt` | Post-processor output |
-| `var.out`        | Solver stdout         |
-| `watcher.out`    | Runsolver output      |
+| `var.out`        | runsolver's measurements (`-v`) |
+| `watcher.out`    | runsolver's log (`-w`) |
 | `stage-status/<n>.json`   | Stage `n`'s latest status    |
 | `stage-attributes/<n>.txt` | Stage `n`'s post-processor output |
 | `stage-stats/<n>.json`    | Stage `n`'s runtime statistics    |
@@ -306,7 +306,8 @@ treat that directory as the protocol marker:
   `attributes.txt` is never read. A stage is recorded once it has finished (its
   `stage-status/<n>.json` is terminal, or it produced the pair's final status) and only if the
   pair has that stage. A finished stage with no file, because it ran no post-processor or its
-  post-processor failed, gets no attributes.
+  post-processor failed, gets no attributes; the monitors log that at DEBUG, since it is not a
+  fault (a failed post-processor is already the stage's status, `ERROR_POST_PROCESSOR`).
 - **Absent** (a job script from before this protocol): `attributes.txt` is recorded only for
   a single-stage pair, under its only stage. A multi-stage pair's `attributes.txt` is not
   recorded, because the stage that wrote it cannot be known.
@@ -325,7 +326,9 @@ marker, because a job script can publish per-stage attributes without per-stage 
 - **Present:** statistics are recorded per stage from `stage-stats/<n>.json` only, under the
   same finished-stage and membership rules. A file is used only if it names this pair and this
   stage and carries every measurement as a non-negative number. Zero is a valid measurement:
-  runsolver reports `MAXVM=0` for a run shorter than its first 0.1 s sample. A finished stage
+  runsolver reports `MAXVM=0` for a run shorter than its first 0.1 s sample. A time in
+  exponent form is a number too: runsolver prints a time below 1e-4 s or from 1e6 s that way
+  (`WCTIME=9.90467e-05`), and the job script writes it to the file unchanged. A finished stage
   with no usable file, for example one whose var file was missing, gets no statistics, never
   another stage's.
 - **Absent:** `stats.json` is recorded only if it explicitly names this pair and a finished
@@ -652,7 +655,10 @@ its queue decides which ones, through the queue label
   Pairs wait rather than fail while all of a queue's nodes are cordoned or
   NotReady, while `STAREXEC_K8S_CPU_LIMIT` is not smaller than the allocatable
   CPU of the queue's largest schedulable node (the log says `Impossible CPU
-  configuration`), and until the backend has listed the nodes once.
+  configuration`), and until the backend has listed the nodes once. The
+  backend logs why it holds a queue when the hold starts or its reason
+  changes, again every 6 hours while it lasts, and `Kubernetes no longer holds
+  dispatch for queue '<q>'` at INFO when it ends.
 
 The backend reads queue labels only from worker nodes, so a node needs both
 labels:

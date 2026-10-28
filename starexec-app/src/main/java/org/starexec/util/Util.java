@@ -13,12 +13,17 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.AccessDeniedException;
+import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.text.DecimalFormat;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -55,6 +60,8 @@ import org.starexec.logger.StarLogger;
 public class Util {
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    // Immutable and thread-safe, unlike SimpleDateFormat, so every request thread can share it.
+    private static final DateTimeFormatter PATH_DATE = DateTimeFormatter.ofPattern(R.PATH_DATE_FORMAT);
     private static final Pattern UNSAFE_SHELL_META_CHARS = Pattern.compile(
         "[;|&><`\\r\\n]"
     );
@@ -1782,6 +1789,77 @@ public class Util {
             FileUtils.deleteQuietly(sandbox);
         }
         return sandbox2;
+    }
+
+    /**
+     * The current local time as a directory name, in {@link R#PATH_DATE_FORMAT}: the time to the
+     * millisecond. Uploads and copies name the directories they create with it. The hour runs
+     * from 01 to 24, so 00:05:09.017 on 18 October 2026 is 20261018-24.05.09.017.
+     *
+     * @return the directory name for the current time
+     */
+    public static String pathDate() {
+        return pathDate(LocalDateTime.now());
+    }
+
+    /** {@link #pathDate()} for the given time. */
+    static String pathDate(LocalDateTime time) {
+        return PATH_DATE.format(time);
+    }
+
+    /**
+     * Deletes the parents of dir, nearest first, while they are empty and strictly inside root.
+     * Only an empty directory can be deleted this way, so nothing else is ever removed. An upload
+     * whose user was deleted meanwhile uses it to remove the directories it created again above
+     * its own (#275).
+     *
+     * @param root the directory to stop below; it is never deleted
+     * @param dir the path whose parents are deleted; it is not deleted itself
+     */
+    public static void deleteEmptyParents(Path root, Path dir) {
+        for (Path parent = dir.getParent();
+             parent != null && parent.startsWith(root) && !parent.equals(root);
+             parent = parent.getParent()) {
+            try {
+                Files.delete(parent);
+            } catch (NoSuchFileException e) {
+                // Already gone; the one above may still be empty.
+            } catch (DirectoryNotEmptyException e) {
+                return;
+            } catch (IOException e) {
+                log.warn("Could not delete the empty directory " + parent, e);
+                return;
+            }
+        }
+    }
+
+    /** How many suffixed names {@link #claimNewDirectory} tries after the one it was given. */
+    public static final int MAX_DIRECTORY_SUFFIX = 100;
+
+    /**
+     * Creates a new, empty directory that belongs to one upload or copy, creating its parents as
+     * needed. A directory that already exists is never reused: then dir-1, dir-2, ... are tried.
+     * These directories are named by the time to the millisecond, so two uploads by one user can be
+     * given the same name. Sharing it would mix their files, and the first to clean up would delete
+     * the other's.
+     *
+     * @param dir the directory to create
+     * @return the directory created: dir, or dir with a suffix
+     * @throws IOException if no directory could be created
+     */
+    public static File claimNewDirectory(File dir) throws IOException {
+        Files.createDirectories(dir.toPath().getParent());
+        for (int suffix = 0; ; suffix++) {
+            File candidate = suffix == 0 ? dir : new File(dir.getPath() + "-" + suffix);
+            try {
+                Files.createDirectory(candidate.toPath());
+                return candidate;
+            } catch (FileAlreadyExistsException e) {
+                if (suffix == MAX_DIRECTORY_SUFFIX) {
+                    throw e;
+                }
+            }
+        }
     }
 
     /**

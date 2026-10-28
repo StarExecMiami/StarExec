@@ -275,7 +275,10 @@ resources:
       memory: "1Gi"
       cpu: "500m"
     limits:
-      memory: "2Gi"
+      # The image caps the JVM heap at 2 GiB (-Xmx2048m in its JAVA_OPTS); the rest of the limit is for the
+      # memory the JVM uses outside the heap. scripts/check-chart-app-heap.py keeps every profile's heap at
+      # or below 75% of the app's limit.
+      memory: "3Gi"
       cpu: "2"
   postgres:
     requests:

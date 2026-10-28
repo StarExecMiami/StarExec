@@ -7,16 +7,22 @@ import org.junit.Test;
 import org.starexec.backend.LocalBackend;
 import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.database.Common;
+import org.starexec.data.database.Queues;
+import org.starexec.data.to.JobPair;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
 
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
@@ -58,8 +64,11 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 	private static final int BENCH_ID = 91001;
 	private static final int JOB_ID = 91001;
 	private static final int PAIR_ID = 91001;
+	/** A node of this test's own, so no row for the machine's real host name is read or touched. */
+	private static final String NODE_NAME = TAG + "-node";
 
 	private static final int ENQUEUED = StatusCode.STATUS_ENQUEUED.getVal();
+	private static final int RUNNING = StatusCode.STATUS_RUNNING.getVal();
 	private static final int COMPLETE = StatusCode.STATUS_COMPLETE.getVal();
 	private static final int NOT_REACHED = StatusCode.STATUS_NOT_REACHED.getVal();
 
@@ -133,6 +142,11 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 			quietly(s, "DELETE FROM starexec.queues WHERE id=" + QUEUE_ID);
 			quietly(s, "DELETE FROM starexec.spaces WHERE id=" + SPACE_ID);
 			quietly(s, "DELETE FROM starexec.users WHERE id=" + USER_ID);
+		}
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement("DELETE FROM starexec.nodes WHERE name = ?")) {
+			ps.setString(1, NODE_NAME);
+			ps.executeUpdate();
 		}
 	}
 
@@ -217,15 +231,63 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 		}
 	}
 
+	/**
+	 * The backend records which node a running pair is on, which is what lists the pair in the
+	 * cluster page's node view while it runs.
+	 *
+	 * <p>{@code initialize()} looks its node up once. On a fresh database or a new host name the
+	 * node is not registered yet at that point -- the first cluster refresh registers it
+	 * afterwards -- and the backend cached that miss, so no pair of the whole lifetime named its
+	 * node while it ran. Here the node is registered after initialization, as that refresh does,
+	 * and the pair is held running until it has been read back.
+	 */
+	@Test
+	public void aRunningPairNamesTheNodeRegisteredAfterInitialization() throws Exception {
+		Path release = work.resolve("release");
+		startBackend();
+		// initialize() named the node after this machine and cached a lookup of it. Both are
+		// pointed at this test's own node, still unregistered: the state initialize() leaves
+		// when the machine's node is missing, without reading or touching a row for it.
+		setField(backend, "nodeName", NODE_NAME);
+		setField(backend, "cachedNodeId", -1);
+		int nodeId = registerNode(NODE_NAME);
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"UPDATE starexec.job_pairs SET primary_jobpair_data = 1 WHERE id = ?")) {
+			// The node view lists a pair through its primary stage, which job creation sets.
+			ps.setInt(1, PAIR_ID);
+			assertEquals(1, ps.executeUpdate());
+		}
+
+		submitStarted(heldScript(release));
+		try {
+			assertEquals("the pair must run on its node (status/node_id)",
+					RUNNING + "/" + nodeId, awaitRunningOn(nodeId));
+			assertEquals("the node's view must list the running pair",
+					List.of(PAIR_ID), pairIds(Queues.getPairsRunningOnNode(nodeId)));
+		} finally {
+			Files.writeString(release, "");
+		}
+		awaitTerminal();
+		assertEquals(COMPLETE, pairStatus());
+	}
+
 	// ------------------------------------------------------------------------- harness
 
 	private void submit(String script) throws Exception {
+		startBackend();
+		submitStarted(script);
+	}
+
+	private void startBackend() {
+		backend = new LocalBackend();
+		backend.initialize("");
+	}
+
+	private void submitStarted(String script) throws Exception {
 		Path scriptPath = work.resolve("job.sh");
 		Files.writeString(scriptPath, script);
 		Files.setPosixFilePermissions(scriptPath, PosixFilePermissions.fromString("rwxr-xr-x"));
-
-		backend = new LocalBackend();
-		backend.initialize("");
 
 		// logPath is a FILE inside the output directory; LocalBackend takes its parent as the
 		// output dir, exactly as production does via JobPairs.getStdout(pairId).
@@ -251,6 +313,40 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 	}
 
 	/**
+	 * Polls until the pair is RUNNING on {@code nodeId}, and returns its status and node id as
+	 * last read, "status/node_id", so a failure says which half was missing.
+	 */
+	private String awaitRunningOn(int nodeId) throws Exception {
+		String expected = RUNNING + "/" + nodeId;
+		long deadline = System.nanoTime() + TIMEOUT_MS * 1_000_000L;
+		String last;
+		do {
+			last = pairStatus() + "/" + pairNodeId();
+			if (last.equals(expected)) {
+				return last;
+			}
+			Thread.sleep(200);
+		} while (System.nanoTime() - deadline < 0);
+		return last;
+	}
+
+	/**
+	 * Says it runs stage 1, as the shipped job script does when a stage starts, then waits for the
+	 * test to release it before completing that stage. Bounded, so a test that dies first does not
+	 * leave it waiting forever.
+	 */
+	private String heldScript(Path release) {
+		return "#!/bin/bash\nset -eu\n"
+				+ "OUT=" + outputDir + "\n"
+				+ "mkdir -p \"$OUT/stage-status\"\n"
+				+ "printf '%s\\n' \"" + statusJson(1, RUNNING) + "\" > \"$OUT/status.json\"\n"
+				+ "n=0\n"
+				+ "while [ ! -e '" + release + "' ] && [ \"$n\" -lt 1200 ]; do sleep 0.1; n=$((n + 1)); done\n"
+				+ record(1, COMPLETE)
+				+ runsolverArtifacts();
+	}
+
+	/**
 	 * A two-stage run, in the artifact protocol the shipped helper uses: one status.json that
 	 * each stage truncates, and one durable record per stage beside it.
 	 */
@@ -273,10 +369,15 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 
 	/** One stage: the per-stage record, then status.json truncated to point at this stage. */
 	private String record(int stage, int status) {
-		String json = "{\\\"pairId\\\":" + PAIR_ID + ",\\\"status\\\":" + status
-				+ ",\\\"stageNumber\\\":" + stage + ",\\\"timestamp\\\":1788818872}";
+		String json = statusJson(stage, status);
 		return "printf '%s\\n' \"" + json + "\" > \"$OUT/stage-status/" + stage + ".json\"\n"
 				+ "printf '%s\\n' \"" + json + "\" > \"$OUT/status.json\"\n";
+	}
+
+	/** One status record, escaped for a double-quoted shell string. */
+	private static String statusJson(int stage, int status) {
+		return "{\\\"pairId\\\":" + PAIR_ID + ",\\\"status\\\":" + status
+				+ ",\\\"stageNumber\\\":" + stage + ",\\\"timestamp\\\":1788818872}";
 	}
 
 	private String runsolverArtifacts() {
@@ -303,6 +404,47 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 			return scalar(con, "SELECT count(*) FROM starexec.job_pair_completion"
 					+ " WHERE pair_id=" + PAIR_ID);
 		}
+	}
+
+	/** The pair's node id, or "null". */
+	private String pairNodeId() throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"SELECT node_id FROM starexec.job_pairs WHERE id = ?")) {
+			ps.setInt(1, PAIR_ID);
+			try (ResultSet rs = ps.executeQuery()) {
+				assertTrue("pair " + PAIR_ID + " has no row", rs.next());
+				return String.valueOf(rs.getObject(1));
+			}
+		}
+	}
+
+	/** Registers a node the way the cluster refresh does, and returns its id. */
+	private static int registerNode(String name) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"INSERT INTO starexec.nodes (name, status) VALUES (?, 'ACTIVE') RETURNING id")) {
+			ps.setString(1, name);
+			try (ResultSet rs = ps.executeQuery()) {
+				assertTrue(rs.next());
+				return rs.getInt(1);
+			}
+		}
+	}
+
+	private static List<Integer> pairIds(List<JobPair> pairs) {
+		assertTrue("the node view's query failed", pairs != null);
+		List<Integer> ids = new ArrayList<>();
+		for (JobPair pair : pairs) {
+			ids.add(pair.getId());
+		}
+		return ids;
+	}
+
+	private static void setField(Object target, String name, Object value) throws Exception {
+		Field field = target.getClass().getDeclaredField(name);
+		field.setAccessible(true);
+		field.set(target, value);
 	}
 
 	private static int scalar(Connection con, String sql) throws SQLException {

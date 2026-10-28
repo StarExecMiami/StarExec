@@ -663,7 +663,7 @@ reaches that environment only when the deployment passes it on:
 | How StarExec was started | Where its settings live |
 |---|---|
 | `make start` with Helm installed | The values file: `charts/starexec/values-local-dev.yaml` for the default `ENV=dev`, `charts/starexec/values-<ENV>.yaml` for another `ENV`, or the file named by `VALS=`. `make start` also passes Helm the fixed `--set` options listed under `deploy-podman-helm` in the `Makefile`, such as the image, the port and the socket; no `STAREXEC_*` variable from your shell is among them. This path always runs the Podman backend. |
-| `make start` without Helm | `render.yaml.template`. Only the variables that `scripts/generate-render-yaml.sh` substitutes come from your shell: the database settings, the port, the backend type, the volume names and the image. |
+| `make start` without Helm | `render.yaml.template`. Only the variables that `scripts/generate-render-yaml.sh` substitutes come from your shell: the database settings, the port, the backend type, the volume names, the image and, with the Podman backend, the container engine's socket (`PODMAN_SOCKET_PATH`), the job image (`STAREXEC_CONTAINER_JOB_IMAGE`) and the data volume's path on the host (`STAREXEC_CONTAINER_HOST_DATA_PATH`, read from the volume when unset). |
 | `docker compose up` | The `environment:` of the `starexec` service in `docker-compose.yml` (Local backend). Docker Compose also merges a `docker-compose.override.yml` next to it, which keeps your changes out of the tracked file. |
 | Kubernetes | The values file the release is deployed from, applied by upgrading the release. On Quokka that file is in git and Jenkins deploys it. |
 
@@ -718,19 +718,29 @@ seconds and skips a queue in these cases:
   `ACTIVE`. Check with
   `SELECT q.name, q.status FROM jobs j JOIN queues q ON q.id = j.queue_id WHERE j.id = <JOB_ID>;`.
   Pause the job, use **Change Queue** on its page to pick an active queue, and resume it; or activate the queue.
-- **The queue has no nodes.** Log: `Queue <q> has <n> pair(s) waiting and no nodes ...`. As a WARN, the
-  backend agrees that no node serves the queue: attach one, or bring it back. As an ERROR (`... yet the backend
-  reports it can accept work`), StarExec's node table and the cluster disagree, usually because a node was
+- **The queue has no nodes.** Log: `Queue <q> has no nodes available (<n> pair(s) waiting to be submitted, <m>
+  enqueued)`. As a WARN, the backend agrees that no node serves the queue: attach one, or bring it back. As an
+  ERROR (`Queue <q> has no nodes associated with it (...), yet the backend reports it can accept work`),
+  StarExec's node table and the cluster disagree, usually because a node was
   never registered: nodes are registered by a periodic task that logs `Loading worker nodes into the db`, so
-  look for a warning after that line.
+  look for a warning after that line. The line is written when the condition starts, again every 6 hours while
+  it lasts (`(first seen <n> minutes ago)`), and `Queue <q> has nodes again` at INFO when it ends.
 - **The queue is full.** Log: `Not adding more job pairs to queue <q>, which has <n> pairs enqueued.` The queue
   already holds `STAREXEC_NODE_MULTIPLIER` (default 16) pairs per node in status 2, which are not starting.
   See status 2 below.
 - **The backend refuses new work.** Log: `Queue <q> cannot accept work at the moment; deferring its pairs to a
-  later pass rather than failing them`. The backend has not finished initializing or is shutting down; on
-  Kubernetes it also logs its own reason next to this line.
+  later pass rather than failing them`. The backend has not started or is shutting down, or, on Kubernetes,
+  holds dispatch for a reason it logs itself just before the first of these lines: when the hold starts or its
+  reason changes, again every 6 hours while it lasts, and `Kubernetes no longer holds dispatch for queue
+  '<q>'` at INFO when it ends. A Podman backend that failed to start logged `Failed to initialize backend` at
+  start-up, with the reason, and is not started again until StarExec restarts. The line is written when the
+  refusal starts, again every 6 hours while pairs wait (`(first seen <n> minutes ago)`), and `Queue <q>
+  accepts work again` at INFO when the queue takes pairs again.
 - **Kubernetes is at its concurrency cap.** Log: `deferring pair <id> (...): at concurrency cap (<n>/<max>)`.
   At most `kubernetes.maxConcurrentJobs` pairs run at once; the rest wait in status 1.
+
+StarExec keeps the no-nodes and refusal conditions, and the Kubernetes backend its holds, in memory, so after a
+restart one that lasts is reported again on the first pass that sees it.
 
 **Status 2 (enqueued): the backend has the pairs but no free slot.** How many pairs run at once:
 
@@ -1096,7 +1106,7 @@ sudo systemctl enable --now nfs-health.timer
 ```bash
 # What the application says it is waiting on
 kubectl logs -n starexec deploy/<release> | grep -E \
-  "Admission deferred|Admission still deferred|Deferring dispatch for queue|OPERATOR ACTION|could not be confirmed stopped|withholding its reset"
+  "Admission deferred|Admission still deferred|Deferring dispatch for queue|no longer holds dispatch|OPERATOR ACTION|could not be confirmed stopped|withholding its reset"
 ```
 
 **Common causes:**
@@ -1184,8 +1194,9 @@ make logs-postgres | grep migration
 # Check memory usage
 podman stats starexec-app
 
-# Check the container's memory limit, current use and OOM kills (cgroup v2)
-podman exec starexec-app sh -c 'cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current; grep oom_kill /sys/fs/cgroup/memory.events'
+# Check the container's memory limit, its use of memory and of swap, how often it reached the limit (max)
+# and how many processes the kernel killed for it (oom_kill) (cgroup v2)
+podman exec starexec-app sh -c 'cd /sys/fs/cgroup; cat memory.max memory.current memory.swap.current; grep -E "^(max|oom_kill) " memory.events'
 
 # On Kubernetes, a container the kernel killed shows "Reason: OOMKilled" under "Last State"
 # once it has restarted, or under "State" until it does
@@ -1193,6 +1204,8 @@ kubectl describe pod <pod-name> -n starexec
 ```
 
 The image ships a JRE, without `jstat` or `jcmd`. Its JVM heap may grow to 2048 MiB (`-Xmx2048m`), so a memory limit at or below that leaves nothing for the memory the JVM uses outside the heap.
+
+Under Podman, the pod has no swap limit. On a host with swap, a container that reaches its memory limit is not killed while swap has room: the kernel moves what does not fit to swap, so `memory.swap.current` and `max` grow while `oom_kill` stays 0.
 
 **Solution:**
 

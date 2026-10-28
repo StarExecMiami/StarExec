@@ -20,16 +20,10 @@ import org.postgresql.util.PSQLException;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.DirectoryNotEmptyException;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
-import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.sql.*;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
 import java.util.*;
-import java.util.Date;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -39,7 +33,6 @@ import java.util.stream.Stream;
 public class Solvers {
 	private static final StarLogger log = StarLogger.getLogger(Solvers.class);
 	private static final String CONFIG_PREFIX = R.CONFIGURATION_PREFIX;
-	private static final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 
 	/**
 	 * Adds a solver to the database. Solver association to a space and run configurations for the solver are also
@@ -90,41 +83,12 @@ public class Solvers {
 		});
 	}
 
-	/** How many suffixed names claimNewDirectory tries after the one it was given. */
-	static final int MAX_DIRECTORY_SUFFIX = 100;
-
-	/**
-	 * Creates a new, empty directory that belongs to one solver upload or copy, creating its
-	 * parents as needed. A directory that already exists is never reused: then dir-1, dir-2, ...
-	 * are tried. Solver directories are named by the time to the millisecond, so two uploads of
-	 * one solver name by one user can be given the same name. Sharing it would mix their files,
-	 * and the one that failed would delete the other's when it cleaned up.
-	 *
-	 * @param dir the directory to create
-	 * @return the directory created: dir, or dir with a suffix
-	 * @throws IOException if no directory could be created
-	 */
-	public static File claimNewDirectory(File dir) throws IOException {
-		Files.createDirectories(dir.toPath().getParent());
-		for (int suffix = 0; ; suffix++) {
-			File candidate = suffix == 0 ? dir : new File(dir.getPath() + "-" + suffix);
-			try {
-				Files.createDirectory(candidate.toPath());
-				return candidate;
-			} catch (FileAlreadyExistsException e) {
-				if (suffix == MAX_DIRECTORY_SUFFIX) {
-					throw e;
-				}
-			}
-		}
-	}
-
 	/**
 	 * Creates the directory where a solver that is built on StarExec keeps its sources: the
 	 * solver's directory with "_src" appended, which is where the rest of StarExec looks for it.
-	 * It must not exist yet, for the same reason as in {@link #claimNewDirectory}.
+	 * It must not exist yet, for the same reason as in {@link Util#claimNewDirectory}.
 	 *
-	 * @param solverDir a directory returned by {@link #claimNewDirectory}
+	 * @param solverDir a directory returned by {@link Util#claimNewDirectory}
 	 * @return the directory created
 	 * @throws IOException if it exists already or cannot be created
 	 */
@@ -143,7 +107,7 @@ public class Solvers {
 	 * left alone, as before.
 	 *
 	 * @param ownerId the user the solver was being added for
-	 * @param claimed directories returned by {@link #claimNewDirectory}; null entries are skipped
+	 * @param claimed directories returned by {@link Util#claimNewDirectory}; null entries are skipped
 	 */
 	public static void deleteDirectoriesOfUnaddedSolver(int ownerId, File... claimed) {
 		try {
@@ -163,32 +127,11 @@ public class Solvers {
 			Path root = new File(R.getSolverPath()).toPath().toAbsolutePath().normalize();
 			for (File dir : claimed) {
 				if (dir != null) {
-					deleteEmptyParents(root, dir.toPath().toAbsolutePath().normalize());
+					Util.deleteEmptyParents(root, dir.toPath().toAbsolutePath().normalize());
 				}
 			}
 		} catch (RuntimeException e) {
 			log.warn("Could not clean up after a solver that was not added", e);
-		}
-	}
-
-	/**
-	 * Deletes the parents of dir, nearest first, while they are empty and strictly inside root.
-	 * Only an empty directory can be deleted this way, so nothing else is ever removed.
-	 */
-	static void deleteEmptyParents(Path root, Path dir) {
-		for (Path parent = dir.getParent();
-		     parent != null && parent.startsWith(root) && !parent.equals(root);
-		     parent = parent.getParent()) {
-			try {
-				Files.delete(parent);
-			} catch (NoSuchFileException e) {
-				// Already gone; the one above may still be empty.
-			} catch (DirectoryNotEmptyException e) {
-				return;
-			} catch (IOException e) {
-				log.warn("Could not delete the empty directory " + parent, e);
-				return;
-			}
 		}
 	}
 
@@ -583,8 +526,8 @@ public class Solvers {
 		boolean added = false;
 		try {
 			File solverDirectory = new File(s.getPath());
-			String date = shortDate.format(new Date());
-			uniqueDir = claimNewDirectory(
+			String date = Util.pathDate();
+			uniqueDir = Util.claimNewDirectory(
 					solverDirectory(new File(R.getSolverPath()), userId, newSolver.getName(), date));
 			newSolver.setPath(uniqueDir.getAbsolutePath());
 
@@ -2668,7 +2611,7 @@ public class Solvers {
 	public static String getDefaultSolverPath(int userId, String solverName) {
 		File uniqueDir = new File(R.getSolverPath(), "" + userId);
 		uniqueDir = new File(uniqueDir, solverName);
-		uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
+		uniqueDir = new File(uniqueDir, Util.pathDate());
 		return uniqueDir.getAbsolutePath();
 	}
 
@@ -2851,6 +2794,85 @@ public class Solvers {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);
+		}
+	}
+
+	/**
+	 * The pairs of build jobs, each with its solver as {@code sd.solver_id}: a build job's pair has a single
+	 * stage, its primary one. Driven from the build jobs, because jobpair_stage_data has no index on
+	 * solver_id. Both the query that reads finished builds and the update that applies one use it, so that
+	 * they agree on which build job of a solver is the newest.
+	 */
+	private static final String BUILD_JOB_PAIRS = " FROM starexec.jobs j"
+			+ " JOIN starexec.job_pairs jp ON jp.job_id = j.id"
+			+ " JOIN starexec.jobpair_stage_data sd"
+			+ " ON sd.jobpair_id = jp.id AND sd.stage_number = jp.primary_jobpair_data"
+			+ " WHERE j.buildjob";
+
+	/**
+	 * Every build job whose pair has a final result that has not been applied to its solver yet, oldest job
+	 * first, with the solver as it is now. A build job counts as applied once its pair's helper benchmark is
+	 * deleted, which is how the job script marked a build it had applied. It cannot apply one in container
+	 * mode, where it has no database connection.
+	 *
+	 * @return the build jobs to apply, possibly none
+	 * @throws SQLException if the query fails
+	 */
+	public static List<FinishedSolverBuild> getFinishedBuildsToRecord() throws SQLException {
+		// "newest" counts applied jobs too: a newer build job always decides.
+		final String sql = "WITH builds AS ("
+				+ " SELECT j.id AS job_id, jp.id AS pair_id, jp.status_code, jp.bench_id, sd.solver_id"
+				+ BUILD_JOB_PAIRS + ")"
+				+ " SELECT b.job_id, b.pair_id, b.status_code, b.bench_id, b.solver_id, s.path, s.build_status,"
+				+ " b.job_id = (SELECT max(o.job_id) FROM builds o WHERE o.solver_id = b.solver_id) AS newest"
+				+ " FROM builds b"
+				+ " JOIN starexec.benchmarks bm ON bm.id = b.bench_id"
+				+ " JOIN starexec.solvers s ON s.id = b.solver_id"
+				+ " WHERE starexec.IsTerminalPairStatus(b.status_code) AND bm.deleted IS NOT TRUE AND bm.name = ?"
+				+ " ORDER BY b.job_id";
+		List<FinishedSolverBuild> builds = new ArrayList<>();
+		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+			ps.setString(1, R.SOLVER_BUILD_SCRIPT);
+			try (ResultSet rs = ps.executeQuery()) {
+				while (rs.next()) {
+					int buildStatus = rs.getInt("build_status");
+					SolverBuildStatus.SolverBuildStatusCode solverStatus = rs.wasNull()
+							? SolverBuildStatus.SolverBuildStatusCode.STATUS_UNKNOWN
+							: SolverBuildStatus.SolverBuildStatusCode.toStatusCode(buildStatus);
+					builds.add(new FinishedSolverBuild(rs.getInt("job_id"), rs.getInt("pair_id"),
+							Status.StatusCode.toStatusCode(rs.getInt("status_code")), rs.getInt("bench_id"),
+							rs.getInt("solver_id"), rs.getString("path"), solverStatus, rs.getBoolean("newest")));
+				}
+			}
+		}
+		return builds;
+	}
+
+	/**
+	 * Applies a build's outcome to its solver, if nothing the outcome was decided on has changed since
+	 * {@link #getFinishedBuildsToRecord} read it: the solver's path, its build status, and this job being the
+	 * solver's newest build job. A failed solver waits for a build too: a rebuild leaves a failed solver failed
+	 * until the rebuild's outcome is applied, and adds its build job only after that.
+	 *
+	 * @param build the build job, with its solver, as read
+	 * @param builtPath where the build copied the built solver, or null if the build failed
+	 * @return true if the solver was changed, false if any of those changed in the meantime
+	 * @throws SQLException if the update fails
+	 */
+	public static boolean recordBuildOutcome(FinishedSolverBuild build, String builtPath) throws SQLException {
+		boolean built = builtPath != null;
+		final String sql = "UPDATE starexec.solvers s SET build_status = ?, path = ?"
+				+ " WHERE s.id = ? AND s.path = ? AND s.build_status = ?"
+				+ " AND NOT EXISTS (SELECT 1" + BUILD_JOB_PAIRS + " AND sd.solver_id = s.id AND j.id > ?)";
+		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+			ps.setInt(1, built ? SolverBuildStatus.SolverBuildStatusCode.BUILT_BY_STAREXEC.getVal()
+					: SolverBuildStatus.SolverBuildStatusCode.BUILD_FAILED.getVal());
+			ps.setString(2, built ? builtPath : build.getSolverPath());
+			ps.setInt(3, build.getSolverId());
+			ps.setString(4, build.getSolverPath());
+			ps.setInt(5, build.getSolverBuildStatus().getVal());
+			ps.setInt(6, build.getJobId());
+			return ps.executeUpdate() == 1;
 		}
 	}
 

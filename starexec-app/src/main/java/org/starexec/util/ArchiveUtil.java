@@ -24,6 +24,14 @@ public class ArchiveUtil {
     );
 
     /**
+     * What a space or job XML upload tells its user when {@link #extractArchive(String)} could not extract the
+     * archive.
+     */
+    public static final String NOT_EXTRACTED =
+        "StarExec has failed to extract your uploaded file. It may be damaged, or it may have been refused for " +
+        "safety.";
+
+    /**
      * Gets the uncompressed size of an archive
      *
      * @param filePath The path to the file to get the size of
@@ -504,16 +512,18 @@ public class ArchiveUtil {
      * is deleted. Note if the extraction failed, some files/folders may have been partially created.
      *
      * @param fileName The full file path to the archive file
+     * @return true if the archive was extracted; false if it was not, for a reason this logs
      * @author Tyler Jensen
      */
-    public static void extractArchive(String fileName) {
+    public static boolean extractArchive(String fileName) {
         try {
             String parent =
                 new File(fileName).getParentFile().getCanonicalPath() +
                 File.separator;
-            ArchiveUtil.extractArchive(fileName, parent);
+            return ArchiveUtil.extractArchive(fileName, parent);
         } catch (Exception e) {
             log.error("extractArchive", e);
+            return false;
         }
     }
 
