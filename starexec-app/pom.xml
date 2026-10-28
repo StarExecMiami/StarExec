@@ -241,6 +241,12 @@
             <artifactId>junit-platform-suite-engine</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- LegacyTestSequenceEngineTest runs the legacy engine through the launcher -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.platform</groupId>
             <artifactId>junit-platform-commons</artifactId>
