@@ -1,7 +1,7 @@
 package org.starexec.test.junit.data.database;
 
 import org.apache.commons.io.FileUtils;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.UploadSessions;
 import org.starexec.data.to.UploadSession;
 import org.starexec.util.UploadArtifactPathGuard;
@@ -10,9 +10,9 @@ import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class UploadSessionsUtilityTests {
 

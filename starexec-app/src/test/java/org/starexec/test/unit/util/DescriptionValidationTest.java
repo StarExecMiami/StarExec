@@ -1,16 +1,16 @@
 package org.starexec.test.unit.util;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.DB;
 import org.starexec.util.Validator;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class DescriptionValidationTest {
 
-    @BeforeClass
+    @BeforeAll
     public static void initializeValidator() {
         Validator.initialize();
     }
@@ -34,8 +34,8 @@ public class DescriptionValidationTest {
         assertFalse(Validator.isValidPrimDescription("a".repeat(DB.SPACE_DESC_LEN + 1)));
         for (char forbidden : new char[]{'<', '>', '"', '\'', '%', ';', ')', '(', '&'}) {
             assertFalse(
-                "Expected description containing '" + forbidden + "' to be rejected",
-                Validator.isValidPrimDescription("before" + forbidden + "after")
+                Validator.isValidPrimDescription("before" + forbidden + "after"),
+                "Expected description containing '" + forbidden + "' to be rejected"
             );
         }
     }

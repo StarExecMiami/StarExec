@@ -1,7 +1,7 @@
 package org.starexec.test.junit;
 
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.to.*;
 import org.starexec.data.to.compare.BenchmarkComparator;
 import org.starexec.data.to.compare.JobPairComparator;
@@ -28,7 +28,7 @@ public class ComparatorTests {
 			Benchmark b2=new Benchmark();
 			b1.setName(a);
 			b2.setName(b);
-			Assert.assertTrue(comp.compare(b1, b2)==a.compareToIgnoreCase(b));
+			Assertions.assertTrue(comp.compare(b1, b2)==a.compareToIgnoreCase(b));
 		}
 		
 		comp=new BenchmarkComparator(1,true);
@@ -44,7 +44,7 @@ public class ComparatorTests {
 			p2.setName(b);
 			b1.setType(p1);
 			b2.setType(p2);
-			Assert.assertTrue(comp.compare(b1, b2)==a.compareToIgnoreCase(b));
+			Assertions.assertTrue(comp.compare(b1, b2)==a.compareToIgnoreCase(b));
 		}
 	}
 	
@@ -60,7 +60,7 @@ public class ComparatorTests {
 			Solver s2=new Solver();
 			s1.setName(a);
 			s2.setName(b);
-			Assert.assertTrue(comp.compare(s1, s2)==a.compareToIgnoreCase(b));
+			Assertions.assertTrue(comp.compare(s1, s2)==a.compareToIgnoreCase(b));
 		}
 		
 		comp=new SolverComparator(1,true);
@@ -73,7 +73,7 @@ public class ComparatorTests {
 			Solver s2=new Solver();
 			s1.setDescription(a);
 			s2.setDescription(b);
-			Assert.assertTrue(comp.compare(s1, s2)==a.compareToIgnoreCase(b));
+			Assertions.assertTrue(comp.compare(s1, s2)==a.compareToIgnoreCase(b));
 		}
 		
 		comp=new SolverComparator(2,true);
@@ -86,7 +86,7 @@ public class ComparatorTests {
 			Solver s2=new Solver();
 			s1.setId(a);
 			s2.setId(b);
-			Assert.assertTrue(comp.compare(s1, s2)== Integer.compare(a, b));
+			Assertions.assertTrue(comp.compare(s1, s2)== Integer.compare(a, b));
 
 		}
 	}
@@ -105,7 +105,7 @@ public class ComparatorTests {
 			JobPair p2=new JobPair();
 			p1.setBench(b1);
 			p2.setBench(b2);
-			Assert.assertTrue(comp.compare(p1, p2)==a.compareToIgnoreCase(b));
+			Assertions.assertTrue(comp.compare(p1, p2)==a.compareToIgnoreCase(b));
 		}
 		comp=new JobPairComparator(1,0,true);
 		for (int x=0;x<100;x++) {
@@ -123,7 +123,7 @@ public class ComparatorTests {
 			p2.addStage(st2);
 			st1.setSolver(s1);
 			st2.setSolver(s2);
-			Assert.assertTrue(comp.compare(p1, p2)==a.compareToIgnoreCase(b));
+			Assertions.assertTrue(comp.compare(p1, p2)==a.compareToIgnoreCase(b));
 		}
 		comp=new JobPairComparator(2,0,true);
 		for (int x=0;x<100;x++) {
@@ -141,7 +141,7 @@ public class ComparatorTests {
 			p2.addStage(s2);
 			s1.setConfiguration(c1);
 			s2.setConfiguration(c2);
-			Assert.assertTrue(comp.compare(p1, p2)==a.compareToIgnoreCase(b));
+			Assertions.assertTrue(comp.compare(p1, p2)==a.compareToIgnoreCase(b));
 		}
 		
 		comp=new JobPairComparator(4,0,true);
@@ -157,7 +157,7 @@ public class ComparatorTests {
 			p2.addStage(s2);
 			s1.setWallclockTime(a);
 			s2.setWallclockTime(b);
-			Assert.assertTrue(comp.compare(p1, p2)==Double.compare(a, b));
+			Assertions.assertTrue(comp.compare(p1, p2)==Double.compare(a, b));
 		}
 		
 		comp=new JobPairComparator(8,0,true);
@@ -173,7 +173,7 @@ public class ComparatorTests {
 			p2.addStage(s2);
 			s1.setCpuUsage(a);
 			s2.setCpuUsage(b);
-			Assert.assertTrue(comp.compare(p1, p2)==Double.compare(a, b));
+			Assertions.assertTrue(comp.compare(p1, p2)==Double.compare(a, b));
 		}
 	}
 	

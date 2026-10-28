@@ -1,10 +1,10 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.database.Pipelines;
@@ -24,9 +24,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Does the real Java job-creation path actually roll back its own partial writes?
@@ -57,13 +57,13 @@ public class PipelineJobAtomicitySqlTest extends Common {
 	private static final int CONFIG_ID = 90401;
 	private static final int BENCH_ID = 90401;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("PipelineJobAtomicitySqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		cleanUp();
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
@@ -85,7 +85,7 @@ public class PipelineJobAtomicitySqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws SQLException {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			dropProbeTrigger(s, "pipeline_stages");
@@ -101,14 +101,14 @@ public class PipelineJobAtomicitySqlTest extends Common {
 		}
 	}
 
-	@AfterClass
+	@AfterAll
 	public static void noProbeTriggersSurvive() throws SQLException {
 		if (!DatabaseTestSupport.isDatabaseConfigured()) {
 			return;
 		}
 		try (Connection con = Common.getConnection()) {
-			assertEquals("a fault-injection trigger must never outlive its test", 0,
-					count(con, "SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'probe_%'"));
+			assertEquals(0, count(con, "SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'probe_%'"),
+					"a fault-injection trigger must never outlive its test");
 		}
 	}
 
@@ -127,7 +127,7 @@ public class PipelineJobAtomicitySqlTest extends Common {
 		Counts before = counts();
 		int id = Pipelines.addPipelineToDatabase(pipeline(TAG + "-stages"));
 
-		assertEquals("creation must report failure, not an id", -1, id);
+		assertEquals(-1, id, "creation must report failure, not an id");
 		assertNoResidue(before);
 	}
 
@@ -150,7 +150,7 @@ public class PipelineJobAtomicitySqlTest extends Common {
 			Common.inTransaction(con -> {
 				SolverPipeline pipe = pipeline(TAG + "-pairs");
 				int pipeId = Pipelines.addPipelineToDatabase(pipe, con);
-				assertTrue("the pipeline should persist before the induced failure", pipeId > 0);
+				assertTrue(pipeId > 0, "the pipeline should persist before the induced failure");
 				if (!Jobs.add(job(TAG + "-job", pipe), SPACE_ID, con)) {
 					throw new SQLException("job creation failed");
 				}
@@ -188,23 +188,23 @@ public class PipelineJobAtomicitySqlTest extends Common {
 
 	private void assertNoResidue(Counts before) throws SQLException {
 		Counts after = counts();
-		assertEquals("no pipeline may survive", before.pipelines, after.pipelines);
-		assertEquals("no pipeline stage may survive", before.stages, after.stages);
-		assertEquals("no job may survive", before.jobs, after.jobs);
-		assertEquals("no job pair may survive", before.pairs, after.pairs);
-		assertEquals("no stage data may survive", before.stageData, after.stageData);
-		assertEquals("no job space may survive", before.jobSpaces, after.jobSpaces);
-		assertEquals("the jobs-initiated counter must not drift", before.initiated, after.initiated);
+		assertEquals(before.pipelines, after.pipelines, "no pipeline may survive");
+		assertEquals(before.stages, after.stages, "no pipeline stage may survive");
+		assertEquals(before.jobs, after.jobs, "no job may survive");
+		assertEquals(before.pairs, after.pairs, "no job pair may survive");
+		assertEquals(before.stageData, after.stageData, "no stage data may survive");
+		assertEquals(before.jobSpaces, after.jobSpaces, "no job space may survive");
+		assertEquals(before.initiated, after.initiated, "the jobs-initiated counter must not drift");
 
 		// And the next borrower must get a connection it can use. The pool applies
 		// defaultAutoCommit when a physical connection is created, not on return, and is
 		// configured without rollbackOnReturn -- so a transaction left open here would be
 		// inherited rather than cleaned up.
 		try (Connection con = Common.getConnection()) {
-			assertTrue("a failed transaction must not return a connection with autoCommit off",
-					con.getAutoCommit());
-			assertEquals("the next borrower must be able to query", 1,
-					count(con, "SELECT 1"));
+			assertTrue(con.getAutoCommit(),
+					"a failed transaction must not return a connection with autoCommit off");
+			assertEquals(1, count(con, "SELECT 1"),
+					"the next borrower must be able to query");
 		}
 	}
 

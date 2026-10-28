@@ -1,8 +1,8 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
@@ -21,6 +21,8 @@ import io.fabric8.kubernetes.client.dsl.NonNamespaceOperation;
 import io.fabric8.kubernetes.client.dsl.PodResource;
 import io.fabric8.kubernetes.client.dsl.ScalableResource;
 import io.fabric8.kubernetes.client.dsl.V1BatchAPIGroupDSL;
+import org.junit.jupiter.api.Test;
+
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -28,7 +30,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.junit.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.ExecutionRef;
@@ -225,15 +226,15 @@ public class ExecutionIdentityCollisionTests {
 
         assertTrue(view.isAvailable());
         assertEquals(
-            "B's own pod has not been scheduled; A's Running pod must not answer for it",
             PodPhaseView.Phase.PENDING,
-            view.phaseFor(executionB())
+            view.phaseFor(executionB()),
+            "B's own pod has not been scheduled; A's Running pod must not answer for it"
         );
         assertEquals(PodPhaseView.Phase.RUNNING, view.phaseFor(executionA()));
         assertEquals(
-            "a bare id names two Jobs here, so it has no answer",
             PodPhaseView.Phase.UNKNOWN,
-            view.phaseFor(EXEC_ID)
+            view.phaseFor(EXEC_ID),
+            "a bare id names two Jobs here, so it has no answer"
         );
     }
 
@@ -255,9 +256,9 @@ public class ExecutionIdentityCollisionTests {
         assertTrue(view.isAvailable());
         assertEquals(PodPhaseView.Phase.RUNNING, view.phaseFor(executionA()));
         assertEquals(
-            "one Job, so the bare id still answers",
             PodPhaseView.Phase.RUNNING,
-            view.phaseFor(EXEC_ID)
+            view.phaseFor(EXEC_ID),
+            "one Job, so the bare id still answers"
         );
     }
 
@@ -283,8 +284,8 @@ public class ExecutionIdentityCollisionTests {
 
         try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
             assertTrue(
-                "a stale callback is handled, not retried forever",
-                callback.onJobComplete(executionA())
+                callback.onJobComplete(executionA()),
+                "a stale callback is handled, not retried forever"
             );
             jobPairs.verifyNoInteractions();
         }
@@ -316,8 +317,8 @@ public class ExecutionIdentityCollisionTests {
 
         try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
             assertTrue(
-                "a superseded execution is finished with, not retried forever",
-                callback.onJobComplete(executionA())
+                callback.onJobComplete(executionA()),
+                "a superseded execution is finished with, not retried forever"
             );
 
             // Nothing at all: not B's pair, and not A's own either. The status, stats and
@@ -350,7 +351,7 @@ public class ExecutionIdentityCollisionTests {
         }
 
         Map<Integer, String> names = (Map<Integer, String>) getField(backend, "execIdToJobName");
-        assertEquals("B still holds its tracking", JOB_B, names.get(EXEC_ID));
+        assertEquals(JOB_B, names.get(EXEC_ID), "B still holds its tracking");
     }
 
     /** A terminal callback delivered twice for one Job is handled once by the monitor. */
@@ -625,8 +626,8 @@ public class ExecutionIdentityCollisionTests {
             boolean handled = callback.onJobComplete(executionB());
             jobPairs.verify(() -> JobPairs.setEarlierStageStatuses(PAIR_B, earlier));
             assertFalse(
-                "ownership lost during ingestion must leave the terminal result unresolved",
-                handled
+                handled,
+                "ownership lost during ingestion must leave the terminal result unresolved"
             );
             jobPairs.verify(() ->
                 JobPairs.setPairStatusPreciseResult(

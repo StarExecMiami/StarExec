@@ -1,8 +1,7 @@
 package org.starexec.test.junit.backend;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.backend.LocalBackend;
 import org.starexec.backend.StageStatsFiles;
@@ -16,11 +15,13 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Map;
 import java.util.Set;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.starexec.test.TemporaryFolders.newFile;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * The rules {@link StageStatsFiles} applies to what a job left behind (#180), and the rerun
@@ -33,11 +34,11 @@ public class StageStatsFilesTest {
 
 	private static final int PAIR = 77;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	private Path output() throws Exception {
-		return folder.newFolder().toPath();
+		return newFolder(folder).toPath();
 	}
 
 	private static Path declare(Path out) throws Exception {
@@ -143,13 +144,13 @@ public class StageStatsFilesTest {
 				{"1e999", "1000"}, {"1.5", "\"\""}}) {
 			Path out = output();
 			Files.writeString(declare(out).resolve("1.json"), stats(PAIR, 1, bad[0], bad[1]));
-			assertTrue("wall=" + bad[0] + " maxvm=" + bad[1],
-					select(out, Set.of(), 1, Set.of(1)).isEmpty());
+			assertTrue(select(out, Set.of(), 1, Set.of(1)).isEmpty(),
+					"wall=" + bad[0] + " maxvm=" + bad[1]);
 		}
 		Path out = output();
 		Files.writeString(declare(out).resolve("1.json"),
 				stats(1).replace("  \"diskSize\": 100,\n", ""));
-		assertTrue("no diskSize", select(out, Set.of(), 1, Set.of(1)).isEmpty());
+		assertTrue(select(out, Set.of(), 1, Set.of(1)).isEmpty(), "no diskSize");
 	}
 
 	@Test
@@ -157,14 +158,14 @@ public class StageStatsFilesTest {
 		for (String bad : new String[] {"", "{ not json", "[1, 2]", "42"}) {
 			Path out = output();
 			Files.writeString(declare(out).resolve("1.json"), bad);
-			assertTrue("'" + bad + "'", select(out, Set.of(), 1, Set.of(1)).isEmpty());
+			assertTrue(select(out, Set.of(), 1, Set.of(1)).isEmpty(), "'" + bad + "'");
 		}
 	}
 
 	@Test
 	public void aLinkedStageFileIsNotRead() throws Exception {
 		Path out = output();
-		Path outside = folder.newFile("outside.json").toPath();
+		Path outside = newFile(folder, "outside.json").toPath();
 		Files.writeString(outside, stats(1));
 		Files.createSymbolicLink(declare(out).resolve("1.json"), outside);
 		assertTrue(select(out, Set.of(), 1, Set.of(1)).isEmpty());
@@ -254,7 +255,7 @@ public class StageStatsFilesTest {
 	@Test
 	public void legacyStatsThroughALinkAreNotRead() throws Exception {
 		Path out = output();
-		Path outside = folder.newFile("outside-stats.json").toPath();
+		Path outside = newFile(folder, "outside-stats.json").toPath();
 		Files.writeString(outside, stats(1));
 		Files.createSymbolicLink(out.resolve("stats.json"), outside);
 		assertTrue(select(out, Set.of(), 1, Set.of(1)).isEmpty());
@@ -272,8 +273,8 @@ public class StageStatsFilesTest {
 			Method cleanup = LocalBackend.class.getDeclaredMethod(
 					"cleanupPreviousRunArtifacts", File.class);
 			cleanup.setAccessible(true);
-			assertFalse("the attempt must not start over a surviving stage-stats directory",
-					(boolean) cleanup.invoke(new LocalBackend(), out.toFile()));
+			assertFalse((boolean) cleanup.invoke(new LocalBackend(), out.toFile()),
+					"the attempt must not start over a surviving stage-stats directory");
 		} finally {
 			Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxr-xr-x"));
 		}
@@ -289,8 +290,8 @@ public class StageStatsFilesTest {
 			Method cleanup = KubernetesNativeBackend.class.getDeclaredMethod(
 					"clearStaleAttemptArtifacts", Path.class, int.class);
 			cleanup.setAccessible(true);
-			assertFalse("the attempt must not be submitted over a surviving stage-stats directory",
-					(boolean) cleanup.invoke(new KubernetesNativeBackend(), out, PAIR));
+			assertFalse((boolean) cleanup.invoke(new KubernetesNativeBackend(), out, PAIR),
+					"the attempt must not be submitted over a surviving stage-stats directory");
 		} finally {
 			Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxr-xr-x"));
 		}

@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.JobPairs;
@@ -19,10 +19,10 @@ import java.sql.Statement;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A precise stage write has to name a stage <em>of the pair it names</em>, not merely a
@@ -81,13 +81,13 @@ public class StageMembershipPreciseStatusSqlTest extends Common {
 	/** Positive, and not a stage of either fixture pair. */
 	private static final int ABSENT_STAGE = 99;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("StageMembershipPreciseStatusSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws Exception {
 		cleanUp();
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
@@ -131,7 +131,7 @@ public class StageMembershipPreciseStatusSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws SQLException {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			for (int pair : new int[]{PAIR_ID, SPARSE_PAIR_ID}) {
@@ -170,25 +170,25 @@ public class StageMembershipPreciseStatusSqlTest extends Common {
 						"UPDATE starexec.jobpair_stage_data SET status_code = " + COMPLETE
 								+ " WHERE jobpair_id = " + PAIR_ID
 								+ " AND stage_number = " + ABSENT_STAGE);
-				assertEquals("a stage the pair does not have takes the status nowhere",
-						0, terminal);
+				assertEquals(0,
+						terminal, "a stage the pair does not have takes the status nowhere");
 
 				int later = s.executeUpdate(
 						"UPDATE starexec.jobpair_stage_data SET status_code = " + NOT_REACHED
 								+ " WHERE jobpair_id = " + PAIR_ID
 								+ " AND stage_number > " + ABSENT_STAGE);
-				assertEquals("and nothing above it either", 0, later);
+				assertEquals(0, later, "and nothing above it either");
 
 				int pair = s.executeUpdate(
 						"UPDATE starexec.job_pairs SET status_code = " + COMPLETE
 								+ " WHERE id = " + PAIR_ID);
-				assertEquals("while the pair-level write still lands: that is the divergence",
-						1, pair);
+				assertEquals(1,
+						pair, "while the pair-level write still lands: that is the divergence");
 			}
 			con.rollback();
 		}
-		assertEquals("the control must leave the fixture as it found it",
-				STAGE_1_STATUS, stageStatus(PAIR_ID, 1));
+		assertEquals(STAGE_1_STATUS,
+				stageStatus(PAIR_ID, 1), "the control must leave the fixture as it found it");
 	}
 
 	// ------------------------------------------------------------------ the invariant
@@ -204,8 +204,8 @@ public class StageMembershipPreciseStatusSqlTest extends Common {
 				PAIR_ID, ABSENT_STAGE, COMPLETE, NOT_REACHED, false);
 
 		assertEquals(PairStatusResult.REJECTED_INVALID_STAGE, result);
-		assertNotEquals("FAILED would ask the caller to retry a permanently invalid argument",
-				PairStatusResult.FAILED, result);
+		assertNotEquals(PairStatusResult.FAILED,
+				result, "FAILED would ask the caller to retry a permanently invalid argument");
 		assertNotEquals(PairStatusResult.APPLIED, result);
 		assertNotEquals(PairStatusResult.SUPERSEDED, result);
 	}
@@ -218,7 +218,7 @@ public class StageMembershipPreciseStatusSqlTest extends Common {
 				JobPairs.setPairStatusPreciseResult(
 						PAIR_ID, ABSENT_STAGE, COMPLETE, NOT_REACHED, false));
 
-		assertEquals("no durable value may change", before, durableState());
+		assertEquals(before, durableState(), "no durable value may change");
 	}
 
 	/**
@@ -228,15 +228,15 @@ public class StageMembershipPreciseStatusSqlTest extends Common {
 	 */
 	@Test
 	public void aRejectedMembershipWriteLeavesNoEndTimeAndNoCompletionRow() throws Exception {
-		assertNull("precondition: the fixture starts with no end_time", endTime(PAIR_ID));
+		assertNull(endTime(PAIR_ID), "precondition: the fixture starts with no end_time");
 		assertEquals(0, completionRows(PAIR_ID));
 
 		JobPairs.setPairStatusPreciseResult(PAIR_ID, ABSENT_STAGE, COMPLETE, NOT_REACHED, false);
 
-		assertNull("a refused write must not stamp an end_time", endTime(PAIR_ID));
-		assertEquals("a refused write must not insert a completion row",
-				0, completionRows(PAIR_ID));
-		assertEquals("and must not move the pair's own status", ENQUEUED, pairStatus(PAIR_ID));
+		assertNull(endTime(PAIR_ID), "a refused write must not stamp an end_time");
+		assertEquals(0,
+				completionRows(PAIR_ID), "a refused write must not insert a completion row");
+		assertEquals(ENQUEUED, pairStatus(PAIR_ID), "and must not move the pair's own status");
 	}
 
 	/** An extreme positive value is the same defect, and is the shape an overflowed parse produces. */
@@ -273,15 +273,15 @@ public class StageMembershipPreciseStatusSqlTest extends Common {
 	 */
 	@Test
 	public void sparseStages() throws Exception {
-		assertEquals("a gap is not a stage of this pair",
-				PairStatusResult.REJECTED_INVALID_STAGE,
+		assertEquals(PairStatusResult.REJECTED_INVALID_STAGE,
 				JobPairs.setPairStatusPreciseResult(
-						SPARSE_PAIR_ID, 2, COMPLETE, NOT_REACHED, false));
+						SPARSE_PAIR_ID, 2, COMPLETE, NOT_REACHED, false),
+				"a gap is not a stage of this pair");
 
-		assertEquals("a sparse tail is a real stage and must still be written",
-				PairStatusResult.APPLIED,
+		assertEquals(PairStatusResult.APPLIED,
 				JobPairs.setPairStatusPreciseResult(
-						SPARSE_PAIR_ID, 3, COMPLETE, NOT_REACHED, false));
+						SPARSE_PAIR_ID, 3, COMPLETE, NOT_REACHED, false),
+				"a sparse tail is a real stage and must still be written");
 		assertEquals(COMPLETE, stageStatus(SPARSE_PAIR_ID, 3));
 	}
 
@@ -296,14 +296,14 @@ public class StageMembershipPreciseStatusSqlTest extends Common {
 		assertEquals(PairStatusResult.APPLIED, JobPairs.setPairStatusPreciseResult(
 				PAIR_ID, 2, COMPLETE, NOT_REACHED, false));
 
-		assertEquals("an earlier stage keeps its own recorded result",
-				STAGE_1_STATUS, stageStatus(PAIR_ID, 1));
-		assertEquals("the named stage takes the terminal status",
-				COMPLETE, stageStatus(PAIR_ID, 2));
-		assertEquals("stages after it are not reached", NOT_REACHED, stageStatus(PAIR_ID, 3));
-		assertEquals("the pair goes terminal", COMPLETE, pairStatus(PAIR_ID));
-		assertTrue("and is stamped", endTime(PAIR_ID) != null);
-		assertEquals("exactly once", 1, completionRows(PAIR_ID));
+		assertEquals(STAGE_1_STATUS,
+				stageStatus(PAIR_ID, 1), "an earlier stage keeps its own recorded result");
+		assertEquals(COMPLETE,
+				stageStatus(PAIR_ID, 2), "the named stage takes the terminal status");
+		assertEquals(NOT_REACHED, stageStatus(PAIR_ID, 3), "stages after it are not reached");
+		assertEquals(COMPLETE, pairStatus(PAIR_ID), "the pair goes terminal");
+		assertTrue(endTime(PAIR_ID) != null, "and is stamped");
+		assertEquals(1, completionRows(PAIR_ID), "exactly once");
 	}
 
 	@Test
@@ -357,7 +357,7 @@ public class StageMembershipPreciseStatusSqlTest extends Common {
 		try (Connection con = Common.getConnection();
 			 Statement s = con.createStatement();
 			 ResultSet rs = s.executeQuery(sql)) {
-			assertTrue("expected a row from: " + sql, rs.next());
+			assertTrue(rs.next(), "expected a row from: " + sql);
 			return rs.getInt(1);
 		}
 	}
@@ -366,7 +366,7 @@ public class StageMembershipPreciseStatusSqlTest extends Common {
 		try (Connection con = Common.getConnection();
 			 Statement s = con.createStatement();
 			 ResultSet rs = s.executeQuery(sql)) {
-			assertTrue("expected a row from: " + sql, rs.next());
+			assertTrue(rs.next(), "expected a row from: " + sql);
 			return rs.getString(1);
 		}
 	}

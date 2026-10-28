@@ -1,7 +1,7 @@
 package org.starexec.test.integration.util.matrixView;
 
 import org.apache.commons.lang3.tuple.Pair;
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Communities;
@@ -61,7 +61,7 @@ public class MatrixTests extends TestSequence {
 		job2=loader.loadJobIntoDatabase(space.getId(), user2.getId(), -1, postProc.getId(), solverIds, 
 												benchmarkIds, cpuTimeout, wallclockTimeout, gbMemory);
 		Spaces.addJobSpace(space.getName(), job.getId());
-		Assert.assertNotNull(Jobs.get(job.getId()));
+		Assertions.assertNotNull(Jobs.get(job.getId()));
 	}
 
 	@Override
@@ -83,20 +83,20 @@ public class MatrixTests extends TestSequence {
 		try {
 			matrix = Matrix.getMatrixForJobSpaceFromJobAndStageNumber(job, space.getId(), jobPairs.get(0).getPrimaryStageNumber());
 		} catch (StarExecException e) {
-			Assert.fail("StarExecException thrown while trying to get matrix: " + e.getMessage());
+			Assertions.fail("StarExecException thrown while trying to get matrix: " + e.getMessage());
 			return;
 		}
 
 		List<Benchmark> benchmarkHeaders = matrix.getBenchmarksByRow();
 
-		Assert.assertEquals(benchmarkHeaders.size(), benchmarks.size());
+		Assertions.assertEquals(benchmarkHeaders.size(), benchmarks.size());
 		Iterator<Benchmark> headerIt = benchmarkHeaders.iterator();
 		Iterator<Benchmark> benchIt = benchmarks.iterator();
 		while (headerIt.hasNext() || benchIt.hasNext()) {
-			Assert.assertEquals(headerIt.next().getName(), benchIt.next().getName());
+			Assertions.assertEquals(headerIt.next().getName(), benchIt.next().getName());
 		}
 
 		List<Pair<Solver, Configuration>> solverHeader = matrix.getSolverConfigsByColumn();
-		Assert.assertEquals(solverHeader.get(0).getLeft().getName(), solver.getName());
+		Assertions.assertEquals(solverHeader.get(0).getLeft().getName(), solver.getName());
 	}
 }

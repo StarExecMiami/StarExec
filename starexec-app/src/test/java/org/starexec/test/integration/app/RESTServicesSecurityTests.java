@@ -1,7 +1,7 @@
 package org.starexec.test.integration.app;
 
 import com.google.gson.Gson;
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.mockito.Mockito;
 import org.starexec.app.RESTServices;
 import org.starexec.constants.R;
@@ -56,7 +56,7 @@ public class RESTServicesSecurityTests extends TestSequence {
 	Queue allQ = null;
 
 	private void assertResultIsInvalid(String result) {
-		Assert.assertFalse(gson.fromJson(result, ValidatorStatusCode.class).isSuccess());
+		Assertions.assertFalse(gson.fromJson(result, ValidatorStatusCode.class).isSuccess());
 	}
 
 	@StarexecTest
@@ -346,7 +346,7 @@ public class RESTServicesSecurityTests extends TestSequence {
 
 	@StarexecTest
 	private void getInvalidUploadedBenchmarkOutput() {
-		Assert.assertTrue(services.getInvalidUploadedBenchmarkOutput(invalidBenchId,
+		Assertions.assertTrue(services.getInvalidUploadedBenchmarkOutput(invalidBenchId,
 				TestUtil.getMockHttpRequest(user.getId())).contains("You may only view your own benchmark uploads"));
 	}
 
@@ -355,15 +355,15 @@ public class RESTServicesSecurityTests extends TestSequence {
 		// A pair the user may not see and a pair that does not exist get the same answer as a missing log.
 		try {
 			services.getJobPairLog(job.getJobPairs().get(0).getId(), TestUtil.getMockHttpRequest(user.getId()));
-			Assert.fail("No exception raised");
+			Assertions.fail("No exception raised");
 		} catch (RESTException e) {
-			Assert.assertEquals("not available", e.getResponse().getEntity());
+			Assertions.assertEquals("not available", e.getResponse().getEntity());
 		}
 		try {
 			services.getJobPairLog(-1, TestUtil.getMockHttpRequest(admin.getId()));
-			Assert.fail("No exception raised");
+			Assertions.fail("No exception raised");
 		} catch (RESTException e) {
-			Assert.assertEquals("not available", e.getResponse().getEntity());
+			Assertions.assertEquals("not available", e.getResponse().getEntity());
 		}
 	}
 
@@ -372,12 +372,12 @@ public class RESTServicesSecurityTests extends TestSequence {
 		try {
 			services.getJobPairStdout(job.getJobPairs().get(0).getId(), 1, 100,
 					TestUtil.getMockHttpRequest(user.getId()));
-			Assert.fail("No exception raised");
+			Assertions.fail("No exception raised");
 		} catch (RESTException e) {
 		}
 		try {
 			services.getJobPairStdout(-1, 1, 100, TestUtil.getMockHttpRequest(admin.getId()));
-			Assert.fail("No exception raised");
+			Assertions.fail("No exception raised");
 		} catch (RESTException e) {
 		}
 	}
@@ -386,11 +386,11 @@ public class RESTServicesSecurityTests extends TestSequence {
 	private void streamJobPairLogSecurityTest() {
 		Response unauthorized = services.streamJobPairLog(job.getJobPairs().get(0).getId(),
 				TestUtil.getMockHttpRequest(user.getId()));
-		Assert.assertEquals(404, unauthorized.getStatus());
+		Assertions.assertEquals(404, unauthorized.getStatus());
 
 		Response invalidPair = services.streamJobPairLog(-1,
 				TestUtil.getMockHttpRequest(admin.getId()));
-		Assert.assertEquals(404, invalidPair.getStatus());
+		Assertions.assertEquals(404, invalidPair.getStatus());
 	}
 
 	@StarexecTest
@@ -399,9 +399,9 @@ public class RESTServicesSecurityTests extends TestSequence {
 			setActivePairLogStreams(100);
 			Response response = services.streamJobPairLog(job.getJobPairs().get(0).getId(),
 					TestUtil.getMockHttpRequest(admin.getId()));
-			Assert.assertEquals(429, response.getStatus());
+			Assertions.assertEquals(429, response.getStatus());
 			Object retryAfter = response.getHeaders().getFirst("Retry-After");
-			Assert.assertNotNull(retryAfter);
+			Assertions.assertNotNull(retryAfter);
 		} catch (Exception e) {
 			throw new RuntimeException(e);
 		} finally {
@@ -418,26 +418,26 @@ public class RESTServicesSecurityTests extends TestSequence {
 				job.getJobPairs().get(0).getId(),
 				null,
 				TestUtil.getMockHttpRequest(user.getId()));
-		Assert.assertEquals(403, unauthorized.getStatus());
+		Assertions.assertEquals(403, unauthorized.getStatus());
 
 		Response missingPair = services.getPairReproducibilityManifest(
 				-1,
 				null,
 				TestUtil.getMockHttpRequest(admin.getId()));
-		Assert.assertEquals(404, missingPair.getStatus());
+		Assertions.assertEquals(404, missingPair.getStatus());
 
 		Response success = services.getPairReproducibilityManifest(
 				job.getJobPairs().get(0).getId(),
 				null,
 				TestUtil.getMockHttpRequest(admin.getId()));
-		Assert.assertEquals(200, success.getStatus());
-		Assert.assertTrue(String.valueOf(success.getEntity()).contains("\"pairId\""));
+		Assertions.assertEquals(200, success.getStatus());
+		Assertions.assertTrue(String.valueOf(success.getEntity()).contains("\"pairId\""));
 
 		Response missingAttempt = services.getPairReproducibilityManifest(
 				job.getJobPairs().get(0).getId(),
 				99999,
 				TestUtil.getMockHttpRequest(admin.getId()));
-		Assert.assertEquals(404, missingAttempt.getStatus());
+		Assertions.assertEquals(404, missingAttempt.getStatus());
 	}
 
 	private static void setActivePairLogStreams(int value) throws Exception {
@@ -451,12 +451,12 @@ public class RESTServicesSecurityTests extends TestSequence {
 	private void getBenchmarkContentTest() {
 		try {
 			services.getBenchmarkContent(benchmarkIds.get(0), 100, TestUtil.getMockHttpRequest(user.getId()));
-			Assert.fail("No exception raised");
+			Assertions.fail("No exception raised");
 		} catch (RESTException e) {
 		}
 		try {
 			services.getBenchmarkContent(-1, 100, TestUtil.getMockHttpRequest(admin.getId()));
-			Assert.fail("No exception raised");
+			Assertions.fail("No exception raised");
 		} catch (RESTException e) {
 		}
 	}
@@ -465,12 +465,12 @@ public class RESTServicesSecurityTests extends TestSequence {
 	private void getSolverBuildLogTest() {
 		try {
 			services.getSolverBuildLog(solver.getId(), TestUtil.getMockHttpRequest(user.getId()));
-			Assert.fail("No exception raised");
+			Assertions.fail("No exception raised");
 		} catch (RESTException e) {
 		}
 		try {
 			services.getSolverBuildLog(-1, TestUtil.getMockHttpRequest(admin.getId()));
-			Assert.fail("No exception raised");
+			Assertions.fail("No exception raised");
 		} catch (RESTException e) {
 		}
 	}

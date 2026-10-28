@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -11,10 +10,11 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * When a build job's solver is copied back, relative to the statuses that say the pair is done.
@@ -31,40 +31,40 @@ public class SolverBuildStatusOrderTest {
 	private static final Path SGE = Path.of("src/main/java/org/starexec/config/sge");
 	private static final String COMPLETE = "7";
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	@Test
 	public void aBuildJobCopiesItsSolverBackBeforeAnyStatusSaysItIsComplete() throws Exception {
 		Result r = run(true, "");
 
-		assertEquals("the branch must finish:\n" + r.out, 0, r.exit);
+		assertEquals(0, r.exit, "the branch must finish:\n" + r.out);
 		int copy = r.out.indexOf("T-COPY");
-		assertTrue("a build job copies its solver back:\n" + r.out, copy >= 0);
-		assertFalse("no COMPLETE may be written before the copy:\n" + r.out,
-				completeWritten(r.out.substring(0, copy)));
-		assertTrue("the stage and the pair are still reported complete after it:\n" + r.out,
-				completeWritten(r.out.substring(copy)));
+		assertTrue(copy >= 0, "a build job copies its solver back:\n" + r.out);
+		assertFalse(completeWritten(r.out.substring(0, copy)),
+				"no COMPLETE may be written before the copy:\n" + r.out);
+		assertTrue(completeWritten(r.out.substring(copy)),
+				"the stage and the pair are still reported complete after it:\n" + r.out);
 	}
 
 	@Test
 	public void aFailedCopyWritesNoComplete() throws Exception {
 		Result r = run(true, "return 1");
 
-		assertNotEquals("a failed copy must end the script under set -e:\n" + r.out, 0, r.exit);
-		assertTrue(r.out, r.out.contains("T-COPY"));
-		assertFalse("the pair must not be reported complete:\n" + r.out, completeWritten(r.out));
-		assertFalse("nor its result claimed:\n" + r.out, r.out.contains("T-CLAIM"));
+		assertNotEquals(0, r.exit, "a failed copy must end the script under set -e:\n" + r.out);
+		assertTrue(r.out.contains("T-COPY"), r.out);
+		assertFalse(completeWritten(r.out), "the pair must not be reported complete:\n" + r.out);
+		assertFalse(r.out.contains("T-CLAIM"), "nor its result claimed:\n" + r.out);
 	}
 
 	@Test
 	public void anOrdinaryJobCopiesNothingAndIsStillReportedComplete() throws Exception {
 		Result r = run(false, "");
 
-		assertEquals("the branch must finish:\n" + r.out, 0, r.exit);
-		assertFalse(r.out, r.out.contains("T-COPY"));
-		assertTrue(r.out, completeWritten(r.out));
-		assertTrue(r.out, r.out.contains("T-CLAIM"));
+		assertEquals(0, r.exit, "the branch must finish:\n" + r.out);
+		assertFalse(r.out.contains("T-COPY"), r.out);
+		assertTrue(completeWritten(r.out), r.out);
+		assertTrue(r.out.contains("T-CLAIM"), r.out);
 	}
 
 	/** Whether {@code out} records a write of COMPLETE, for the pair or for a stage. */
@@ -90,9 +90,9 @@ public class SolverBuildStatusOrderTest {
 				break;
 			}
 		}
-		assertTrue("the stage loop must check for errors", start >= 0);
+		assertTrue(start >= 0, "the stage loop must check for errors");
 		int claim = JobscriptBlocks.indexOfLineStartingWith(loop.subList(start, loop.size()), "claimResult");
-		assertTrue("the success branch must be followed by the result claim", claim > 0);
+		assertTrue(claim > 0, "the success branch must be followed by the result claim");
 		claim += start;
 		String line = loop.get(start);
 		String fi = line.substring(0, line.indexOf("if ")) + "fi";
@@ -109,7 +109,7 @@ public class SolverBuildStatusOrderTest {
 	 * runs {@code copyBody}; every status write prints T-WRITE|status|stage; the claim prints T-CLAIM.
 	 */
 	private Result run(boolean buildJob, String copyBody) throws Exception {
-		Path dir = folder.newFolder("order-" + System.nanoTime()).toPath();
+		Path dir = newFolder(folder, "order-" + System.nanoTime()).toPath();
 		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
 		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
 		String script = "export SCRIPT_DIR=\"" + dir + "\"\n"
@@ -142,7 +142,7 @@ public class SolverBuildStatusOrderTest {
 				+ "echo T-DONE\n";
 		File file = new File(dir.toFile(), "generated.sh");
 		Files.writeString(file.toPath(), script);
-		assertEquals("generated script must parse", 0, exec(dir, Bash.PATH, "-n", file.getAbsolutePath()).exit);
+		assertEquals(0, exec(dir, Bash.PATH, "-n", file.getAbsolutePath()).exit, "generated script must parse");
 		return exec(dir, Bash.PATH, file.getAbsolutePath());
 	}
 
@@ -159,7 +159,7 @@ public class SolverBuildStatusOrderTest {
 			p.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
 		}
 		String out = Files.readString(log.toPath(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang:\n" + out, finished);
+		assertTrue(finished, "command must not hang:\n" + out);
 		return new Result(p.exitValue(), out);
 	}
 

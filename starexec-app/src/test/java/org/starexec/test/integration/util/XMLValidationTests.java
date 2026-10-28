@@ -1,6 +1,5 @@
 package org.starexec.test.integration.util;
 
-import static org.junit.Assert.*;
 import org.starexec.constants.R;
 import org.starexec.data.database.Communities;
 import org.starexec.data.security.ValidatorStatusCode;
@@ -17,6 +16,9 @@ import org.starexec.util.XMLUtil;
 import java.io.File;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 public class XMLValidationTests extends TestSequence {
     private User admin = null;
     private Solver solver = null;
@@ -29,7 +31,7 @@ public class XMLValidationTests extends TestSequence {
             int configId = solver.getConfigurations().get(0).getId();
             File xml = loader.getBasicTestXMLFile(configId, benchmarkIds.get(0));
             ValidatorStatusCode status = XMLUtil.validateAgainstSchema(xml, JobXmlType.STANDARD.schemaPath);
-            assertTrue(status.getMessage(), status.isSuccess());
+            assertTrue(status.isSuccess(), status.getMessage());
         } catch (Exception e) {
             fail("Caught Exception: "+ Util.getStackTrace(e));
         }
@@ -41,7 +43,7 @@ public class XMLValidationTests extends TestSequence {
             int configId = solver.getConfigurations().get(0).getId();
             File xml = loader.getJoblineTestXMLFile(configId, configId, benchmarkIds.get(0), benchmarkIds.get(1));
             ValidatorStatusCode status = XMLUtil.validateAgainstSchema(xml, JobXmlType.STANDARD.schemaPath);
-            assertTrue(status.getMessage(), status.isSuccess());
+            assertTrue(status.isSuccess(), status.getMessage());
         } catch (Exception e) {
             fail("Caught Exception: "+ Util.getStackTrace(e));
         }

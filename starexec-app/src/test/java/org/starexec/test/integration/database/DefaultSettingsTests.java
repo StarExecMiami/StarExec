@@ -1,6 +1,6 @@
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Settings;
@@ -42,22 +42,22 @@ public class DefaultSettingsTests extends TestSequence {
             int settingId = settings.getId();
             DefaultSettings s = Settings.getProfileById(settingId);
 
-            Assert.assertFalse("Benchmark was already in settings.", s.getBenchIds().contains(benchId));
+            Assertions.assertFalse(s.getBenchIds().contains(benchId), "Benchmark was already in settings.");
 
             Settings.addDefaultBenchmark(settingId, benchId);
 
             s = Settings.getProfileById(settingId);
 
-            Assert.assertTrue("Default benchmark was not added.", s.getBenchIds().contains(benchId));
+            Assertions.assertTrue(s.getBenchIds().contains(benchId), "Default benchmark was not added.");
 
             Settings.deleteDefaultBenchmark(settingId, benchId);
 
             s = Settings.getProfileById(settingId);
 
-            Assert.assertFalse("Benchmark not deleted from settings.", s.getBenchIds().contains(benchId));
+            Assertions.assertFalse(s.getBenchIds().contains(benchId), "Benchmark not deleted from settings.");
 
         } catch (SQLException e) {
-            Assert.fail("Caught SQLException: " + Util.getStackTrace(e));
+            Assertions.fail("Caught SQLException: " + Util.getStackTrace(e));
         }
     }
 
@@ -69,14 +69,14 @@ public class DefaultSettingsTests extends TestSequence {
 
 		int id = Settings.addNewSettingsProfile(newSettings);
 
-        Assert.assertNotEquals("Error while adding new settings.", id, -1);
+        Assertions.assertNotEquals(id, -1, "Error while adding new settings.");
 
         try {
             DefaultSettings dbSettings = Settings.getProfileById(newSettings.getId());
 
             assertDefaultSettingsEqual(newSettings, dbSettings);
         } catch(SQLException e) {
-            Assert.fail("Caught SQLException: " + Util.getStackTrace(e));
+            Assertions.fail("Caught SQLException: " + Util.getStackTrace(e));
         } finally {
             Settings.deleteProfile(newSettings.getId());
         }
@@ -92,13 +92,13 @@ public class DefaultSettingsTests extends TestSequence {
             List<Integer> settingsBenchmarks = settingsWithDefaultBenchmarks.getBenchIds();
             Collections.sort(settingsBenchmarks);
 
-            Assert.assertTrue(settingsBenchmarks.size() == dbBenchmarks.size());
+            Assertions.assertTrue(settingsBenchmarks.size() == dbBenchmarks.size());
 
             for (int i = 0; i < settingsBenchmarks.size(); i++) {
-                Assert.assertEquals(settingsBenchmarks.get(i), (Integer)dbBenchmarks.get(i).getId());
+                Assertions.assertEquals(settingsBenchmarks.get(i), (Integer)dbBenchmarks.get(i).getId());
             }
         } catch (SQLException e) {
-            Assert.fail("SQLException thrown: " + Util.getStackTrace(e));
+            Assertions.fail("SQLException thrown: " + Util.getStackTrace(e));
         }
     }
 
@@ -111,13 +111,13 @@ public class DefaultSettingsTests extends TestSequence {
             List<Integer> settingsBenchmarks = settingsWithDefaultBenchmarks.getBenchIds();
             Collections.sort(settingsBenchmarks);
 
-            Assert.assertTrue(settingsBenchmarks.size() == dbBenchmarks.size());
+            Assertions.assertTrue(settingsBenchmarks.size() == dbBenchmarks.size());
 
             for (int i = 0; i < settingsBenchmarks.size(); i++) {
-                Assert.assertEquals(settingsBenchmarks.get(i), dbBenchmarks.get(i));
+                Assertions.assertEquals(settingsBenchmarks.get(i), dbBenchmarks.get(i));
             }
         } catch (SQLException e) {
-            Assert.fail("SQLException thrown: " + Util.getStackTrace(e));
+            Assertions.fail("SQLException thrown: " + Util.getStackTrace(e));
         }
     }
 
@@ -135,12 +135,12 @@ public class DefaultSettingsTests extends TestSequence {
         // TODO: need to change all other fields of setting except name, primId, and type (these are immutable)
 
         boolean success = Settings.updateDefaultSettings(newSettings);
-        Assert.assertTrue("Database call failed.", success);
+        Assertions.assertTrue(success, "Database call failed.");
         try {
             DefaultSettings dbSettings = Settings.getProfileById(newSettings.getId());
             assertDefaultSettingsEqual(newSettings, dbSettings);
         } catch (SQLException e) {
-            Assert.fail("Caught SQLException: " + Util.getStackTrace(e));
+            Assertions.fail("Caught SQLException: " + Util.getStackTrace(e));
         } finally {
             Settings.deleteProfile(newSettings.getId());
         }
@@ -148,51 +148,51 @@ public class DefaultSettingsTests extends TestSequence {
 
     private void assertDefaultSettingsEqual(DefaultSettings newSettings, DefaultSettings dbSettings) {
 
-        Assert.assertNotNull("The new setting object was null.", newSettings);
-        Assert.assertNotNull("The DB setting object was null.", dbSettings);
+        Assertions.assertNotNull(newSettings, "The new setting object was null.");
+        Assertions.assertNotNull(dbSettings, "The DB setting object was null.");
 
 
-        Assert.assertEquals("PrimId was not equal.", newSettings.getPrimId(), dbSettings.getPrimId());
-        Assert.assertEquals("PreProcessorId was not equal.", newSettings.getPreProcessorId(), dbSettings.getPreProcessorId());
-        Assert.assertEquals("PostProcessorId was not equal.", newSettings.getPostProcessorId(), dbSettings.getPostProcessorId());
-        Assert.assertEquals("BenchProcessorId was not equal.", newSettings.getBenchProcessorId(), dbSettings.getBenchProcessorId());
-        Assert.assertEquals("SolverId was not equal.", newSettings.getSolverId(), dbSettings.getSolverId());
-        Assert.assertEquals("WallclockTimeout was not equal.", newSettings.getWallclockTimeout(), dbSettings.getWallclockTimeout());
-        Assert.assertEquals("CpuTimeout was not equal.", newSettings.getCpuTimeout(), dbSettings.getCpuTimeout());
-        Assert.assertEquals("MaxMemory was not equal.", newSettings.getMaxMemory(), dbSettings.getMaxMemory());
-        Assert.assertEquals("DependenciesEnabled was not equal.", newSettings.isDependenciesEnabled(), dbSettings.isDependenciesEnabled());
-        Assert.assertEquals("Name was not equal.", newSettings.getName(), dbSettings.getName());
-        Assert.assertEquals("Type was not equal.", newSettings.getType(), dbSettings.getType());
-        Assert.assertEquals("Benchmarking framework was not equal.", newSettings.getBenchmarkingFramework(), dbSettings.getBenchmarkingFramework());
+        Assertions.assertEquals(newSettings.getPrimId(), dbSettings.getPrimId(), "PrimId was not equal.");
+        Assertions.assertEquals(newSettings.getPreProcessorId(), dbSettings.getPreProcessorId(), "PreProcessorId was not equal.");
+        Assertions.assertEquals(newSettings.getPostProcessorId(), dbSettings.getPostProcessorId(), "PostProcessorId was not equal.");
+        Assertions.assertEquals(newSettings.getBenchProcessorId(), dbSettings.getBenchProcessorId(), "BenchProcessorId was not equal.");
+        Assertions.assertEquals(newSettings.getSolverId(), dbSettings.getSolverId(), "SolverId was not equal.");
+        Assertions.assertEquals(newSettings.getWallclockTimeout(), dbSettings.getWallclockTimeout(), "WallclockTimeout was not equal.");
+        Assertions.assertEquals(newSettings.getCpuTimeout(), dbSettings.getCpuTimeout(), "CpuTimeout was not equal.");
+        Assertions.assertEquals(newSettings.getMaxMemory(), dbSettings.getMaxMemory(), "MaxMemory was not equal.");
+        Assertions.assertEquals(newSettings.isDependenciesEnabled(), dbSettings.isDependenciesEnabled(), "DependenciesEnabled was not equal.");
+        Assertions.assertEquals(newSettings.getName(), dbSettings.getName(), "Name was not equal.");
+        Assertions.assertEquals(newSettings.getType(), dbSettings.getType(), "Type was not equal.");
+        Assertions.assertEquals(newSettings.getBenchmarkingFramework(), dbSettings.getBenchmarkingFramework(), "Benchmarking framework was not equal.");
 
         List<Integer> settingsBenchIds = newSettings.getBenchIds();
         List<Integer> dbSettingsBenchIds = dbSettings.getBenchIds();
 
         final String benchIdsNotEqual = "Bench ids were not equal.";
-        Assert.assertEquals(benchIdsNotEqual, settingsBenchIds.size(), dbSettingsBenchIds.size());
+        Assertions.assertEquals(settingsBenchIds.size(), dbSettingsBenchIds.size(), benchIdsNotEqual);
 
         Collections.sort(settingsBenchIds);
         Collections.sort(dbSettingsBenchIds);
         for (int i = 0; i < settingsBenchIds.size(); i++) {
-            Assert.assertEquals(benchIdsNotEqual, settingsBenchIds.get(i), dbSettingsBenchIds.get(i));
+            Assertions.assertEquals(settingsBenchIds.get(i), dbSettingsBenchIds.get(i), benchIdsNotEqual);
         }
     }
 
 	@StarexecTest
 	private void getSettingsByUser() {
 		List<DefaultSettings> settingsList=Settings.getDefaultSettingsOwnedByUser(u.getId());
-		Assert.assertEquals(settingsList.size(), 1);
-		Assert.assertTrue(settingsList.get(0).equals(settings));
+		Assertions.assertEquals(settingsList.size(), 1);
+		Assertions.assertTrue(settingsList.get(0).equals(settings));
 	}
 
 	@StarexecTest
 	private void deleteSettingsTest() {
 		DefaultSettings temp=loader.loadDefaultSettingsProfileIntoDatabase(u.getId());
-		Assert.assertTrue(Settings.deleteProfile(temp.getId()));
+		Assertions.assertTrue(Settings.deleteProfile(temp.getId()));
 		try {
-			Assert.assertNull(Settings.getProfileById(temp.getId()));
+			Assertions.assertNull(Settings.getProfileById(temp.getId()));
 		} catch (SQLException e) {
-			Assert.fail("Caught SQLException: "+ Util.getStackTrace(e));
+			Assertions.fail("Caught SQLException: "+ Util.getStackTrace(e));
 		}
 	}
 
@@ -200,8 +200,8 @@ public class DefaultSettingsTests extends TestSequence {
 	private void getSettingsByNameTest() {
 		List<DefaultSettings> settingsList=Settings.getDefaultSettingsByPrimIdAndType(settings.getPrimId(), settings.getType());
 
-		Assert.assertEquals(settingsList.size(),1);
-		Assert.assertTrue(settingsList.get(0).equals(settings));
+		Assertions.assertEquals(settingsList.size(),1);
+		Assertions.assertTrue(settingsList.get(0).equals(settings));
 	}
 
 
@@ -209,10 +209,10 @@ public class DefaultSettingsTests extends TestSequence {
 	private void getSettingsTest() {
 		try {
 			DefaultSettings temp = Settings.getProfileById(settings.getId());
-			Assert.assertNotNull(temp);
-			Assert.assertTrue(temp.equals(settings));
+			Assertions.assertNotNull(temp);
+			Assertions.assertTrue(temp.equals(settings));
 		} catch (SQLException e) {
-			Assert.fail("Caught SQLException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught SQLException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -220,12 +220,12 @@ public class DefaultSettingsTests extends TestSequence {
 	private void updateDefaultMemoryLimitTest() {
 
 
-		Assert.assertTrue(Settings.setDefaultMaxMemory(settings.getId(), settings.getMaxMemory()+1));
+		Assertions.assertTrue(Settings.setDefaultMaxMemory(settings.getId(), settings.getMaxMemory()+1));
 		try {
-			Assert.assertEquals(settings.getMaxMemory() + 1, Settings.getProfileById(settings.getId()).getMaxMemory());
-			Assert.assertTrue(Settings.setDefaultMaxMemory(settings.getId(), settings.getMaxMemory()));
+			Assertions.assertEquals(settings.getMaxMemory() + 1, Settings.getProfileById(settings.getId()).getMaxMemory());
+			Assertions.assertTrue(Settings.setDefaultMaxMemory(settings.getId(), settings.getMaxMemory()));
 		} catch (SQLException e) {
-			Assert.fail("Caught SQLException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught SQLException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -236,14 +236,14 @@ public class DefaultSettingsTests extends TestSequence {
 			
 			// Set a default profile
 			boolean success = Settings.setDefaultProfileForUser(u.getId(), settings.getId());
-			Assert.assertTrue("Failed to set default profile for user", success);
+			Assertions.assertTrue(success, "Failed to set default profile for user");
 			
 			// Verify it was set
 			Integer newDefault = Settings.getDefaultProfileForUser(u.getId());
-			Assert.assertNotNull("Default profile should not be null after setting", newDefault);
-			Assert.assertEquals("Default profile ID should match", newDefault.intValue(), settings.getId());
+			Assertions.assertNotNull(newDefault, "Default profile should not be null after setting");
+			Assertions.assertEquals(newDefault.intValue(), settings.getId(), "Default profile ID should match");
 		} catch (Exception e) {
-			Assert.fail("Caught exception: " + Util.getStackTrace(e));
+			Assertions.fail("Caught exception: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -252,22 +252,22 @@ public class DefaultSettingsTests extends TestSequence {
 		try {
 			// First set a default profile
 			boolean setSuccess = Settings.setDefaultProfileForUser(u.getId(), settings.getId());
-			Assert.assertTrue("Failed to set default profile", setSuccess);
+			Assertions.assertTrue(setSuccess, "Failed to set default profile");
 			
 			// Verify it was set
 			Integer beforeClear = Settings.getDefaultProfileForUser(u.getId());
-			Assert.assertNotNull("Default should be set before clearing", beforeClear);
-			Assert.assertEquals("Default should match what we set", beforeClear.intValue(), settings.getId());
+			Assertions.assertNotNull(beforeClear, "Default should be set before clearing");
+			Assertions.assertEquals(beforeClear.intValue(), settings.getId(), "Default should match what we set");
 			
 			// Now clear it
 			boolean clearSuccess = Settings.clearDefaultProfileForUser(u.getId());
-			Assert.assertTrue("Failed to clear default profile for user", clearSuccess);
+			Assertions.assertTrue(clearSuccess, "Failed to clear default profile for user");
 			
 			// Verify it was cleared
 			Integer afterClear = Settings.getDefaultProfileForUser(u.getId());
-			Assert.assertNull("Default profile should be null after clearing", afterClear);
+			Assertions.assertNull(afterClear, "Default profile should be null after clearing");
 		} catch (Exception e) {
-			Assert.fail("Caught exception: " + Util.getStackTrace(e));
+			Assertions.fail("Caught exception: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -277,17 +277,17 @@ public class DefaultSettingsTests extends TestSequence {
 			// Ensure user has no default
 			Settings.clearDefaultProfileForUser(u2.getId());
 			Integer beforeClear = Settings.getDefaultProfileForUser(u2.getId());
-			Assert.assertNull("User should have no default", beforeClear);
+			Assertions.assertNull(beforeClear, "User should have no default");
 			
 			// Clearing again should still succeed (idempotent operation)
 			boolean clearSuccess = Settings.clearDefaultProfileForUser(u2.getId());
-			Assert.assertTrue("Clearing already-null default should succeed", clearSuccess);
+			Assertions.assertTrue(clearSuccess, "Clearing already-null default should succeed");
 			
 			// Verify still null
 			Integer afterClear = Settings.getDefaultProfileForUser(u2.getId());
-			Assert.assertNull("Default should still be null", afterClear);
+			Assertions.assertNull(afterClear, "Default should still be null");
 		} catch (Exception e) {
-			Assert.fail("Caught exception: " + Util.getStackTrace(e));
+			Assertions.fail("Caught exception: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -297,24 +297,24 @@ public class DefaultSettingsTests extends TestSequence {
 			// Set default to settings1
 			Settings.setDefaultProfileForUser(u.getId(), settings.getId());
 			Integer default1 = Settings.getDefaultProfileForUser(u.getId());
-			Assert.assertEquals("Should be set to first profile", default1.intValue(), settings.getId());
+			Assertions.assertEquals(default1.intValue(), settings.getId(), "Should be set to first profile");
 			
 			// Clear it
 			Settings.clearDefaultProfileForUser(u.getId());
 			Integer cleared1 = Settings.getDefaultProfileForUser(u.getId());
-			Assert.assertNull("Should be null after clear", cleared1);
+			Assertions.assertNull(cleared1, "Should be null after clear");
 			
 			// Set to different profile
 			Settings.setDefaultProfileForUser(u.getId(), settings2.getId());
 			Integer default2 = Settings.getDefaultProfileForUser(u.getId());
-			Assert.assertEquals("Should be set to second profile", default2.intValue(), settings2.getId());
+			Assertions.assertEquals(default2.intValue(), settings2.getId(), "Should be set to second profile");
 			
 			// Clear again
 			Settings.clearDefaultProfileForUser(u.getId());
 			Integer cleared2 = Settings.getDefaultProfileForUser(u.getId());
-			Assert.assertNull("Should be null after second clear", cleared2);
+			Assertions.assertNull(cleared2, "Should be null after second clear");
 		} catch (Exception e) {
-			Assert.fail("Caught exception: " + Util.getStackTrace(e));
+			Assertions.fail("Caught exception: " + Util.getStackTrace(e));
 		}
 	}
 

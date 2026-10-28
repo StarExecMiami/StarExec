@@ -1,34 +1,36 @@
 package org.starexec.data.database;
 
-import org.junit.BeforeClass;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.constants.R;
 import org.starexec.util.Validator;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.starexec.test.TemporaryFolders.newFile;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 public class SpacesDescriptionPreflightTest {
 
-    @Rule
-    public TemporaryFolder temporaryFolder = new TemporaryFolder();
+    @TempDir
+    public File temporaryFolder;
 
-    @BeforeClass
+    @BeforeAll
     public static void initializeValidator() {
         Validator.initialize();
     }
 
     @Test
     public void validatesAllSubspaceDescriptionsBeforeTraversalWrites() throws Exception {
-        Path root = temporaryFolder.newFolder("benchmark-tree").toPath();
+        Path root = newFolder(temporaryFolder, "benchmark-tree").toPath();
         Path validSubspace = Files.createDirectory(root.resolve("valid-space"));
         Files.writeString(
             validSubspace.resolve(R.BENCHMARK_DESC_PATH),
@@ -55,9 +57,9 @@ public class SpacesDescriptionPreflightTest {
 
     @Test
     public void rejectsSymbolicLinkDescriptionFiles() throws Exception {
-        Path root = temporaryFolder.newFolder("symlink-tree").toPath();
+        Path root = newFolder(temporaryFolder, "symlink-tree").toPath();
         Path subspace = Files.createDirectory(root.resolve("linked-space"));
-        Path target = temporaryFolder.newFile("external-description.txt").toPath();
+        Path target = newFile(temporaryFolder, "external-description.txt").toPath();
         Files.writeString(target, "apparently safe", StandardCharsets.UTF_8);
         Files.createSymbolicLink(subspace.resolve(R.BENCHMARK_DESC_PATH), target);
 
@@ -71,7 +73,7 @@ public class SpacesDescriptionPreflightTest {
 
     @Test
     public void rejectsOversizedDescriptionsWithABoundedRead() throws Exception {
-        Path root = temporaryFolder.newFolder("oversized-tree").toPath();
+        Path root = newFolder(temporaryFolder, "oversized-tree").toPath();
         Path subspace = Files.createDirectory(root.resolve("oversized-space"));
         Files.writeString(
             subspace.resolve(R.BENCHMARK_DESC_PATH),

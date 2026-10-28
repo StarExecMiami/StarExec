@@ -1,6 +1,6 @@
 package org.starexec.test.junit.data.database;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.Jobs;

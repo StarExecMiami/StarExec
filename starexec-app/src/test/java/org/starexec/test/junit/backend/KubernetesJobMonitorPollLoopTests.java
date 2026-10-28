@@ -1,8 +1,8 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
@@ -24,9 +24,9 @@ import io.fabric8.kubernetes.client.dsl.ScalableResource;
 import io.fabric8.kubernetes.client.dsl.V1BatchAPIGroupDSL;
 import java.lang.reflect.Field;
 import java.util.List;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.KubernetesJobMonitor;
 
 /**
@@ -53,7 +53,7 @@ public class KubernetesJobMonitorPollLoopTests {
     private FilterWatchListDeletable<Job, JobList, ScalableResource<Job>> filteredJobs;
     private KubernetesJobMonitor monitor;
 
-    @Before
+    @BeforeEach
     @SuppressWarnings("unchecked")
     public void setUp() {
         KubernetesClient client = mock(KubernetesClient.class);
@@ -86,7 +86,7 @@ public class KubernetesJobMonitorPollLoopTests {
         );
     }
 
-    @After
+    @AfterEach
     public void tearDown() {
         if (monitor.isRunning()) {
             monitor.stop();
@@ -132,15 +132,15 @@ public class KubernetesJobMonitorPollLoopTests {
         monitor.stop();
         loop.join(WATCH_MS);
 
-        assertFalse("the polling loop is still running a second after stop()", loop.isAlive());
+        assertFalse(loop.isAlive(), "the polling loop is still running a second after stop()");
     }
 
     private Thread monitorThread() throws Exception {
         Field field = KubernetesJobMonitor.class.getDeclaredField("monitorThread");
         field.setAccessible(true);
         Thread thread = (Thread) field.get(monitor);
-        assertNotNull("the monitor has no polling thread", thread);
-        assertTrue("the polling thread has already ended", thread.isAlive());
+        assertNotNull(thread, "the monitor has no polling thread");
+        assertTrue(thread.isAlive(), "the polling thread has already ended");
         return thread;
     }
 }

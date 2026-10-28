@@ -1,11 +1,12 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import org.junit.Test;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.LocalBackend;
@@ -37,7 +38,7 @@ public class LocalBackendExecutionHostTest {
             recordExecutionHost(backend, 42);
 
             pairs.verify(() -> JobPairs.updatePairExecutionHost(42, 7));
-            assertEquals("a found id is cached", 7, cachedNodeId(backend));
+            assertEquals(7, cachedNodeId(backend), "a found id is cached");
         }
     }
 
@@ -67,7 +68,7 @@ public class LocalBackendExecutionHostTest {
             pairs.verify(
                     () -> JobPairs.updatePairExecutionHost(Mockito.anyInt(), Mockito.anyInt()),
                     Mockito.never());
-            assertEquals("a miss is not cached", -1, cachedNodeId(backend));
+            assertEquals(-1, cachedNodeId(backend), "a miss is not cached");
 
             recordExecutionHost(backend, 43);
             pairs.verify(() -> JobPairs.updatePairExecutionHost(43, 9));

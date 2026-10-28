@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -14,9 +13,10 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * {@code decodePathArrays} against the real {@code functions.bash}.
@@ -50,8 +50,8 @@ public class JobscriptDecodePathArraysTest {
 	private static final Path STATUS_CODES =
 			Path.of("src/main/java/org/starexec/config/sge/status_codes.bash");
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	// ------------------------------------------------------------ the defect
 
@@ -63,9 +63,9 @@ public class JobscriptDecodePathArraysTest {
 	public void theTwoStageNoInputCaseDecodes() throws Exception {
 		Decoded d = run(helper(), 2, 0);
 
-		assertEquals("the helper must not abort", 0, d.exitCode);
-		assertTrue("execution must continue past decodePathArrays", d.reachedMarker);
-		assertEquals("no inputs to decode", List.of(), d.inputs);
+		assertEquals(0, d.exitCode, "the helper must not abort");
+		assertTrue(d.reachedMarker, "execution must continue past decodePathArrays");
+		assertEquals(List.of(), d.inputs, "no inputs to decode");
 		assertEquals(2, d.stages.size());
 	}
 
@@ -78,11 +78,11 @@ public class JobscriptDecodePathArraysTest {
 	public void theStageIndexedDecodeIsWhatFails() throws Exception {
 		Decoded d = run(helperWithStageIndexedInputDecode(), 2, 0);
 
-		assertFalse("the pre-fix helper must not succeed", d.exitCode == 0);
-		assertFalse("it must not get past the decode", d.reachedMarker);
-		assertTrue("it must fail on the unset benchmark-input element, was:\n" + d.output,
-				d.output.contains("BENCH_INPUT_PATHS[i]: unbound variable")
-						|| d.output.contains("BENCH_INPUT_PATHS: unbound variable"));
+		assertFalse(d.exitCode == 0, "the pre-fix helper must not succeed");
+		assertFalse(d.reachedMarker, "it must not get past the decode");
+		assertTrue(d.output.contains("BENCH_INPUT_PATHS[i]: unbound variable")
+						|| d.output.contains("BENCH_INPUT_PATHS: unbound variable"),
+				"it must fail on the unset benchmark-input element, was:\n" + d.output);
 	}
 
 	// ------------------------------------------------------- cardinality matrix
@@ -108,12 +108,12 @@ public class JobscriptDecodePathArraysTest {
 
 			Decoded d = run(helper, stages, inputs);
 
-			assertEquals(label + " must not abort:\n" + d.output, 0, d.exitCode);
-			assertTrue(label + " must continue past the decode", d.reachedMarker);
-			assertEquals(label + ": every declared input must be decoded",
-					expectedInputs(inputs), d.inputs);
-			assertEquals(label + ": every stage must be decoded",
-					expectedStages(stages), d.stages);
+			assertEquals(0, d.exitCode, label + " must not abort:\n" + d.output);
+			assertTrue(d.reachedMarker, label + " must continue past the decode");
+			assertEquals(expectedInputs(inputs),
+					d.inputs, label + ": every declared input must be decoded");
+			assertEquals(expectedStages(stages),
+					d.stages, label + ": every stage must be decoded");
 		}
 	}
 
@@ -126,8 +126,8 @@ public class JobscriptDecodePathArraysTest {
 	public void theSentinelIsNotDecodedAsAnInput() throws Exception {
 		Decoded d = run(helper(), 2, 2);
 
-		assertEquals("only the real inputs are decoded", 2, d.inputs.size());
-		assertEquals("the sentinel must still be the empty string", "", d.sentinel);
+		assertEquals(2, d.inputs.size(), "only the real inputs are decoded");
+		assertEquals("", d.sentinel, "the sentinel must still be the empty string");
 	}
 
 	/**
@@ -139,8 +139,8 @@ public class JobscriptDecodePathArraysTest {
 		// "YWJjZA==" is the base64 of "abcd", used here as the literal path content.
 		Decoded d = run(helper(), 1, 1, List.of("YWJjZA=="));
 
-		assertEquals("the value must survive as itself, not as its own decoding",
-				List.of("YWJjZA=="), d.inputs);
+		assertEquals(List.of("YWJjZA=="),
+				d.inputs, "the value must survive as itself, not as its own decoding");
 	}
 
 	/** The four per-stage arrays keep their own cardinality and are unaffected. */
@@ -159,7 +159,7 @@ public class JobscriptDecodePathArraysTest {
 	// ----------------------------------------------------------------- harness
 
 	private Path helper() throws Exception {
-		Path dir = folder.newFolder("helper-" + System.nanoTime()).toPath();
+		Path dir = newFolder(folder, "helper-" + System.nanoTime()).toPath();
 		Files.copy(HELPER, dir.resolve("functions.bash"));
 		Files.copy(STATUS_CODES, dir.resolve("status_codes.bash"));
 		return dir;
@@ -235,7 +235,7 @@ public class JobscriptDecodePathArraysTest {
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("the harness must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "the harness must not hang");
 		return new Decoded(p.exitValue(), output);
 	}
 

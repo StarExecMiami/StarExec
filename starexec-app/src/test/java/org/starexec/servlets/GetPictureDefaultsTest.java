@@ -1,8 +1,7 @@
 package org.starexec.servlets;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
@@ -17,9 +16,10 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * Which bytes {@link GetPicture} serves when an entity has no picture of its own.
@@ -33,25 +33,25 @@ public class GetPictureDefaultsTest {
 
 	private static final String BUNDLED_USER_DEFAULT = "static/default-pics/default-pics/users/Pic0.jpg";
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	/** The Kubernetes layout: a data volume with no defaults on it. */
 	@Test
 	public void servesTheBundledDefaultWhenTheDataVolumeHasNone() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 
 		Served served = get(pictures, "uorg", "5");
 
-		assertEquals("no error status", 0, served.errorStatus);
-		assertArrayEquals("the bundled default picture", bundled(BUNDLED_USER_DEFAULT), served.body);
-		assertTrue("and not an empty body", served.body.length > 0);
+		assertEquals(0, served.errorStatus, "no error status");
+		assertArrayEquals(bundled(BUNDLED_USER_DEFAULT), served.body, "the bundled default picture");
+		assertTrue(served.body.length > 0, "and not an empty body");
 	}
 
 	/** The same for benchmarks, the third kind of picture with a bundled default. */
 	@Test
 	public void servesTheBundledBenchmarkDefaultWhenTheDataVolumeHasNone() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 
 		Served served = get(pictures, "bthn", "3");
 
@@ -62,7 +62,7 @@ public class GetPictureDefaultsTest {
 	/** The Local and Podman layout: the data volume has the defaults, and they still win. */
 	@Test
 	public void aDefaultOnTheDataVolumeIsStillServedFirst() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 		byte[] onVolume = "default on the volume".getBytes();
 		write(pictures.resolve("users/Pic0.jpg"), onVolume);
 
@@ -75,7 +75,7 @@ public class GetPictureDefaultsTest {
 	/** An entity's own picture is served whatever the defaults. */
 	@Test
 	public void anUploadedPictureIsServed() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 		byte[] uploaded = "uploaded picture".getBytes();
 		write(pictures.resolve("solvers/Pic7_org.jpg"), uploaded);
 
@@ -92,7 +92,7 @@ public class GetPictureDefaultsTest {
 	 */
 	@Test
 	public void aNonCanonicalIdNamesTheSamePicture() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 		byte[] uploaded = "uploaded picture".getBytes();
 		write(pictures.resolve("solvers/Pic7_org.jpg"), uploaded);
 
@@ -105,7 +105,7 @@ public class GetPictureDefaultsTest {
 	/** Result charts have no default: a missing one is an error, not an empty success. */
 	@Test
 	public void aMissingPictureWithNoDefaultIsNotFound() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 
 		Served served = get(pictures, "corg", "9");
 
@@ -159,7 +159,7 @@ public class GetPictureDefaultsTest {
 
 	private static byte[] bundled(String resource) throws Exception {
 		try (InputStream in = GetPicture.class.getClassLoader().getResourceAsStream(resource)) {
-			assertTrue("the default must be on the classpath: " + resource, in != null);
+			assertTrue(in != null, "the default must be on the classpath: " + resource);
 			return in.readAllBytes();
 		}
 	}

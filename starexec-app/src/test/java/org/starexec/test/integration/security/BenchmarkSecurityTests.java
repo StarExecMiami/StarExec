@@ -1,6 +1,6 @@
 package org.starexec.test.integration.security;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Communities;
@@ -34,91 +34,91 @@ public class BenchmarkSecurityTests extends TestSequence {
 
 	@StarexecTest
 	private void CanDeleteBenchTest() {
-		Assert.assertTrue(BenchmarkSecurity.canUserDeleteBench(benchmarkIds.get(0), user1.getId()).isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserDeleteBench(benchmarkIds.get(0), admin.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserDeleteBench(benchmarkIds.get(0), user2.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserDeleteBench(benchmarkIds.get(0), user1.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserDeleteBench(benchmarkIds.get(0), admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserDeleteBench(benchmarkIds.get(0), user2.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void CanRecyleBenchTest() {
-		Assert.assertTrue(BenchmarkSecurity.canUserRecycleBench(benchmarkIds.get(0), user1.getId()).isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserRecycleBench(benchmarkIds.get(0), admin.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserRecycleBench(benchmarkIds.get(0), user2.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserRecycleBench(benchmarkIds.get(0), user1.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserRecycleBench(benchmarkIds.get(0), admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRecycleBench(benchmarkIds.get(0), user2.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void CanRestoreBenchTest() {
 		Benchmark b=Benchmarks.get(benchmarkIds.get(0));
 		//benchmarks can be restored only if they were actually recycled to begin with
-		Assert.assertFalse(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), user1.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), admin.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), user2.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), user1.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), user2.getId()).isSuccess());
 
-		Assert.assertTrue(Benchmarks.recycle(b.getId()));
+		Assertions.assertTrue(Benchmarks.recycle(b.getId()));
 
-		Assert.assertTrue(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), user1.getId()).isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), admin.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), user2.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), user1.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRestoreBenchmark(b.getId(), user2.getId()).isSuccess());
 
-		Assert.assertTrue(Benchmarks.restore(b.getId()));
+		Assertions.assertTrue(Benchmarks.restore(b.getId()));
 	}
 
 	@StarexecTest
 	private void CanDeleteBenchesTest() {
-		Assert.assertTrue(BenchmarkSecurity.canUserDeleteBenchmarks(benchmarkIds, user1.getId()).isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserDeleteBenchmarks(benchmarkIds, admin.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserDeleteBenchmarks(benchmarkIds, user2.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserDeleteBenchmarks(benchmarkIds, user1.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserDeleteBenchmarks(benchmarkIds, admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserDeleteBenchmarks(benchmarkIds, user2.getId()).isSuccess());
 		List<Integer> temp= new ArrayList<>();
 		temp.addAll(benchmarkIds);
 		temp.addAll(benchmarkIds2);
-		Assert.assertFalse(BenchmarkSecurity.canUserDeleteBenchmarks(temp, user1.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserDeleteBenchmarks(temp, user2.getId()).isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserDeleteBenchmarks(temp, admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserDeleteBenchmarks(temp, user1.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserDeleteBenchmarks(temp, user2.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserDeleteBenchmarks(temp, admin.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canRecycleBenchesTest() {
-		Assert.assertTrue(BenchmarkSecurity.canUserRecycleBenchmarks(benchmarkIds, user1.getId()).isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserRecycleBenchmarks(benchmarkIds, admin.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserRecycleBenchmarks(benchmarkIds, user2.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserRecycleBenchmarks(benchmarkIds, user1.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserRecycleBenchmarks(benchmarkIds, admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRecycleBenchmarks(benchmarkIds, user2.getId()).isSuccess());
 		List<Integer> temp= new ArrayList<>();
 		temp.addAll(benchmarkIds);
 		temp.addAll(benchmarkIds2);
-		Assert.assertFalse(BenchmarkSecurity.canUserRecycleBenchmarks(temp, user1.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserRecycleBenchmarks(temp, user2.getId()).isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserRecycleBenchmarks(temp, admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRecycleBenchmarks(temp, user1.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRecycleBenchmarks(temp, user2.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserRecycleBenchmarks(temp, admin.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canRestoreBenchesTest() {
-		Assert.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, user1.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, admin.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, user2.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, user1.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, user2.getId()).isSuccess());
 
 		for (Integer i : benchmarkIds) {
-			Assert.assertTrue(Benchmarks.recycle(i));
+			Assertions.assertTrue(Benchmarks.recycle(i));
 		}
 
 		for (Integer i : benchmarkIds2) {
-			Assert.assertTrue(Benchmarks.recycle(i));
+			Assertions.assertTrue(Benchmarks.recycle(i));
 		}
 
-		Assert.assertTrue(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, user1.getId()).isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, admin.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, user2.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, user1.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(benchmarkIds, user2.getId()).isSuccess());
 
 		List<Integer> temp= new ArrayList<>();
 		temp.addAll(benchmarkIds);
 		temp.addAll(benchmarkIds2);
 		//because there are benchmarks by both owners in temp, neither owner should be able to restore them.
 		//only the admin should be able to
-		Assert.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(temp, user1.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(temp, user2.getId()).isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserRestoreBenchmarks(temp, admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(temp, user1.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserRestoreBenchmarks(temp, user2.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserRestoreBenchmarks(temp, admin.getId()).isSuccess());
 
 
 		for (Integer i : temp) {
-			Assert.assertTrue(Benchmarks.restore(i));
+			Assertions.assertTrue(Benchmarks.restore(i));
 		}
 	}
 
@@ -128,9 +128,9 @@ public class BenchmarkSecurityTests extends TestSequence {
 		Benchmark b1=Benchmarks.get(benchmarkIds.get(0));
 		Benchmark b2=Benchmarks.get(benchmarkIds.get(1));
 		ValidatorStatusCode code = BenchmarkSecurity.canUserEditBenchmark(b1.getId(), b1.getName(),b1.getDescription(),b1.getType().getId(), user1.getId());
-		Assert.assertTrue(code.isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserEditBenchmark(b1.getId(), b1.getName(),b1.getDescription(),b1.getType().getId(), admin.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserEditBenchmark(b1.getId(), b1.getName(),b2.getDescription(),b1.getType().getId(), user2.getId()).isSuccess());
+		Assertions.assertTrue(code.isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserEditBenchmark(b1.getId(), b1.getName(),b1.getDescription(),b1.getType().getId(), admin.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserEditBenchmark(b1.getId(), b1.getName(),b2.getDescription(),b1.getType().getId(), user2.getId()).isSuccess());
 	}
 
 	@StarexecTest
@@ -138,28 +138,28 @@ public class BenchmarkSecurityTests extends TestSequence {
 		Benchmark b=Benchmarks.get(benchmarkIds.get(0));
 		//first, do the test with "downloadable" set to false
 		Benchmarks.updateDetails(b.getId(), b.getName(), b.getDescription(), false, b.getType().getId());
-		Assert.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user1.getId()).isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), admin.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user1.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), admin.getId()).isSuccess());
 
 		//user2 is in the same space, but they still are not allowed to see the contents
-		Assert.assertFalse(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user2.getId()).isSuccess());
-		Assert.assertFalse(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user3.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user2.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user3.getId()).isSuccess());
 
 		//then, again with downloadable set to true
 		Benchmarks.updateDetails(b.getId(), b.getName(), b.getDescription(), true, b.getType().getId());
-		Assert.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user1.getId()).isSuccess());
-		Assert.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), admin.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user1.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), admin.getId()).isSuccess());
 		//now user2 can see the contents because they are in the same space
-		Assert.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user2.getId()).isSuccess());
+		Assertions.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user2.getId()).isSuccess());
 
-		Assert.assertFalse(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user3.getId()).isSuccess());
+		Assertions.assertFalse(BenchmarkSecurity.canUserSeeBenchmarkContents(b.getId(), user3.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canSeeBenchmarkUploadStatusTest() {
-		Assert.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkStatus(benchmarkStatus.getId(), user1.getId()));
-		Assert.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkStatus(benchmarkStatus.getId(), admin.getId()));
-		Assert.assertFalse(BenchmarkSecurity.canUserSeeBenchmarkStatus(benchmarkStatus.getId(), user2.getId()));
+		Assertions.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkStatus(benchmarkStatus.getId(), user1.getId()));
+		Assertions.assertTrue(BenchmarkSecurity.canUserSeeBenchmarkStatus(benchmarkStatus.getId(), admin.getId()));
+		Assertions.assertFalse(BenchmarkSecurity.canUserSeeBenchmarkStatus(benchmarkStatus.getId(), user2.getId()));
 	}
 
 	@Override
@@ -180,8 +180,8 @@ public class BenchmarkSecurityTests extends TestSequence {
 		admin=loader.loadUserIntoDatabase(TestUtil.getRandomAlphaString(10),TestUtil.getRandomAlphaString(10),TestUtil.getRandomPassword(),TestUtil.getRandomPassword(),"The University of Miami",R.ADMIN_ROLE_NAME);
 		benchmarkIds=loader.loadBenchmarksIntoDatabase("benchmarks.zip", space.getId(), user1.getId());
 		benchmarkIds2=loader.loadBenchmarksIntoDatabase("benchmarks.zip", space2.getId(), user2.getId());
-		Assert.assertNotNull(benchmarkIds);
-		Assert.assertNotNull(benchmarkIds2);
+		Assertions.assertNotNull(benchmarkIds);
+		Assertions.assertNotNull(benchmarkIds2);
 		benchmarkStatus = Uploads.getBenchmarkStatus(Uploads.createBenchmarkUploadStatus(space.getId(), user1.getId()));
 	}
 

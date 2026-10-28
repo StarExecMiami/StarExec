@@ -1,6 +1,6 @@
 package org.starexec.test.integration.security;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.security.QueueSecurity;
 import org.starexec.data.to.User;
@@ -16,19 +16,19 @@ public class QueueSecurityTests extends TestSequence {
 	@StarexecTest
 	private void canUserMakeQueueTest() {
 		String randomName=TestUtil.getRandomQueueName();
-		Assert.assertTrue(QueueSecurity.canUserMakeQueue(admin.getId(), randomName).isSuccess());
+		Assertions.assertTrue(QueueSecurity.canUserMakeQueue(admin.getId(), randomName).isSuccess());
 
-		Assert.assertFalse(QueueSecurity.canUserMakeQueue(user1.getId(),randomName).isSuccess());
-		Assert.assertFalse(QueueSecurity.canUserMakeQueue(user2.getId(),randomName).isSuccess());
+		Assertions.assertFalse(QueueSecurity.canUserMakeQueue(user1.getId(),randomName).isSuccess());
+		Assertions.assertFalse(QueueSecurity.canUserMakeQueue(user2.getId(),randomName).isSuccess());
 	}
 
 	@StarexecTest
 	private void canEditQueueTest() {
-		Assert.assertTrue(QueueSecurity.canUserEditQueue(admin.getId(), 50, 20).isSuccess());
+		Assertions.assertTrue(QueueSecurity.canUserEditQueue(admin.getId(), 50, 20).isSuccess());
 
-		Assert.assertFalse(QueueSecurity.canUserEditQueue(user1.getId(), 50, 20).isSuccess());
-		Assert.assertFalse(QueueSecurity.canUserEditQueue(admin.getId(), -1, 20).isSuccess());
-		Assert.assertFalse(QueueSecurity.canUserEditQueue(admin.getId(), 50, 0).isSuccess());
+		Assertions.assertFalse(QueueSecurity.canUserEditQueue(user1.getId(), 50, 20).isSuccess());
+		Assertions.assertFalse(QueueSecurity.canUserEditQueue(admin.getId(), -1, 20).isSuccess());
+		Assertions.assertFalse(QueueSecurity.canUserEditQueue(admin.getId(), 50, 0).isSuccess());
 	}
 
 	@Override
@@ -41,9 +41,9 @@ public class QueueSecurityTests extends TestSequence {
 		user1=loader.loadUserIntoDatabase();
 		user2=loader.loadUserIntoDatabase();
 		admin=loader.loadUserIntoDatabase(TestUtil.getRandomAlphaString(10),TestUtil.getRandomAlphaString(10),TestUtil.getRandomPassword(),TestUtil.getRandomPassword(),"The University of Miami",R.ADMIN_ROLE_NAME);
-		Assert.assertNotNull(user1);
-		Assert.assertNotNull(user2);
-		Assert.assertNotNull(admin);
+		Assertions.assertNotNull(user1);
+		Assertions.assertNotNull(user2);
+		Assertions.assertNotNull(admin);
 	}
 
 	@Override

@@ -1,8 +1,7 @@
 package org.starexec.test.junit.util;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.util.XMLUtil;
 import org.w3c.dom.Document;
@@ -22,9 +21,10 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFile;
 
 /**
  * The namespace contract of the exported space and job XML, pinned in one place (#122).
@@ -56,8 +56,8 @@ public class XmlSchemaNamespaceTests {
 	private static final Path PACKAGED_SCHEMA_DIR = Path.of("src/main/resources/schemas");
 	private static final Path SERVED_SCHEMA_DIR = Path.of("src/main/webapp/public");
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	/**
 	 * Every schema declares, as its {@code targetNamespace}, the namespace its documents are
@@ -68,9 +68,9 @@ public class XmlSchemaNamespaceTests {
 	@Test
 	public void everyBundledSchemaDeclaresItsNamespace() throws Exception {
 		for (String name : SCHEMA_NAMES) {
-			assertEquals(name + " does not declare the namespace its documents are written in",
-					XMLUtil.SCHEMA_NAMESPACE_ROOT + name,
-					targetNamespace(PACKAGED_SCHEMA_DIR.resolve(name)));
+			assertEquals(XMLUtil.SCHEMA_NAMESPACE_ROOT + name,
+					targetNamespace(PACKAGED_SCHEMA_DIR.resolve(name)),
+					name + " does not declare the namespace its documents are written in");
 		}
 	}
 
@@ -82,8 +82,8 @@ public class XmlSchemaNamespaceTests {
 				// ISO-8859-1 maps every byte, so the binary documents in webapp/public cannot
 				// make this scan fail on decoding rather than on the token.
 				String content = new String(Files.readAllBytes(file), StandardCharsets.ISO_8859_1);
-				assertFalse(file + " still contains the unsubstituted @Web.URL@ token",
-						content.contains("@Web.URL@"));
+				assertFalse(content.contains("@Web.URL@"),
+						file + " still contains the unsubstituted @Web.URL@ token");
 			}
 		}
 	}
@@ -95,8 +95,8 @@ public class XmlSchemaNamespaceTests {
 			Path packaged = PACKAGED_SCHEMA_DIR.resolve(name);
 			Path served = SERVED_SCHEMA_DIR.resolve(name);
 			if (Files.isRegularFile(packaged) && Files.isRegularFile(served)) {
-				assertEquals(name + " declares a different namespace in each of its two copies",
-						targetNamespace(packaged), targetNamespace(served));
+				assertEquals(targetNamespace(packaged),
+						targetNamespace(served), name + " declares a different namespace in each of its two copies");
 			}
 		}
 	}
@@ -109,13 +109,13 @@ public class XmlSchemaNamespaceTests {
 	public void theSpacesRootCarriesTheShippedSchemasNamespace() throws Exception {
 		Element root = XMLUtil.createSpacesRoot(XMLUtil.generateNewDocument());
 
-		assertEquals("the space export does not stamp the namespace its schema declares",
-				targetNamespace(PACKAGED_SCHEMA_DIR.resolve("batchSpaceSchema.xsd")),
-				root.getNamespaceURI());
+		assertEquals(targetNamespace(PACKAGED_SCHEMA_DIR.resolve("batchSpaceSchema.xsd")),
+				root.getNamespaceURI(),
+				"the space export does not stamp the namespace its schema declares");
 		assertEquals("tns:Spaces", root.getTagName());
-		assertEquals("a reader must be pointed at the schema beside the namespace",
-				root.getNamespaceURI() + " batchSpaceSchema.xsd",
-				root.getAttribute("xsi:schemaLocation"));
+		assertEquals(root.getNamespaceURI() + " batchSpaceSchema.xsd",
+				root.getAttribute("xsi:schemaLocation"),
+				"a reader must be pointed at the schema beside the namespace");
 	}
 
 	/** The same contract for the job export, which is where the doubled slash (U15) appeared. */
@@ -123,13 +123,13 @@ public class XmlSchemaNamespaceTests {
 	public void theJobsRootCarriesTheShippedSchemasNamespace() throws Exception {
 		Element root = XMLUtil.createJobsRoot(XMLUtil.generateNewDocument());
 
-		assertEquals("the job export does not stamp the namespace its schema declares",
-				targetNamespace(PACKAGED_SCHEMA_DIR.resolve("batchJobSchema.xsd")),
-				root.getNamespaceURI());
+		assertEquals(targetNamespace(PACKAGED_SCHEMA_DIR.resolve("batchJobSchema.xsd")),
+				root.getNamespaceURI(),
+				"the job export does not stamp the namespace its schema declares");
 		assertEquals("tns:Jobs", root.getTagName());
-		assertEquals("a reader must be pointed at the schema beside the namespace",
-				root.getNamespaceURI() + " batchJobSchema.xsd",
-				root.getAttribute("xsi:schemaLocation"));
+		assertEquals(root.getNamespaceURI() + " batchJobSchema.xsd",
+				root.getAttribute("xsi:schemaLocation"),
+				"a reader must be pointed at the schema beside the namespace");
 	}
 
 	/**
@@ -146,9 +146,9 @@ public class XmlSchemaNamespaceTests {
 			for (String value : Arrays.asList(
 					root.getNamespaceURI(), root.getAttribute("xsi:schemaLocation"))) {
 				int schemeEnd = value.indexOf("://");
-				assertTrue("expected an absolute namespace, was: " + value, schemeEnd > 0);
-				assertFalse("a doubled slash leaked into: " + value,
-						value.indexOf("//", schemeEnd + 3) >= 0);
+				assertTrue(schemeEnd > 0, "expected an absolute namespace, was: " + value);
+				assertFalse(value.indexOf("//", schemeEnd + 3) >= 0,
+						"a doubled slash leaked into: " + value);
 			}
 		}
 	}
@@ -165,8 +165,8 @@ public class XmlSchemaNamespaceTests {
 
 		ValidatorStatusCode status = XMLUtil.validateAgainstSchema(document, packagedSpaceSchema());
 
-		assertTrue("a Spaces document rooted by the exporter did not validate: "
-				+ status.getMessage(), status.isSuccess());
+		assertTrue(status.isSuccess(), "a Spaces document rooted by the exporter did not validate: "
+				+ status.getMessage());
 	}
 
 	/**
@@ -182,10 +182,10 @@ public class XmlSchemaNamespaceTests {
 
 		ValidatorStatusCode status = XMLUtil.validateAgainstSchema(document, packagedSpaceSchema());
 
-		assertFalse("a Spaces document in a deployment-URL namespace validated: "
-				+ status.getMessage(), status.isSuccess());
-		assertTrue("the failure should name the undeclared root element, was: " + status.getMessage(),
-				status.getMessage().contains("Spaces"));
+		assertFalse(status.isSuccess(), "a Spaces document in a deployment-URL namespace validated: "
+				+ status.getMessage());
+		assertTrue(status.getMessage().contains("Spaces"),
+				"the failure should name the undeclared root element, was: " + status.getMessage());
 	}
 
 	/**
@@ -208,7 +208,7 @@ public class XmlSchemaNamespaceTests {
 		space.setAttribute("name", "round-trip");
 		root.appendChild(space);
 
-		File file = folder.newFile("spaces.xml");
+		File file = newFile(folder, "spaces.xml");
 		Transformer transformer = TransformerFactory.newInstance().newTransformer();
 		transformer.transform(new DOMSource(document), new StreamResult(file));
 		return file;

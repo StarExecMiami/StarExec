@@ -1,8 +1,8 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.JobPairs.ConditionalPairUpdateResult;
@@ -14,8 +14,8 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The fence on {@link JobPairs#tryReturnDeferredPairToPending}, against the real schema.
@@ -40,13 +40,13 @@ public class DeferredPairResetSqlTest extends Common {
 
 	private int jobId;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("DeferredPairResetSqlTest");
 		Common.initialize();
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		if (jobId == 0) {
 			return;
@@ -103,7 +103,7 @@ public class DeferredPairResetSqlTest extends Common {
 	/** A pair of a fresh job, with its stage row, in the given state. */
 	private int pair(int status, Integer sgeId) throws SQLException {
 		try (Connection con = Common.getConnection()) {
-			assertTrue("a pooled connection must come back in autocommit mode", con.getAutoCommit());
+			assertTrue(con.getAutoCommit(), "a pooled connection must come back in autocommit mode");
 			int userId = selectInt(con, "SELECT min(id) FROM starexec.users");
 			jobId = selectInt(con, "INSERT INTO starexec.jobs (user_id, name, total_pairs, disk_size) " +
 					"VALUES (" + userId + ", 'deferred-pair-reset-test', 1, 0) RETURNING id");
@@ -119,10 +119,10 @@ public class DeferredPairResetSqlTest extends Common {
 	/** The pair and its stage row both carry {@code expected}. */
 	private static void assertStatus(int pairId, int expected) throws SQLException {
 		try (Connection con = Common.getConnection()) {
-			assertEquals("pair status", expected,
-					selectInt(con, "SELECT status_code FROM starexec.job_pairs WHERE id = " + pairId));
-			assertEquals("stage status", expected,
-					selectInt(con, "SELECT status_code FROM starexec.jobpair_stage_data WHERE jobpair_id = " + pairId));
+			assertEquals(expected, selectInt(con, "SELECT status_code FROM starexec.job_pairs WHERE id = " + pairId),
+					"pair status");
+			assertEquals(expected, selectInt(con, "SELECT status_code FROM starexec.jobpair_stage_data WHERE jobpair_id = " + pairId),
+					"stage status");
 		}
 	}
 

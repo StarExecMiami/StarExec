@@ -1,7 +1,7 @@
 package org.starexec.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -10,7 +10,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 
 public class CpuPartitionManagerTest {
 
@@ -205,9 +206,9 @@ public class CpuPartitionManagerTest {
             CpuPartitionManager.subdivide("0-15", 2, splitHalfSiblings(16));
 
         assertEquals(
-            "each partition must hold whole physical cores, not one thread of each",
             Arrays.asList("0-3,8-11", "4-7,12-15"),
-            parts
+            parts,
+            "each partition must hold whole physical cores, not one thread of each"
         );
     }
 
@@ -217,14 +218,14 @@ public class CpuPartitionManagerTest {
         // siblings, which would let two pairs share a cache while appearing isolated.
         try {
             CpuPartitionManager.subdivide("0-3", 3, adjacentPairSiblings(4));
-            org.junit.Assert.fail(
+            Assertions.fail(
                 "splitting beyond the physical core count must be refused, not silently"
                     + " produce partitions that share a cache"
             );
         } catch (IllegalArgumentException expected) {
-            org.junit.Assert.assertTrue(
-                "the error should say why: " + expected.getMessage(),
-                expected.getMessage().contains("SMT siblings")
+            Assertions.assertTrue(
+                expected.getMessage().contains("SMT siblings"),
+                "the error should say why: " + expected.getMessage()
             );
         }
     }
@@ -262,14 +263,14 @@ public class CpuPartitionManagerTest {
     public void testExplicitPartitions_rejectsTheDocumentedSiblingSplit() {
         try {
             CpuPartitionManager.partitionsFromOverride("0-7 8-15", splitHalfSiblings(16));
-            org.junit.Assert.fail(
+            Assertions.fail(
                 "a configuration that splits SMT siblings across partitions must abort"
                     + " startup, not silently degrade to no isolation"
             );
         } catch (CpuPartitionManager.UnsafePartitionConfigurationException expected) {
-            org.junit.Assert.assertTrue(
-                "the error should name the hazard: " + expected.getMessage(),
-                expected.getMessage().contains("splits SMT siblings")
+            Assertions.assertTrue(
+                expected.getMessage().contains("splits SMT siblings"),
+                "the error should name the hazard: " + expected.getMessage()
             );
         }
     }
@@ -289,11 +290,11 @@ public class CpuPartitionManagerTest {
     public void testExplicitPartitions_rejectsOverlappingPartitions() {
         try {
             CpuPartitionManager.partitionsFromOverride("0-7 4-11", adjacentPairSiblings(16));
-            org.junit.Assert.fail("two partitions sharing a CPU must abort startup");
+            Assertions.fail("two partitions sharing a CPU must abort startup");
         } catch (CpuPartitionManager.UnsafePartitionConfigurationException expected) {
-            org.junit.Assert.assertTrue(
-                expected.getMessage(),
-                expected.getMessage().contains("both partition")
+            Assertions.assertTrue(
+                expected.getMessage().contains("both partition"),
+                expected.getMessage()
             );
         }
     }

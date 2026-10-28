@@ -1,6 +1,6 @@
 package org.starexec.test.integration.security;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.to.User;
@@ -16,20 +16,20 @@ public class GeneralSecurityTests extends TestSequence {
 
 	@StarexecTest
 	private void canUserRunTests() {
-		Assert.assertTrue(GeneralSecurity.canUserRunTestsNoRunningCheck(admin.getId()).isSuccess());
-		Assert.assertFalse(GeneralSecurity.canUserRunTestsNoRunningCheck(user1.getId()).isSuccess());
+		Assertions.assertTrue(GeneralSecurity.canUserRunTestsNoRunningCheck(admin.getId()).isSuccess());
+		Assertions.assertFalse(GeneralSecurity.canUserRunTestsNoRunningCheck(user1.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canUserUpdatePassword() {
 		String pass1=Util.getTempPassword();
 		String pass2=Util.getTempPassword();
-		Assert.assertTrue(GeneralSecurity.canUserUpdatePassword(user1.getId(), user1.getId(), plaintextPassword, pass1, pass1).isSuccess());
-		Assert.assertTrue(GeneralSecurity.canUserUpdatePassword(user1.getId(), admin.getId(), plaintextPassword, pass1, pass1).isSuccess());
+		Assertions.assertTrue(GeneralSecurity.canUserUpdatePassword(user1.getId(), user1.getId(), plaintextPassword, pass1, pass1).isSuccess());
+		Assertions.assertTrue(GeneralSecurity.canUserUpdatePassword(user1.getId(), admin.getId(), plaintextPassword, pass1, pass1).isSuccess());
 
-		Assert.assertFalse(GeneralSecurity.canUserUpdatePassword(user1.getId(), user1.getId(), pass1, pass1, pass1).isSuccess());
-		Assert.assertFalse(GeneralSecurity.canUserUpdatePassword(user1.getId(), user1.getId(), plaintextPassword, pass1, pass2).isSuccess());
-		Assert.assertFalse(GeneralSecurity.canUserUpdatePassword(admin.getId(), user1.getId(), plaintextPassword, pass1, pass1).isSuccess());
+		Assertions.assertFalse(GeneralSecurity.canUserUpdatePassword(user1.getId(), user1.getId(), pass1, pass1, pass1).isSuccess());
+		Assertions.assertFalse(GeneralSecurity.canUserUpdatePassword(user1.getId(), user1.getId(), plaintextPassword, pass1, pass2).isSuccess());
+		Assertions.assertFalse(GeneralSecurity.canUserUpdatePassword(admin.getId(), user1.getId(), plaintextPassword, pass1, pass1).isSuccess());
 	}
 
 	@Override

@@ -1,7 +1,7 @@
 package org.starexec.servlets;
 
 import org.apache.commons.lang3.tuple.Pair;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.starexec.data.database.Requests;
@@ -15,7 +15,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.Mockito.*;
 
 /** Regression coverage for address-free email-change confirmations. */
@@ -43,8 +44,8 @@ public class VerifyEmailChangePrivacyTest {
 			verify(response).sendRedirect(redirect.capture());
 			String location = redirect.getValue();
 			assertTrue(location.endsWith("public/messages/email_changed.jsp"));
-			assertFalse("Redirect must not disclose the changed address", location.contains(address));
-			assertFalse("Confirmation redirect must have no query", location.contains("?"));
+			assertFalse(location.contains(address), "Redirect must not disclose the changed address");
+			assertFalse(location.contains("?"), "Confirmation redirect must have no query");
 			users.verify(() -> Users.updateEmail(userId, address));
 			requests.verify(() -> Requests.deleteChangeEmailRequest(userId));
 		}

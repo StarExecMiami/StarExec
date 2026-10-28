@@ -1,6 +1,6 @@
 package org.starexec.data.database;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.starexec.data.to.Permission;
 import org.starexec.data.to.UploadJob;
@@ -15,9 +15,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * The permissions chosen on the benchmark upload form travel with the upload, as
@@ -78,7 +78,7 @@ public class UploadJobSpacePermissionsTest {
         for (String name : NAMES) {
             Permission back = UploadJob.decodeSpacePermissions(
                 UploadJob.encodeSpacePermissions(granting(name)));
-            assertEquals(name, Collections.singletonList(name), on(back));
+            assertEquals(Collections.singletonList(name), on(back), name);
         }
     }
 
@@ -142,7 +142,7 @@ public class UploadJobSpacePermissionsTest {
         UploadJob job = (UploadJob) map.invoke(null, rs);
         assertEquals(42L, job.getId());
         assertNull(job.getSourceUrl());
-        assertNull("the old default applies", job.getSpacePermissions());
+        assertNull(job.getSpacePermissions(), "the old default applies");
     }
 
     @Test

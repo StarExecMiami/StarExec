@@ -1,7 +1,7 @@
 package org.starexec.servlets;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.starexec.data.database.Communities;
@@ -19,9 +19,9 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -45,7 +45,7 @@ public class MailFailureReportedTest {
 	private static final int COMMUNITY = 7;
 
 	/** Both flows validate their form first; the application compiles the patterns at startup. */
-	@BeforeClass
+	@BeforeAll
 	public static void compilePatterns() {
 		Validator.initialize();
 	}
@@ -63,7 +63,7 @@ public class MailFailureReportedTest {
 	@Test
 	public void aRegistrationWhoseActivationEmailWasNotSentSaysSo() throws Exception {
 		ValidatorStatusCode status = register(false, false);
-		assertTrue("the account was created", status.isSuccess());
+		assertTrue(status.isSuccess(), "the account was created");
 		assertEquals("email_failed", status.getMessage());
 	}
 
@@ -77,7 +77,7 @@ public class MailFailureReportedTest {
 	@Test
 	public void anAdminCreatedUserWhoseEmailWasNotSentSaysSo() throws Exception {
 		ValidatorStatusCode status = register(true, false);
-		assertTrue("the account was created", status.isSuccess());
+		assertTrue(status.isSuccess(), "the account was created");
 		assertEquals("email_failed", status.getMessage());
 	}
 
@@ -91,27 +91,27 @@ public class MailFailureReportedTest {
 	@Test
 	public void aRegistrationWhoseActivationEmailWasNotSentLandsOnTheFailureMessage() throws Exception {
 		String location = registrationRedirect(false, false).location;
-		assertTrue(location, location.endsWith("/public/registrationConfirmation.jsp?result=email_failed"));
+		assertTrue(location.endsWith("/public/registrationConfirmation.jsp?result=email_failed"), location);
 	}
 
 	@Test
 	public void aRegistrationWhoseActivationEmailWasSentLandsOnTheUsualMessage() throws Exception {
 		String location = registrationRedirect(false, true).location;
-		assertTrue(location, location.endsWith("/public/registrationConfirmation.jsp"));
+		assertTrue(location.endsWith("/public/registrationConfirmation.jsp"), location);
 	}
 
 	/** The user list warns for result=email_failed, and says "created successfully" for regSuccess. */
 	@Test
 	public void anAdminWhoseNewUsersEmailWasNotSentIsWarnedAndNotToldItWorked() throws Exception {
 		Redirect redirect = registrationRedirect(true, false);
-		assertTrue(redirect.location, redirect.location.endsWith("/secure/admin/user.jsp?result=email_failed"));
+		assertTrue(redirect.location.endsWith("/secure/admin/user.jsp?result=email_failed"), redirect.location);
 		verify(redirect.session, never()).setAttribute(eq("regSuccess"), any());
 	}
 
 	@Test
 	public void anAdminWhoseNewUsersEmailWasSentIsToldItWorked() throws Exception {
 		Redirect redirect = registrationRedirect(true, true);
-		assertTrue(redirect.location, redirect.location.endsWith("/secure/admin/user.jsp"));
+		assertTrue(redirect.location.endsWith("/secure/admin/user.jsp"), redirect.location);
 		verify(redirect.session).setAttribute("regSuccess", true);
 	}
 

@@ -1,9 +1,8 @@
 package org.starexec.data.database;
 
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.InOrder;
 import org.mockito.MockedStatic;
 import org.starexec.data.to.Configuration;
@@ -11,6 +10,7 @@ import org.starexec.data.to.Solver;
 import org.starexec.data.to.Solver.ExecutableType;
 import org.starexec.data.to.SolverBuildStatus;
 
+import java.io.File;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -21,10 +21,10 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.doAnswer;
@@ -35,6 +35,7 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * Solvers.add commits a solver's row, its space association and its configurations together, or
@@ -48,8 +49,8 @@ import static org.mockito.Mockito.when;
  */
 public class SolversAddTransactionTest {
 
-	@Rule
-	public TemporaryFolder tmp = new TemporaryFolder();
+	@TempDir
+	public File tmp;
 
 	private final AtomicBoolean autoCommit = new AtomicBoolean(true);
 	private final List<Boolean> autoCommitWhenRun = new ArrayList<>();
@@ -59,7 +60,7 @@ public class SolversAddTransactionTest {
 	private PreparedStatement associate;
 	private PreparedStatement addConfiguration;
 
-	@Before
+	@BeforeEach
 	public void connection() throws Exception {
 		con = mock(Connection.class);
 		addSolver = returningId(42);
@@ -90,10 +91,10 @@ public class SolversAddTransactionTest {
 		order.verify(addConfiguration).executeQuery();
 		order.verify(con).commit();
 		verify(con, never()).rollback();
-		assertEquals("each statement runs inside the transaction",
-				Arrays.asList(false, false, false), autoCommitWhenRun);
-		assertTrue("auto-commit is restored before the connection goes back to the pool", autoCommit.get());
-		assertEquals("one connection carries every statement", 1, connections.get());
+		assertEquals(Arrays.asList(false, false, false),
+				autoCommitWhenRun, "each statement runs inside the transaction");
+		assertTrue(autoCommit.get(), "auto-commit is restored before the connection goes back to the pool");
+		assertEquals(1, connections.get(), "one connection carries every statement");
 		verify(con).close();
 	}
 
@@ -122,10 +123,10 @@ public class SolversAddTransactionTest {
 		assertThrows(SQLException.class, this::add);
 
 		verify(con).rollback();
-		assertEquals("each statement runs inside the transaction",
-				Arrays.asList(false, false, false), autoCommitWhenRun);
-		assertTrue("auto-commit is restored before the connection goes back to the pool", autoCommit.get());
-		assertEquals("one connection carries every statement", 1, connections.get());
+		assertEquals(Arrays.asList(false, false, false),
+				autoCommitWhenRun, "each statement runs inside the transaction");
+		assertTrue(autoCommit.get(), "auto-commit is restored before the connection goes back to the pool");
+		assertEquals(1, connections.get(), "one connection carries every statement");
 		verify(con).close();
 	}
 
@@ -137,10 +138,10 @@ public class SolversAddTransactionTest {
 		order.verify(addSolver).executeQuery();
 		verify(con, never()).commit();
 		verify(con).rollback();
-		assertFalse("AddSolver ran", autoCommitWhenRun.isEmpty());
-		assertFalse("no statement runs outside the transaction", autoCommitWhenRun.contains(true));
-		assertTrue("auto-commit is restored before the connection goes back to the pool", autoCommit.get());
-		assertEquals("one connection carries every statement", 1, connections.get());
+		assertFalse(autoCommitWhenRun.isEmpty(), "AddSolver ran");
+		assertFalse(autoCommitWhenRun.contains(true), "no statement runs outside the transaction");
+		assertTrue(autoCommit.get(), "auto-commit is restored before the connection goes back to the pool");
+		assertEquals(1, connections.get(), "one connection carries every statement");
 		verify(con).close();
 	}
 
@@ -149,7 +150,7 @@ public class SolversAddTransactionTest {
 		Solver solver = new Solver();
 		solver.setUserId(5);
 		solver.setName("synthetic-solver");
-		solver.setPath(tmp.newFolder().getAbsolutePath());
+		solver.setPath(newFolder(tmp).getAbsolutePath());
 		solver.setType(ExecutableType.SOLVER);
 		SolverBuildStatus status = new SolverBuildStatus();
 		status.setCode(1);

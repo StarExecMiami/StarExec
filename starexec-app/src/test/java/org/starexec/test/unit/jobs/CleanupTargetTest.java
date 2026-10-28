@@ -1,23 +1,24 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /** Real cleanup callers under the helper's strict shell options; all files are disposable. */
 public class CleanupTargetTest {
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	@Test
 	public void quotaCleanupRemovesTheRequestedOutput() throws Exception {
@@ -71,8 +72,8 @@ public class CleanupTargetTest {
 		final Path stdout;
 		final Path unrelated;
 
-		Harness(TemporaryFolder folder, boolean spaces) throws Exception {
-			root = folder.newFolder("fixture").toPath();
+		Harness(File folder, boolean spaces) throws Exception {
+			root = newFolder(folder, "fixture").toPath();
 			output = Files.createDirectory(root.resolve(spaces ? "pair output" : "pair-output"));
 			Files.writeString(output.resolve("partial"), "PARTIAL");
 			Path benchDir = Files.createDirectory(root.resolve(spaces ? "build input" : "build-input"));
@@ -106,24 +107,24 @@ public class CleanupTargetTest {
 			builder.directory(root.toFile()).redirectErrorStream(true).redirectOutput(log.toFile());
 			Process process = builder.start();
 			try {
-				assertTrue("cleanup must finish", process.waitFor(10, TimeUnit.SECONDS));
-				assertEquals(Files.readString(log), 0, process.exitValue());
+				assertTrue(process.waitFor(10, TimeUnit.SECONDS), "cleanup must finish");
+				assertEquals(0, process.exitValue(), Files.readString(log));
 			} finally {
 				process.destroyForcibly();
-				assertTrue("cleanup must be reaped", process.waitFor(5, TimeUnit.SECONDS));
+				assertTrue(process.waitFor(5, TimeUnit.SECONDS), "cleanup must be reaped");
 			}
 		}
 
 		void assertOutputCleaned() throws Exception {
 			assertTrue(Files.isDirectory(output));
-			assertFalse("the requested output must be removed", Files.exists(output.resolve("partial")));
+			assertFalse(Files.exists(output.resolve("partial")), "the requested output must be removed");
 			assertEquals("KEEP", Files.readString(unrelated));
 			assertEquals("BENCHMARK", Files.readString(benchmark));
 		}
 
 		void assertBenchmarkCleaned() throws Exception {
 			assertTrue(Files.isDirectory(benchmark.getParent()));
-			assertFalse("the build benchmark must be removed", Files.exists(benchmark));
+			assertFalse(Files.exists(benchmark), "the build benchmark must be removed");
 			assertEquals("KEEP", Files.readString(unrelated));
 			assertEquals("PARTIAL", Files.readString(output.resolve("partial")));
 		}

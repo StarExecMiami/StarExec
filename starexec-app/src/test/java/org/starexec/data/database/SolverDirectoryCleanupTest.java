@@ -1,10 +1,9 @@
 package org.starexec.data.database;
 
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.stubbing.Answer;
 import org.starexec.constants.R;
@@ -23,14 +22,15 @@ import java.sql.SQLException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * A solver upload or copy creates new directories for the solver and, if the solver is not
@@ -44,22 +44,22 @@ public class SolverDirectoryCleanupTest {
 	private static final int OWNER = 5;
 	private static final String DATE = "20261018-10.00.00.000";
 
-	@Rule
-	public TemporaryFolder tmp = new TemporaryFolder();
+	@TempDir
+	public File tmp;
 
 	private final AtomicBoolean ownerExists = new AtomicBoolean(true);
 	private final AtomicInteger inserts = new AtomicInteger();
 	private File root;
 
 	/** A copy validates its configuration names; the application compiles the patterns at startup. */
-	@BeforeClass
+	@BeforeAll
 	public static void compileValidatorPatterns() {
 		Validator.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void solverRoot() throws IOException {
-		root = tmp.newFolder("Solvers");
+		root = newFolder(tmp, "Solvers");
 	}
 
 	@Test
@@ -86,8 +86,8 @@ public class SolverDirectoryCleanupTest {
 
 		assertFalse(dir.exists());
 		assertFalse(src.exists());
-		assertTrue("another solver of the same name is untouched",
-				new File(other, "bin/starexec_run_default").isFile());
+		assertTrue(new File(other, "bin/starexec_run_default").isFile(),
+				"another solver of the same name is untouched");
 	}
 
 	/**
@@ -119,8 +119,8 @@ public class SolverDirectoryCleanupTest {
 		deleteUnadded(dir, src);
 
 		assertFalse(new File(root, "" + OWNER).exists());
-		assertTrue("another user's solver is untouched", neighbour.isFile());
-		assertTrue("build output is untouched", buildOutput.isFile());
+		assertTrue(neighbour.isFile(), "another user's solver is untouched");
+		assertTrue(buildOutput.isFile(), "build output is untouched");
 	}
 
 	@Test
@@ -162,7 +162,7 @@ public class SolverDirectoryCleanupTest {
 
 	@Test
 	public void directoriesOutsideTheSolverRootAreNeverDeleted() throws Exception {
-		File outside = tmp.newFolder("elsewhere", "5", "z3");
+		File outside = newFolder(tmp, "elsewhere", "5", "z3");
 		File dir = Util.claimNewDirectory(new File(outside, DATE));
 		ownerExists.set(false);
 
@@ -192,10 +192,10 @@ public class SolverDirectoryCleanupTest {
 		});
 
 		assertEquals(-1, id);
-		assertEquals("the copy got as far as the insert", 1, inserts.get());
+		assertEquals(1, inserts.get(), "the copy got as far as the insert");
 		assertArrayEquals(new String[0], new File(root, OWNER + "/z3").list());
-		assertTrue("the original is untouched", new File(original.getPath(), "bin/starexec_run_default").isFile());
-		assertTrue("the original's sources are untouched", new File(original.getPath() + "_src", "main.c").isFile());
+		assertTrue(new File(original.getPath(), "bin/starexec_run_default").isFile(), "the original is untouched");
+		assertTrue(new File(original.getPath() + "_src", "main.c").isFile(), "the original's sources are untouched");
 	}
 
 	@Test
@@ -242,7 +242,7 @@ public class SolverDirectoryCleanupTest {
 
 	/** A solver of another user, built on StarExec, so it has a sources directory too. */
 	private Solver originalWithSources() throws IOException {
-		File path = tmp.newFolder("Solvers-of-user-6", "z3", DATE);
+		File path = newFolder(tmp, "Solvers-of-user-6", "z3", DATE);
 		write(new File(path, "bin/starexec_run_default"));
 		write(new File(path.getPath() + "_src", "main.c"));
 		Solver original = new Solver();

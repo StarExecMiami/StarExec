@@ -1,17 +1,18 @@
 package org.starexec.test.junit.database;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import org.junit.Assume;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.data.database.Processors;
 
 /**
@@ -20,11 +21,11 @@ import org.starexec.data.database.Processors;
  */
 public class ProcessorFileDeletionTests {
 
-    @Rule
-    public TemporaryFolder processorRoot = new TemporaryFolder();
+    @TempDir
+    public File processorRoot;
 
-    @Rule
-    public TemporaryFolder outsideRoot = new TemporaryFolder();
+    @TempDir
+    public File outsideRoot;
 
     @Test
     public void deletesProcessorDirectoryWithFilesAndReturnsTrue() throws Exception {
@@ -35,8 +36,8 @@ public class ProcessorFileDeletionTests {
 
         boolean deleted = deleteProcessorFiles(processorDir.toString());
 
-        assertTrue("the deletion must be reported as successful", deleted);
-        assertFalse("the processor directory must be gone", Files.exists(processorDir));
+        assertTrue(deleted, "the deletion must be reported as successful");
+        assertFalse(Files.exists(processorDir), "the processor directory must be gone");
     }
 
     @Test
@@ -50,12 +51,12 @@ public class ProcessorFileDeletionTests {
 
         assertTrue(deleted);
         assertFalse(
-            "the now-empty timestamp directory must be removed",
-            Files.exists(timestampDir)
+            Files.exists(timestampDir),
+            "the now-empty timestamp directory must be removed"
         );
         assertTrue(
-            "only the timestamp directory is cleaned up",
-            Files.exists(communityDir)
+            Files.exists(communityDir),
+            "only the timestamp directory is cleaned up"
         );
     }
 
@@ -71,18 +72,18 @@ public class ProcessorFileDeletionTests {
         assertTrue(deleted);
         assertFalse(Files.exists(first));
         assertTrue(
-            "the timestamp directory is not empty",
-            Files.exists(second.getParent())
+            Files.exists(second.getParent()),
+            "the timestamp directory is not empty"
         );
         assertTrue(
-            "the other processor must survive",
-            Files.exists(second.resolve("process"))
+            Files.exists(second.resolve("process")),
+            "the other processor must survive"
         );
     }
 
     @Test
     public void refusesRelativePathThatEscapesTheRoot() throws Exception {
-        Path outsideDir = outsideRoot.newFolder("outside").toPath();
+        Path outsideDir = newFolder(outsideRoot, "outside").toPath();
         Path outsideFile = outsideDir.resolve("keep.txt");
         Files.writeString(outsideFile, "keep");
         Path workingDirectory = Paths.get(".").toAbsolutePath().normalize();
@@ -93,16 +94,16 @@ public class ProcessorFileDeletionTests {
         boolean deleted = deleteProcessorFiles(escapingPath);
 
         assertFalse(
-            "a path outside the processor root must be refused",
-            deleted
+            deleted,
+            "a path outside the processor root must be refused"
         );
         assertTrue(
-            "the outside directory must be untouched",
-            Files.exists(outsideDir)
+            Files.exists(outsideDir),
+            "the outside directory must be untouched"
         );
         assertTrue(
-            "the outside file must be untouched",
-            Files.exists(outsideFile)
+            Files.exists(outsideFile),
+            "the outside file must be untouched"
         );
     }
 
@@ -110,24 +111,24 @@ public class ProcessorFileDeletionTests {
     public void refusesLiteralParentTraversalPath() throws Exception {
         boolean deleted = deleteProcessorFiles("../../etc");
 
-        assertFalse("a parent traversal path must be refused", deleted);
+        assertFalse(deleted, "a parent traversal path must be refused");
         assertTrue(
-            "the processor root must be untouched",
-            Files.exists(processorRoot.getRoot().toPath())
+            Files.exists(processorRoot.toPath()),
+            "the processor root must be untouched"
         );
     }
 
     @Test
     public void refusesAbsolutePathOutsideTheRoot() throws Exception {
-        Path outsideDir = outsideRoot.newFolder("elsewhere").toPath();
+        Path outsideDir = newFolder(outsideRoot, "elsewhere").toPath();
         Path outsideFile = outsideDir.resolve("keep.txt");
         Files.writeString(outsideFile, "keep");
 
         boolean deleted = deleteProcessorFiles(outsideDir.toString());
 
         assertFalse(
-            "an absolute path outside the root must be refused",
-            deleted
+            deleted,
+            "an absolute path outside the root must be refused"
         );
         assertTrue(Files.exists(outsideDir));
         assertTrue(Files.exists(outsideFile));
@@ -135,20 +136,20 @@ public class ProcessorFileDeletionTests {
 
     @Test
     public void refusesTheProcessorRootItself() throws Exception {
-        Path root = processorRoot.getRoot().toPath();
+        Path root = processorRoot.toPath();
         Path keep = root.resolve("keep.txt");
         Files.writeString(keep, "keep");
 
         boolean deleted = deleteProcessorFiles(root.toString());
 
-        assertFalse("the root itself must be refused", deleted);
-        assertTrue("the root must be untouched", Files.exists(keep));
+        assertFalse(deleted, "the root itself must be refused");
+        assertTrue(Files.exists(keep), "the root must be untouched");
     }
 
     @Test
     public void removesSymlinkInsideProcessorWithoutFollowingIt() throws Exception {
         Path processorDir = createProcessorDir("solver");
-        Path outsideDir = outsideRoot.newFolder("symlink-target").toPath();
+        Path outsideDir = newFolder(outsideRoot, "symlink-target").toPath();
         Path outsideFile = outsideDir.resolve("outside.txt");
         Files.writeString(outsideFile, "outside");
         Path link = processorDir.resolve("link-to-outside");
@@ -159,26 +160,25 @@ public class ProcessorFileDeletionTests {
         assertTrue(deleted);
         assertFalse(Files.exists(processorDir));
         assertFalse(
-            "the symlink itself must be removed",
-            Files.exists(link, LinkOption.NOFOLLOW_LINKS)
+            Files.exists(link, LinkOption.NOFOLLOW_LINKS),
+            "the symlink itself must be removed"
         );
         assertTrue(
-            "the symlink target directory must survive",
-            Files.exists(outsideDir)
+            Files.exists(outsideDir),
+            "the symlink target directory must survive"
         );
         assertTrue(
-            "the symlink target file must survive",
-            Files.exists(outsideFile)
+            Files.exists(outsideFile),
+            "the symlink target file must survive"
         );
     }
 
     @Test
     public void removesSymlinkTargetAsLinkOnly() throws Exception {
-        Path outsideDir = outsideRoot.newFolder("target").toPath();
+        Path outsideDir = newFolder(outsideRoot, "target").toPath();
         Path outsideFile = outsideDir.resolve("outside.txt");
         Files.writeString(outsideFile, "outside");
         Path link = processorRoot
-            .getRoot()
             .toPath()
             .resolve("3/20260916-01.06.50.701/solver");
         Files.createDirectories(link.getParent());
@@ -189,42 +189,41 @@ public class ProcessorFileDeletionTests {
         assertTrue(deleted);
         assertFalse(Files.exists(link, LinkOption.NOFOLLOW_LINKS));
         assertTrue(
-            "the symlink target must survive",
-            Files.exists(outsideDir)
+            Files.exists(outsideDir),
+            "the symlink target must survive"
         );
         assertTrue(Files.exists(outsideFile));
     }
 
     @Test
     public void refusesTargetReachedThroughIntermediateSymlink() throws Exception {
-        Path outsideCommunity = outsideRoot.newFolder("outside-community").toPath();
+        Path outsideCommunity = newFolder(outsideRoot, "outside-community").toPath();
         Path outsideProcessor = outsideCommunity.resolve("solver");
         Files.createDirectories(outsideProcessor);
         Path outsideFile = outsideProcessor.resolve("keep.txt");
         Files.writeString(outsideFile, "keep");
 
-        Path linkedCommunity = processorRoot.getRoot().toPath().resolve("3");
+        Path linkedCommunity = processorRoot.toPath().resolve("3");
         createSymbolicLinkOrSkip(linkedCommunity, outsideCommunity);
         Path escapedTarget = linkedCommunity.resolve("solver");
 
         boolean deleted = deleteProcessorFiles(escapedTarget.toString());
 
         assertFalse(
-            "a target reached through an intermediate symlink must be refused",
-            deleted
+            deleted,
+            "a target reached through an intermediate symlink must be refused"
         );
         assertTrue(
-            "the intermediate symlink must be retained when deletion is refused",
-            Files.exists(linkedCommunity, LinkOption.NOFOLLOW_LINKS)
+            Files.exists(linkedCommunity, LinkOption.NOFOLLOW_LINKS),
+            "the intermediate symlink must be retained when deletion is refused"
         );
-        assertTrue("the outside directory must survive", Files.exists(outsideProcessor));
-        assertTrue("the outside file must survive", Files.exists(outsideFile));
+        assertTrue(Files.exists(outsideProcessor), "the outside directory must survive");
+        assertTrue(Files.exists(outsideFile), "the outside file must survive");
     }
 
     @Test
     public void deletesPlainFileAndReturnsTrue() throws Exception {
         Path file = processorRoot
-            .getRoot()
             .toPath()
             .resolve("3/20260916-01.06.50.701/solver");
         Files.createDirectories(file.getParent());
@@ -240,7 +239,7 @@ public class ProcessorFileDeletionTests {
     public void nullPathReturnsTrue() {
         assertTrue(
             Processors.deleteProcessorFiles(
-                processorRoot.getRoot().toPath(),
+                processorRoot.toPath(),
                 null
             )
         );
@@ -250,7 +249,7 @@ public class ProcessorFileDeletionTests {
     public void emptyPathReturnsTrue() {
         assertTrue(
             Processors.deleteProcessorFiles(
-                processorRoot.getRoot().toPath(),
+                processorRoot.toPath(),
                 ""
             )
         );
@@ -259,7 +258,6 @@ public class ProcessorFileDeletionTests {
     @Test
     public void nonExistentPathInsideRootReturnsTrue() throws Exception {
         Path missing = processorRoot
-            .getRoot()
             .toPath()
             .resolve("3/20260916-01.06.50.701/solver");
         assertFalse(Files.exists(missing, LinkOption.NOFOLLOW_LINKS));
@@ -280,24 +278,23 @@ public class ProcessorFileDeletionTests {
 
         boolean deleted = deleteProcessorFiles(dateDir.toString() + "/..");
 
-        assertFalse("the deletion must be refused", deleted);
-        assertTrue("another processor's files must survive", Files.exists(other.resolve("process")));
+        assertFalse(deleted, "the deletion must be refused");
+        assertTrue(Files.exists(other.resolve("process")), "another processor's files must survive");
 
-        assertFalse("a stored <date>/. must be refused too",
-            deleteProcessorFiles(dateDir.toString() + "/."));
+        assertFalse(deleteProcessorFiles(dateDir.toString() + "/."),
+            "a stored <date>/. must be refused too");
         assertTrue(Files.exists(other.resolve("process")));
     }
 
     private boolean deleteProcessorFiles(String processorPath) {
         return Processors.deleteProcessorFiles(
-            processorRoot.getRoot().toPath(),
+            processorRoot.toPath(),
             processorPath
         );
     }
 
     private Path createProcessorDir(String name) throws IOException {
         Path directory = processorRoot
-            .getRoot()
             .toPath()
             .resolve("3")
             .resolve("20260916-01.06.50.701")
@@ -311,9 +308,8 @@ public class ProcessorFileDeletionTests {
         try {
             Files.createSymbolicLink(link, target);
         } catch (UnsupportedOperationException | IOException e) {
-            Assume.assumeNoException(
-                "file store does not support symlinks",
-                e
+            Assumptions.abort(
+                "file store does not support symlinks: " + e
             );
         }
     }

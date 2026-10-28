@@ -1,14 +1,14 @@
 package org.starexec.test.junit.util;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.R;
 import org.starexec.util.Validator;
 
 import java.util.regex.Pattern;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Which email addresses registration accepts.
@@ -33,7 +33,7 @@ public class EmailValidationTest {
 	 * A unit test has no context, so it makes the same call. The patterns come from compile-time
 	 * constants in {@code R}, so nothing here needs configuration or a database.
 	 */
-	@BeforeClass
+	@BeforeAll
 	public static void compilePatterns() {
 		Validator.initialize();
 	}
@@ -71,8 +71,8 @@ public class EmailValidationTest {
 
 		assertTrue(pattern.matcher("u@e." + "a".repeat(63)).matches());
 		assertFalse(
-				"64 exceeds the maximum length of a DNS label and must still be refused",
-				pattern.matcher("u@e." + "a".repeat(64)).matches());
+				pattern.matcher("u@e." + "a".repeat(64)).matches(),
+				"64 exceeds the maximum length of a DNS label and must still be refused");
 	}
 
 	/**
@@ -83,10 +83,10 @@ public class EmailValidationTest {
 	@Test
 	public void anAddressTooLongForItsColumnIsRefused() {
 		String at64 = "a".repeat(57) + "@e.com";                 // exactly 63
-		assertTrue("inside the column width", Validator.isValidEmail(at64));
+		assertTrue(Validator.isValidEmail(at64), "inside the column width");
 
 		String at65 = "a".repeat(59) + "@e.com";                 // 65
-		assertFalse("longer than users.email VARCHAR(64)", Validator.isValidEmail(at65));
+		assertFalse(Validator.isValidEmail(at65), "longer than users.email VARCHAR(64)");
 
 		// The shape the TLD change makes easy to reach: valid pattern, over the column.
 		assertFalse(Validator.isValidEmail("researcher@example." + "a".repeat(60)));
@@ -107,7 +107,7 @@ public class EmailValidationTest {
 		assertFalse(Validator.isValidEmail("testuiowaedu"));
 		assertFalse(Validator.isValidEmail("testuiowa.com"));
 		assertFalse(Validator.isValidEmail("test@uiowanet"));
-		assertFalse("a one-character TLD is below the bound", Validator.isValidEmail("test@x.a"));
+		assertFalse(Validator.isValidEmail("test@x.a"), "a one-character TLD is below the bound");
 		assertFalse(Validator.isValidEmail("test@example.123"));
 		assertFalse(Validator.isValidEmail(null));
 		assertFalse(Validator.isValidEmail(""));

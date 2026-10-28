@@ -1,9 +1,8 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.After;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -15,9 +14,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * What the container-mode watchdog actually kills when it fires (#254).
@@ -32,8 +32,8 @@ public class DeadlockWatchdogReapTest {
 
 	private static final Path SGE = Path.of("src/main/java/org/starexec/config/sge");
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	/**
 	 * A hung child and the grandchild it backgrounded are both gone once the watchdog fires, and
@@ -52,10 +52,10 @@ public class DeadlockWatchdogReapTest {
 				+ "if kill -0 \"$GC\" 2>/dev/null; then echo T-GRANDCHILD-ALIVE; kill -9 \"$GC\"; else echo T-GRANDCHILD-GONE; fi\n"
 				+ "echo T-JOBSCRIPT-CONTINUED\n");
 
-		assertEquals(r.out, 0, r.exit);
-		assertTrue("the hung child must be killed:\n" + r.out, r.out.contains("T-FOREGROUND-ENDED"));
-		assertTrue("its grandchild must be killed too:\n" + r.out, r.out.contains("T-GRANDCHILD-GONE"));
-		assertTrue("the jobscript itself must survive:\n" + r.out, r.out.contains("T-JOBSCRIPT-CONTINUED"));
+		assertEquals(0, r.exit, r.out);
+		assertTrue(r.out.contains("T-FOREGROUND-ENDED"), "the hung child must be killed:\n" + r.out);
+		assertTrue(r.out.contains("T-GRANDCHILD-GONE"), "its grandchild must be killed too:\n" + r.out);
+		assertTrue(r.out.contains("T-JOBSCRIPT-CONTINUED"), "the jobscript itself must survive:\n" + r.out);
 	}
 
 	/**
@@ -75,9 +75,9 @@ public class DeadlockWatchdogReapTest {
 				+ "wait \"$WATCHDOG\" 2>/dev/null || true\n"
 				+ "if kill -0 \"$SPARE\" 2>/dev/null; then echo T-SUBSHELL-ALIVE; kill \"$SPARE\"; else echo T-SUBSHELL-KILLED; fi\n");
 
-		assertEquals(r.out, 0, r.exit);
-		assertTrue("the jobscript's subshell must survive:\n" + r.out, r.out.contains("T-SUBSHELL-ALIVE"));
-		assertFalse(r.out, r.out.contains("T-SUBSHELL-KILLED"));
+		assertEquals(0, r.exit, r.out);
+		assertTrue(r.out.contains("T-SUBSHELL-ALIVE"), "the jobscript's subshell must survive:\n" + r.out);
+		assertFalse(r.out.contains("T-SUBSHELL-KILLED"), r.out);
 	}
 
 	/**
@@ -99,9 +99,9 @@ public class DeadlockWatchdogReapTest {
 				+ "sleep 0.2\n"
 				+ "if kill -0 \"$GC\" 2>/dev/null; then echo T-GRANDCHILD-ALIVE; kill -9 \"$GC\"; else echo T-GRANDCHILD-GONE; fi\n");
 
-		assertEquals(r.out, 0, r.exit);
-		assertTrue("the hung child must be killed, not left stopped:\n" + r.out, r.out.contains("T-FOREGROUND-ENDED"));
-		assertTrue("its grandchild must be killed too:\n" + r.out, r.out.contains("T-GRANDCHILD-GONE"));
+		assertEquals(0, r.exit, r.out);
+		assertTrue(r.out.contains("T-FOREGROUND-ENDED"), "the hung child must be killed, not left stopped:\n" + r.out);
+		assertTrue(r.out.contains("T-GRANDCHILD-GONE"), "its grandchild must be killed too:\n" + r.out);
 	}
 
 	/**
@@ -121,9 +121,9 @@ public class DeadlockWatchdogReapTest {
 				+ "sleep 0.2\n"
 				+ "if kill -0 \"$GC\" 2>/dev/null; then echo T-GRANDCHILD-ALIVE; kill -9 \"$GC\"; else echo T-GRANDCHILD-GONE; fi\n");
 
-		assertEquals(r.out, 0, r.exit);
-		assertTrue("the watchdog must arm and kill the hung child:\n" + r.out, r.out.contains("T-FOREGROUND-ENDED"));
-		assertTrue("its grandchild must be killed too:\n" + r.out, r.out.contains("T-GRANDCHILD-GONE"));
+		assertEquals(0, r.exit, r.out);
+		assertTrue(r.out.contains("T-FOREGROUND-ENDED"), "the watchdog must arm and kill the hung child:\n" + r.out);
+		assertTrue(r.out.contains("T-GRANDCHILD-GONE"), "its grandchild must be killed too:\n" + r.out);
 	}
 
 	/**
@@ -162,9 +162,9 @@ public class DeadlockWatchdogReapTest {
 				+ "done\n"
 				+ "builtin kill -9 \"$VICTIM\" \"$GC\" 2>/dev/null || true\n");
 
-		assertEquals(r.out, 0, r.exit);
-		assertTrue("the TERM must have landed mid-freeze:\n" + r.out, r.out.contains("T-TERM-DELIVERED"));
-		assertFalse("no process may be left stopped:\n" + r.out, r.out.contains("T-STOPPED-"));
+		assertEquals(0, r.exit, r.out);
+		assertTrue(r.out.contains("T-TERM-DELIVERED"), "the TERM must have landed mid-freeze:\n" + r.out);
+		assertFalse(r.out.contains("T-STOPPED-"), "no process may be left stopped:\n" + r.out);
 	}
 
 	/**
@@ -199,8 +199,8 @@ public class DeadlockWatchdogReapTest {
 				+ "if [ \"$st\" = S ]; then echo T-NEW-ALIVE; else echo \"T-NEW-GONE-$st\"; fi\n"
 				+ "builtin kill -9 \"$NEW\" 2>/dev/null || true\n");
 
-		assertEquals(r.out, 0, r.exit);
-		assertTrue("work started after the stop must survive:\n" + r.out, r.out.contains("T-NEW-ALIVE"));
+		assertEquals(0, r.exit, r.out);
+		assertTrue(r.out.contains("T-NEW-ALIVE"), "work started after the stop must survive:\n" + r.out);
 	}
 
 	/** A sleeping watchdog dies on the TERM itself, so stopping it costs about nothing. */
@@ -215,9 +215,9 @@ public class DeadlockWatchdogReapTest {
 				+ "stopDeadlockWatchdog\n"
 				+ "echo \"T-ELAPSED-MS=$(( ($(date +%s%N) - t0) / 1000000 ))\"\n");
 
-		assertEquals(r.out, 0, r.exit);
+		assertEquals(0, r.exit, r.out);
 		long ms = elapsedMs(r.out);
-		assertTrue("a sleeping watchdog must stop in under 2 s, took " + ms + " ms:\n" + r.out, ms < 2000);
+		assertTrue(ms < 2000, "a sleeping watchdog must stop in under 2 s, took " + ms + " ms:\n" + r.out);
 	}
 
 	/**
@@ -249,11 +249,11 @@ public class DeadlockWatchdogReapTest {
 				+ "sleep 0.3\n"
 				+ "if kill -0 \"$SLEEP\" 2>/dev/null; then echo T-SLEEP-SURVIVED; else echo T-SLEEP-GONE; fi\n");
 
-		assertEquals(r.out, 0, r.exit);
-		assertFalse("the watchdog's sleep child must be found:\n" + r.out, r.out.contains("T-NO-SLEEP-FOUND"));
-		assertTrue("the sleep must be running before the stop, or this proves nothing:\n" + r.out,
-				r.out.contains("T-SLEEP-RUNNING-BEFORE-STOP"));
-		assertTrue("the watchdog's sleep must not outlive it:\n" + r.out, r.out.contains("T-SLEEP-GONE"));
+		assertEquals(0, r.exit, r.out);
+		assertFalse(r.out.contains("T-NO-SLEEP-FOUND"), "the watchdog's sleep child must be found:\n" + r.out);
+		assertTrue(r.out.contains("T-SLEEP-RUNNING-BEFORE-STOP"),
+				"the sleep must be running before the stop, or this proves nothing:\n" + r.out);
+		assertTrue(r.out.contains("T-SLEEP-GONE"), "the watchdog's sleep must not outlive it:\n" + r.out);
 	}
 
 	/**
@@ -275,11 +275,11 @@ public class DeadlockWatchdogReapTest {
 				+ "sleep 0.2\n"
 				+ "if isOwnLiveChild \"$WEDGED\"; then echo T-WEDGED-ALIVE; else echo T-WEDGED-GONE; fi\n");
 
-		assertEquals(r.out, 0, r.exit);
+		assertEquals(0, r.exit, r.out);
 		long ms = elapsedMs(r.out);
-		assertTrue("stop must wait out the 1 s cap, took " + ms + " ms:\n" + r.out, ms >= 1000);
-		assertTrue("stop must return soon after the 1 s cap, took " + ms + " ms:\n" + r.out, ms < 3000);
-		assertTrue("the wedged watchdog must be gone:\n" + r.out, r.out.contains("T-WEDGED-GONE"));
+		assertTrue(ms >= 1000, "stop must wait out the 1 s cap, took " + ms + " ms:\n" + r.out);
+		assertTrue(ms < 3000, "stop must return soon after the 1 s cap, took " + ms + " ms:\n" + r.out);
+		assertTrue(r.out.contains("T-WEDGED-GONE"), "the wedged watchdog must be gone:\n" + r.out);
 	}
 
 	private static long elapsedMs(String out) {
@@ -332,9 +332,9 @@ public class DeadlockWatchdogReapTest {
 					continue;
 				}
 				int exemption = line.indexOf("set +e");
-				assertTrue(script + ":" + (i + 1) + " reads a file with $(<...), which ends the shell"
-								+ " on bash 5.2 when the file is missing: " + line.trim(),
-						exemption >= 0 && exemption < matcher.start());
+				assertTrue(exemption >= 0 && exemption < matcher.start(),
+						script + ":" + (i + 1) + " reads a file with $(<...), which ends the shell"
+								+ " on bash 5.2 when the file is missing: " + line.trim());
 			}
 		}
 	}
@@ -362,7 +362,7 @@ public class DeadlockWatchdogReapTest {
 				break;
 			}
 		}
-		assertTrue("killDeadlockedJobPair must exist in functions.bash", start >= 0);
+		assertTrue(start >= 0, "killDeadlockedJobPair must exist in functions.bash");
 
 		int trapLine = -1;
 		int sleepLine = -1;
@@ -379,11 +379,11 @@ public class DeadlockWatchdogReapTest {
 			}
 		}
 
-		assertTrue("the watchdog must install a TERM trap naming its sleep", trapLine >= 0);
-		assertTrue("the watchdog must background its sleep", sleepLine >= 0);
-		assertTrue("the trap (line " + (trapLine + 1) + ") must be installed before the sleep is"
-						+ " backgrounded (line " + (sleepLine + 1) + "), or a TERM in between orphans it",
-				trapLine < sleepLine);
+		assertTrue(trapLine >= 0, "the watchdog must install a TERM trap naming its sleep");
+		assertTrue(sleepLine >= 0, "the watchdog must background its sleep");
+		assertTrue(trapLine < sleepLine,
+				"the trap (line " + (trapLine + 1) + ") must be installed before the sleep is"
+						+ " backgrounded (line " + (sleepLine + 1) + "), or a TERM in between orphans it");
 	}
 
 	/** The jobscript's own arming line, so this test cannot drift from what production runs. */
@@ -404,7 +404,7 @@ public class DeadlockWatchdogReapTest {
 	 * cannot reach it: it has been reparented. Every PID a case records in its pids file is
 	 * killed here, pass or fail; SIGKILL ends a stopped process too.
 	 */
-	@After
+	@AfterEach
 	public void killRecordedProcesses() throws Exception {
 		for (Path dir : scriptDirs) {
 			Path pids = dir.resolve("pids");
@@ -421,7 +421,7 @@ public class DeadlockWatchdogReapTest {
 	}
 
 	private Result runWithHelper(String body) throws Exception {
-		Path dir = folder.newFolder("reap-" + System.nanoTime()).toPath();
+		Path dir = newFolder(folder, "reap-" + System.nanoTime()).toPath();
 		scriptDirs.add(dir);
 		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
 		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
@@ -457,7 +457,7 @@ public class DeadlockWatchdogReapTest {
 			p.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
 		}
 		String out = Files.readString(log.toPath(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang:\n" + out, finished);
+		assertTrue(finished, "command must not hang:\n" + out);
 		return new Result(p.exitValue(), out);
 	}
 

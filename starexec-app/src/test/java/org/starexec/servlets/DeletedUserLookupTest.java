@@ -1,7 +1,7 @@
 package org.starexec.servlets;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.Common;
@@ -15,9 +15,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -36,7 +36,7 @@ public class DeletedUserLookupTest {
 	private final ResultSet results = mock(ResultSet.class);
 	private final List<String> reported = new ArrayList<>();
 
-	@Before
+	@BeforeEach
 	public void stubTheConnection() throws SQLException {
 		when(connection.prepareStatement(anyString())).thenReturn(statement);
 		when(statement.executeQuery()).thenReturn(results);
@@ -64,8 +64,8 @@ public class DeletedUserLookupTest {
 
 		assertFalse(isDeletedUser(7));
 		assertEquals(1, reported.size());
-		assertTrue(reported.get(0), reported.get(0).startsWith("WARN "));
-		assertTrue(reported.get(0), reported.get(0).contains("Could not check whether user 7 exists"));
+		assertTrue(reported.get(0).startsWith("WARN "), reported.get(0));
+		assertTrue(reported.get(0).contains("Could not check whether user 7 exists"), reported.get(0));
 	}
 
 	/** isDeletedUser with only the connection replaced; each error log row is recorded, not written. */

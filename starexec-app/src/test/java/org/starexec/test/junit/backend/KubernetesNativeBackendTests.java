@@ -1,7 +1,5 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.*;
-
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -31,7 +29,11 @@ import io.fabric8.kubernetes.client.dsl.ScalableResource;
 import io.fabric8.kubernetes.client.dsl.V1BatchAPIGroupDSL;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+
+import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.Backend;
@@ -114,10 +116,10 @@ public class KubernetesNativeBackendTests {
         stage.setAccessible(true);
         try {
             stage.invoke(callback, ref, record);
-            org.junit.Assert.fail("absent terminal evidence must still be refused");
+            Assertions.fail("absent terminal evidence must still be refused");
         } catch (java.lang.reflect.InvocationTargetException e) {
             assertTrue(e.getCause() instanceof org.starexec.backend.StageStatusSnapshots.InvalidSnapshotException);
-            assertTrue(e.getCause().getMessage(), e.getCause().getMessage().contains(expected));
+            assertTrue(e.getCause().getMessage().contains(expected), e.getCause().getMessage());
         }
     }
 
@@ -155,8 +157,8 @@ public class KubernetesNativeBackendTests {
             // Refused and retried, never recorded: the result is EarlierStages.RETRY.
             assertEquals("RETRY",
                 String.valueOf(method.invoke(ctor.newInstance(backend), execution, 77, 1, null)));
-            assertTrue("expected diagnostic: " + expected,
-                appender.list.stream().anyMatch(event -> event.getFormattedMessage().contains(expected)));
+            assertTrue(appender.list.stream().anyMatch(event -> event.getFormattedMessage().contains(expected)),
+                "expected diagnostic: " + expected);
         } finally {
             logger.detachAppender(appender);
             appender.stop();
@@ -247,8 +249,8 @@ public class KubernetesNativeBackendTests {
         execToPair.put(1, 111);
         execToOut.put(1, Path.of("/tmp/output/1"));
 
-        assertFalse("killAll cannot report success when it proved nothing", backend.killAll());
-        assertEquals("tracking must survive an unprovable killAll", 1, execToJob.size());
+        assertFalse(backend.killAll(), "killAll cannot report success when it proved nothing");
+        assertEquals(1, execToJob.size(), "tracking must survive an unprovable killAll");
         assertEquals(1, execToPair.size());
         assertEquals(1, execToOut.size());
     }
@@ -588,10 +590,10 @@ public class KubernetesNativeBackendTests {
                     StatusCode.STATUS_NOT_REACHED.getVal(), false))
                 .thenReturn(PairStatusResult.APPLIED);
 
-            assertFalse("not visible yet: retry, do not abandon",
-                callback.onJobComplete(execution(31, "job-31")));
-            assertEquals("tracking is held while waiting", "job-31",
-                ((Map<Integer, String>) getField(backend, "execIdToJobName")).get(31));
+            assertFalse(callback.onJobComplete(execution(31, "job-31")),
+                "not visible yet: retry, do not abandon");
+            assertEquals("job-31", ((Map<Integer, String>) getField(backend, "execIdToJobName")).get(31),
+                "tracking is held while waiting");
 
             // The file becomes visible on a later poll, well inside the window.
             now.addAndGet(30_000L);
@@ -627,13 +629,13 @@ public class KubernetesNativeBackendTests {
 
             assertFalse(callback.onJobComplete(execution(32, "job-32")));
             now.addAndGet(119_000L);
-            assertFalse("still inside the 120 s window", callback.onJobComplete(execution(32, "job-32")));
+            assertFalse(callback.onJobComplete(execution(32, "job-32")), "still inside the 120 s window");
 
             now.addAndGet(2_000L);
-            assertTrue("past the window: the existing intervention path, handled",
-                callback.onJobComplete(execution(32, "job-32")));
-            assertTrue("tracking released as before",
-                ((Map<Integer, String>) getField(backend, "execIdToJobName")).isEmpty());
+            assertTrue(callback.onJobComplete(execution(32, "job-32")),
+                "past the window: the existing intervention path, handled");
+            assertTrue(((Map<Integer, String>) getField(backend, "execIdToJobName")).isEmpty(),
+                "tracking released as before");
             jobPairsMock.verify(() -> JobPairs.setPairStatusPreciseResult(
                 Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
                 Mockito.anyBoolean()), Mockito.never());
@@ -983,17 +985,17 @@ public class KubernetesNativeBackendTests {
             restore(backend, 7);
 
             assertEquals(
-                "a pod in phase " + phase + " means the execution may still run",
                 Backend.KillOutcome.UNPROVEN,
-                killConfirmed(backend, 7)
+                killConfirmed(backend, 7),
+                "a pod in phase " + phase + " means the execution may still run"
             );
             assertTrue(
-                "accounting must be retained while phase=" + phase,
-                holdingSlot(backend).contains(7)
+                holdingSlot(backend).contains(7),
+                "accounting must be retained while phase=" + phase
             );
             assertFalse(
-                "tracking must be retained while phase=" + phase,
-                trackingMap(backend, "execIdToJobName").isEmpty()
+                trackingMap(backend, "execIdToJobName").isEmpty(),
+                "tracking must be retained while phase=" + phase
             );
         }
     }
@@ -1010,9 +1012,9 @@ public class KubernetesNativeBackendTests {
             // A terminated pod cannot consume CPU or write further output, so holding the
             // execution for it would wedge admission on a harmless historical object.
             assertEquals(
-                "phase " + phase + " is terminal and therefore safe",
                 Backend.KillOutcome.CONFIRMED_SAFE,
-                killConfirmed(backend, 8)
+                killConfirmed(backend, 8),
+                "phase " + phase + " is terminal and therefore safe"
             );
             assertFalse(holdingSlot(backend).contains(8));
         }
@@ -1040,7 +1042,7 @@ public class KubernetesNativeBackendTests {
         restore(backend, 42);
 
         assertEquals(Backend.KillOutcome.CONFIRMED_SAFE, killConfirmed(backend, 42));
-        assertFalse("the slot is released once the Job is gone", holdingSlot(backend).contains(42));
+        assertFalse(holdingSlot(backend).contains(42), "the slot is released once the Job is gone");
     }
 
     /** The wait is bounded: a Job that outlives it still leaves the kill unproven and held. */
@@ -1057,9 +1059,9 @@ public class KubernetesNativeBackendTests {
 
         long start = System.nanoTime();
         assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 43));
-        assertTrue("the wait must be bounded",
-            System.nanoTime() - start < java.util.concurrent.TimeUnit.SECONDS.toNanos(5));
-        assertTrue("accounting is retained", holdingSlot(backend).contains(43));
+        assertTrue(System.nanoTime() - start < java.util.concurrent.TimeUnit.SECONDS.toNanos(5),
+            "the wait must be bounded");
+        assertTrue(holdingSlot(backend).contains(43), "accounting is retained");
     }
 
     /**
@@ -1083,8 +1085,8 @@ public class KubernetesNativeBackendTests {
         assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 44));
         long waitedMillis =
             java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-        assertTrue("waited " + waitedMillis + " ms, but the 2 s wait began at the request",
-            waitedMillis < 1_600L);
+        assertTrue(waitedMillis < 1_600L,
+            "waited " + waitedMillis + " ms, but the 2 s wait began at the request");
         // The request itself started the deletion; the confirmation repeated it.
         Mockito.verify(jobResource(backend, "job-44"), Mockito.atLeast(2))
             .withPropagationPolicy(io.fabric8.kubernetes.api.model.DeletionPropagation.FOREGROUND);
@@ -1127,17 +1129,17 @@ public class KubernetesNativeBackendTests {
         restore(backend, 21);
 
         assertEquals(
-            "a Job with backoffLimit=3 at failed=1 can still create another pod",
             Backend.KillOutcome.UNPROVEN,
-            killConfirmed(backend, 21)
+            killConfirmed(backend, 21),
+            "a Job with backoffLimit=3 at failed=1 can still create another pod"
         );
         assertTrue(
-            "its slot must be retained so no unrelated pair lands beside the retry",
-            holdingSlot(backend).contains(21)
+            holdingSlot(backend).contains(21),
+            "its slot must be retained so no unrelated pair lands beside the retry"
         );
         assertFalse(
-            "tracking must be retained",
-            trackingMap(backend, "execIdToJobName").isEmpty()
+            trackingMap(backend, "execIdToJobName").isEmpty(),
+            "tracking must be retained"
         );
     }
 
@@ -1170,10 +1172,10 @@ public class KubernetesNativeBackendTests {
             restore(backend, 22);
 
             assertEquals(
-                type + "=" + status + " should" + (spent ? "" : " not") + " make the"
-                    + " controller spent",
                 spent ? Backend.KillOutcome.CONFIRMED_SAFE : Backend.KillOutcome.UNPROVEN,
-                killConfirmed(backend, 22)
+                killConfirmed(backend, 22),
+                type + "=" + status + " should" + (spent ? "" : " not") + " make the"
+                    + " controller spent"
             );
         }
     }
@@ -1192,9 +1194,9 @@ public class KubernetesNativeBackendTests {
         restore(backend, 23);
 
         assertEquals(
-            "succeeded>0 is a pod counter, not a terminal Job condition",
             Backend.KillOutcome.UNPROVEN,
-            killConfirmed(backend, 23)
+            killConfirmed(backend, 23),
+            "succeeded>0 is a pod counter, not a terminal Job condition"
         );
     }
 
@@ -1212,9 +1214,9 @@ public class KubernetesNativeBackendTests {
         restore(backend, 24);
 
         assertEquals(
-            "absence of information is not evidence of safety",
             Backend.KillOutcome.UNPROVEN,
-            killConfirmed(backend, 24)
+            killConfirmed(backend, 24),
+            "absence of information is not evidence of safety"
         );
     }
 
@@ -1228,9 +1230,9 @@ public class KubernetesNativeBackendTests {
         restore(backend, 25);
 
         assertEquals(
-            "an unreadable Job listing cannot establish that no controller survives",
             Backend.KillOutcome.UNPROVEN,
-            killConfirmed(backend, 25)
+            killConfirmed(backend, 25),
+            "an unreadable Job listing cannot establish that no controller survives"
         );
         assertTrue(holdingSlot(backend).contains(25));
     }
@@ -1252,9 +1254,9 @@ public class KubernetesNativeBackendTests {
         restore(backend, 26);
 
         assertEquals(
-            "a Failed pod plus a live Job means the next attempt may still start",
             Backend.KillOutcome.UNPROVEN,
-            killConfirmed(backend, 26)
+            killConfirmed(backend, 26),
+            "a Failed pod plus a live Job means the next attempt may still start"
         );
         assertTrue(holdingSlot(backend).contains(26));
     }
@@ -1272,9 +1274,9 @@ public class KubernetesNativeBackendTests {
         );
 
         assertEquals(
-            "a live Job carrying exec-id=27 is found by label even with no local name",
             Backend.KillOutcome.UNPROVEN,
-            killConfirmed(backend, 27)
+            killConfirmed(backend, 27),
+            "a live Job carrying exec-id=27 is found by label even with no local name"
         );
     }
 
@@ -1292,10 +1294,10 @@ public class KubernetesNativeBackendTests {
         restore(backend, 28);
 
         assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 28));
-        assertTrue("the slot is held", holdingSlot(backend).contains(28));
+        assertTrue(holdingSlot(backend).contains(28), "the slot is held");
         assertFalse(
-            "and the obligation is recorded, not forgotten",
-            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty()
+            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty(),
+            "and the obligation is recorded, not forgotten"
         );
 
         // The pod goes away and no controller remains. The sweep re-checks BOTH halves --
@@ -1304,10 +1306,10 @@ public class KubernetesNativeBackendTests {
         givenPodsFor((KubernetesClient) getField(backend, "kubernetesClient"));
         invokePrivate(backend, "revisitUnverifiedExecutions");
 
-        assertFalse("the hold is released", holdingSlot(backend).contains(28));
+        assertFalse(holdingSlot(backend).contains(28), "the hold is released");
         assertTrue(
-            "and the record is cleared",
-            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty()
+            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty(),
+            "and the record is cleared"
         );
     }
 
@@ -1332,8 +1334,8 @@ public class KubernetesNativeBackendTests {
         restore(backend, 40);
 
         assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 40));
-        assertTrue("the slot is held while the Job is still there", holdingSlot(backend).contains(40));
-        assertTrue("and the hold has an owner that will revisit it", unverified(backend).containsKey(40));
+        assertTrue(holdingSlot(backend).contains(40), "the slot is held while the Job is still there");
+        assertTrue(unverified(backend).containsKey(40), "and the hold has an owner that will revisit it");
 
         // The foreground deletion completes: neither the Job nor its pod remains.
         KubernetesClient client = (KubernetesClient) getField(backend, "kubernetesClient");
@@ -1341,8 +1343,8 @@ public class KubernetesNativeBackendTests {
         givenPodsFor(client);
         invokePrivate(backend, "revisitUnverifiedExecutions");
 
-        assertFalse("the hold is released", holdingSlot(backend).contains(40));
-        assertFalse("and the record is cleared", unverified(backend).containsKey(40));
+        assertFalse(holdingSlot(backend).contains(40), "the hold is released");
+        assertFalse(unverified(backend).containsKey(40), "and the record is cleared");
     }
 
     /** The same for the admin pause-all path, which retains what it cannot confirm stopped. */
@@ -1354,17 +1356,17 @@ public class KubernetesNativeBackendTests {
         givenJobDeletion(backend, "job-41", true, jobWithNoConditions(41), podInPhase(41, "Running"));
         restore(backend, 41);
 
-        assertFalse("killAll cannot report success while the Job is still there", backend.killAll());
+        assertFalse(backend.killAll(), "killAll cannot report success while the Job is still there");
         assertTrue(holdingSlot(backend).contains(41));
-        assertTrue("the retained execution has an owner", unverified(backend).containsKey(41));
+        assertTrue(unverified(backend).containsKey(41), "the retained execution has an owner");
 
         KubernetesClient client = (KubernetesClient) getField(backend, "kubernetesClient");
         givenJobsFor(client);
         givenPodsFor(client);
         invokePrivate(backend, "revisitUnverifiedExecutions");
 
-        assertFalse("the hold is released", holdingSlot(backend).contains(41));
-        assertFalse("and the record is cleared", unverified(backend).containsKey(41));
+        assertFalse(holdingSlot(backend).contains(41), "the hold is released");
+        assertFalse(unverified(backend).containsKey(41), "and the record is cleared");
     }
 
     @Test
@@ -1379,12 +1381,12 @@ public class KubernetesNativeBackendTests {
         invokePrivate(backend, "revisitUnverifiedExecutions");
 
         assertTrue(
-            "still running, so the slot stays held",
-            holdingSlot(backend).contains(29)
+            holdingSlot(backend).contains(29),
+            "still running, so the slot stays held"
         );
         assertFalse(
-            "and the obligation stays on the books",
-            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty()
+            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty(),
+            "and the obligation stays on the books"
         );
     }
 
@@ -1413,22 +1415,22 @@ public class KubernetesNativeBackendTests {
         invokePrivate(backend, "revisitUnverifiedExecutions");
 
         assertFalse(
+            ((Set<Integer>) getField(backend, "legacyKilledExecIds")).contains(31),
             "marking a merely-safe execution as killed cancels the continuation: every"
                 + " terminal callback short-circuits on the stopped-execution state and"
                 + " returns true, so the monitor drops its cleanup-pending record with the"
-                + " DB transition never written and the pair stranded at ENQUEUED",
-            ((Set<Integer>) getField(backend, "legacyKilledExecIds")).contains(31)
+                + " DB transition never written and the pair stranded at ENQUEUED"
         );
         assertTrue(
-            "and no concrete cancellation may be recorded for it either",
             ((Set<ExecutionRef>) getField(backend, "killedExecutions"))
                 .stream()
-                .noneMatch(ref -> ref.execId() == 31)
+                .noneMatch(ref -> ref.execId() == 31),
+            "and no concrete cancellation may be recorded for it either"
         );
         assertEquals(
-            "and the continuation still resolves its pair id from this map",
             Integer.valueOf(4242),
-            ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).get(31)
+            ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).get(31),
+            "and the continuation still resolves its pair id from this map"
         );
     }
 
@@ -1458,13 +1460,13 @@ public class KubernetesNativeBackendTests {
         invokePrivate(backend, "inventoryPodsWithoutJobs");
 
         assertTrue(
+            admissionDegraded(backend),
             "a running managed pod with no usable exec-id cannot hold a slot, so admission"
-                + " itself has to be the thing that defers",
-            admissionDegraded(backend)
+                + " itself has to be the thing that defers"
         );
         assertFalse(
-            "and the defer must be visible at the dispatch gate",
-            backend.isQueueDispatchable("all.q")
+            backend.isQueueDispatchable("all.q"),
+            "and the defer must be visible at the dispatch gate"
         );
     }
 
@@ -1485,7 +1487,7 @@ public class KubernetesNativeBackendTests {
         givenManagedPodListing(client);
         invokePrivate(backend, "inventoryPodsWithoutJobs");
 
-        assertFalse("the condition must be self-healing", admissionDegraded(backend));
+        assertFalse(admissionDegraded(backend), "the condition must be self-healing");
     }
 
     @Test
@@ -1505,8 +1507,8 @@ public class KubernetesNativeBackendTests {
         givenManagedPodListingFailure(client);
         invokePrivate(backend, "inventoryPodsWithoutJobs");
 
-        assertTrue("a failed observation must never clear a safety hold",
-            admissionDegraded(backend));
+        assertTrue(admissionDegraded(backend),
+            "a failed observation must never clear a safety hold");
     }
 
     private boolean admissionDegraded(KubernetesNativeBackend backend) throws Exception {
@@ -1647,8 +1649,8 @@ public class KubernetesNativeBackendTests {
         Path dir = java.nio.file.Files.createTempDirectory("starexec-absence");
         try {
             assertTrue(
-                "a missing file in a readable directory is proven absent",
-                confirmedAbsent(backend, dir.resolve("var.out"))
+                confirmedAbsent(backend, dir.resolve("var.out")),
+                "a missing file in a readable directory is proven absent"
             );
         } finally {
             java.nio.file.Files.deleteIfExists(dir);
@@ -1689,7 +1691,7 @@ public class KubernetesNativeBackendTests {
                 dir, java.nio.file.attribute.PosixFilePermissions.fromString("---------")
             );
         } catch (UnsupportedOperationException | java.io.IOException e) {
-            org.junit.Assume.assumeNoException("POSIX permissions unavailable", e);
+            Assumptions.abort("POSIX permissions unavailable: " + e);
         }
         try {
             // Root ignores the permission bits, so confirm the barrier is real before
@@ -1707,13 +1709,13 @@ public class KubernetesNativeBackendTests {
             } catch (java.io.IOException e) {
                 barrierHolds = true;
             }
-            org.junit.Assume.assumeTrue(
-                "this JVM can read through a 000 directory (running as root?)", barrierHolds
+            Assumptions.assumeTrue(
+                barrierHolds, "this JVM can read through a 000 directory (running as root?)"
             );
 
             assertFalse(
-                "existence that cannot be determined must never be reported as absence",
-                confirmedAbsent(backend, artifact)
+                confirmedAbsent(backend, artifact),
+                "existence that cannot be determined must never be reported as absence"
             );
         } finally {
             java.nio.file.Files.setPosixFilePermissions(
@@ -1733,12 +1735,12 @@ public class KubernetesNativeBackendTests {
         try {
             java.nio.file.Files.createSymbolicLink(link, dir.resolve("nowhere"));
         } catch (UnsupportedOperationException | java.io.IOException e) {
-            org.junit.Assume.assumeNoException("symlinks unavailable on this filesystem", e);
+            Assumptions.abort("symlinks unavailable on this filesystem: " + e);
         }
         try {
             assertFalse(
-                "a symlink standing where an artifact belongs is a surviving artifact",
-                confirmedAbsent(backend, link)
+                confirmedAbsent(backend, link),
+                "a symlink standing where an artifact belongs is a surviving artifact"
             );
         } finally {
             java.nio.file.Files.deleteIfExists(link);
@@ -1768,14 +1770,14 @@ public class KubernetesNativeBackendTests {
         givenJobDeletion(backend, "starexec-pair-0-exec-10", true, null, podInPhase(10, "Running"));
 
         assertEquals(
-            "a Running pod carrying the exec-id label means this is not safe,"
-                + " whatever local tracking says",
             Backend.KillOutcome.UNPROVEN,
-            killConfirmed(backend, 10)
+            killConfirmed(backend, 10),
+            "a Running pod carrying the exec-id label means this is not safe,"
+                + " whatever local tracking says"
         );
         assertTrue(
-            "a discovered live execution must enter the accounting",
-            holdingSlot(backend).contains(10)
+            holdingSlot(backend).contains(10),
+            "a discovered live execution must enter the accounting"
         );
         assertEquals(1, activeCount(backend));
         // Identity is the pod's exec-id LABEL, not a reconstructed Job name. A name cannot
@@ -1784,8 +1786,8 @@ public class KubernetesNativeBackendTests {
         // live Job as absent. The retry owner is the recurring pod inventory, which selects
         // by that label.
         assertNull(
-            "no Job name may be invented for an execution whose name was lost",
-            trackingMap(backend, "execIdToJobName").get(10)
+            trackingMap(backend, "execIdToJobName").get(10),
+            "no Job name may be invented for an execution whose name was lost"
         );
     }
 
@@ -1803,7 +1805,7 @@ public class KubernetesNativeBackendTests {
         restore(backend, 11);
 
         assertEquals(Backend.KillOutcome.CONFIRMED_SAFE, killConfirmed(backend, 11));
-        assertFalse("the surviving reservation must go", holdingSlot(backend).contains(11));
+        assertFalse(holdingSlot(backend).contains(11), "the surviving reservation must go");
         assertNull(trackingMap(backend, "execIdToPairId").get(11));
         assertNull(trackingMap(backend, "execIdToOutputDir").get(11));
         assertEquals(0, activeCount(backend));
@@ -1817,8 +1819,8 @@ public class KubernetesNativeBackendTests {
         restore(backend, 10);
         restore(backend, 11);
 
-        assertEquals("both live executions must be counted", 2, holdingSlot(backend).size());
-        assertEquals("the counter must agree with the set", 2, activeCount(backend));
+        assertEquals(2, holdingSlot(backend).size(), "both live executions must be counted");
+        assertEquals(2, activeCount(backend), "the counter must agree with the set");
     }
 
     @Test
@@ -1826,7 +1828,7 @@ public class KubernetesNativeBackendTests {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
         setField(backend, "maxConcurrentJobs", 1);
         assertTrue(acquire(backend, 20));
-        assertFalse("a second NEW submission must not fit", acquire(backend, 21));
+        assertFalse(acquire(backend, 21), "a second NEW submission must not fit");
         assertEquals(1, holdingSlot(backend).size());
         assertEquals(1, activeCount(backend));
     }
@@ -1961,8 +1963,8 @@ public class KubernetesNativeBackendTests {
         givenManagedJobs(backend,
             finishedJob(31, "uid-31"));
 
-        assertTrue("its pair still waits for the monitor",
-            backend.getActiveExecutionIds().contains(31));
+        assertTrue(backend.getActiveExecutionIds().contains(31),
+            "its pair still waits for the monitor");
     }
 
     /** Once ingestion released the execution, a finished Job is over: the sweep may act. */
@@ -2243,8 +2245,8 @@ public class KubernetesNativeBackendTests {
                 .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
 
             assertFalse(
-                "the escalation must report incomplete so the monitor retries it",
-                callback.onJobStuckPending(execution(41, "job-41"), "not scheduled")
+                callback.onJobStuckPending(execution(41, "job-41"), "not scheduled"),
+                "the escalation must report incomplete so the monitor retries it"
             );
             jobPairsMock.verify(
                 () -> JobPairs.retryNeverStartedPair(
@@ -2267,12 +2269,12 @@ public class KubernetesNativeBackendTests {
         }
 
         assertTrue(
-            "the slot stays held while the pod may run",
-            holdingSlot(backend).contains(41)
+            holdingSlot(backend).contains(41),
+            "the slot stays held while the pod may run"
         );
         assertFalse(
-            "and the obligation is recorded for the sweep",
-            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty()
+            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty(),
+            "and the obligation is recorded for the sweep"
         );
     }
 
@@ -2343,8 +2345,8 @@ public class KubernetesNativeBackendTests {
         assertTrue(execToOut.isEmpty());
         assertEquals(0, activeJobCount.get());
         assertTrue(holdingSlot.isEmpty());
-        assertTrue("nothing the execution owned is deleted",
-            java.nio.file.Files.isDirectory(output));
+        assertTrue(java.nio.file.Files.isDirectory(output),
+            "nothing the execution owned is deleted");
     }
 
     /**
@@ -2635,7 +2637,7 @@ public class KubernetesNativeBackendTests {
                 output, java.nio.file.attribute.PosixFilePermissions.fromString("---------")
             );
         } catch (UnsupportedOperationException | java.io.IOException e) {
-            org.junit.Assume.assumeNoException("POSIX permissions unavailable", e);
+            Assumptions.abort("POSIX permissions unavailable: " + e);
         }
         try {
             // Root ignores the permission bits; confirm the barrier is real first.
@@ -2652,8 +2654,8 @@ public class KubernetesNativeBackendTests {
             } catch (java.io.IOException e) {
                 barrierHolds = true;
             }
-            org.junit.Assume.assumeTrue(
-                "this JVM can read through a 000 directory (running as root?)", barrierHolds
+            Assumptions.assumeTrue(
+                barrierHolds, "this JVM can read through a 000 directory (running as root?)"
             );
 
             KubernetesJobMonitor.JobCompletionCallback callback =
@@ -2746,18 +2748,18 @@ public class KubernetesNativeBackendTests {
     @Test
     public void aJobRecordedBeforeARestartIsNotReportedAgain() throws Exception {
         List<String> messages = completeUntrackedJob(61, StatusCode.STATUS_COMPLETE);
-        assertTrue(messages.toString(),
-            messages.stream().noneMatch(m -> m.contains("INTERVENTION")));
-        assertTrue(messages.toString(), messages.stream().anyMatch(
-            m -> m.contains("Not ingesting") && m.contains("already holds terminal status 7")));
+        assertTrue(messages.stream().noneMatch(m -> m.contains("INTERVENTION")),
+            messages.toString());
+        assertTrue(messages.stream().anyMatch(
+            m -> m.contains("Not ingesting") && m.contains("already holds terminal status 7")), messages.toString());
     }
 
     /** Any terminal status means the pair was settled, by whichever writer settled it. */
     @Test
     public void aJobWhosePairWasFiledAsASubmitFailureIsNotReportedAgain() throws Exception {
         List<String> messages = completeUntrackedJob(63, StatusCode.ERROR_SUBMIT_FAIL);
-        assertTrue(messages.toString(),
-            messages.stream().noneMatch(m -> m.contains("INTERVENTION")));
+        assertTrue(messages.stream().noneMatch(m -> m.contains("INTERVENTION")),
+            messages.toString());
     }
 
     /**
@@ -2767,8 +2769,8 @@ public class KubernetesNativeBackendTests {
     @Test
     public void anUntrackedJobWhosePairIsUnresolvedIsStillReported() throws Exception {
         List<String> messages = completeUntrackedJob(62, StatusCode.STATUS_ENQUEUED);
-        assertTrue(messages.toString(), messages.stream()
-            .anyMatch(m -> m.contains("INGESTION INTERVENTION REQUIRED")));
+        assertTrue(messages.stream()
+            .anyMatch(m -> m.contains("INGESTION INTERVENTION REQUIRED")), messages.toString());
     }
 
     /**
@@ -2796,8 +2798,8 @@ public class KubernetesNativeBackendTests {
                 .when(() -> JobPairs.getPairStatusLookup(execId * 10))
                 .thenReturn(foundLookup(pairStatus.getVal()));
 
-            assertTrue("handled, not retried forever",
-                callback.onJobComplete(execution(execId, "job-" + execId)));
+            assertTrue(callback.onJobComplete(execution(execId, "job-" + execId)),
+                "handled, not retried forever");
             // Nothing is written either way: no evidence is read for an untracked execution.
             jobPairsMock.verify(
                 () -> JobPairs.setPairStatusPreciseResult(
@@ -3224,8 +3226,8 @@ public class KubernetesNativeBackendTests {
             if ("all.q".equals(normalized)) {
                 defaultLabels++;
                 assertTrue(
-                    "affinity does not accept a label the view calls default: '" + label + "'",
-                    accepted.contains(label.trim())
+                    accepted.contains(label.trim()),
+                    "affinity does not accept a label the view calls default: '" + label + "'"
                 );
             } else {
                 nonDefaultLabels++;
@@ -3233,14 +3235,14 @@ public class KubernetesNativeBackendTests {
                 // view treats as a distinct queue, default-queue pods would be scheduled
                 // onto hardware reserved for that queue.
                 assertFalse(
+                    accepted.contains(label.trim()),
                     "affinity accepts '" + label + "', which the view calls queue '"
-                        + normalized + "', not the default",
-                    accepted.contains(label.trim())
+                        + normalized + "', not the default"
                 );
             }
         }
-        assertTrue("vacuous: no default-mapping label exercised", defaultLabels > 0);
-        assertTrue("vacuous: no distinct-queue label exercised", nonDefaultLabels > 0);
+        assertTrue(defaultLabels > 0, "vacuous: no default-mapping label exercised");
+        assertTrue(nonDefaultLabels > 0, "vacuous: no distinct-queue label exercised");
     }
 
     private JobPairs.PairStatusLookupResult foundLookup(int statusCode)
@@ -3278,24 +3280,24 @@ public class KubernetesNativeBackendTests {
 
     @Test
     public void wholeCpuRequestsAreAcceptedIncludingAWholeNodesWorth() throws Exception {
-        assertTrue("1 CPU", isWholeNumberCpuQuantity("1"));
+        assertTrue(isWholeNumberCpuQuantity("1"), "1 CPU");
         assertTrue(
+            isWholeNumberCpuQuantity("32"),
             "32 is what production configures -- a whole compute node -- and it must no"
-                + " longer be replaced by 1",
-            isWholeNumberCpuQuantity("32")
+                + " longer be replaced by 1"
         );
-        assertTrue("milli-CPU that divides exactly", isWholeNumberCpuQuantity("2000m"));
-        assertTrue("whitespace tolerated", isWholeNumberCpuQuantity(" 16 "));
+        assertTrue(isWholeNumberCpuQuantity("2000m"), "milli-CPU that divides exactly");
+        assertTrue(isWholeNumberCpuQuantity(" 16 "), "whitespace tolerated");
     }
 
     @Test
     public void fractionalCpuRequestsAreRejected() throws Exception {
         // A fractional request cannot receive exclusive cores; Kubernetes gives it a CFS
         // bandwidth quota and the solver's threads float across the whole node.
-        assertFalse("1500m is 1.5 CPUs", isWholeNumberCpuQuantity("1500m"));
-        assertFalse("half a CPU", isWholeNumberCpuQuantity("500m"));
-        assertFalse("decimal form", isWholeNumberCpuQuantity("2.5"));
-        assertFalse("even a whole-valued decimal", isWholeNumberCpuQuantity("2.0"));
+        assertFalse(isWholeNumberCpuQuantity("1500m"), "1500m is 1.5 CPUs");
+        assertFalse(isWholeNumberCpuQuantity("500m"), "half a CPU");
+        assertFalse(isWholeNumberCpuQuantity("2.5"), "decimal form");
+        assertFalse(isWholeNumberCpuQuantity("2.0"), "even a whole-valued decimal");
     }
 
     @Test
@@ -3304,7 +3306,7 @@ public class KubernetesNativeBackendTests {
         assertFalse(isWholeNumberCpuQuantity(""));
         assertFalse(isWholeNumberCpuQuantity("   "));
         assertFalse(isWholeNumberCpuQuantity("all"));
-        assertFalse("zero CPUs is not a pair's worth", isWholeNumberCpuQuantity("0"));
+        assertFalse(isWholeNumberCpuQuantity("0"), "zero CPUs is not a pair's worth");
         assertFalse(isWholeNumberCpuQuantity("-4"));
         assertFalse(isWholeNumberCpuQuantity("0m"));
     }
@@ -3364,15 +3366,15 @@ public class KubernetesNativeBackendTests {
         Container container = buildContainer("32");
 
         assertEquals(
-            "the operator's CPU limit must survive into the pod spec, not be replaced by 1",
             "32",
-            container.getResources().getLimits().get("cpu").toString()
+            container.getResources().getLimits().get("cpu").toString(),
+            "the operator's CPU limit must survive into the pod spec, not be replaced by 1"
         );
         assertEquals(
-            "requests must match limits, or the pod is not Guaranteed and Kubernetes will"
-                + " never assign it exclusive cores",
             "32",
-            container.getResources().getRequests().get("cpu").toString()
+            container.getResources().getRequests().get("cpu").toString(),
+            "requests must match limits, or the pod is not Guaranteed and Kubernetes will"
+                + " never assign it exclusive cores"
         );
     }
 
@@ -3421,10 +3423,10 @@ public class KubernetesNativeBackendTests {
         Container container = buildContainerWithPullPolicy("IfNotPresent");
 
         assertEquals(
-            "the operator's pull policy must reach the pod, or isolated workers are asked"
-                + " to re-resolve an image from a registry they cannot reach",
             "IfNotPresent",
-            container.getImagePullPolicy()
+            container.getImagePullPolicy(),
+            "the operator's pull policy must reach the pod, or isolated workers are asked"
+                + " to re-resolve an image from a registry they cannot reach"
         );
     }
 
@@ -3465,14 +3467,14 @@ public class KubernetesNativeBackendTests {
             throws Exception {
         Container unset = buildContainerWithPullPolicy("");
         assertNull(
-            "an empty setting must leave the field absent, not stamp a fabricated default",
-            unset.getImagePullPolicy()
+            unset.getImagePullPolicy(),
+            "an empty setting must leave the field absent, not stamp a fabricated default"
         );
 
         Container never = buildContainer("32");
         assertNull(
-            "a backend that never loaded the setting must behave the same way",
-            never.getImagePullPolicy()
+            never.getImagePullPolicy(),
+            "a backend that never loaded the setting must behave the same way"
         );
     }
 
@@ -3500,10 +3502,10 @@ public class KubernetesNativeBackendTests {
     @Test
     public void strictModeReturnsTheConfiguredCpuLimitUnchanged() throws Exception {
         assertEquals(
-            "strict mode must validate the operator's value, never replace it -- a whole"
-                + " compute node is the SGE-equivalent allocation and must survive",
             "32",
-            resolveCpuLimitForStrictMode("32")
+            resolveCpuLimitForStrictMode("32"),
+            "strict mode must validate the operator's value, never replace it -- a whole"
+                + " compute node is the SGE-equivalent allocation and must survive"
         );
         assertEquals("1", resolveCpuLimitForStrictMode("1"));
         assertEquals("2000m", resolveCpuLimitForStrictMode("2000m"));
@@ -3516,8 +3518,8 @@ public class KubernetesNativeBackendTests {
             fail("a fractional CPU request cannot receive exclusive cores and must abort");
         } catch (IllegalStateException expected) {
             assertTrue(
-                expected.getMessage(),
-                expected.getMessage().contains("whole number of CPUs")
+                expected.getMessage().contains("whole number of CPUs"),
+                expected.getMessage()
             );
         }
     }
@@ -3547,37 +3549,37 @@ public class KubernetesNativeBackendTests {
         f.setAccessible(true);
 
         assertEquals(
-            "the backend's default queue must be the canonical R.DEFAULT_QUEUE_NAME, or a"
-                + " fresh cluster invents a queue the rest of StarExec does not know",
             org.starexec.constants.R.DEFAULT_QUEUE_NAME,
-            f.get(null)
+            f.get(null),
+            "the backend's default queue must be the canonical R.DEFAULT_QUEUE_NAME, or a"
+                + " fresh cluster invents a queue the rest of StarExec does not know"
         );
         assertEquals("all.q", f.get(null));
     }
 
     @Test
     public void bothSpellingsOfTheDefaultQueueAreRecognised() throws Exception {
-        assertTrue("canonical name", isDefaultQueueName("all.q"));
+        assertTrue(isDefaultQueueName("all.q"), "canonical name");
         assertTrue(
+            isDefaultQueueName("all"),
             "the SGE host-group short form, which Queues.removeQueue passes to moveNode;"
-                + " unrecognised, it was written as a literal label and became a third queue",
-            isDefaultQueueName("all")
+                + " unrecognised, it was written as a literal label and became a third queue"
         );
         // Deliberately reversed. This asserted "case tolerated" -- isDefaultQueueName was
         // the only case-insensitive queue comparison in the system, while the node-label
         // list and GetIdByName are both exact. That let an admin create a distinct queue
         // 'ALL.q' whose pairs were then given the default queue's affinity and run on the
         // default queue's hardware. A case variant is a different queue, everywhere.
-        assertFalse("a case variant is a distinct queue", isDefaultQueueName("ALL.Q"));
-        assertFalse("a case variant is a distinct queue", isDefaultQueueName("All.q"));
-        assertTrue("whitespace tolerated", isDefaultQueueName(" all.q "));
+        assertFalse(isDefaultQueueName("ALL.Q"), "a case variant is a distinct queue");
+        assertFalse(isDefaultQueueName("All.q"), "a case variant is a distinct queue");
+        assertTrue(isDefaultQueueName(" all.q "), "whitespace tolerated");
     }
 
     @Test
     public void arealQueueIsNotMistakenForTheDefault() throws Exception {
         assertFalse(isDefaultQueueName("casc.q"));
         assertFalse(isDefaultQueueName("public.q"));
-        assertFalse("the old invented name is not special", isDefaultQueueName("default"));
+        assertFalse(isDefaultQueueName("default"), "the old invented name is not special");
         assertFalse(isDefaultQueueName(null));
         assertFalse(isDefaultQueueName(""));
     }
@@ -3619,8 +3621,8 @@ public class KubernetesNativeBackendTests {
     @Test
     public void aCordonedNodeIsNotSchedulable() throws Exception {
         assertFalse(
-            "an operator draining a node must not have work sent to it",
-            isNodeSchedulable(Boolean.TRUE, "True")
+            isNodeSchedulable(Boolean.TRUE, "True"),
+            "an operator draining a node must not have work sent to it"
         );
     }
 
@@ -3629,8 +3631,8 @@ public class KubernetesNativeBackendTests {
         // The case a cordon-only check misses: kubelet stopped, disk pressure, a network
         // partition. The node accepts nothing, so a pod sent there pends indefinitely.
         assertFalse(isNodeSchedulable(Boolean.FALSE, "False"));
-        assertFalse("Unknown is not Ready", isNodeSchedulable(Boolean.FALSE, "Unknown"));
-        assertFalse("no Ready condition at all", isNodeSchedulable(Boolean.FALSE, null));
+        assertFalse(isNodeSchedulable(Boolean.FALSE, "Unknown"), "Unknown is not Ready");
+        assertFalse(isNodeSchedulable(Boolean.FALSE, null), "no Ready condition at all");
     }
 
     // ---------------------------------------------------------------------
@@ -3706,9 +3708,9 @@ public class KubernetesNativeBackendTests {
         );
 
         assertFalse(
+            backend.isQueueDispatchable("casc.q"),
             "a transient outage must defer dispatch, not let the pairs through to be"
-                + " marked terminally failed",
-            backend.isQueueDispatchable("casc.q")
+                + " marked terminally failed"
         );
     }
 
@@ -3805,10 +3807,10 @@ public class KubernetesNativeBackendTests {
         KubernetesNativeBackend backend = backendWithOutputDir(9001, dir);
 
         assertEquals(
-            "runsolver reported TIMEOUT=true, so STATUS_COMPLETE from status.json must"
-                + " not be what gets recorded",
             org.starexec.data.to.Status.StatusCode.EXCEED_CPU.getVal(),
-            readTerminalStatus(backend, 9001)
+            readTerminalStatus(backend, 9001),
+            "runsolver reported TIMEOUT=true, so STATUS_COMPLETE from status.json must"
+                + " not be what gets recorded"
         );
     }
 
@@ -3851,9 +3853,9 @@ public class KubernetesNativeBackendTests {
         // No limit fired, so the verdict abstains and status.json is still authoritative
         // for non-limit outcomes such as a run-script failure.
         assertEquals(
-            "the verdict must only override when runsolver actually reports a breach",
             org.starexec.data.to.Status.StatusCode.ERROR_RUNSCRIPT.getVal(),
-            readTerminalStatus(backend, 9003)
+            readTerminalStatus(backend, 9003),
+            "the verdict must only override when runsolver actually reports a breach"
         );
     }
 
@@ -3873,10 +3875,10 @@ public class KubernetesNativeBackendTests {
         KubernetesNativeBackend backend = backendWithOutputDir(9004, dir);
 
         assertEquals(
-            "valid status.json explicitly records a run-script failure; limit artifacts"
-                + " must not replace that evidenced result",
             org.starexec.data.to.Status.StatusCode.ERROR_RUNSCRIPT.getVal(),
-            readTerminalStatus(backend, 9004)
+            readTerminalStatus(backend, 9004),
+            "valid status.json explicitly records a run-script failure; limit artifacts"
+                + " must not replace that evidenced result"
         );
     }
 
@@ -3902,8 +3904,8 @@ public class KubernetesNativeBackendTests {
 
         for (String name : List.of("var.out", "watcher.out", "status.json", "stats.json")) {
             assertFalse(
-                "a previous attempt's " + name + " must not survive into the next attempt",
-                java.nio.file.Files.exists(dir.resolve(name))
+                java.nio.file.Files.exists(dir.resolve(name)),
+                "a previous attempt's " + name + " must not survive into the next attempt"
             );
         }
 
@@ -3933,7 +3935,7 @@ public class KubernetesNativeBackendTests {
                 dir, java.nio.file.attribute.PosixFilePermissions.fromString("r-xr-xr-x")
             );
         } catch (UnsupportedOperationException e) {
-            org.junit.Assume.assumeNoException("POSIX permissions unavailable", e);
+            Assumptions.abort("POSIX permissions unavailable: " + e);
         }
 
         try {
@@ -3945,15 +3947,15 @@ public class KubernetesNativeBackendTests {
             boolean allAbsent = (Boolean) clear.invoke(backend, dir, 5150);
 
             // Running as root defeats the permission bits; skip rather than pass vacuously.
-            org.junit.Assume.assumeTrue(
-                "cannot simulate an undeletable file as this user",
-                java.nio.file.Files.exists(stale)
+            Assumptions.assumeTrue(
+                java.nio.file.Files.exists(stale),
+                "cannot simulate an undeletable file as this user"
             );
 
             assertFalse(
+                allAbsent,
                 "a surviving stale artifact must be reported as failure, so submitScript"
-                    + " refuses to create the Job rather than misclassifying the run",
-                allAbsent
+                    + " refuses to create the Job rather than misclassifying the run"
             );
         } finally {
             java.nio.file.Files.setPosixFilePermissions(
@@ -4053,12 +4055,12 @@ public class KubernetesNativeBackendTests {
         List<String> queues = java.util.Arrays.asList(backend.getQueues());
 
         assertTrue(
+            queues.contains("all.q"),
             "an unlabelled worker node belongs to the default queue everywhere else,"
-                + " so getQueues must report it too: " + queues,
-            queues.contains("all.q")
+                + " so getQueues must report it too: " + queues
         );
-        assertTrue("the real second queue is still reported: " + queues,
-            queues.contains("sat-comp"));
+        assertTrue(queues.contains("sat-comp"),
+            "the real second queue is still reported: " + queues);
     }
 
     @Test
@@ -4071,8 +4073,8 @@ public class KubernetesNativeBackendTests {
         );
 
         List<String> queues = java.util.Arrays.asList(backend.getQueues());
-        assertTrue("blank label is default-queue membership: " + queues,
-            queues.contains("all.q"));
+        assertTrue(queues.contains("all.q"),
+            "blank label is default-queue membership: " + queues);
     }
 
     @Test
@@ -4130,24 +4132,24 @@ public class KubernetesNativeBackendTests {
             envVar(container, "STAREXEC_NODE_NAME");
 
         assertNotNull(
+            nodeName,
             "without this the pod reports its own name as the host, which is not a row in"
-                + " nodes, and every pair's measurements are lost to P0002",
-            nodeName
+                + " nodes, and every pair's measurements are lost to P0002"
         );
         assertNotNull(
+            nodeName.getValueFrom(),
             "it must come from the downward API, not a literal: the scheduler picks the"
-                + " node after the Job is created",
-            nodeName.getValueFrom()
+                + " node after the Job is created"
         );
         assertNotNull(nodeName.getValueFrom().getFieldRef());
         assertEquals(
-            "spec.nodeName is the Node's metadata.name, which is what nodes.name holds",
             "spec.nodeName",
-            nodeName.getValueFrom().getFieldRef().getFieldPath()
+            nodeName.getValueFrom().getFieldRef().getFieldPath(),
+            "spec.nodeName is the Node's metadata.name, which is what nodes.name holds"
         );
         assertNull(
-            "a literal value would be a guess at where the scheduler will place the pod",
-            nodeName.getValue()
+            nodeName.getValue(),
+            "a literal value would be a guess at where the scheduler will place the pod"
         );
     }
 
@@ -4165,7 +4167,7 @@ public class KubernetesNativeBackendTests {
                 }
             }
         }
-        assertNotNull("resolveStatsNodeName should exist on an inner class", resolve);
+        assertNotNull(resolve, "resolveStatsNodeName should exist on an inner class");
 
         // Instantiate the inner class that owns it, via its synthetic outer-instance ctor.
         java.lang.reflect.Constructor<?> ctor =
@@ -4176,10 +4178,10 @@ public class KubernetesNativeBackendTests {
             : ctor.newInstance();
 
         assertNull(
+            resolve.invoke(owner, (Object) null),
             "an unknown node must yield null, not a placeholder: a name that cannot"
                 + " resolve guarantees P0002 and discards the pair's measurements while"
-                + " hiding why",
-            resolve.invoke(owner, (Object) null)
+                + " hiding why"
         );
     }
 
@@ -4194,8 +4196,8 @@ public class KubernetesNativeBackendTests {
         );
 
         assertTrue(
-            "an unlabelled queue must not be deferred silently -- it never resolves",
-            backend.isQueueDispatchable("high-mem.q")
+            backend.isQueueDispatchable("high-mem.q"),
+            "an unlabelled queue must not be deferred silently -- it never resolves"
         );
     }
 
@@ -4254,9 +4256,9 @@ public class KubernetesNativeBackendTests {
         );
 
         assertTrue(
+            backend.isQueueDispatchable("kubernetes.q"),
             "31 CPUs against a 32-CPU node leaves room for node DaemonSets and must be"
-                + " allowed to dispatch",
-            backend.isQueueDispatchable("kubernetes.q")
+                + " allowed to dispatch"
         );
     }
 
@@ -4273,8 +4275,8 @@ public class KubernetesNativeBackendTests {
         );
 
         assertFalse(
-            "a request equal to allocatable can never be scheduled and must hold dispatch",
-            backend.isQueueDispatchable("kubernetes.q")
+            backend.isQueueDispatchable("kubernetes.q"),
+            "a request equal to allocatable can never be scheduled and must hold dispatch"
         );
     }
 
@@ -4314,8 +4316,8 @@ public class KubernetesNativeBackendTests {
         );
 
         assertFalse(
-            "every node is smaller than the request, so nothing will ever schedule",
-            backend.isQueueDispatchable("small.q")
+            backend.isQueueDispatchable("small.q"),
+            "every node is smaller than the request, so nothing will ever schedule"
         );
     }
 
@@ -4331,8 +4333,8 @@ public class KubernetesNativeBackendTests {
         );
 
         assertFalse(
-            "capacity that could not be established must defer, not dispatch",
-            backend.isQueueDispatchable("kubernetes.q")
+            backend.isQueueDispatchable("kubernetes.q"),
+            "capacity that could not be established must defer, not dispatch"
         );
     }
 
@@ -4384,8 +4386,8 @@ public class KubernetesNativeBackendTests {
                 .endStatus()
                 .build();
         assertFalse(
-            "a cordoned node must not lend its CPUs to the capacity ceiling",
-            (Boolean) schedulable.invoke(null, cordoned)
+            (Boolean) schedulable.invoke(null, cordoned),
+            "a cordoned node must not lend its CPUs to the capacity ceiling"
         );
     }
 
@@ -4461,8 +4463,8 @@ public class KubernetesNativeBackendTests {
     private static Map<String, String> mountsByPath(Container container) {
         Map<String, String> mounts = new java.util.HashMap<>();
         for (VolumeMount m : container.getVolumeMounts()) {
-            assertNull("a job mount must not collide with another: " + m.getMountPath(),
-                mounts.put(m.getMountPath(), m.getName()));
+            assertNull(mounts.put(m.getMountPath(), m.getName()),
+                "a job mount must not collide with another: " + m.getMountPath());
         }
         return mounts;
     }
@@ -4482,12 +4484,12 @@ public class KubernetesNativeBackendTests {
         PodSpec pod = podSpecFor("/app/work");
         Container container = pod.getContainers().get(0);
 
-        assertEquals("the container runs in the working directory", "/app/work", container.getWorkingDir());
-        assertEquals("the root filesystem stays read-only (#237)",
-            Boolean.TRUE, container.getSecurityContext().getReadOnlyRootFilesystem());
+        assertEquals("/app/work", container.getWorkingDir(), "the container runs in the working directory");
+        assertEquals(Boolean.TRUE,
+            container.getSecurityContext().getReadOnlyRootFilesystem(), "the root filesystem stays read-only (#237)");
         String volume = mountsByPath(container).get("/app/work");
-        assertNotNull("the working directory must be mounted", volume);
-        assertNotNull("as an emptyDir", volumeNamed(pod, volume).getEmptyDir());
+        assertNotNull(volume, "the working directory must be mounted");
+        assertNotNull(volumeNamed(pod, volume).getEmptyDir(), "as an emptyDir");
     }
 
     /** A working directory on the data volume (as values-local-dev intends) is writable already. */
@@ -4512,8 +4514,8 @@ public class KubernetesNativeBackendTests {
 
     private static void assertOnlyDataAndTmpMounted(PodSpec pod) {
         Map<String, String> mounts = mountsByPath(pod.getContainers().get(0));
-        assertEquals("a nested emptyDir would hide what is on the volume at that path",
-            Set.of("/app/data", "/tmp", "/app/home"), mounts.keySet());
+        assertEquals(Set.of("/app/data", "/tmp", "/app/home"),
+            mounts.keySet(), "a nested emptyDir would hide what is on the volume at that path");
         assertEquals(3, pod.getVolumes().size());
     }
 
@@ -4531,10 +4533,10 @@ public class KubernetesNativeBackendTests {
             .filter(e -> "HOME".equals(e.getName()))
             .map(io.fabric8.kubernetes.api.model.EnvVar::getValue)
             .findFirst().orElse(null);
-        assertEquals("HOME must be set explicitly, to the pod's own mount", "/app/home", home);
+        assertEquals("/app/home", home, "HOME must be set explicitly, to the pod's own mount");
         String volume = mountsByPath(container).get(home);
-        assertNotNull("HOME must be a mount", volume);
-        assertNotNull("an emptyDir, so it is per pod", volumeNamed(pod, volume).getEmptyDir());
+        assertNotNull(volume, "HOME must be a mount");
+        assertNotNull(volumeNamed(pod, volume).getEmptyDir(), "an emptyDir, so it is per pod");
     }
 
     /** A working directory configured at or under HOME must not become a second mount there. */
@@ -4591,8 +4593,8 @@ public class KubernetesNativeBackendTests {
         throws Exception {
         for (String name : new String[] {
             "execIdToJobName", "execIdToPairId", "execIdToOutputDir", "execIdToAttemptNo" }) {
-            assertFalse(name + " must be released",
-                ((Map<Integer, ?>) getField(backend, name)).containsKey(execId));
+            assertFalse(((Map<Integer, ?>) getField(backend, name)).containsKey(execId),
+                name + " must be released");
         }
     }
 
@@ -4694,8 +4696,8 @@ public class KubernetesNativeBackendTests {
             jp.when(() -> JobPairs.setPairStatusPreciseResult(641, 1, COMPLETE, NOT_REACHED, false, 1))
                 .thenReturn(PairStatusResult.STALE_ATTEMPT);
 
-            assertTrue("a stale refusal is handled, not retried",
-                callback.onJobComplete(execution(64, "job-64")));
+            assertTrue(callback.onJobComplete(execution(64, "job-64")),
+                "a stale refusal is handled, not retried");
 
             jp.verify(() -> JobPairs.setPairStatusPreciseResult(
                 641, 1, COMPLETE, NOT_REACHED, false, 1), Mockito.times(1));
@@ -4770,8 +4772,8 @@ public class KubernetesNativeBackendTests {
             stubAttributeWrite(jp, 671, 1, 4, false);
             jp.when(() -> JobPairs.getCurrentAttemptNo(671)).thenReturn(5);
 
-            assertTrue("a stale refusal is handled, not retried",
-                callback.onJobComplete(execution(67, "job-67")));
+            assertTrue(callback.onJobComplete(execution(67, "job-67")),
+                "a stale refusal is handled, not retried");
 
             // Both stages' stats were written before the attributes were reached, and the
             // refusal of stage 1's attributes stopped the loop: stage 2's was never tried.
@@ -4948,7 +4950,7 @@ public class KubernetesNativeBackendTests {
         }
 
         assertEquals(Integer.valueOf(6), attempts.get(91));
-        assertNull("a Job from before the label is unfenced, never attempt 0", attempts.get(92));
+        assertNull(attempts.get(92), "a Job from before the label is unfenced, never attempt 0");
     }
 
     @Test
@@ -5040,9 +5042,9 @@ public class KubernetesNativeBackendTests {
             assertTrue(execId > 0);
         }
         assertEquals(
-            "one slot must already be held when the attempt is read, and no Job built yet",
             List.of("attempt slots=1 active=1", "resource"),
-            submission.events
+            submission.events,
+            "one slot must already be held when the attempt is read, and no Job built yet"
         );
     }
 
@@ -5066,13 +5068,13 @@ public class KubernetesNativeBackendTests {
             jp.verify(() -> JobPairs.setStartTime(Mockito.anyInt()), Mockito.never());
         }
 
-        assertEquals("the reservation must go back", 0, activeCount(backend));
+        assertEquals(0, activeCount(backend), "the reservation must go back");
         assertTrue(holdingSlot(backend).isEmpty());
-        assertTrue("no Job may be created", submission.built.isEmpty());
+        assertTrue(submission.built.isEmpty(), "no Job may be created");
         for (String name : new String[] {
             "execIdToJobName", "execIdToPairId", "execIdToOutputDir", "execIdToAttemptNo",
             "execIdToJobUid" }) {
-            assertTrue(name + " must be empty", ((Map<Integer, ?>) getField(backend, name)).isEmpty());
+            assertTrue(((Map<Integer, ?>) getField(backend, name)).isEmpty(), name + " must be empty");
         }
     }
 
@@ -5129,9 +5131,9 @@ public class KubernetesNativeBackendTests {
 
             int execId = backend.submitScript(804, "/script.sh", "/work", logIn(dir));
 
-            assertTrue("treated as established", execId > 0);
-            assertTrue("this is the ambiguous path",
-                ((Map<Integer, ?>) getField(backend, "ambiguousSubmissions")).containsKey(execId));
+            assertTrue(execId > 0, "treated as established");
+            assertTrue(((Map<Integer, ?>) getField(backend, "ambiguousSubmissions")).containsKey(execId),
+                "this is the ambiguous path");
             assertEquals(Integer.valueOf(9),
                 ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).get(execId));
         }
@@ -5154,15 +5156,15 @@ public class KubernetesNativeBackendTests {
 
             int first = backend.submitScript(805, "/script.sh", "/work", logIn(dir));
             assertEquals(5, first);
-            assertEquals("the new attempt overwrites the stale one",
-                Integer.valueOf(2), attempts.get(5));
+            assertEquals(Integer.valueOf(2),
+                attempts.get(5), "the new attempt overwrites the stale one");
 
             // Id 6 is reused by an execution with no attempt to fence on: the stale entry must
             // not survive to fence it against attempt 99.
             int second = backend.submitScript(0, "/script.sh", "/work", logIn(dir));
             assertEquals(6, second);
-            assertFalse("no attempt means no entry, not the previous one",
-                attempts.containsKey(6));
+            assertFalse(attempts.containsKey(6),
+                "no attempt means no entry, not the previous one");
         }
     }
 
@@ -5190,8 +5192,8 @@ public class KubernetesNativeBackendTests {
 
         assertEquals(Integer.valueOf(9071),
             ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).get(71));
-        assertEquals("the attempt is refilled from the same Job as the pair",
-            Integer.valueOf(5),
-            ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).get(71));
+        assertEquals(Integer.valueOf(5),
+            ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).get(71),
+            "the attempt is refilled from the same Job as the pair");
     }
 }

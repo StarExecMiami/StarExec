@@ -1,6 +1,6 @@
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.Requests;
 import org.starexec.data.database.Users;
@@ -35,17 +35,17 @@ public class RequestsTests extends TestSequence {
 	@StarexecTest
 	private void getCommunityRequestByUserTest() {
 		CommunityRequest test=Requests.getCommunityRequest(request.getUserId());
-		Assert.assertEquals(request.getCode(), test.getCode());
-		Assert.assertEquals(request.getUserId(),test.getUserId());
-		Assert.assertEquals(request.getMessage(),test.getMessage());
+		Assertions.assertEquals(request.getCode(), test.getCode());
+		Assertions.assertEquals(request.getUserId(),test.getUserId());
+		Assertions.assertEquals(request.getMessage(),test.getMessage());
 	}
 	
 	@StarexecTest
 	private void getCommunityRequestByCodeTest() {
 		CommunityRequest test=Requests.getCommunityRequest(request.getCode());
-		Assert.assertEquals(request.getCode(), test.getCode());
-		Assert.assertEquals(request.getUserId(),test.getUserId());
-		Assert.assertEquals(request.getMessage(),test.getMessage());
+		Assertions.assertEquals(request.getCode(), test.getCode());
+		Assertions.assertEquals(request.getUserId(),test.getUserId());
+		Assertions.assertEquals(request.getMessage(),test.getMessage());
 	}
 
 	@StarexecTest
@@ -65,22 +65,22 @@ public class RequestsTests extends TestSequence {
 			commRequestsSizeAfter = Requests.getPendingCommunityRequestsForCommunity(query, comm.getId()).size();
 			comm2RequestsSizeAfter = Requests.getPendingCommunityRequestsForCommunity(query, comm2.getId()).size();
 
-			Assert.assertTrue(Users.deleteUser(tempUser.getId()));
+			Assertions.assertTrue(Users.deleteUser(tempUser.getId()));
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Requests.getPendingCommunityRequestsForCommunity threw an exception: "+e.getMessage());
+			Assertions.fail("Requests.getPendingCommunityRequestsForCommunity threw an exception: "+e.getMessage());
 		}
 
-		Assert.assertEquals(commRequestsSizeBefore, commRequestsSizeAfter-1);
-		Assert.assertEquals(comm2RequestsSizeBefore, comm2RequestsSizeAfter);
+		Assertions.assertEquals(commRequestsSizeBefore, commRequestsSizeAfter-1);
+		Assertions.assertEquals(comm2RequestsSizeBefore, comm2RequestsSizeAfter);
 	}
 
 	
 	@StarexecTest
 	private void getCommunityRequestCountTest() {
 		try {
-			Assert.assertTrue(Requests.getCommunityRequestCount()>0);
+			Assertions.assertTrue(Requests.getCommunityRequestCount()>0);
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("getCommunityRequestCount threw an exception."+e.getMessage());
+			Assertions.fail("getCommunityRequestCount threw an exception."+e.getMessage());
 		}
 	}
 	
@@ -88,40 +88,40 @@ public class RequestsTests extends TestSequence {
 	private void approveCommunityRequestTest() throws StarExecDatabaseException {
 		User tempUser=loader.loadUserIntoDatabase();
 		CommunityRequest tempRequest=loader.loadCommunityRequestIntoDatabase(tempUser.getId(), comm.getId());
-		Assert.assertFalse(Users.isMemberOfCommunity(tempUser.getId(), comm.getId()));
+		Assertions.assertFalse(Users.isMemberOfCommunity(tempUser.getId(), comm.getId()));
 
-		Assert.assertTrue(Requests.approveCommunityRequest(tempUser.getId(), comm.getId()));
-		Assert.assertNull(Requests.getCommunityRequest(tempRequest.getCode()));
-		Assert.assertTrue(Users.isMemberOfCommunity(tempUser.getId(), comm.getId()));
-		Assert.assertTrue(Users.deleteUser(tempUser.getId()));
+		Assertions.assertTrue(Requests.approveCommunityRequest(tempUser.getId(), comm.getId()));
+		Assertions.assertNull(Requests.getCommunityRequest(tempRequest.getCode()));
+		Assertions.assertTrue(Users.isMemberOfCommunity(tempUser.getId(), comm.getId()));
+		Assertions.assertTrue(Users.deleteUser(tempUser.getId()));
 	}
 	
 	@StarexecTest
 	private void declineCommunityRequestTest() throws StarExecDatabaseException {
 		User tempUser=loader.loadUserIntoDatabase();
 		CommunityRequest tempRequest=loader.loadCommunityRequestIntoDatabase(tempUser.getId(), comm.getId());
-		Assert.assertFalse(Users.isMemberOfCommunity(tempUser.getId(), comm.getId()));
+		Assertions.assertFalse(Users.isMemberOfCommunity(tempUser.getId(), comm.getId()));
 
-		Assert.assertTrue(Requests.declineCommunityRequest(tempUser.getId(), comm.getId()));
-		Assert.assertNull(Requests.getCommunityRequest(tempRequest.getCode()));
-		Assert.assertFalse(Users.isMemberOfCommunity(tempUser.getId(), comm.getId()));
-		Assert.assertTrue(Users.deleteUser(tempUser.getId()));
+		Assertions.assertTrue(Requests.declineCommunityRequest(tempUser.getId(), comm.getId()));
+		Assertions.assertNull(Requests.getCommunityRequest(tempRequest.getCode()));
+		Assertions.assertFalse(Users.isMemberOfCommunity(tempUser.getId(), comm.getId()));
+		Assertions.assertTrue(Users.deleteUser(tempUser.getId()));
 	}
 	
 	@StarexecTest
 	private void addAndRedeemPassResetRequestTest() {
 		String randomCode=UUID.randomUUID().toString();
-		Assert.assertTrue(Requests.addPassResetRequest(registeredUser.getId(), randomCode));
+		Assertions.assertTrue(Requests.addPassResetRequest(registeredUser.getId(), randomCode));
 		int userId=Requests.redeemPassResetRequest(randomCode);
-		Assert.assertEquals(registeredUser.getId(),userId);
+		Assertions.assertEquals(registeredUser.getId(),userId);
 	}
 	
 	@StarexecTest
 	private void addCommunityRequestTest() {
 		String randomMessage=TestUtil.getRandomAlphaString(30);
 		String randomCode=UUID.randomUUID().toString();
-		Assert.assertTrue(Requests.addCommunityRequest(registeredUser, comm.getId(), randomCode, randomMessage));
-		Assert.assertNotNull(Requests.getCommunityRequest(randomCode));
+		Assertions.assertTrue(Requests.addCommunityRequest(registeredUser, comm.getId(), randomCode, randomMessage));
+		Assertions.assertNotNull(Requests.getCommunityRequest(randomCode));
 	}
 	
 	

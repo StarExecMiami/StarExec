@@ -1,6 +1,6 @@
 package org.starexec.test.integration.util.dataStructures;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.logger.StarLogger;
 import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
@@ -28,15 +28,15 @@ public class TreeNodeTests extends TestSequence {
 	private void AddAndRemoveChildTest() {
 		TreeNode<Integer> tree = new TreeNode<>(1);
 		TreeNode<Integer> child = new TreeNode<>(2);
-		Assert.assertEquals(tree.getNumberOfChildren(), 0);
+		Assertions.assertEquals(tree.getNumberOfChildren(), 0);
 		tree.addChild(child);
-		Assert.assertEquals(tree.getNumberOfChildren(), 1);
-		Assert.assertEquals(tree.getChild(0), child);	
-		Assert.assertEquals(child.getParent(), tree);
-		Assert.assertNull(tree.getParent());
-		Assert.assertEquals(tree.removeChild(0), child);
-		Assert.assertNull(child.getParent());
-		Assert.assertEquals(tree.getNumberOfChildren(), 0);
+		Assertions.assertEquals(tree.getNumberOfChildren(), 1);
+		Assertions.assertEquals(tree.getChild(0), child);	
+		Assertions.assertEquals(child.getParent(), tree);
+		Assertions.assertNull(tree.getParent());
+		Assertions.assertEquals(tree.removeChild(0), child);
+		Assertions.assertNull(child.getParent());
+		Assertions.assertEquals(tree.getNumberOfChildren(), 0);
 	}
 
 	@StarexecTest
@@ -47,7 +47,7 @@ public class TreeNodeTests extends TestSequence {
 		}
 		int i = 0;
 		for (TreeNode<Integer> child : tree) {
-			Assert.assertEquals(child.getData(), Integer.valueOf(i));
+			Assertions.assertEquals(child.getData(), Integer.valueOf(i));
 			i++;
 		}
 	}
@@ -57,7 +57,7 @@ public class TreeNodeTests extends TestSequence {
 		TreeNode<Integer> tree = new TreeNode<>(null);
 		try {
 			tree.addChild(null);
-			Assert.fail("addChild should have thrown a NullPointerException.");
+			Assertions.fail("addChild should have thrown a NullPointerException.");
 		} catch (NullPointerException e) {
 			// NullPointerException was thrown as expected.	
 		}
@@ -77,9 +77,9 @@ public class TreeNodeTests extends TestSequence {
 			}
 		}
 
-		Assert.assertTrue(tree.hasChild(child));
+		Assertions.assertTrue(tree.hasChild(child));
 
-		Assert.assertEquals(childWithReferenceIndex, tree.getIndexOfChild(child));
+		Assertions.assertEquals(childWithReferenceIndex, tree.getIndexOfChild(child));
 	}
 
 
@@ -94,16 +94,16 @@ public class TreeNodeTests extends TestSequence {
 
 	private static void assertValueOfDataAtIndexForTreeEquals(int index, TreeNode<Integer> tree, int value) {
 		try {
-			Assert.assertEquals(tree.getChild(index).getData(), Integer.valueOf(value));
+			Assertions.assertEquals(tree.getChild(index).getData(), Integer.valueOf(value));
 		} catch (IndexOutOfBoundsException e) {
-			Assert.fail("Index "+index+" should not be out of bounds for tree.");
+			Assertions.fail("Index "+index+" should not be out of bounds for tree.");
 		}
 	}
 
 	private static void assertIndexOutOfBoundsForTree(int index, TreeNode<Integer> tree) {
 		try {
 			tree.getChild(index);
-			Assert.fail("getChild should have thrown a NullPointer exception.");
+			Assertions.fail("getChild should have thrown a NullPointer exception.");
 		} catch (IndexOutOfBoundsException e) {
 			// getChild threw an exception as expected.
 		}

@@ -1,8 +1,8 @@
 package org.starexec.test.integration;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assume.assumeTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -14,9 +14,9 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 
 /**
  * Applies the whole migration chain to a throwaway PostgreSQL container and then CALLS a
@@ -69,11 +69,11 @@ public class StoredRoutineSmokeIT {
     // container lifecycle
     // ------------------------------------------------------------------
 
-    @BeforeClass
+    @BeforeAll
     public static void startDatabase() throws Exception {
         runtime = detectRuntime();
-        assumeTrue("no podman or docker on PATH; skipping stored-routine smoke test",
-            runtime != null);
+        assumeTrue(runtime != null,
+            "no podman or docker on PATH; skipping stored-routine smoke test");
 
         exec(30, runtime, "rm", "-f", CONTAINER);
 
@@ -82,7 +82,7 @@ public class StoredRoutineSmokeIT {
             "-e", "POSTGRES_USER=starexec",
             "-e", "POSTGRES_DB=postgres",
             IMAGE);
-        assumeTrue("could not start " + IMAGE + ": " + created.output, created.exitCode == 0);
+        assumeTrue(created.exitCode == 0, "could not start " + IMAGE + ": " + created.output);
 
         // pg_isready is not sufficient on its own: the official image starts a temporary
         // server to run its init scripts and then restarts, so there is a window where
@@ -99,7 +99,7 @@ public class StoredRoutineSmokeIT {
                 Thread.sleep(1000);
             }
         }
-        assertTrue("postgres never accepted queries", ready);
+        assertTrue(ready, "postgres never accepted queries");
 
         // Checked, not fired and forgotten. A silent failure here surfaced later as
         // "database does not exist" while applying the first migration, which points at
@@ -113,7 +113,7 @@ public class StoredRoutineSmokeIT {
         seed();
     }
 
-    @AfterClass
+    @AfterAll
     public static void stopDatabase() {
         if (runtime != null) {
             exec(60, runtime, "rm", "-f", CONTAINER);
@@ -133,8 +133,8 @@ public class StoredRoutineSmokeIT {
     public void migrationChainApplies() throws Exception {
         int routines = Integer.parseInt(query(
             "SELECT count(*) FROM information_schema.routines WHERE routine_schema='starexec';"));
-        assertTrue("expected the schema to define stored routines, found " + routines,
-            routines > 400);
+        assertTrue(routines > 400,
+            "expected the schema to define stored routines, found " + routines);
     }
 
     /**
@@ -150,7 +150,7 @@ public class StoredRoutineSmokeIT {
         // seed data makes it -- is the assertion. Pinning a specific number instead
         // would only couple this test to V0002.
         int queues = Integer.parseInt(query("SELECT count(*) FROM starexec.GetAllQueues();"));
-        assertTrue("GetAllQueues must execute and return a count, got " + queues, queues >= 0);
+        assertTrue(queues >= 0, "GetAllQueues must execute and return a count, got " + queues);
 
         run("SELECT starexec.GetIdByName('nonexistent-queue');");
         run("SELECT starexec.GetNameById(1);");
@@ -172,8 +172,8 @@ public class StoredRoutineSmokeIT {
         // Raises a business-logic error for a subscription that does not exist, which is
         // fine: the point is that the function resolves rather than being undefined.
         Result r = psql(DATABASE, "SELECT starexec.UnsubscribeUserFromJob(9001, 9001);");
-        assertTrue("UnsubscribeUserFromJob must exist: " + r.output,
-            !r.output.contains("does not exist"));
+        assertTrue(!r.output.contains("does not exist"),
+            "UnsubscribeUserFromJob must exist: " + r.output);
     }
 
     /** The three-way terminal-status contract. */
@@ -182,14 +182,14 @@ public class StoredRoutineSmokeIT {
         run("UPDATE starexec.job_pairs SET status_code=4 WHERE id=9002;");
         run("UPDATE starexec.jobpair_stage_data SET status_code=4 WHERE jobpair_id=9002;");
 
-        assertEquals("non-terminal to terminal must apply",
-            "t", query("SELECT starexec.UpdatePairStatusPrecise(9002,1,7,23);"));
-        assertEquals("the same terminal status again must be idempotent success",
-            "t", query("SELECT starexec.UpdatePairStatusPrecise(9002,1,7,23);"));
-        assertEquals("a different terminal status must be refused",
-            "f", query("SELECT starexec.UpdatePairStatusPrecise(9002,1,11,23);"));
-        assertEquals("and accepted with an explicit override",
-            "t", query("SELECT starexec.UpdatePairStatusPrecise(9002,1,11,23,TRUE);"));
+        assertEquals("t",
+            query("SELECT starexec.UpdatePairStatusPrecise(9002,1,7,23);"), "non-terminal to terminal must apply");
+        assertEquals("t",
+            query("SELECT starexec.UpdatePairStatusPrecise(9002,1,7,23);"), "the same terminal status again must be idempotent success");
+        assertEquals("f",
+            query("SELECT starexec.UpdatePairStatusPrecise(9002,1,11,23);"), "a different terminal status must be refused");
+        assertEquals("t",
+            query("SELECT starexec.UpdatePairStatusPrecise(9002,1,11,23,TRUE);"), "and accepted with an explicit override");
     }
 
     /** Disk accounting must not move when the same figure is reported twice. */
@@ -207,19 +207,19 @@ public class StoredRoutineSmokeIT {
         String afterSecond = query("SELECT disk_size FROM starexec.users WHERE id=9001;");
 
         assertEquals("5000", afterFirst);
-        assertEquals("a repeated report must not charge twice", afterFirst, afterSecond);
+        assertEquals(afterFirst, afterSecond, "a repeated report must not charge twice");
     }
 
     /** A space must not be movable into itself or below itself. */
     @Test
     public void spaceMovesCannotCreateACycle() throws Exception {
         Result self = psql(DATABASE, "SELECT starexec.MoveSpace(9101, 9101);");
-        assertTrue("a self-move must be refused: " + self.output,
-            self.output.contains("cannot be moved into itself"));
+        assertTrue(self.output.contains("cannot be moved into itself"),
+            "a self-move must be refused: " + self.output);
 
         Result descendant = psql(DATABASE, "SELECT starexec.MoveSpace(9102, 9101);");
-        assertTrue("a move into a descendant must be refused: " + descendant.output,
-            descendant.output.contains("own descendants"));
+        assertTrue(descendant.output.contains("own descendants"),
+            "a move into a descendant must be refused: " + descendant.output);
 
         assertEquals("t", query("SELECT starexec.IsSpaceDescendant(9101,9102);"));
         assertEquals("f", query("SELECT starexec.IsSpaceDescendant(9102,9101);"));
@@ -247,10 +247,10 @@ public class StoredRoutineSmokeIT {
         String first = query("SELECT starexec.AddPipelineStage(9201, NULL::INT, FALSE, FALSE);");
         String second = query("SELECT starexec.AddPipelineStage(9201, NULL::INT, TRUE, FALSE);");
 
-        assertEquals("a primary stage must be recorded on the pipeline row",
-            second, query("SELECT primary_stage_id FROM starexec.solver_pipelines WHERE id=9201;"));
-        assertTrue("stage ids must ascend with insertion order, got " + first + " then " + second,
-            Integer.parseInt(second) > Integer.parseInt(first));
+        assertEquals(second,
+            query("SELECT primary_stage_id FROM starexec.solver_pipelines WHERE id=9201;"), "a primary stage must be recorded on the pipeline row");
+        assertTrue(Integer.parseInt(second) > Integer.parseInt(first),
+            "stage ids must ascend with insertion order, got " + first + " then " + second);
     }
 
     /**
@@ -259,15 +259,15 @@ public class StoredRoutineSmokeIT {
      */
     @Test
     public void addPipelineStageHasNoSurvivingOverload() throws Exception {
-        assertEquals("AddPipelineStage must not be overloaded", "1", query(
+        assertEquals("1", query(
             "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace"
-            + " WHERE n.nspname='starexec' AND p.proname='addpipelinestage';"));
-        assertEquals("the surviving signature must take BOOLEAN and return INT", "1", query(
+            + " WHERE n.nspname='starexec' AND p.proname='addpipelinestage';"), "AddPipelineStage must not be overloaded");
+        assertEquals("1", query(
             "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace"
             + " WHERE n.nspname='starexec' AND p.proname='addpipelinestage' AND p.prokind='f'"
             + " AND pg_get_function_identity_arguments(p.oid)="
             + "'_pid integer, _cid integer, _primary boolean, _noop boolean'"
-            + " AND pg_get_function_result(p.oid)='integer';"));
+            + " AND pg_get_function_result(p.oid)='integer';"), "the surviving signature must take BOOLEAN and return INT");
     }
 
     /**
@@ -291,7 +291,7 @@ public class StoredRoutineSmokeIT {
 
         List<String> returned = List.of(query(
             "SELECT stage_id FROM starexec.GetStagesByPipelineId(9202);").split("\\R"));
-        assertEquals("stages must come back ordered by stage_id", inserted, returned);
+        assertEquals(inserted, returned, "stages must come back ordered by stage_id");
     }
 
     /**
@@ -315,16 +315,16 @@ public class StoredRoutineSmokeIT {
             // Induced failure: pipeline_stages.pipeline_id has a foreign key.
             "SELECT starexec.AddPipelineStage(999999, NULL::INT, TRUE, FALSE);",
             "COMMIT;"));
-        assertTrue("the induced failure must be the foreign key, was: " + attempt.output,
-            attempt.output.contains("pipeline_stages_pipeline_id"));
-        assertTrue("an aborted transaction must not commit: " + attempt.output,
-            attempt.output.contains("ROLLBACK"));
+        assertTrue(attempt.output.contains("pipeline_stages_pipeline_id"),
+            "the induced failure must be the foreign key, was: " + attempt.output);
+        assertTrue(attempt.output.contains("ROLLBACK"),
+            "an aborted transaction must not commit: " + attempt.output);
 
-        assertEquals("the pipeline must not survive the failure of its stage",
-            "0", query("SELECT count(*) FROM starexec.solver_pipelines"
-                + " WHERE name='rollbackAtStage';"));
-        assertEquals("no other pipeline may be disturbed",
-            before, query("SELECT count(*) FROM starexec.solver_pipelines;"));
+        assertEquals("0",
+            query("SELECT count(*) FROM starexec.solver_pipelines"
+                + " WHERE name='rollbackAtStage';"), "the pipeline must not survive the failure of its stage");
+        assertEquals(before,
+            query("SELECT count(*) FROM starexec.solver_pipelines;"), "no other pipeline may be disturbed");
     }
 
     /**
@@ -357,19 +357,19 @@ public class StoredRoutineSmokeIT {
             // transaction and has to disappear with it.
             "CALL starexec.AddToEventOccurrencesNotRelatedToQueue('jobs initiated', 1);",
             "COMMIT;"));
-        assertTrue("an aborted transaction must not commit: " + attempt.output,
-            attempt.output.contains("ROLLBACK"));
+        assertTrue(attempt.output.contains("ROLLBACK"),
+            "an aborted transaction must not commit: " + attempt.output);
 
-        assertEquals("the job must not survive the failure of its pairs",
-            "0", query("SELECT count(*) FROM starexec.jobs WHERE id=9401;"));
-        assertEquals("no job pair may survive",
-            "0", query("SELECT count(*) FROM starexec.job_pairs WHERE job_id=9401;"));
-        assertEquals("no stage data may survive",
-            stageDataBefore, query("SELECT count(*) FROM starexec.jobpair_stage_data;"));
-        assertEquals("no unrelated pair may be disturbed",
-            pairsBefore, query("SELECT count(*) FROM starexec.job_pairs;"));
-        assertEquals("the jobs-initiated counter must not drift",
-            initiatedBefore, query(initiatedCount));
+        assertEquals("0",
+            query("SELECT count(*) FROM starexec.jobs WHERE id=9401;"), "the job must not survive the failure of its pairs");
+        assertEquals("0",
+            query("SELECT count(*) FROM starexec.job_pairs WHERE job_id=9401;"), "no job pair may survive");
+        assertEquals(stageDataBefore,
+            query("SELECT count(*) FROM starexec.jobpair_stage_data;"), "no stage data may survive");
+        assertEquals(pairsBefore,
+            query("SELECT count(*) FROM starexec.job_pairs;"), "no unrelated pair may be disturbed");
+        assertEquals(initiatedBefore,
+            query(initiatedCount), "the jobs-initiated counter must not drift");
     }
 
     /** Upload completion must report an outcome rather than nothing. */
@@ -396,13 +396,13 @@ public class StoredRoutineSmokeIT {
                 .sorted(Comparator.comparing(p -> p.getFileName().toString()))
                 .forEach(files::add);
         }
-        assertTrue("no migrations found under " + MIGRATIONS.toAbsolutePath(), !files.isEmpty());
+        assertTrue(!files.isEmpty(), "no migrations found under " + MIGRATIONS.toAbsolutePath());
 
         for (Path f : files) {
             Result r = execWithStdin(180, Files.readString(f),
                 runtime, "exec", "-i", CONTAINER,
                 "psql", "-U", "starexec", "-d", DATABASE, "-v", "ON_ERROR_STOP=1", "-q");
-            assertEquals("migration failed: " + f.getFileName() + "\n" + r.output, 0, r.exitCode);
+            assertEquals(0, r.exitCode, "migration failed: " + f.getFileName() + "\n" + r.output);
         }
     }
 
@@ -454,13 +454,13 @@ public class StoredRoutineSmokeIT {
     /** Runs SQL and fails the test if psql reports an error. */
     private static void run(String sql) throws Exception {
         Result r = psql(DATABASE, sql);
-        assertEquals("SQL failed: " + sql + "\n" + r.output, 0, r.exitCode);
+        assertEquals(0, r.exitCode, "SQL failed: " + sql + "\n" + r.output);
     }
 
     /** Runs SQL expected to yield a single value, and returns it trimmed. */
     private static String query(String sql) throws Exception {
         Result r = psql(DATABASE, sql);
-        assertEquals("query failed: " + sql + "\n" + r.output, 0, r.exitCode);
+        assertEquals(0, r.exitCode, "query failed: " + sql + "\n" + r.output);
         return r.output.trim();
     }
 
@@ -472,7 +472,7 @@ public class StoredRoutineSmokeIT {
     private static void mustSucceed(String what, String db, String sql) {
         Result r = execWithStdin(60, sql, runtime, "exec", "-i", CONTAINER,
             "psql", "-U", "starexec", "-d", db, "-q", "-v", "ON_ERROR_STOP=1");
-        assertEquals(what + " failed:\n" + r.output, 0, r.exitCode);
+        assertEquals(0, r.exitCode, what + " failed:\n" + r.output);
     }
 
     private static Result psql(String db, String sql) throws Exception {

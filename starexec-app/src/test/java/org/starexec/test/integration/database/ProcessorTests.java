@@ -1,6 +1,6 @@
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Processors;
@@ -31,17 +31,17 @@ public class ProcessorTests extends TestSequence {
 	@StarexecTest
 	private void getProcTest() {
 		Processor p=Processors.get(postProc.getId());
-		Assert.assertNotNull(p);
-		Assert.assertEquals(postProc.getName(),p.getName());
+		Assertions.assertNotNull(p);
+		Assertions.assertEquals(postProc.getName(),p.getName());
 	}
 	
 	@StarexecTest
 	private void updateProcName() {
 		String oldName=postProc.getName();
 		String newName=TestUtil.getRandomSolverName();
-		Assert.assertEquals(oldName,Processors.get(postProc.getId()).getName());
-		Assert.assertTrue(Processors.updateName(postProc.getId(), newName));
-		Assert.assertEquals(newName,Processors.get(postProc.getId()).getName());
+		Assertions.assertEquals(oldName,Processors.get(postProc.getId()).getName());
+		Assertions.assertTrue(Processors.updateName(postProc.getId(), newName));
+		Assertions.assertEquals(newName,Processors.get(postProc.getId()).getName());
 		postProc.setName(newName);
 
 	}
@@ -50,9 +50,9 @@ public class ProcessorTests extends TestSequence {
 	private void updateProcDesc() {
 		String oldDesc=postProc.getDescription();
 		String newDesc=TestUtil.getRandomSolverName();
-		Assert.assertEquals(oldDesc,Processors.get(postProc.getId()).getDescription());
-		Assert.assertTrue(Processors.updateDescription(postProc.getId(), newDesc));
-		Assert.assertEquals(newDesc,Processors.get(postProc.getId()).getDescription());
+		Assertions.assertEquals(oldDesc,Processors.get(postProc.getId()).getDescription());
+		Assertions.assertTrue(Processors.updateDescription(postProc.getId(), newDesc));
+		Assertions.assertEquals(newDesc,Processors.get(postProc.getId()).getDescription());
 		postProc.setDescription(newDesc);
 	}
 	
@@ -65,7 +65,7 @@ public class ProcessorTests extends TestSequence {
 				foundProc=true;
 			}
 		}
-		Assert.assertTrue(foundProc);
+		Assertions.assertTrue(foundProc);
 	}
 	
 	@StarexecTest
@@ -74,7 +74,7 @@ public class ProcessorTests extends TestSequence {
 		for (Processor p : Processors.getByUser(user.getId(), ProcessorType.POST)) {
 			found = found || p.getId()==postProc.getId();
 		}
-		Assert.assertTrue(found);
+		Assertions.assertTrue(found);
 	}
 	
 	@StarexecTest
@@ -83,7 +83,7 @@ public class ProcessorTests extends TestSequence {
 		for (Processor p : Processors.getByUser(user.getId(), ProcessorType.BENCH)) {
 			found = found || p.getId()==R.NO_TYPE_PROC_ID;
 		}
-		Assert.assertTrue(found);
+		Assertions.assertTrue(found);
 	}
 	
 	@StarexecTest
@@ -95,32 +95,32 @@ public class ProcessorTests extends TestSequence {
 				foundProc=true;
 			}
 		}
-		Assert.assertTrue(foundProc);
+		Assertions.assertTrue(foundProc);
 	}
 	
 	@StarexecTest
 	private void getNoTypeProcessorTest() {
 		Processor p = Processors.getNoTypeProcessor();
-		Assert.assertNotNull(p);
+		Assertions.assertNotNull(p);
 	}
 	
 	@StarexecTest
 	private void processorExistsTest() {
-		Assert.assertTrue(Processors.processorExists(postProc.getId()));
+		Assertions.assertTrue(Processors.processorExists(postProc.getId()));
 	}
 	
 	@StarexecTest
 	private void processorDoesNotExistTest() {
-		Assert.assertFalse(Processors.processorExists(-1));
+		Assertions.assertFalse(Processors.processorExists(-1));
 	}
 	
 	@StarexecTest
 	private void updateFilePathTest() {
 		String newPath = "test path postproc";
 		String oldPath = postProc.getFilePath();
-		Assert.assertTrue(Processors.updateFilePath(postProc.getId(), newPath));
-		Assert.assertEquals(newPath, Processors.get(postProc.getId()).getFilePath());
-		Assert.assertTrue(Processors.updateFilePath(postProc.getId(), oldPath));
+		Assertions.assertTrue(Processors.updateFilePath(postProc.getId(), newPath));
+		Assertions.assertEquals(newPath, Processors.get(postProc.getId()).getFilePath());
+		Assertions.assertTrue(Processors.updateFilePath(postProc.getId(), oldPath));
 
 	}
 

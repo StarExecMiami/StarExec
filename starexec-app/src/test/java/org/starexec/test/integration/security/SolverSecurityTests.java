@@ -1,7 +1,7 @@
 package org.starexec.test.integration.security;
 
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Solvers;
@@ -35,9 +35,9 @@ public class SolverSecurityTests extends TestSequence {
 	Space tempCommunity2=null; //led by 'regular'
 	@StarexecTest
 	private void deleteSolverPermissionTest() {
-		Assert.assertTrue(SolverSecurity.canUserDeleteSolver(solver.getId(), owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserDeleteSolver(solver.getId(), admin.getId()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserDeleteSolver(solver.getId(), regular.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteSolver(solver.getId(), owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteSolver(solver.getId(), admin.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserDeleteSolver(solver.getId(), regular.getId()).isSuccess());
 	}
 
 	@StarexecTest
@@ -46,23 +46,23 @@ public class SolverSecurityTests extends TestSequence {
 		ids.add(solver.getId());
 		ids.add(solver2.getId());
 
-		Assert.assertTrue(SolverSecurity.canUserDeleteSolvers(ids, owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserDeleteSolvers(ids, admin.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserDeleteSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteSolvers(ids, admin.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteSolvers(ids, owner.getId()).isSuccess());
 
 		ids.add(solver3.getId());
 
-		Assert.assertNotEquals(true,SolverSecurity.canUserDeleteSolvers(ids, owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserDeleteSolvers(ids, admin.getId()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserDeleteSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserDeleteSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteSolvers(ids, admin.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserDeleteSolvers(ids, owner.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canUserSeeBuildLog() {
-		Assert.assertTrue(SolverSecurity.canUserSeeBuildLog(solver.getId(), owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserSeeBuildLog(solver.getId(), admin.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserSeeBuildLog(solver.getId(), owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserSeeBuildLog(solver.getId(), admin.getId()).isSuccess());
 
-		Assert.assertNotEquals(true, SolverSecurity.canUserSeeBuildLog(solver.getId(), regular.getId()).isSuccess());
+		Assertions.assertNotEquals(true, SolverSecurity.canUserSeeBuildLog(solver.getId(), regular.getId()).isSuccess());
 	}
 
 	@StarexecTest
@@ -71,15 +71,15 @@ public class SolverSecurityTests extends TestSequence {
 		ids.add(c.getId());
 		ids.add(c2.getId());
 
-		Assert.assertTrue(SolverSecurity.canUserDeleteConfigurations(ids, owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserDeleteConfigurations(ids, admin.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserDeleteConfigurations(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteConfigurations(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteConfigurations(ids, admin.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteConfigurations(ids, owner.getId()).isSuccess());
 
 		ids.add(c3.getId());
 
-		Assert.assertNotEquals(true,SolverSecurity.canUserDeleteConfigurations(ids, owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserDeleteConfigurations(ids, admin.getId()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserDeleteConfigurations(ids, owner.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserDeleteConfigurations(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteConfigurations(ids, admin.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserDeleteConfigurations(ids, owner.getId()).isSuccess());
 
 	}
 
@@ -89,15 +89,15 @@ public class SolverSecurityTests extends TestSequence {
 		ids.add(solver.getId());
 		ids.add(solver2.getId());
 
-		Assert.assertTrue(SolverSecurity.canUserRecycleSolvers(ids, owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserRecycleSolvers(ids, admin.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserRecycleSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRecycleSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRecycleSolvers(ids, admin.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRecycleSolvers(ids, owner.getId()).isSuccess());
 
 		ids.add(solver3.getId());
 
-		Assert.assertNotEquals(true,SolverSecurity.canUserRecycleSolvers(ids, owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserRecycleSolvers(ids, admin.getId()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserRecycleSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserRecycleSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRecycleSolvers(ids, admin.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserRecycleSolvers(ids, owner.getId()).isSuccess());
 	}
 
 	@StarexecTest
@@ -106,79 +106,79 @@ public class SolverSecurityTests extends TestSequence {
 		ids.add(solver.getId());
 		ids.add(solver2.getId());
 
-		Assert.assertTrue(SolverSecurity.canUserRestoreSolvers(ids, owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserRestoreSolvers(ids, admin.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserRestoreSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRestoreSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRestoreSolvers(ids, admin.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRestoreSolvers(ids, owner.getId()).isSuccess());
 
 		ids.add(solver3.getId());
 
-		Assert.assertNotEquals(true,SolverSecurity.canUserRestoreSolvers(ids, owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserRestoreSolvers(ids, admin.getId()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserRestoreSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserRestoreSolvers(ids, owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRestoreSolvers(ids, admin.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserRestoreSolvers(ids, owner.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canDownloadSolverTest() {
-		Assert.assertTrue(SolverSecurity.canUserDownloadSolver(solver.getId(), owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserDownloadSolver(solver.getId(), admin.getId()).isSuccess());
-		Assert.assertFalse(SolverSecurity.canUserDownloadSolver(solver.getId(), regular.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDownloadSolver(solver.getId(), owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDownloadSolver(solver.getId(), admin.getId()).isSuccess());
+		Assertions.assertFalse(SolverSecurity.canUserDownloadSolver(solver.getId(), regular.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void recycleSolverPermissionTest() {
-		Assert.assertTrue(SolverSecurity.canUserRecycleSolver(solver.getId(), owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserRecycleSolver(solver.getId(), admin.getId()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserRecycleSolver(solver.getId(), regular.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRecycleSolver(solver.getId(), owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRecycleSolver(solver.getId(), admin.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserRecycleSolver(solver.getId(), regular.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void restoreSolverPermissionTest() {
-		Assert.assertTrue(SolverSecurity.canUserRestoreSolver(solver.getId(), owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserRestoreSolver(solver.getId(), admin.getId()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserRestoreSolver(solver.getId(), regular.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRestoreSolver(solver.getId(), owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRestoreSolver(solver.getId(), admin.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserRestoreSolver(solver.getId(), regular.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canUserUpdateSolver() {
-		Assert.assertTrue(SolverSecurity.canUserUpdateSolver(solver.getId(), solver.getName(), solver.getDescription(), solver.isDownloadable(), admin.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserUpdateSolver(solver.getId(), solver.getName(), solver.getDescription(), solver.isDownloadable(), owner.getId()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserUpdateSolver(solver.getId(), solver.getName(), solver.getDescription(), solver.isDownloadable(), regular.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserUpdateSolver(solver.getId(), solver.getName(), solver.getDescription(), solver.isDownloadable(), admin.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserUpdateSolver(solver.getId(), solver.getName(), solver.getDescription(), solver.isDownloadable(), owner.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserUpdateSolver(solver.getId(), solver.getName(), solver.getDescription(), solver.isDownloadable(), regular.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canUserUpdateConfiguration() {
-		Assert.assertTrue(SolverSecurity.canUserUpdateConfiguration(c.getId(), owner.getId(), c.getName(), c.getDescription()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserUpdateConfiguration(c.getId(), admin.getId(), c.getName(), c.getDescription()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserUpdateConfiguration(c.getId(), regular.getId(), c.getName(), c.getDescription()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserUpdateConfiguration(c.getId(), owner.getId(), c.getName(), c.getDescription()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserUpdateConfiguration(c.getId(), admin.getId(), c.getName(), c.getDescription()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserUpdateConfiguration(c.getId(), regular.getId(), c.getName(), c.getDescription()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canUserAddConfigurationTest() {
-		Assert.assertTrue(SolverSecurity.canUserAddConfiguration(solver.getId(), owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserAddConfiguration(solver.getId(), admin.getId()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserAddConfiguration(solver.getId(), regular.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserAddConfiguration(solver.getId(), owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserAddConfiguration(solver.getId(), admin.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserAddConfiguration(solver.getId(), regular.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canUserDeleteConfigurationTest() {
-		Assert.assertTrue(SolverSecurity.canUserDeleteConfiguration(c.getId(), owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserDeleteConfiguration(c.getId(), admin.getId()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserDeleteConfiguration(c.getId(), regular.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteConfiguration(c.getId(), owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserDeleteConfiguration(c.getId(), admin.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserDeleteConfiguration(c.getId(), regular.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canRunStarexecBuildTest() {
-		Assert.assertTrue(SolverSecurity.canUserRunStarexecBuild(owner.getId(), tempCommunity.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserRunStarexecBuild(admin.getId(), tempCommunity.getId()).isSuccess());
-		Assert.assertNotEquals(true,SolverSecurity.canUserRunStarexecBuild(owner.getId(), tempCommunity2.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRunStarexecBuild(owner.getId(), tempCommunity.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRunStarexecBuild(admin.getId(), tempCommunity.getId()).isSuccess());
+		Assertions.assertNotEquals(true,SolverSecurity.canUserRunStarexecBuild(owner.getId(), tempCommunity2.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void canUserRecycleOrphanedSolversTest() {
-		Assert.assertTrue(SolverSecurity.canUserRecycleOrphanedSolvers(owner.getId(), owner.getId()).isSuccess());
-		Assert.assertTrue(SolverSecurity.canUserRecycleOrphanedSolvers(owner.getId(), admin.getId()).isSuccess());
-		Assert.assertFalse(SolverSecurity.canUserRecycleOrphanedSolvers(admin.getId(), owner.getId()).isSuccess());
-		Assert.assertFalse(SolverSecurity.canUserRecycleOrphanedSolvers(owner.getId(), regular.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRecycleOrphanedSolvers(owner.getId(), owner.getId()).isSuccess());
+		Assertions.assertTrue(SolverSecurity.canUserRecycleOrphanedSolvers(owner.getId(), admin.getId()).isSuccess());
+		Assertions.assertFalse(SolverSecurity.canUserRecycleOrphanedSolvers(admin.getId(), owner.getId()).isSuccess());
+		Assertions.assertFalse(SolverSecurity.canUserRecycleOrphanedSolvers(owner.getId(), regular.getId()).isSuccess());
 	}
 
 	@Override

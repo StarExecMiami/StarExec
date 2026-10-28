@@ -1,8 +1,7 @@
 package org.starexec.test.junit.backend;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.backend.LocalBackend;
 import org.starexec.backend.StageAttributeFiles;
@@ -17,10 +16,12 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.starexec.test.TemporaryFolders.newFile;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * The rules {@link StageAttributeFiles} applies to what a job left behind (#179), and the rerun
@@ -33,11 +34,11 @@ public class StageAttributeFilesTest {
 
 	private static final int PAIR = 77;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	private Path output() throws Exception {
-		return folder.newFolder().toPath();
+		return newFolder(folder).toPath();
 	}
 
 	private static Path declare(Path out) throws Exception {
@@ -101,25 +102,25 @@ public class StageAttributeFilesTest {
 	@Test
 	public void aLinkedStageFileIsNotRead() throws Exception {
 		Path out = output();
-		Path outside = folder.newFile("outside.txt").toPath();
+		Path outside = newFile(folder, "outside.txt").toPath();
 		Files.writeString(outside, "starexec-result=Outside\n");
 		Files.createSymbolicLink(declare(out).resolve("1.txt"), outside);
 
 		Map<Integer, Properties> selected = StageAttributeFiles.select(
 				out, PAIR, Set.of(), 1, new Properties(), () -> Set.of(1));
-		assertTrue("followed a link: " + selected, selected.isEmpty());
+		assertTrue(selected.isEmpty(), "followed a link: " + selected);
 	}
 
 	/** Replacing the marker with a link does not steer the pair back to the legacy file. */
 	@Test
 	public void aLinkedMarkerStillDeclaresTheProtocol() throws Exception {
 		Path out = output();
-		Files.createSymbolicLink(out.resolve("stage-attributes"), folder.newFolder().toPath());
+		Files.createSymbolicLink(out.resolve("stage-attributes"), newFolder(folder).toPath());
 		assertTrue(StageAttributeFiles.declared(out));
 
 		Map<Integer, Properties> selected = StageAttributeFiles.select(
 				out, PAIR, Set.of(), 1, props("starexec-result", "Legacy"), () -> Set.of(1));
-		assertTrue("the legacy file was used: " + selected, selected.isEmpty());
+		assertTrue(selected.isEmpty(), "the legacy file was used: " + selected);
 	}
 
 	/** A file far larger than any post-processor output is refused instead of read into memory. */
@@ -205,8 +206,8 @@ public class StageAttributeFilesTest {
 			Method cleanup = LocalBackend.class.getDeclaredMethod(
 					"cleanupPreviousRunArtifacts", File.class);
 			cleanup.setAccessible(true);
-			assertFalse("the attempt must not start over a surviving stage-attributes directory",
-					(boolean) cleanup.invoke(new LocalBackend(), out.toFile()));
+			assertFalse((boolean) cleanup.invoke(new LocalBackend(), out.toFile()),
+					"the attempt must not start over a surviving stage-attributes directory");
 		} finally {
 			Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxr-xr-x"));
 		}
@@ -222,9 +223,9 @@ public class StageAttributeFilesTest {
 			Method cleanup = KubernetesNativeBackend.class.getDeclaredMethod(
 					"clearStaleAttemptArtifacts", Path.class, int.class);
 			cleanup.setAccessible(true);
-			assertFalse("the attempt must not be submitted over a surviving stage-attributes"
-							+ " directory",
-					(boolean) cleanup.invoke(new KubernetesNativeBackend(), out, PAIR));
+			assertFalse((boolean) cleanup.invoke(new KubernetesNativeBackend(), out, PAIR),
+					"the attempt must not be submitted over a surviving stage-attributes"
+							+ " directory");
 		} finally {
 			Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxr-xr-x"));
 		}

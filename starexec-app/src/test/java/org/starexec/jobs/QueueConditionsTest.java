@@ -1,9 +1,9 @@
 package org.starexec.jobs;
 
-import static org.junit.Assert.assertEquals;
-
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.jobs.QueueConditions.Kind;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * When a condition that keeps a queue from dispatching is due a report: when it starts, every
@@ -27,14 +27,14 @@ public class QueueConditionsTest {
     public void aConditionThatLastsIsReportedAgainEveryRepeatInterval() {
         QueueConditions conditions = new QueueConditions();
         conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0);
-        assertEquals("just before the interval",
-            -1, conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + REPEAT - 1));
-        assertEquals("at the interval, with the minutes it has lasted",
-            360, conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + REPEAT));
-        assertEquals("the pass after that",
-            -1, conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + REPEAT + PASS));
-        assertEquals("the interval counts from the last report",
-            -1, conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + 2 * REPEAT - 1));
+        assertEquals(-1,
+            conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + REPEAT - 1), "just before the interval");
+        assertEquals(360,
+            conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + REPEAT), "at the interval, with the minutes it has lasted");
+        assertEquals(-1,
+            conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + REPEAT + PASS), "the pass after that");
+        assertEquals(-1,
+            conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + 2 * REPEAT - 1), "the interval counts from the last report");
         assertEquals(720, conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + 2 * REPEAT));
     }
 
@@ -52,7 +52,7 @@ public class QueueConditionsTest {
         QueueConditions conditions = new QueueConditions();
         conditions.report(1, Kind.NO_NODES, "a", T0);
         assertEquals(5, conditions.end(1, Kind.NO_NODES, T0 + 5 * MINUTE));
-        assertEquals("it has ended already", -1, conditions.end(1, Kind.NO_NODES, T0 + 6 * MINUTE));
+        assertEquals(-1, conditions.end(1, Kind.NO_NODES, T0 + 6 * MINUTE), "it has ended already");
     }
 
     @Test
@@ -83,10 +83,10 @@ public class QueueConditionsTest {
     public void queuesAndKindsAreKeptApart() {
         QueueConditions conditions = new QueueConditions();
         assertEquals(0, conditions.report(1, Kind.NO_NODES, "a", T0));
-        assertEquals("another queue", 0, conditions.report(2, Kind.NO_NODES, "a", T0));
-        assertEquals("another kind", 0, conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0));
-        assertEquals("ending one kind", 3, conditions.end(1, Kind.NO_NODES, T0 + 3 * MINUTE));
-        assertEquals("leaves the other", -1, conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + 4 * MINUTE));
-        assertEquals("and the other queue", -1, conditions.report(2, Kind.NO_NODES, "a", T0 + 4 * MINUTE));
+        assertEquals(0, conditions.report(2, Kind.NO_NODES, "a", T0), "another queue");
+        assertEquals(0, conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0), "another kind");
+        assertEquals(3, conditions.end(1, Kind.NO_NODES, T0 + 3 * MINUTE), "ending one kind");
+        assertEquals(-1, conditions.report(1, Kind.CANNOT_ACCEPT_WORK, "a", T0 + 4 * MINUTE), "leaves the other");
+        assertEquals(-1, conditions.report(2, Kind.NO_NODES, "a", T0 + 4 * MINUTE), "and the other queue");
     }
 }

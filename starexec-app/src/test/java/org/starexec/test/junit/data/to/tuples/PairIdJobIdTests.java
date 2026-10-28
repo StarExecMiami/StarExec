@@ -1,8 +1,7 @@
 package org.starexec.test.junit.data.to.tuples;
-
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.to.tuples.PairIdJobId;
-import org.testng.Assert;
+import org.junit.jupiter.api.Assertions;
 
 
 public class PairIdJobIdTests {
@@ -12,35 +11,36 @@ public class PairIdJobIdTests {
         PairIdJobId first = new PairIdJobId(1, 1);
         PairIdJobId second = new PairIdJobId(1, 1);
 
-        Assert.assertEquals(first, second);
+        Assertions.assertEquals(first, second);
+        Assertions.assertEquals(second, first);
     }
 
     @Test
     public void rightInequalityTest() {
         PairIdJobId first = new PairIdJobId(1, 2);
         PairIdJobId second = new PairIdJobId(1, 1);
-        Assert.assertNotEquals(first, second);
+        Assertions.assertNotEquals(first, second);
     }
 
     @Test
     public void leftInequalityTest() {
         PairIdJobId first = new PairIdJobId(2, 1);
         PairIdJobId second = new PairIdJobId(1, 1);
-        Assert.assertNotEquals(first, second);
+        Assertions.assertNotEquals(first, second);
     }
 
     @Test
     public void bothInequalityTest() {
         PairIdJobId first = new PairIdJobId(2, 2);
         PairIdJobId second = new PairIdJobId(1, 1);
-        Assert.assertNotEquals(first, second);
+        Assertions.assertNotEquals(first, second);
     }
 
     @Test
     public void hashTest() {
         PairIdJobId first = new PairIdJobId(1, 1);
         PairIdJobId second = new PairIdJobId(1, 1);
-        Assert.assertEquals(first.hashCode(), second.hashCode());
+        Assertions.assertEquals(first.hashCode(), second.hashCode());
     }
 
 

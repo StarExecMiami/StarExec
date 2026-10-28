@@ -189,23 +189,10 @@
                 <version>${junit-jupiter.version}</version>
                 <scope>test</scope>
             </dependency>
-            <!-- JUnit 5 Vintage Engine for JUnit 4 backward compatibility -->
-            <dependency>
-                <groupId>org.junit.vintage</groupId>
-                <artifactId>junit-vintage-engine</artifactId>
-                <version>${junit-jupiter.version}</version>
-                <scope>test</scope>
-            </dependency>
             <!-- JUnit Platform -->
             <dependency>
                 <groupId>org.junit.platform</groupId>
-                <artifactId>junit-platform-suite-api</artifactId>
-                <version>${junit-platform.version}</version>
-                <scope>test</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.junit.platform</groupId>
-                <artifactId>junit-platform-suite-engine</artifactId>
+                <artifactId>junit-platform-launcher</artifactId>
                 <version>${junit-platform.version}</version>
                 <scope>test</scope>
             </dependency>
@@ -218,9 +205,44 @@
                 <groupId>org.owasp</groupId>
                 <artifactId>dependency-check-maven</artifactId>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+            </plugin>
         </plugins>
         <pluginManagement>
             <plugins>
+                <!-- Tests are JUnit 5 (Jupiter) only. No engine runs JUnit 4 or TestNG tests, so
+                     with junit:junit or TestNG on the classpath such a test would compile and
+                     then silently never run. This fails the build instead, including when a new
+                     dependency brings one of them in transitively. tomcat-credential-handler
+                     has no parent, so it repeats this rule. -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-enforcer-plugin</artifactId>
+                    <version>3.6.3</version>
+                    <executions>
+                        <execution>
+                            <id>jupiter-only</id>
+                            <goals>
+                                <goal>enforce</goal>
+                            </goals>
+                            <configuration>
+                                <rules>
+                                    <bannedDependencies>
+                                        <excludes>
+                                            <exclude>junit:junit</exclude>
+                                            <exclude>org.junit.vintage:junit-vintage-engine</exclude>
+                                            <exclude>org.testng:testng</exclude>
+                                        </excludes>
+                                        <message>Tests use JUnit 5 (Jupiter) only: a JUnit 4 or TestNG test would compile and never run. Write tests with org.junit.jupiter.api, and exclude the banned artifact from any dependency that brings it in.</message>
+                                    </bannedDependencies>
+                                </rules>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>

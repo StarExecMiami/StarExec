@@ -1,10 +1,10 @@
 package org.starexec.test.junit.database;
 
 import org.apache.commons.lang3.tuple.Triple;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.app.RESTHelpers;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * The job attributes page shows each result's wallclock and cpu totals to four decimals, and
@@ -61,13 +61,13 @@ public class JobAttributeTimePrecisionSqlTest extends Common {
 	private int solverId;
 	private int configId;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobAttributeTimePrecisionSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			userId = selectInt(con, "SELECT min(id) FROM starexec.users");
@@ -93,7 +93,7 @@ public class JobAttributeTimePrecisionSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		if (jobId == 0) {
 			return;
@@ -127,13 +127,13 @@ public class JobAttributeTimePrecisionSqlTest extends Common {
 	@Test
 	public void theAttributesTableKeepsTimeBelowASecond() throws SQLException {
 		List<AttributesTableRow> table = RESTHelpers.getAttributesTable(spaceId);
-		assertEquals("one configuration, one row", 1, table.size());
+		assertEquals(1, table.size(), "one configuration, one row");
 
 		List<String> values = Jobs.getJobAttributeValues(spaceId);
 		values.sort(null);
 		Map<String, String> cells = new TreeMap<>();
 		List<Triple<Integer, String, String>> countAndTimes = table.get(0).countAndTimes;
-		assertEquals("a cell per result", values.size(), countAndTimes.size());
+		assertEquals(values.size(), countAndTimes.size(), "a cell per result");
 		for (int i = 0; i < values.size(); i++) {
 			Triple<Integer, String, String> cell = countAndTimes.get(i);
 			cells.put(values.get(i), cell.getLeft()

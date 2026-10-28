@@ -1,7 +1,6 @@
 package org.starexec.test.junit;
 
-import static org.junit.Assert.*;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.util.Util;
 
 import java.awt.*;
@@ -9,6 +8,12 @@ import java.io.File;
 import java.io.IOException;
 import java.util.List;
 import javax.servlet.http.Cookie;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class UtilTests {
 
@@ -99,13 +104,13 @@ public class UtilTests {
 	public void isBinaryFile() throws IOException {
 		// Use pom.xml which exists in the project root
 		File textFile = new File("pom.xml");
-		assertTrue("Text file should exist: " + textFile.getAbsolutePath(), textFile.exists());
-		assertFalse("pom.xml should be detected as text file", Util.isBinaryFile(textFile));
+		assertTrue(textFile.exists(), "Text file should exist: " + textFile.getAbsolutePath());
+		assertFalse(Util.isBinaryFile(textFile), "pom.xml should be detected as text file");
 		
 		// Use a compiled class file from target directory as binary test
 		File binaryFile = new File("target/classes/org/starexec/util/Util.class");
 		if (binaryFile.exists()) {
-			assertTrue("Class file should be detected as binary", Util.isBinaryFile(binaryFile));
+			assertTrue(Util.isBinaryFile(binaryFile), "Class file should be detected as binary");
 		}
 		// If class file doesn't exist (e.g., clean build), skip binary test
 	}
@@ -161,8 +166,8 @@ public class UtilTests {
 		Cookie cookie = Util.createEncodedCookie("session", "user123");
 		
 		// Verify security attributes are set
-		assertTrue("Cookie should be HttpOnly", cookie.isHttpOnly());
-		assertEquals("Cookie path should be /starexec", "/starexec", cookie.getPath());
+		assertTrue(cookie.isHttpOnly(), "Cookie should be HttpOnly");
+		assertEquals("/starexec", cookie.getPath(), "Cookie path should be /starexec");
 	}
 
 	@Test

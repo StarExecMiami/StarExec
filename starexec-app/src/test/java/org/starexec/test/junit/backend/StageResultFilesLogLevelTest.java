@@ -4,15 +4,15 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 import org.starexec.backend.StageAttributeFiles;
 import org.starexec.backend.StageStatsFiles;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -21,8 +21,9 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * At which level a finished stage's missing per-stage file is reported.
@@ -37,14 +38,14 @@ public class StageResultFilesLogLevelTest {
 
 	private static final int PAIR = 77;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	private Logger logger;
 	private Level previous;
 	private ListAppender<ILoggingEvent> appender;
 
-	@Before
+	@BeforeEach
 	public void captureLog() {
 		logger = (Logger) LoggerFactory.getLogger("org.starexec.backend.StageResultFiles");
 		previous = logger.getLevel();
@@ -54,7 +55,7 @@ public class StageResultFilesLogLevelTest {
 		logger.addAppender(appender);
 	}
 
-	@After
+	@AfterEach
 	public void releaseLog() {
 		logger.detachAppender(appender);
 		appender.stop();
@@ -62,7 +63,7 @@ public class StageResultFilesLogLevelTest {
 	}
 
 	private Path output() throws Exception {
-		return folder.newFolder().toPath();
+		return newFolder(folder).toPath();
 	}
 
 	private static Path declare(Path out, String directory) throws Exception {
@@ -105,11 +106,11 @@ public class StageResultFilesLogLevelTest {
 		Map<Integer, Properties> selected = StageAttributeFiles.select(
 				out, PAIR, Set.of(), 1, new Properties(), () -> Set.of(1));
 
-		assertTrue("a stage without a file has no attributes", selected.isEmpty());
-		assertEquals("nothing at WARN or above, which is stored in error_logs: " + all(),
-				List.of(), atOrAbove(Level.WARN));
-		assertEquals("one DEBUG line still names the pair, the stage and what it lacks: " + all(),
-				1, count(Level.DEBUG, "Pair 77 stage 1 ", "attributes"));
+		assertTrue(selected.isEmpty(), "a stage without a file has no attributes");
+		assertEquals(List.of(),
+				atOrAbove(Level.WARN), "nothing at WARN or above, which is stored in error_logs: " + all());
+		assertEquals(1,
+				count(Level.DEBUG, "Pair 77 stage 1 ", "attributes"), "one DEBUG line still names the pair, the stage and what it lacks: " + all());
 	}
 
 	/**
@@ -126,9 +127,9 @@ public class StageResultFilesLogLevelTest {
 
 		assertEquals(Set.of(1), selected.keySet());
 		assertEquals("Theorem", selected.get(1).getProperty("starexec-result"));
-		assertEquals("nothing at WARN or above: " + all(), List.of(), atOrAbove(Level.WARN));
-		assertEquals("one DEBUG line for stage 2: " + all(),
-				1, count(Level.DEBUG, "Pair 77 stage 2 ", "attributes"));
+		assertEquals(List.of(), atOrAbove(Level.WARN), "nothing at WARN or above: " + all());
+		assertEquals(1,
+				count(Level.DEBUG, "Pair 77 stage 2 ", "attributes"), "one DEBUG line for stage 2: " + all());
 	}
 
 	/** Every stage that ran publishes its measurements, so one without them has lost them. */
@@ -141,8 +142,8 @@ public class StageResultFilesLogLevelTest {
 				out, PAIR, Set.of(), 1, () -> Set.of(1));
 
 		assertTrue(selected.isEmpty());
-		assertEquals("the lost measurements are still a WARN: " + all(),
-				1, count(Level.WARN, "Pair 77 stage 1 finished without a per-stage measurements file"));
+		assertEquals(1,
+				count(Level.WARN, "Pair 77 stage 1 finished without a per-stage measurements file"), "the lost measurements are still a WARN: " + all());
 	}
 
 	/**
@@ -159,6 +160,6 @@ public class StageResultFilesLogLevelTest {
 				out, PAIR, Set.of(1), 0, new Properties(), () -> Set.of(1, 2)).isEmpty());
 		assertTrue(StageStatsFiles.select(out, PAIR, Set.of(1), 0, () -> Set.of(1, 2)).isEmpty());
 
-		assertEquals("no line while the pair runs: " + all(), List.of(), all());
+		assertEquals(List.of(), all(), "no line while the pair runs: " + all());
 	}
 }

@@ -1,8 +1,8 @@
 package org.starexec.test.junit.data.database;
 
-import org.junit.Assert;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
@@ -17,7 +17,7 @@ public class JobTests {
 	
 	private final static String TEST_QUEUE_NAME = "all.q";
 
-	@Before
+	@BeforeEach
 	public void initialize() {
 		// No static mocking needed in @Before, we'll do it in each test
 	}
@@ -43,7 +43,7 @@ public class JobTests {
 			// to returning R.DEFAULT_QUEUE_SLOTS = "2"
 			jobsMock.when(() -> Jobs.getSlotsInJobQueue(any())).thenCallRealMethod();
 			// Verify the method returns the default when SGE backend is unavailable
-			Assert.assertEquals(R.DEFAULT_QUEUE_SLOTS, Jobs.getSlotsInJobQueue(job));
+			Assertions.assertEquals(R.DEFAULT_QUEUE_SLOTS, Jobs.getSlotsInJobQueue(job));
 		}
 	}
 
@@ -53,7 +53,7 @@ public class JobTests {
 			R.BACKEND_TYPE = R.LOCAL_TYPE;
 			Job job = getTestJob();
 			jobsMock.when(() -> Jobs.getSlotsInJobQueue(job)).thenCallRealMethod();
-			Assert.assertEquals(Jobs.getSlotsInJobQueue(job), R.DEFAULT_QUEUE_SLOTS);
+			Assertions.assertEquals(Jobs.getSlotsInJobQueue(job), R.DEFAULT_QUEUE_SLOTS);
 			System.out.println("End GetSlotsInJobQueueForLocalTest");
 		}
 	}
@@ -64,7 +64,7 @@ public class JobTests {
 			Job job = getTestJob();
 			jobsMock.when(() -> Jobs.getSlotsInJobQueue(job)).thenCallRealMethod();
 			R.BACKEND_TYPE = R.OAR_TYPE;
-			Assert.assertEquals(Jobs.getSlotsInJobQueue(job), R.DEFAULT_QUEUE_SLOTS);
+			Assertions.assertEquals(Jobs.getSlotsInJobQueue(job), R.DEFAULT_QUEUE_SLOTS);
 		}
 	}
 }

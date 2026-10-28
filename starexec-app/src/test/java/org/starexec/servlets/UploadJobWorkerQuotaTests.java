@@ -5,7 +5,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.apache.commons.io.FileUtils;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.UploadJobQueue;
@@ -24,9 +24,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Covers the disk-quota half of upload extraction.
@@ -55,7 +55,7 @@ public class UploadJobWorkerQuotaTests {
             IOException failure = expectPrepareExtractionFailure(tempRoot, archive, 8L);
 
             assertQuotaWordingNotSecurityWording(failure);
-            assertEquals("extraction must not have started", 0, countDirectories(archive.getParent()));
+            assertEquals(0, countDirectories(archive.getParent()), "extraction must not have started");
         } finally {
             FileUtils.deleteQuietly(tempRoot.toFile());
         }
@@ -122,12 +122,12 @@ public class UploadJobWorkerQuotaTests {
             // so only a stream-derived figure could reject this upload. Derived rather than
             // hard-coded: TAR padding depends on the writer's record and block size.
             long quota = (floor + tarStreamBytes) / 2;
-            assertTrue("TAR stream must exceed the quota", tarStreamBytes > quota);
-            assertTrue("payload must fit inside the quota", payload.length() < quota);
-            assertTrue("compressed archive must clear the quota", Files.size(archive) < quota);
+            assertTrue(tarStreamBytes > quota, "TAR stream must exceed the quota");
+            assertTrue(payload.length() < quota, "payload must fit inside the quota");
+            assertTrue(Files.size(archive) < quota, "compressed archive must clear the quota");
 
-            assertEquals("an upload whose payload fits must extract", 1,
-                extractSuccessfully(tempRoot, archive, quota));
+            assertEquals(1, extractSuccessfully(tempRoot, archive, quota),
+                "an upload whose payload fits must extract");
         } finally {
             FileUtils.deleteQuietly(tempRoot.toFile());
         }
@@ -147,16 +147,16 @@ public class UploadJobWorkerQuotaTests {
             Path archive = createTarGzArchive(sessionArchive(tempRoot, "streaming", "AllProblems.tgz"),
                 "bench/file1.p", payload);
             long quota = 100_000L;
-            assertEquals("fixture must have no pre-flight estimate", -1L,
-                new UploadJobWorker().estimateUncompressedSizeBytes(archive.toFile()));
-            assertTrue("fixture must clear the compressed-size pre-check", Files.size(archive) < quota);
-            assertTrue("fixture must exceed the quota once unpacked", payload.length() > quota);
+            assertEquals(-1L, new UploadJobWorker().estimateUncompressedSizeBytes(archive.toFile()),
+                "fixture must have no pre-flight estimate");
+            assertTrue(Files.size(archive) < quota, "fixture must clear the compressed-size pre-check");
+            assertTrue(payload.length() > quota, "fixture must exceed the quota once unpacked");
 
             IOException failure = expectPrepareExtractionFailure(tempRoot, archive, quota);
 
             assertQuotaWordingNotSecurityWording(failure);
-            assertEquals("partial extraction must be cleaned up", 0,
-                countDirectories(archive.getParent()));
+            assertEquals(0, countDirectories(archive.getParent()),
+                "partial extraction must be cleaned up");
         } finally {
             FileUtils.deleteQuietly(tempRoot.toFile());
         }
@@ -202,10 +202,10 @@ public class UploadJobWorkerQuotaTests {
                     worker.prepareExtraction(job, archive.toFile(), new AtomicInteger());
                 } catch (IOException e) {
                     String message = e.getMessage();
-                    assertTrue("should name the archive, was: " + message,
-                        message.contains("AllProblems.tgz"));
-                    assertFalse("should not expose the absolute server path, was: " + message,
-                        message.contains(tempRoot.toAbsolutePath().toString()));
+                    assertTrue(message.contains("AllProblems.tgz"),
+                        "should name the archive, was: " + message);
+                    assertFalse(message.contains(tempRoot.toAbsolutePath().toString()),
+                        "should not expose the absolute server path, was: " + message);
                     return;
                 }
             }
@@ -219,14 +219,14 @@ public class UploadJobWorkerQuotaTests {
 
     private void assertQuotaWordingNotSecurityWording(IOException failure) {
         String message = failure.getMessage();
-        assertTrue("should name the limit as a disk quota, was: " + message,
-            message.contains("disk quota"));
-        assertTrue("should name the remedy, was: " + message,
-            message.contains("recycle bin"));
-        assertFalse("must not be reported as a security rejection, was: " + message,
-            message.contains(SAFETY_LIMIT_WORDING));
-        assertFalse("must not reuse the zip-bomb wording, was: " + message,
-            message.contains(ZIP_BOMB_WORDING));
+        assertTrue(message.contains("disk quota"),
+            "should name the limit as a disk quota, was: " + message);
+        assertTrue(message.contains("recycle bin"),
+            "should name the remedy, was: " + message);
+        assertFalse(message.contains(SAFETY_LIMIT_WORDING),
+            "must not be reported as a security rejection, was: " + message);
+        assertFalse(message.contains(ZIP_BOMB_WORDING),
+            "must not reuse the zip-bomb wording, was: " + message);
     }
 
     private IOException expectPrepareExtractionFailure(Path tempRoot, Path archive, long remainingQuota)

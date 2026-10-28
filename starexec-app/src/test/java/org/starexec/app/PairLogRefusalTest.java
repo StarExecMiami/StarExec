@@ -1,7 +1,7 @@
 package org.starexec.app;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.JobPairs;
@@ -14,8 +14,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.core.Response;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 
@@ -30,7 +30,7 @@ public class PairLogRefusalTest {
 
 	private static final int PAIR_ID = 537;
 
-	@BeforeClass
+	@BeforeAll
 	public static void initialize() {
 		Validator.initialize();
 	}

@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.jobs.JobManager;
 
 import java.io.File;
@@ -15,8 +14,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * The producer half of the contract, joined to the consumer half.
@@ -37,8 +37,8 @@ public class JobscriptArrayCardinalityTest {
 	private static final Path SGE = Path.of("src/main/java/org/starexec/config/sge");
 	private static final Path TEMPLATE = SGE.resolve("jobscript");
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	/**
 	 * The representation, stated as the producer defines it: one element per input, plus the
@@ -52,8 +52,8 @@ public class JobscriptArrayCardinalityTest {
 			String rendered = JobManager.toBashArray("BENCH_INPUT_PATHS", withSentinel(paths(inputs)), true);
 			int declared = countAssignments(rendered, "BENCH_INPUT_PATHS");
 
-			assertEquals(inputs + " inputs must render " + (inputs + 1) + " elements",
-					inputs + 1, declared);
+			assertEquals(inputs + 1,
+					declared, inputs + " inputs must render " + (inputs + 1) + " elements");
 		}
 	}
 
@@ -62,10 +62,10 @@ public class JobscriptArrayCardinalityTest {
 	public void theTemplateDefinesBothCounts() throws Exception {
 		String template = Files.readString(TEMPLATE);
 
-		assertTrue("the template must define NUM_STAGES", numStagesLine(template) != null);
-		assertTrue("the template must define NUM_BENCH_INPUTS", numBenchInputsLine(template) != null);
-		assertTrue("NUM_BENCH_INPUTS must exclude the sentinel, was: " + numBenchInputsLine(template),
-				numBenchInputsLine(template).contains("- 1"));
+		assertTrue(numStagesLine(template) != null, "the template must define NUM_STAGES");
+		assertTrue(numBenchInputsLine(template) != null, "the template must define NUM_BENCH_INPUTS");
+		assertTrue(numBenchInputsLine(template).contains("- 1"),
+				"NUM_BENCH_INPUTS must exclude the sentinel, was: " + numBenchInputsLine(template));
 	}
 
 	/**
@@ -94,7 +94,7 @@ public class JobscriptArrayCardinalityTest {
 
 	private void assertDecodes(int stages, int inputs) throws Exception {
 		String label = "stages=" + stages + " inputs=" + inputs;
-		Path dir = folder.newFolder("gen-" + stages + "-" + inputs + "-" + System.nanoTime()).toPath();
+		Path dir = newFolder(folder, "gen-" + stages + "-" + inputs + "-" + System.nanoTime()).toPath();
 		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
 		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
 
@@ -132,16 +132,16 @@ public class JobscriptArrayCardinalityTest {
 		Files.writeString(script.toPath(), s.toString());
 
 		// The generated text must be syntactically valid before it is run.
-		assertEquals(label + ": generated script must parse", 0,
-				run(Bash.PATH, "-n", script.getAbsolutePath()).exit);
+		assertEquals(0, run(Bash.PATH, "-n", script.getAbsolutePath()).exit,
+				label + ": generated script must parse");
 
 		Result r = run(Bash.PATH, script.getAbsolutePath());
-		assertEquals(label + ": must not abort:\n" + r.out, 0, r.exit);
-		assertTrue(label + ": must complete the decode:\n" + r.out, r.out.contains("GEN-DECODE-COMPLETED"));
-		assertEquals(label + ": NUM_STAGES", String.valueOf(stages), value(r.out, "GEN-NUM_STAGES"));
-		assertEquals(label + ": NUM_BENCH_INPUTS", String.valueOf(inputs), value(r.out, "GEN-NUM_BENCH_INPUTS"));
-		assertEquals(label + ": array length is inputs plus the sentinel",
-				String.valueOf(inputs + 1), value(r.out, "GEN-ARRAY_LEN"));
+		assertEquals(0, r.exit, label + ": must not abort:\n" + r.out);
+		assertTrue(r.out.contains("GEN-DECODE-COMPLETED"), label + ": must complete the decode:\n" + r.out);
+		assertEquals(String.valueOf(stages), value(r.out, "GEN-NUM_STAGES"), label + ": NUM_STAGES");
+		assertEquals(String.valueOf(inputs), value(r.out, "GEN-NUM_BENCH_INPUTS"), label + ": NUM_BENCH_INPUTS");
+		assertEquals(String.valueOf(inputs + 1),
+				value(r.out, "GEN-ARRAY_LEN"), label + ": array length is inputs plus the sentinel");
 
 		List<String> decoded = new ArrayList<>();
 		for (String line : r.out.split("\n")) {
@@ -149,7 +149,7 @@ public class JobscriptArrayCardinalityTest {
 				decoded.add(line.substring("GEN-INPUT|".length()));
 			}
 		}
-		assertEquals(label + ": every input decoded exactly once", paths(inputs), decoded);
+		assertEquals(paths(inputs), decoded, label + ": every input decoded exactly once");
 	}
 
 	private static String numStagesLine(String template) {
@@ -220,7 +220,7 @@ public class JobscriptArrayCardinalityTest {
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "command must not hang");
 		return new Result(p.exitValue(), out);
 	}
 

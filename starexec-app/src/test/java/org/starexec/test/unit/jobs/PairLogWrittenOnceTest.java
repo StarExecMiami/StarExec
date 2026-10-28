@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
@@ -16,8 +15,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * The pair log that {@code log} in the shipped {@code functions.bash} writes.
@@ -65,8 +65,8 @@ public class PairLogWrittenOnceTest {
 			"TS: cleaned",
 			"Jobscript ending.");
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	/** The defect: the log ended with fragments and repeats of lines written before it. */
 	@Test
@@ -90,10 +90,10 @@ public class PairLogWrittenOnceTest {
 
 		String finished = run.log();
 		List<String> snapshots = run.snapshots();
-		assertEquals("one copy per step", 6, snapshots.size());
+		assertEquals(6, snapshots.size(), "one copy per step");
 		for (int i = 0; i < snapshots.size(); i++) {
-			assertTrue("copy " + (i + 1) + " is not a prefix of the finished log:\n" + snapshots.get(i),
-					finished.startsWith(snapshots.get(i)));
+			assertTrue(finished.startsWith(snapshots.get(i)),
+					"copy " + (i + 1) + " is not a prefix of the finished log:\n" + snapshots.get(i));
 		}
 	}
 
@@ -124,17 +124,17 @@ public class PairLogWrittenOnceTest {
 		}
 
 		/** As LocalBackend starts a job script: stderr into stdout, and stdout into the pair log. */
-		static Run withStdoutIntoTheLog(TemporaryFolder folder) throws Exception {
+		static Run withStdoutIntoTheLog(File folder) throws Exception {
 			return start(folder, true, STEPS);
 		}
 
 		/** As a pod starts one: stdout is a pipe the container runtime reads. */
-		static Run withStdoutToAPipe(TemporaryFolder folder) throws Exception {
+		static Run withStdoutToAPipe(File folder) throws Exception {
 			return start(folder, false, STEPS);
 		}
 
-		static Run start(TemporaryFolder folder, boolean stdoutIntoTheLog, String steps) throws Exception {
-			Path root = folder.newFolder("log-" + System.nanoTime()).toPath();
+		static Run start(File folder, boolean stdoutIntoTheLog, String steps) throws Exception {
+			Path root = newFolder(folder, "log-" + System.nanoTime()).toPath();
 			Path sge = Files.createDirectories(root.resolve("sge"));
 			for (String name : new String[] {"functions.bash", "status_codes.bash", "timestamper.bash"}) {
 				Path from = SGE.resolve(name);
@@ -202,10 +202,10 @@ public class PairLogWrittenOnceTest {
 				p.descendants().forEach(ProcessHandle::destroyForcibly);
 				p.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
 			}
-			assertTrue("the script must not hang", finished);
+			assertTrue(finished, "the script must not hang");
 			String stdout = new String(piped.get(10, TimeUnit.SECONDS), StandardCharsets.UTF_8);
-			assertEquals("the script must succeed:\n" + (stdoutIntoTheLog ? Files.readString(log) : stdout),
-					0, p.exitValue());
+			assertEquals(0,
+					p.exitValue(), "the script must succeed:\n" + (stdoutIntoTheLog ? Files.readString(log) : stdout));
 			return new Run(log, snapshots, stdout);
 		}
 

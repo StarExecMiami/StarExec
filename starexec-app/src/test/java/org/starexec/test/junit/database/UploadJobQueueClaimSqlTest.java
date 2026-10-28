@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.UploadJobQueue;
 import org.starexec.data.to.UploadJob;
@@ -16,8 +16,8 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Optional;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * At most one upload by URL is claimed at a time, against a real database (#139).
@@ -37,13 +37,13 @@ public class UploadJobQueueClaimSqlTest extends Common {
 	// the database may hold.
 	private static final int PRIORITY = 1_000_000;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("UploadJobQueueClaimSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		cleanUp();
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
@@ -55,13 +55,13 @@ public class UploadJobQueueClaimSqlTest extends Common {
 			try (ResultSet rs = s.executeQuery("SELECT count(*) FROM starexec.upload_jobs WHERE status = "
 					+ "'PROCESSING' AND source_url IS NOT NULL")) {
 				rs.next();
-				assertEquals("an upload by URL from outside this test is already running; use a "
-						+ "disposable database", 0, rs.getInt(1));
+				assertEquals(0, rs.getInt(1), "an upload by URL from outside this test is already running; use a "
+						+ "disposable database");
 			}
 		}
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws SQLException {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			s.execute("DELETE FROM starexec.upload_jobs WHERE user_id = " + USER_ID);
@@ -77,7 +77,7 @@ public class UploadJobQueueClaimSqlTest extends Common {
 		long waiting = insertJob("PENDING", "https://example.org/next.tgz", 1);
 		long file = insertJob("PENDING", null, 2);
 
-		assertEquals("the uploaded file is claimed although the URL upload is smaller", file, claimed());
+		assertEquals(file, claimed(), "the uploaded file is claimed although the URL upload is smaller");
 		assertEquals("PENDING", status(waiting));
 	}
 
@@ -147,7 +147,7 @@ public class UploadJobQueueClaimSqlTest extends Common {
 
 	private static long claimed() {
 		Optional<UploadJob> job = UploadJobQueue.claimJob();
-		assertTrue("a job was claimed", job.isPresent());
+		assertTrue(job.isPresent(), "a job was claimed");
 		return job.get().getId();
 	}
 

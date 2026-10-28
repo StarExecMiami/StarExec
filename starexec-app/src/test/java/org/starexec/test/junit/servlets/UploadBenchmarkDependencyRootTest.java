@@ -1,7 +1,7 @@
 package org.starexec.test.junit.servlets;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.Permissions;
@@ -16,9 +16,9 @@ import javax.servlet.http.HttpServletRequest;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 
 /**
@@ -33,7 +33,7 @@ public class UploadBenchmarkDependencyRootTest {
     private static final int UPLOADER = 7;
 
     /** The application compiles these patterns at startup; validation uses them. */
-    @BeforeClass
+    @BeforeAll
     public static void compileValidatorPatterns() {
         Validator.initialize();
     }

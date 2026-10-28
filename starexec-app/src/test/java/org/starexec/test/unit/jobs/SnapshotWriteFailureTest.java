@@ -1,22 +1,23 @@
 package org.starexec.test.unit.jobs;
 
 import com.google.gson.JsonParser;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 public class SnapshotWriteFailureTest {
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	@Test
 	public void snapshotDirectoryFailureReportsThePreciseStageWithoutRecursion() throws Exception {
@@ -30,11 +31,11 @@ public class SnapshotWriteFailureTest {
 	@Test
 	public void failureOfTheFallbackWriteStillExitsWithoutRecursion() throws Exception {
 		Path out = runFailure(true);
-		assertTrue("fault injection must prevent writing the fallback", Files.isDirectory(out.resolve("status.json")));
+		assertTrue(Files.isDirectory(out.resolve("status.json")), "fault injection must prevent writing the fallback");
 	}
 
 	private Path runFailure(boolean breakFallback) throws Exception {
-		Path dir = folder.newFolder().toPath();
+		Path dir = newFolder(folder).toPath();
 		Path sge = Path.of("src/main/java/org/starexec/config/sge").toAbsolutePath();
 		Path script = dir.resolve("probe.sh");
 		Files.writeString(script, """
@@ -69,12 +70,12 @@ public class SnapshotWriteFailureTest {
 		if (!finished) {
 			process.destroyForcibly();
 		}
-		assertTrue("storage failure must terminate promptly", finished);
-		assertEquals(Files.readString(log), 1, process.exitValue());
-		assertFalse("must not re-enter the failing writer", Files.readString(log).contains("maximum function nesting"));
-		assertEquals("only one snapshot failure may be attempted", 1, Files.readAllLines(dir.resolve("failures")).size());
-		assertEquals("EXIT handling must not invent a benchmark failure", "true", Files.readString(dir.resolve("status-sent")).trim());
-		assertFalse("the job must not continue after storage failure", Files.exists(dir.resolve("continued")));
+		assertTrue(finished, "storage failure must terminate promptly");
+		assertEquals(1, process.exitValue(), Files.readString(log));
+		assertFalse(Files.readString(log).contains("maximum function nesting"), "must not re-enter the failing writer");
+		assertEquals(1, Files.readAllLines(dir.resolve("failures")).size(), "only one snapshot failure may be attempted");
+		assertEquals("true", Files.readString(dir.resolve("status-sent")).trim(), "EXIT handling must not invent a benchmark failure");
+		assertFalse(Files.exists(dir.resolve("continued")), "the job must not continue after storage failure");
 		return dir;
 	}
 }

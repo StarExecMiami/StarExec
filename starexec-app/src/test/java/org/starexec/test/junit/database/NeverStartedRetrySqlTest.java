@@ -1,11 +1,11 @@
 package org.starexec.test.junit.database;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -17,10 +17,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.JobPairs.NeverStartedRetryResult;
@@ -47,13 +47,13 @@ public class NeverStartedRetrySqlTest extends Common {
     private int jobId;
     private int pairId;
 
-    @BeforeClass
+    @BeforeAll
     public static void requireDatabase() {
         DatabaseTestSupport.assumeDatabaseAvailable("NeverStartedRetrySqlTest");
         Common.initialize();
     }
 
-    @Before
+    @BeforeEach
     public void createEnqueuedPair() throws SQLException {
         try (Connection con = Common.getConnection()) {
             int userId = queryInt(con, "SELECT min(id) FROM starexec.users");
@@ -85,7 +85,7 @@ public class NeverStartedRetrySqlTest extends Common {
         }
     }
 
-    @After
+    @AfterEach
     public void dropFixture() throws SQLException {
         if (jobId == 0) {
             return;
@@ -114,10 +114,10 @@ public class NeverStartedRetrySqlTest extends Common {
 
         assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), pairStatus());
         assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), stageStatus());
-        assertNull("nothing ran, so there is no end time", endTime());
-        assertTrue("the automatic allowance is spent", allowanceSpent());
-        assertEquals("the reset starts a new attempt", 2, currentAttempt());
-        assertFalse("and nothing is completed", completionRecorded());
+        assertNull(endTime(), "nothing ran, so there is no end time");
+        assertTrue(allowanceSpent(), "the automatic allowance is spent");
+        assertEquals(2, currentAttempt(), "the reset starts a new attempt");
+        assertFalse(completionRecorded(), "and nothing is completed");
     }
 
     @Test
@@ -151,9 +151,9 @@ public class NeverStartedRetrySqlTest extends Common {
 
         assertEquals(StatusCode.ERROR_SUBMIT_FAIL.getVal(), pairStatus());
         assertEquals(StatusCode.ERROR_SUBMIT_FAIL.getVal(), stageStatus());
-        assertNotNull("a terminal pair carries an end time", endTime());
-        assertTrue("and a completion row", completionRecorded());
-        assertEquals("filing it starts no new attempt", 2, currentAttempt());
+        assertNotNull(endTime(), "a terminal pair carries an end time");
+        assertTrue(completionRecorded(), "and a completion row");
+        assertEquals(2, currentAttempt(), "filing it starts no new attempt");
     }
 
     @Test
@@ -171,10 +171,10 @@ public class NeverStartedRetrySqlTest extends Common {
                 StatusCode.STATUS_PENDING_SUBMIT, StatusCode.STATUS_RUNNING,
                 StatusCode.STATUS_KILLED, StatusCode.STATUS_PAUSED}) {
             setPairStatus(moved.getVal(), EXEC_ID);
-            assertEquals(moved.name(), NeverStartedRetryResult.STALE,
-                JobPairs.retryNeverStartedPair(pairId, EXEC_ID, 1));
-            assertEquals(moved.name(), moved.getVal(), pairStatus());
-            assertFalse(moved.name(), allowanceSpent());
+            assertEquals(NeverStartedRetryResult.STALE, JobPairs.retryNeverStartedPair(pairId, EXEC_ID, 1),
+                moved.name());
+            assertEquals(moved.getVal(), pairStatus(), moved.name());
+            assertFalse(allowanceSpent(), moved.name());
         }
     }
 
@@ -278,8 +278,8 @@ public class NeverStartedRetrySqlTest extends Common {
             executor.shutdownNow();
         }
         assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), pairStatus());
-        assertFalse("the rerun is not spent as the automatic retry", allowanceSpent());
-        assertEquals("and starts no attempt of its own", 1, currentAttempt());
+        assertFalse(allowanceSpent(), "the rerun is not spent as the automatic retry");
+        assertEquals(1, currentAttempt(), "and starts no attempt of its own");
     }
 
     private void assertUntouched() throws SQLException {

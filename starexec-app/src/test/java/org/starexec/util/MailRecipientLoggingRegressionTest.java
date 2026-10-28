@@ -7,7 +7,7 @@ import ch.qos.logback.core.read.ListAppender;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.mail.EmailException;
 import org.apache.commons.mail.SimpleEmail;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 import org.slf4j.LoggerFactory;
@@ -25,7 +25,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -150,16 +151,16 @@ public class MailRecipientLoggingRegressionTest {
 			});
 			operation.run();
 
-			assertFalse("Expected a mail diagnostic", logs.events.isEmpty());
+			assertFalse(logs.events.isEmpty(), "Expected a mail diagnostic");
 			if (expectPersistedFailure) {
-				assertFalse("Expected the mail failure to be persisted", persistedMessages.isEmpty());
+				assertFalse(persistedMessages.isEmpty(), "Expected the mail failure to be persisted");
 			}
-			assertFalse("Recipient leaked into a formatted log message",
-					logs.events.stream().anyMatch(event -> contains(event.getFormattedMessage(), address)));
-			assertFalse("Recipient leaked through a logged throwable",
-					logs.events.stream().anyMatch(event -> throwableContains(event.getThrowableProxy(), address)));
-			assertFalse("Recipient leaked through ErrorLogs",
-					persistedMessages.stream().anyMatch(message -> contains(message, address)));
+			assertFalse(logs.events.stream().anyMatch(event -> contains(event.getFormattedMessage(), address)),
+					"Recipient leaked into a formatted log message");
+			assertFalse(logs.events.stream().anyMatch(event -> throwableContains(event.getThrowableProxy(), address)),
+					"Recipient leaked through a logged throwable");
+			assertFalse(persistedMessages.stream().anyMatch(message -> contains(message, address)),
+					"Recipient leaked through ErrorLogs");
 		}
 	}
 

@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
 import org.starexec.data.to.Status.StatusCode;
@@ -17,11 +17,11 @@ import java.sql.Statement;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * {@code UpdatePairStatusPrecise} against a real database, on the one argument that decides
@@ -69,13 +69,13 @@ public class StageZeroPreciseStatusSqlTest extends Common {
 	private static final int STAGE_2_STATUS = EXCEED_CPU;
 	private static final int STAGE_3_STATUS = ENQUEUED;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("StageZeroPreciseStatusSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws Exception {
 		cleanUp();
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
@@ -109,7 +109,7 @@ public class StageZeroPreciseStatusSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws SQLException {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			quietly(s, "DELETE FROM starexec.job_pair_repro_manifests WHERE pair_id=" + PAIR_ID);
@@ -145,18 +145,18 @@ public class StageZeroPreciseStatusSqlTest extends Common {
 				int rows = s.executeUpdate(
 						"UPDATE starexec.jobpair_stage_data SET status_code = " + NOT_REACHED
 								+ " WHERE jobpair_id = " + PAIR_ID + " AND stage_number > 0");
-				assertEquals("stage_number > 0 selects every stage, which is the defect", 3, rows);
+				assertEquals(3, rows, "stage_number > 0 selects every stage, which is the defect");
 
 				int targeted = s.executeUpdate(
 						"UPDATE starexec.jobpair_stage_data SET status_code = " + COMPLETE
 								+ " WHERE jobpair_id = " + PAIR_ID + " AND stage_number = 0");
-				assertEquals("...while stage_number = 0 selects none, so nothing takes the"
-						+ " status", 0, targeted);
+				assertEquals(0, targeted, "...while stage_number = 0 selects none, so nothing takes the"
+						+ " status");
 			}
 			con.rollback();
 		}
-		assertEquals("the control must leave the fixture as it found it",
-				STAGE_1_STATUS, stageStatus(1));
+		assertEquals(STAGE_1_STATUS,
+				stageStatus(1), "the control must leave the fixture as it found it");
 	}
 
 	// ------------------------------------------------------------------ the invariant
@@ -167,7 +167,7 @@ public class StageZeroPreciseStatusSqlTest extends Common {
 
 		assertRefused(0);
 
-		assertEquals("no durable value may change", before, durableState());
+		assertEquals(before, durableState(), "no durable value may change");
 	}
 
 	@Test
@@ -176,7 +176,7 @@ public class StageZeroPreciseStatusSqlTest extends Common {
 
 		assertRefused(-1);
 
-		assertEquals("no durable value may change", before, durableState());
+		assertEquals(before, durableState(), "no durable value may change");
 	}
 
 	/**
@@ -186,13 +186,13 @@ public class StageZeroPreciseStatusSqlTest extends Common {
 	 */
 	@Test
 	public void aRefusedWriteLeavesNoEndTimeAndNoCompletionRow() throws Exception {
-		assertNull("precondition: the fixture starts with no end_time", endTime());
+		assertNull(endTime(), "precondition: the fixture starts with no end_time");
 		assertEquals(0, completionRows());
 
 		assertRefused(0);
 
-		assertNull("a refused write must not stamp an end_time", endTime());
-		assertEquals("a refused write must not insert a completion row", 0, completionRows());
+		assertNull(endTime(), "a refused write must not stamp an end_time");
+		assertEquals(0, completionRows(), "a refused write must not insert a completion row");
 	}
 
 	// ------------------------------------------------------------- the positive control
@@ -208,15 +208,15 @@ public class StageZeroPreciseStatusSqlTest extends Common {
 			try (ResultSet rs = s.executeQuery("SELECT starexec.UpdatePairStatusPrecise("
 					+ PAIR_ID + ",2," + COMPLETE + "," + NOT_REACHED + ")")) {
 				assertTrue(rs.next());
-				assertTrue("a valid stage must be applied", rs.getBoolean(1));
+				assertTrue(rs.getBoolean(1), "a valid stage must be applied");
 			}
 		}
 
-		assertEquals("an earlier stage keeps its own result", STAGE_1_STATUS, stageStatus(1));
-		assertEquals("the named stage takes the status", COMPLETE, stageStatus(2));
-		assertEquals("a later stage becomes not reached", NOT_REACHED, stageStatus(3));
-		assertEquals("the pair takes the status", COMPLETE, pairStatus());
-		assertNotNull("a terminal pair carries an end_time", endTime());
+		assertEquals(STAGE_1_STATUS, stageStatus(1), "an earlier stage keeps its own result");
+		assertEquals(COMPLETE, stageStatus(2), "the named stage takes the status");
+		assertEquals(NOT_REACHED, stageStatus(3), "a later stage becomes not reached");
+		assertEquals(COMPLETE, pairStatus(), "the pair takes the status");
+		assertNotNull(endTime(), "a terminal pair carries an end_time");
 		assertEquals(1, completionRows());
 	}
 
@@ -238,9 +238,9 @@ public class StageZeroPreciseStatusSqlTest extends Common {
 					+ stageNumber + "," + COMPLETE + "," + NOT_REACHED + ")");
 			fail("stage number " + stageNumber + " names no stage and must be refused");
 		} catch (SQLException expected) {
-			assertEquals("the routine must report an invalid parameter, so a caller can tell"
-							+ " this apart from a transient failure",
-					"22023", expected.getSQLState());
+			assertEquals("22023",
+					expected.getSQLState(), "the routine must report an invalid parameter, so a caller can tell"
+							+ " this apart from a transient failure");
 		}
 	}
 
@@ -284,7 +284,7 @@ public class StageZeroPreciseStatusSqlTest extends Common {
 		try (Connection con = Common.getConnection();
 			 Statement s = con.createStatement();
 			 ResultSet rs = s.executeQuery(sql)) {
-			assertTrue("expected a row from: " + sql, rs.next());
+			assertTrue(rs.next(), "expected a row from: " + sql);
 			return rs.getInt(1);
 		}
 	}
@@ -293,7 +293,7 @@ public class StageZeroPreciseStatusSqlTest extends Common {
 		try (Connection con = Common.getConnection();
 			 Statement s = con.createStatement();
 			 ResultSet rs = s.executeQuery(sql)) {
-			assertTrue("expected a row from: " + sql, rs.next());
+			assertTrue(rs.next(), "expected a row from: " + sql);
 			return rs.getString(1);
 		}
 	}

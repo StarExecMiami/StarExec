@@ -1,6 +1,6 @@
 package org.starexec.test.util;
 
-import org.junit.Assume;
+import org.junit.jupiter.api.Assumptions;
 import org.starexec.constants.R;
 import org.starexec.util.Util;
 
@@ -42,12 +42,12 @@ public final class DatabaseTestSupport {
 	 * @param testName used in the skip message so developers know what to configure.
 	 */
 	public static void assumeDatabaseAvailable(String testName) {
-		Assume.assumeTrue(
+		Assumptions.assumeTrue(
+			isDatabaseConfigured(),
 			String.format(
 				"%s requires a reachable PostgreSQL instance. Set POSTGRES_* values in starexec-config.xml and ensure the DB is running.",
 				testName
-			),
-			isDatabaseConfigured()
+			)
 		);
 	}
 }

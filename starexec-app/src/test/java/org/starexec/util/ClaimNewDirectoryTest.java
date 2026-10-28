@@ -1,24 +1,23 @@
 package org.starexec.util;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** {@link Util#claimNewDirectory} gives every upload or copy a directory of its own. */
 public class ClaimNewDirectoryTest {
 
-	@Rule
-	public TemporaryFolder tmp = new TemporaryFolder();
+	@TempDir
+	public File tmp;
 
 	@Test
 	public void aClaimCreatesTheDirectoryAndItsParents() throws Exception {
@@ -39,7 +38,7 @@ public class ClaimNewDirectoryTest {
 
 		assertEquals(new File(dir.getPath() + "-1"), second);
 		assertArrayEquals(new String[0], second.list());
-		assertTrue("the other upload's file is untouched", new File(first, "theirs").isFile());
+		assertTrue(new File(first, "theirs").isFile(), "the other upload's file is untouched");
 		assertEquals(new File(dir.getPath() + "-2"), Util.claimNewDirectory(dir));
 	}
 
@@ -55,7 +54,7 @@ public class ClaimNewDirectoryTest {
 
 	/** A directory named the way uploads name theirs, whose parents do not exist yet. */
 	private File uploadDir() {
-		return new File(tmp.getRoot(), "uploads/5/20261018-10.00.00.000");
+		return new File(tmp, "uploads/5/20261018-10.00.00.000");
 	}
 
 	private static void write(File file) throws IOException {

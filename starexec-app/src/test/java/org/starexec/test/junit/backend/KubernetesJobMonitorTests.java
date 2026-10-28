@@ -1,11 +1,10 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.eq;
@@ -15,7 +14,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
-
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
@@ -41,8 +41,6 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.junit.Before;
-import org.junit.Test;
 import org.starexec.backend.ExecutionRef;
 import org.starexec.backend.KubernetesJobMonitor;
 
@@ -67,7 +65,7 @@ public class KubernetesJobMonitorTests {
     private KubernetesJobMonitor.JobCompletionCallback callback;
     private KubernetesJobMonitor monitor;
 
-    @Before
+    @BeforeEach
     @SuppressWarnings("unchecked")
     public void setUp() {
         kubernetesClient = mock(KubernetesClient.class);
@@ -238,8 +236,8 @@ public class KubernetesJobMonitorTests {
         verify(callback, times(0)).onJobFailed(any(ExecutionRef.class), anyString());
         verify(callback, times(0)).onJobComplete(any(ExecutionRef.class));
         assertFalse(
-            "nothing terminal may be recorded for a Job that can still start a pod",
-            getCompletedExecutions().contains(execution())
+            getCompletedExecutions().contains(execution()),
+            "nothing terminal may be recorded for a Job that can still start a pod"
         );
     }
 
@@ -789,7 +787,7 @@ public class KubernetesJobMonitorTests {
         Field field = KubernetesJobMonitor.class.getDeclaredField("recordedNodes");
         field.setAccessible(true);
         Map<ExecutionRef, String> recorded = (Map<ExecutionRef, String>) field.get(monitor);
-        assertEquals("recorded while it runs", "node-a", recorded.get(execution()));
+        assertEquals("node-a", recorded.get(execution()), "recorded while it runs");
 
         givenJobs(new JobBuilder()
             .withNewMetadata()
@@ -810,7 +808,7 @@ public class KubernetesJobMonitorTests {
         invokePollJobsOnce();
 
         verify(callback, times(1)).onJobComplete(execution());
-        assertFalse("dropped once it has finished", recorded.containsKey(execution()));
+        assertFalse(recorded.containsKey(execution()), "dropped once it has finished");
     }
 
     /** A Job allowed to retry can run its next pod on another node, and the pair moves with it. */
@@ -851,7 +849,7 @@ public class KubernetesJobMonitorTests {
         Field field = KubernetesJobMonitor.class.getDeclaredField("recordedNodes");
         field.setAccessible(true);
         Map<ExecutionRef, String> recorded = (Map<ExecutionRef, String>) field.get(monitor);
-        assertEquals("recorded while it runs", "node-a", recorded.get(execution()));
+        assertEquals("node-a", recorded.get(execution()), "recorded while it runs");
 
         givenPods(podFor(EXEC_ID, "Pending"));
         setClockMinutesAfterPodCreation(61);
@@ -860,7 +858,7 @@ public class KubernetesJobMonitorTests {
 
         verify(callback, times(1)).onJobStuckPending(eq(execution()), anyString());
         assertTrue(getCompletedExecutions().contains(execution()));
-        assertFalse("dropped once it is given up", recorded.containsKey(execution()));
+        assertFalse(recorded.containsKey(execution()), "dropped once it is given up");
     }
 
     /**
@@ -880,7 +878,7 @@ public class KubernetesJobMonitorTests {
         Field field = KubernetesJobMonitor.class.getDeclaredField("recordedNodes");
         field.setAccessible(true);
         Map<ExecutionRef, String> recorded = (Map<ExecutionRef, String>) field.get(monitor);
-        assertEquals("recorded while it runs", "node-a", recorded.get(execution()));
+        assertEquals("node-a", recorded.get(execution()), "recorded while it runs");
 
         givenJobs();
         givenPods();
@@ -888,7 +886,7 @@ public class KubernetesJobMonitorTests {
 
         verify(callback, never()).onJobComplete(any(ExecutionRef.class));
         verify(callback, never()).onJobFailed(any(ExecutionRef.class), anyString());
-        assertFalse("dropped once its Job is gone", recorded.containsKey(execution()));
+        assertFalse(recorded.containsKey(execution()), "dropped once its Job is gone");
     }
 
     @SuppressWarnings("unchecked")

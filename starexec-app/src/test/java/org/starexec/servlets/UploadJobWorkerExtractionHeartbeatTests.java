@@ -1,6 +1,7 @@
 package org.starexec.servlets;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.UploadJobQueue;
@@ -9,7 +10,7 @@ import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Extraction progress reporting runs once per archive entry, so its cost is multiplied by the
@@ -172,11 +173,11 @@ public class UploadJobWorkerExtractionHeartbeatTests {
             UploadJobWorker.class.getDeclaredField("EXTRACTION_HEARTBEAT_MIN_INTERVAL_MS");
         f.setAccessible(true);
         long intervalMs = (long) f.get(null);
-        assertEquals("a one-second floor is what the traversal callback already uses",
-            1000L, intervalMs);
+        assertEquals(1000L,
+            intervalMs, "a one-second floor is what the traversal callback already uses");
         // UploadJob.isStuck() reports stuck after five minutes without a heartbeat.
-        org.junit.Assert.assertTrue(
-            "heartbeat interval must stay far inside the five-minute stuck threshold",
-            intervalMs * 10 < 5 * 60 * 1000L);
+        Assertions.assertTrue(
+            intervalMs * 10 < 5 * 60 * 1000L,
+            "heartbeat interval must stay far inside the five-minute stuck threshold");
     }
 }

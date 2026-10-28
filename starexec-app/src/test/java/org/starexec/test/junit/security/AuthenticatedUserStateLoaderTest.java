@@ -1,8 +1,8 @@
 package org.starexec.test.junit.security;
 
-import org.junit.After;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Users;
@@ -15,9 +15,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.UUID;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -41,13 +41,13 @@ public class AuthenticatedUserStateLoaderTest extends Common {
 
 	private static final String TAG = UUID.randomUUID().toString().replace("-", "");
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("AuthenticatedUserStateLoaderTest");
 		Common.initialize();
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws Exception {
 		final String fixtures = "aus-" + TAG + "-%";
 		try (Connection con = Common.getConnection()) {
@@ -132,7 +132,7 @@ public class AuthenticatedUserStateLoaderTest extends Common {
 
 		assertEquals(AuthenticatedUserState.State.DENIED, state.getState());
 		assertEquals(R.SUSPENDED_ROLE_NAME, state.getRole());
-		assertNotNull("a denied account is still an account", state.getUser());
+		assertNotNull(state.getUser(), "a denied account is still an account");
 	}
 
 	@Test
@@ -174,8 +174,8 @@ public class AuthenticatedUserStateLoaderTest extends Common {
 		int id = userWithRoles("zero");
 		AuthenticatedUserState state = Users.loadAuthenticatedUserState(id);
 
-		assertEquals("a user row with no role is not a deleted user",
-				AuthenticatedUserState.State.MALFORMED, state.getState());
+		assertEquals(AuthenticatedUserState.State.MALFORMED,
+				state.getState(), "a user row with no role is not a deleted user");
 		assertEquals("0 role rows", state.getDiagnostic());
 	}
 
@@ -186,7 +186,7 @@ public class AuthenticatedUserStateLoaderTest extends Common {
 
 		assertEquals(AuthenticatedUserState.State.MALFORMED, state.getState());
 		assertEquals("2 role rows", state.getDiagnostic());
-		assertNull("no role may be invented from an ambiguous set", state.getRole());
+		assertNull(state.getRole(), "no role may be invented from an ambiguous set");
 	}
 
 	@Test
@@ -199,8 +199,8 @@ public class AuthenticatedUserStateLoaderTest extends Common {
 
 		assertEquals(AuthenticatedUserState.State.MALFORMED, a.getState());
 		assertEquals(AuthenticatedUserState.State.MALFORMED, b.getState());
-		assertEquals("the verdict must be a property of the data, not of row order",
-				a.getState(), b.getState());
+		assertEquals(a.getState(),
+				b.getState(), "the verdict must be a property of the data, not of row order");
 	}
 
 	// ------------------------------------------------------------ read 1 and 2 failures
@@ -253,8 +253,8 @@ public class AuthenticatedUserStateLoaderTest extends Common {
 
 			AuthenticatedUserState state = Users.loadAuthenticatedUserState(partial, id);
 
-			assertEquals("Users.get swallows the exception and returns null; that is not a deletion",
-					AuthenticatedUserState.State.ERROR, state.getState());
+			assertEquals(AuthenticatedUserState.State.ERROR,
+					state.getState(), "Users.get swallows the exception and returns null; that is not a deletion");
 			assertEquals("user construction indeterminate", state.getDiagnostic());
 			assertNull(state.getUser());
 		}
@@ -277,8 +277,8 @@ public class AuthenticatedUserStateLoaderTest extends Common {
 
 			AuthenticatedUserState state = Users.loadAuthenticatedUserState(partial, id);
 
-			assertEquals("existence was already established, so an empty third read is indeterminate",
-					AuthenticatedUserState.State.ERROR, state.getState());
+			assertEquals(AuthenticatedUserState.State.ERROR,
+					state.getState(), "existence was already established, so an empty third read is indeterminate");
 			assertEquals("user construction indeterminate", state.getDiagnostic());
 		}
 	}
@@ -304,8 +304,8 @@ public class AuthenticatedUserStateLoaderTest extends Common {
 
 			AuthenticatedUserState state = Users.loadAuthenticatedUserState(partial, id);
 
-			assertEquals("the session must not carry a role the loader never validated",
-					AuthenticatedUserState.State.ERROR, state.getState());
+			assertEquals(AuthenticatedUserState.State.ERROR,
+					state.getState(), "the session must not carry a role the loader never validated");
 			assertEquals("role changed during refresh", state.getDiagnostic());
 			assertNull(state.getUser());
 		}

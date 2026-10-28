@@ -1,9 +1,9 @@
 package org.starexec.command;
 
 import com.sun.net.httpserver.HttpServer;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.to.Permission;
 
 import java.io.IOException;
@@ -15,10 +15,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * StarexecCommand's benchmark upload against a stub server that answers as this server does.
@@ -43,7 +43,7 @@ public class StarexecCommandUploadTest {
 	private String jobBody = "{\"id\": 17, \"status\": \"COMPLETED\", \"totalFilesFound\": 5,"
 			+ " \"totalFilesProcessed\": 5, \"totalSpacesCreated\": 1}";
 
-	@Before
+	@BeforeEach
 	public void start() throws IOException {
 		archive = Files.createTempFile("benchmarks", ".tar");
 		Files.write(archive, new byte[] { 1, 2, 3 });
@@ -79,7 +79,7 @@ public class StarexecCommandUploadTest {
 		base = "http://127.0.0.1:" + server.getAddress().getPort() + "/starexec/";
 	}
 
-	@After
+	@AfterEach
 	public void stop() throws IOException {
 		server.stop(0);
 		Files.deleteIfExists(archive);
@@ -109,7 +109,7 @@ public class StarexecCommandUploadTest {
 		uploadBody = "{\"status\": \"PENDING\"}";
 		Connection con = new Connection("u", "p", base);
 		assertEquals(Status.ERROR_INTERNAL, upload(con));
-		assertTrue(con.getLastError(), con.getLastError().contains("did not name its upload job"));
+		assertTrue(con.getLastError().contains("did not name its upload job"), con.getLastError());
 	}
 
 	@Test
@@ -119,7 +119,7 @@ public class StarexecCommandUploadTest {
 		uploadCookie = "New_ID=5; Path=/starexec";
 		Connection con = new Connection("u", "p", base);
 		int id = upload(con);
-		assertEquals(con.getLastError(), 5, id);
+		assertEquals(5, id, con.getLastError());
 	}
 
 	@Test
@@ -145,7 +145,7 @@ public class StarexecCommandUploadTest {
 		Connection con = new Connection("u", "p", base);
 		assertNull(con.getBenchmarkUploadStatus(17));
 		assertEquals("No upload job 17 is visible to you", con.getLastError());
-		assertFalse(requested.toString(), requested.stream().anyMatch(p -> p.contains("uploadDescription")));
+		assertFalse(requested.stream().anyMatch(p -> p.contains("uploadDescription")), requested.toString());
 	}
 
 	@Test

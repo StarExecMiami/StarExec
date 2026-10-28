@@ -1,11 +1,10 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.to.FinishedSolverBuild;
@@ -15,6 +14,7 @@ import org.starexec.data.to.Status.StatusCode;
 import org.starexec.jobs.SolverBuildRecorder;
 import org.starexec.test.util.DatabaseTestSupport;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,10 +29,10 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assume.assumeTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * {@link SolverBuildRecorder#recordFinishedBuilds} against the real tables: a finished build job sets its
@@ -52,8 +52,8 @@ public class SolverBuildRecordSqlTest extends Common {
 	private static final int BUILT_BY_STAREXEC = 2;
 	private static final int BUILD_FAILED = 3;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	private final List<Integer> jobs = new ArrayList<>();
 	private final List<Integer> benchmarks = new ArrayList<>();
@@ -62,29 +62,29 @@ public class SolverBuildRecordSqlTest extends Common {
 	private Path source;
 	private Path built;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("SolverBuildRecordSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void createSolverFiles() throws Exception {
 		try (Connection con = Common.getConnection();
 				PreparedStatement ps = con.prepareStatement("SELECT min(id) FROM starexec.users");
 				ResultSet rs = ps.executeQuery()) {
 			assertTrue(rs.next());
 			userId = rs.getInt(1);
-			assertTrue("the database must have a user", userId > 0);
+			assertTrue(userId > 0, "the database must have a user");
 		}
-		Path solverDir = Files.createDirectories(folder.getRoot().toPath().resolve("Solvers/3/probe"));
+		Path solverDir = Files.createDirectories(folder.toPath().resolve("Solvers/3/probe"));
 		source = Files.createDirectory(solverDir.resolve("20261025-09.15.48.756_src"));
 		Files.writeString(source.resolve("starexec_build"), "BUILD SCRIPT");
 		// The upload creates the built path empty; a build that worked copied the solver into it.
 		built = Files.createDirectory(solverDir.resolve("20261025-09.15.48.756"));
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			for (int job : jobs) {
@@ -112,8 +112,8 @@ public class SolverBuildRecordSqlTest extends Common {
 
 		assertEquals(BUILT_BY_STAREXEC, buildStatus(solver));
 		assertEquals(built.toString(), path(solver));
-		assertTrue("the helper benchmark is deleted", deleted(bench));
-		assertFalse("with its file", Files.exists(benchFile));
+		assertTrue(deleted(bench), "the helper benchmark is deleted");
+		assertFalse(Files.exists(benchFile), "with its file");
 	}
 
 	@Test
@@ -125,7 +125,7 @@ public class SolverBuildRecordSqlTest extends Common {
 		SolverBuildRecorder.recordFinishedBuilds();
 
 		assertEquals(BUILD_FAILED, buildStatus(solver));
-		assertEquals("a rebuild starts from the uploaded source", source.toString(), path(solver));
+		assertEquals(source.toString(), path(solver), "a rebuild starts from the uploaded source");
 		assertTrue(deleted(bench));
 	}
 
@@ -170,8 +170,8 @@ public class SolverBuildRecordSqlTest extends Common {
 
 		assertEquals(UNBUILT, buildStatus(solver));
 		assertEquals(source.toString(), path(solver));
-		assertTrue("the older job is retired", deleted(older));
-		assertFalse("the newer one is still running", deleted(newer));
+		assertTrue(deleted(older), "the older job is retired");
+		assertFalse(deleted(newer), "the newer one is still running");
 	}
 
 	/**
@@ -187,12 +187,12 @@ public class SolverBuildRecordSqlTest extends Common {
 		SolverBuildRecorder.recordFinishedBuilds();
 		assertEquals(BUILT_BY_STAREXEC, buildStatus(solver));
 		rebuild(solver);
-		assertEquals("as RebuildSolver leaves it", UNBUILT, buildStatus(solver));
+		assertEquals(UNBUILT, buildStatus(solver), "as RebuildSolver leaves it");
 		assertEquals(source.toString(), path(solver));
 
 		SolverBuildRecorder.recordFinishedBuilds();
 
-		assertEquals("the applied build is not applied again", UNBUILT, buildStatus(solver));
+		assertEquals(UNBUILT, buildStatus(solver), "the applied build is not applied again");
 		assertEquals(source.toString(), path(solver));
 	}
 
@@ -221,18 +221,18 @@ public class SolverBuildRecordSqlTest extends Common {
 		Path solverDir = built.getParent();
 		Files.setPosixFilePermissions(solverDir, PosixFilePermissions.fromString("---------"));
 		try {
-			assumeTrue("needs a user that file permissions apply to", cannotRead(built));
+			assumeTrue(cannotRead(built), "needs a user that file permissions apply to");
 			SolverBuildRecorder.recordFinishedBuilds();
 		} finally {
 			Files.setPosixFilePermissions(solverDir, PosixFilePermissions.fromString("rwxr-xr-x"));
 		}
 		assertEquals(UNBUILT, buildStatus(solver));
 		assertEquals(source.toString(), path(solver));
-		assertFalse("not recorded, so not retired", deleted(bench));
+		assertFalse(deleted(bench), "not recorded, so not retired");
 
 		SolverBuildRecorder.recordFinishedBuilds();
 
-		assertEquals("recorded once it can be read", BUILT_BY_STAREXEC, buildStatus(solver));
+		assertEquals(BUILT_BY_STAREXEC, buildStatus(solver), "recorded once it can be read");
 		assertEquals(built.toString(), path(solver));
 		assertTrue(deleted(bench));
 	}
@@ -266,20 +266,20 @@ public class SolverBuildRecordSqlTest extends Common {
 	@Test
 	public void theOutcomeIsOnlyAppliedWhileTheSolverIsAsItWasRead() throws Exception {
 		int alreadyBuilt = insertSolver(source, BUILT_BY_STAREXEC);
-		assertFalse("a solver built in between",
-				Solvers.recordBuildOutcome(asRead(alreadyBuilt, source, UNBUILT), "/elsewhere"));
+		assertFalse(Solvers.recordBuildOutcome(asRead(alreadyBuilt, source, UNBUILT), "/elsewhere"),
+				"a solver built in between");
 		assertEquals(BUILT_BY_STAREXEC, buildStatus(alreadyBuilt));
 		assertEquals(source.toString(), path(alreadyBuilt));
 
 		int moved = insertSolver(built, UNBUILT);
-		assertFalse("a solver whose path changed in between",
-				Solvers.recordBuildOutcome(asRead(moved, source, UNBUILT), null));
+		assertFalse(Solvers.recordBuildOutcome(asRead(moved, source, UNBUILT), null),
+				"a solver whose path changed in between");
 		assertEquals(UNBUILT, buildStatus(moved));
 		assertEquals(built.toString(), path(moved));
 
 		int rebuilt = insertSolver(source, BUILD_FAILED);
-		assertTrue("a failed solver being rebuilt waits for the rebuild",
-				Solvers.recordBuildOutcome(asRead(rebuilt, source, BUILD_FAILED), built.toString()));
+		assertTrue(Solvers.recordBuildOutcome(asRead(rebuilt, source, BUILD_FAILED), built.toString()),
+				"a failed solver being rebuilt waits for the rebuild");
 		assertEquals(BUILT_BY_STAREXEC, buildStatus(rebuilt));
 		assertEquals(built.toString(), path(rebuilt));
 	}
@@ -294,14 +294,14 @@ public class SolverBuildRecordSqlTest extends Common {
 		FinishedSolverBuild read = finishedBuildOf(solver);
 		setBuildStatus(solver, BUILD_FAILED);
 
-		assertFalse("the status read is not the solver's any more",
-				Solvers.recordBuildOutcome(read, read.getBuiltPath()));
+		assertFalse(Solvers.recordBuildOutcome(read, read.getBuiltPath()),
+				"the status read is not the solver's any more");
 		assertEquals(BUILD_FAILED, buildStatus(solver));
 		assertEquals(source.toString(), path(solver));
 
 		SolverBuildRecorder.recordFinishedBuilds();
 
-		assertEquals("decided again, from the solver as it is now", BUILT_BY_STAREXEC, buildStatus(solver));
+		assertEquals(BUILT_BY_STAREXEC, buildStatus(solver), "decided again, from the solver as it is now");
 		assertEquals(built.toString(), path(solver));
 		assertTrue(deleted(bench));
 	}
@@ -317,20 +317,20 @@ public class SolverBuildRecordSqlTest extends Common {
 		int older = insertBenchmark("starexec_build", benchmarkFile());
 		buildJob(solver, older, StatusCode.STATUS_COMPLETE);
 		FinishedSolverBuild read = finishedBuildOf(solver);
-		assertTrue("read as the newest", read.isNewestBuildOfSolver());
+		assertTrue(read.isNewestBuildOfSolver(), "read as the newest");
 		int newer = insertBenchmark("starexec_build", benchmarkFile());
 		buildJob(solver, newer, StatusCode.STATUS_PENDING_SUBMIT);
 
-		assertFalse("a newer build job exists now", Solvers.recordBuildOutcome(read, read.getBuiltPath()));
+		assertFalse(Solvers.recordBuildOutcome(read, read.getBuiltPath()), "a newer build job exists now");
 		assertEquals(BUILD_FAILED, buildStatus(solver));
 		assertEquals(source.toString(), path(solver));
 
 		SolverBuildRecorder.recordFinishedBuilds();
 
-		assertEquals("still waiting for the newer job", BUILD_FAILED, buildStatus(solver));
+		assertEquals(BUILD_FAILED, buildStatus(solver), "still waiting for the newer job");
 		assertEquals(source.toString(), path(solver));
-		assertTrue("the older job is retired", deleted(older));
-		assertFalse("the newer one has not finished", deleted(newer));
+		assertTrue(deleted(older), "the older job is retired");
+		assertFalse(deleted(newer), "the newer one has not finished");
 	}
 
 	/** Only the solver's own build jobs can be newer: a later build of another solver holds nothing up. */
@@ -349,7 +349,7 @@ public class SolverBuildRecordSqlTest extends Common {
 		assertEquals(BUILT_BY_STAREXEC, buildStatus(solver));
 		assertEquals(built.toString(), path(solver));
 		assertTrue(deleted(bench));
-		assertEquals("the other solver still waits for its own build", UNBUILT, buildStatus(other));
+		assertEquals(UNBUILT, buildStatus(other), "the other solver still waits for its own build");
 		assertFalse(deleted(otherBench));
 	}
 
@@ -371,14 +371,14 @@ public class SolverBuildRecordSqlTest extends Common {
 		assertEquals(BUILT_BY_STAREXEC, buildStatus(solver));
 		assertEquals(built.toString(), path(solver));
 		assertTrue(deleted(bench));
-		assertFalse("the ordinary job's benchmark is not a helper", deleted(problem));
+		assertFalse(deleted(problem), "the ordinary job's benchmark is not a helper");
 	}
 
 	// ---------------------------------------------------------------------------- fixture
 
 	/** A helper benchmark file where addBenchmarkFromText puts one; a kept sibling bounds the cleanup. */
 	private Path benchmarkFile() throws Exception {
-		Path userDir = Files.createDirectories(folder.getRoot().toPath().resolve("Benchmarks/" + userId));
+		Path userDir = Files.createDirectories(folder.toPath().resolve("Benchmarks/" + userId));
 		Files.writeString(userDir.resolve("keep"), "KEEP");
 		Path dir = Files.createDirectory(userDir.resolve(UUID.randomUUID().toString()));
 		return Files.writeString(dir.resolve("starexec_build"), "dummy benchmark");
@@ -447,7 +447,7 @@ public class SolverBuildRecordSqlTest extends Common {
 		List<FinishedSolverBuild> builds = Solvers.getFinishedBuildsToRecord().stream()
 				.filter(b -> b.getSolverId() == solver)
 				.collect(Collectors.toList());
-		assertEquals("finished build jobs of solver " + solver, 1, builds.size());
+		assertEquals(1, builds.size(), "finished build jobs of solver " + solver);
 		return builds.get(0);
 	}
 
@@ -471,7 +471,7 @@ public class SolverBuildRecordSqlTest extends Common {
 				PreparedStatement ps = con.prepareStatement("SELECT deleted FROM starexec.benchmarks WHERE id = ?")) {
 			ps.setInt(1, bench);
 			try (ResultSet rs = ps.executeQuery()) {
-				assertTrue("benchmark " + bench + " must exist", rs.next());
+				assertTrue(rs.next(), "benchmark " + bench + " must exist");
 				return rs.getBoolean(1);
 			}
 		}
@@ -513,7 +513,7 @@ public class SolverBuildRecordSqlTest extends Common {
 		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
 			ps.setInt(1, id);
 			try (ResultSet rs = ps.executeQuery()) {
-				assertTrue("row " + id + " must exist", rs.next());
+				assertTrue(rs.next(), "row " + id + " must exist");
 				return rs.getString(1);
 			}
 		}

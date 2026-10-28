@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -12,9 +11,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * The producer half of the container-mode stage-status contract, driven through the real
@@ -34,8 +34,8 @@ public class ContainerStageStatusTest {
 
 	private static final Path SGE = Path.of("src/main/java/org/starexec/config/sge");
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	// --------------------------------------------------------------- containerWriteStatus
 
@@ -51,11 +51,11 @@ public class ContainerStageStatusTest {
 		h.write(15, 2);
 		h.run();
 
-		assertEquals("stage 1 must survive stage 2's write", 7, h.snapshotStatus(1));
-		assertEquals("stage 2 must be recorded", 15, h.snapshotStatus(2));
-		assertEquals("the legacy file still holds the last write", 15, h.legacyStatus());
-		assertEquals("the legacy file still names the last stage", 2, h.legacyStage());
-		assertEquals("the legacy file still names the pair", 41, h.legacyPairId());
+		assertEquals(7, h.snapshotStatus(1), "stage 1 must survive stage 2's write");
+		assertEquals(15, h.snapshotStatus(2), "stage 2 must be recorded");
+		assertEquals(15, h.legacyStatus(), "the legacy file still holds the last write");
+		assertEquals(2, h.legacyStage(), "the legacy file still names the last stage");
+		assertEquals(41, h.legacyPairId(), "the legacy file still names the pair");
 	}
 
 	/** Each snapshot carries the pair, so the monitor can check it against the container. */
@@ -80,8 +80,8 @@ public class ContainerStageStatusTest {
 		h.write(4, 0);
 		h.run();
 
-		assertEquals("the legacy file is still written", 4, h.legacyStatus());
-		assertTrue("stage 0 must leave no snapshot", h.snapshotNames().isEmpty());
+		assertEquals(4, h.legacyStatus(), "the legacy file is still written");
+		assertTrue(h.snapshotNames().isEmpty(), "stage 0 must leave no snapshot");
 	}
 
 	/**
@@ -96,10 +96,10 @@ public class ContainerStageStatusTest {
 			h.writeRaw(7, stage);
 			h.run();
 
-			assertTrue("stage '" + stage + "' must leave no snapshot: " + h.snapshotNames(),
-					h.snapshotNames().isEmpty());
-			assertFalse("stage '" + stage + "' must not write outside the snapshot directory",
-					Files.exists(h.out.resolve("escape")));
+			assertTrue(h.snapshotNames().isEmpty(),
+					"stage '" + stage + "' must leave no snapshot: " + h.snapshotNames());
+			assertFalse(Files.exists(h.out.resolve("escape")),
+					"stage '" + stage + "' must not write outside the snapshot directory");
 		}
 	}
 
@@ -112,9 +112,9 @@ public class ContainerStageStatusTest {
 		h.run();
 
 		for (String name : h.snapshotNames()) {
-			assertFalse("a temporary file was left behind: " + name, name.endsWith(".tmp"));
+			assertFalse(name.endsWith(".tmp"), "a temporary file was left behind: " + name);
 		}
-		assertEquals("only the two snapshots", 2, h.snapshotNames().size());
+		assertEquals(2, h.snapshotNames().size(), "only the two snapshots");
 	}
 
 	/** Re-reporting a stage replaces that stage only, and leaves the others alone. */
@@ -126,8 +126,8 @@ public class ContainerStageStatusTest {
 		h.write(4, 2);
 		h.run();
 
-		assertEquals("stage 1 holds its latest status", 7, h.snapshotStatus(1));
-		assertEquals("stage 2 is untouched by stage 1's rewrite", 4, h.snapshotStatus(2));
+		assertEquals(7, h.snapshotStatus(1), "stage 1 holds its latest status");
+		assertEquals(4, h.snapshotStatus(2), "stage 2 is untouched by stage 1's rewrite");
 	}
 
 	// ------------------------------------------------------------------------- harness
@@ -139,8 +139,8 @@ public class ContainerStageStatusTest {
 		h.body.append("sendStageStatus \"$STATUS_COMPLETE\" 1\n");
 		h.run();
 
-		assertEquals("the pair must remain running until explicitly completed", 4, h.legacyStatus());
-		assertEquals("the completed stage must still be recorded", 7, h.snapshotStatus(1));
+		assertEquals(4, h.legacyStatus(), "the pair must remain running until explicitly completed");
+		assertEquals(7, h.snapshotStatus(1), "the completed stage must still be recorded");
 	}
 
 	@Test
@@ -168,7 +168,7 @@ public class ContainerStageStatusTest {
 
 		assertEquals(h.snapshotStatus(2), h.legacyStatus());
 		assertEquals(2, h.legacyStage());
-		assertTrue("a limit must remain a failure", h.legacyStatus() != 7);
+		assertTrue(h.legacyStatus() != 7, "a limit must remain a failure");
 	}
 
 	/** A generated script that sources the shipped helper and drives one function. */
@@ -178,8 +178,8 @@ public class ContainerStageStatusTest {
 		private final Path out;
 		private final StringBuilder body = new StringBuilder();
 
-		Harness(TemporaryFolder folder) throws Exception {
-			dir = folder.newFolder("h-" + System.nanoTime()).toPath();
+		Harness(File folder) throws Exception {
+			dir = newFolder(folder, "h-" + System.nanoTime()).toPath();
 			out = dir.resolve("out");
 			Files.createDirectories(out);
 			// The shipped files, copied rather than re-implemented, so the assertions are
@@ -211,10 +211,10 @@ public class ContainerStageStatusTest {
 		void run() throws Exception {
 			File script = new File(dir.toFile(), "generated.sh");
 			Files.writeString(script.toPath(), body.toString());
-			assertEquals("generated script must parse", 0,
-					exec(Bash.PATH, "-n", script.getAbsolutePath()).exit);
+			assertEquals(0, exec(Bash.PATH, "-n", script.getAbsolutePath()).exit,
+					"generated script must parse");
 			Result r = exec(Bash.PATH, script.getAbsolutePath());
-			assertEquals("the helper must not abort:\n" + r.out, 0, r.exit);
+			assertEquals(0, r.exit, "the helper must not abort:\n" + r.out);
 		}
 
 		Path snapshotDir() {
@@ -263,7 +263,7 @@ public class ContainerStageStatusTest {
 		var m = java.util.regex.Pattern
 				.compile("\"" + name + "\"\\s*:\\s*(-?\\d+)")
 				.matcher(json);
-		assertTrue("json must carry " + name + ": " + json, m.find());
+		assertTrue(m.find(), "json must carry " + name + ": " + json);
 		String raw = m.group(1);
 		try {
 			return Integer.parseInt(raw);
@@ -280,7 +280,7 @@ public class ContainerStageStatusTest {
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "command must not hang");
 		return new Result(p.exitValue(), out);
 	}
 

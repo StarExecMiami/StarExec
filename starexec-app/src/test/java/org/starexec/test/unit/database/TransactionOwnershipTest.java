@@ -1,6 +1,6 @@
 package org.starexec.test.unit.database;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 
 import java.lang.reflect.InvocationHandler;
@@ -12,11 +12,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * What the transaction owner does to the connection it borrows.
@@ -59,7 +59,7 @@ public class TransactionOwnershipTest {
 		});
 
 		assertTrue(refused.getMessage().contains("does not own"));
-		assertEquals("nothing may touch a connection it refused", List.of(), recorder.calls);
+		assertEquals(List.of(), recorder.calls, "nothing may touch a connection it refused");
 	}
 
 	@Test
@@ -73,8 +73,8 @@ public class TransactionOwnershipTest {
 
 		assertEquals(Arrays.asList("setAutoCommit(false)", "rollback", "setAutoCommit(true)"),
 				recorder.calls);
-		assertSame("the cause must survive so the log says what actually failed",
-				thrown, surfaced.getCause());
+		assertSame(thrown,
+				surfaced.getCause(), "the cause must survive so the log says what actually failed");
 	}
 
 	/** Two failures in a row must still produce exactly one rollback, not one per boundary. */
@@ -86,8 +86,8 @@ public class TransactionOwnershipTest {
 			throw new SQLException("pair stage insertion failed");
 		});
 
-		assertEquals("rollback must happen once", 1, count(recorder.calls, "rollback"));
-		assertEquals("nothing may be committed", 0, count(recorder.calls, "commit"));
+		assertEquals(1, count(recorder.calls, "rollback"), "rollback must happen once");
+		assertEquals(0, count(recorder.calls, "commit"), "nothing may be committed");
 	}
 
 	/**
@@ -103,7 +103,7 @@ public class TransactionOwnershipTest {
 		SQLException surfaced = runExpectingFailure(recorder, con -> "unreachable outcome");
 
 		assertEquals(1, count(recorder.calls, "commit"));
-		assertEquals("a failed commit must still roll back", 1, count(recorder.calls, "rollback"));
+		assertEquals(1, count(recorder.calls, "rollback"), "a failed commit must still roll back");
 		assertTrue(surfaced.getMessage().contains("commit"));
 	}
 
@@ -132,8 +132,8 @@ public class TransactionOwnershipTest {
 		runExpectingFailure(recorder, con -> {
 			throw new SQLException("failed");
 		});
-		assertEquals("autoCommit must be restored last",
-				"setAutoCommit(true)", recorder.calls.get(recorder.calls.size() - 1));
+		assertEquals("setAutoCommit(true)",
+				recorder.calls.get(recorder.calls.size() - 1), "autoCommit must be restored last");
 	}
 
 	/**
@@ -155,9 +155,9 @@ public class TransactionOwnershipTest {
 
 		String result = Common.runTransactional(recorder.connection(), con -> "written");
 
-		assertEquals("the committed result must reach the caller", "written", result);
-		assertEquals("nothing may be rolled back after a successful commit",
-				0, count(recorder.calls, "rollback"));
+		assertEquals("written", result, "the committed result must reach the caller");
+		assertEquals(0,
+				count(recorder.calls, "rollback"), "nothing may be rolled back after a successful commit");
 		assertEquals(1, count(recorder.calls, "commit"));
 	}
 
@@ -175,8 +175,8 @@ public class TransactionOwnershipTest {
 		});
 
 		assertEquals("the original failure", surfaced.getMessage());
-		assertTrue("the restoration failure must ride along",
-				surfaced.getSuppressed().length >= 1);
+		assertTrue(surfaced.getSuppressed().length >= 1,
+				"the restoration failure must ride along");
 	}
 
 	/** Both cleanup steps failing still leaves the application failure primary. */
@@ -191,7 +191,7 @@ public class TransactionOwnershipTest {
 		});
 
 		assertEquals("the original failure", surfaced.getMessage());
-		assertEquals("both cleanup failures must be attached", 2, surfaced.getSuppressed().length);
+		assertEquals(2, surfaced.getSuppressed().length, "both cleanup failures must be attached");
 	}
 
 	/** After every path that restores cleanly, the next borrower sees autoCommit=true. */
@@ -199,13 +199,13 @@ public class TransactionOwnershipTest {
 	public void aCleanlyRestoredConnectionIsReusable() throws Exception {
 		RecordingConnection ok = new RecordingConnection(true);
 		Common.runTransactional(ok.connection(), con -> "fine");
-		assertTrue("a committed transaction must leave autoCommit on", ok.autoCommit);
+		assertTrue(ok.autoCommit, "a committed transaction must leave autoCommit on");
 
 		RecordingConnection failed = new RecordingConnection(true);
 		runExpectingFailure(failed, con -> {
 			throw new SQLException("failed");
 		});
-		assertTrue("a rolled-back transaction must leave autoCommit on", failed.autoCommit);
+		assertTrue(failed.autoCommit, "a rolled-back transaction must leave autoCommit on");
 	}
 
 	/** The owner borrows the connection; whoever opened it closes it. */
@@ -215,8 +215,8 @@ public class TransactionOwnershipTest {
 
 		Common.runTransactional(recorder.connection(), con -> null);
 
-		assertFalse("runTransactional must not close a connection it does not own",
-				recorder.calls.contains("close"));
+		assertFalse(recorder.calls.contains("close"),
+				"runTransactional must not close a connection it does not own");
 	}
 
 	@Test

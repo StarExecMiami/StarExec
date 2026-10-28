@@ -1,6 +1,6 @@
 package org.starexec.test.integration.StateTests;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.Permissions;
 import org.starexec.data.database.Spaces;
@@ -12,6 +12,7 @@ import org.starexec.test.integration.TestSequence;
 
 import java.util.HashSet;
 import java.util.List;
+
 public class IntroStateTests extends TestSequence {
 	User admin=null;
 	@Override
@@ -24,7 +25,7 @@ public class IntroStateTests extends TestSequence {
 		List<Space> spaces=Spaces.getAllSpaces();
 
 		for (Space s : spaces) {
-			Assert.assertFalse(Permissions.getSpaceDefault(s.getId()).isLeader());
+			Assertions.assertFalse(Permissions.getSpaceDefault(s.getId()).isLeader());
 		}
 	}
 
@@ -38,7 +39,7 @@ public class IntroStateTests extends TestSequence {
 				if (names.contains(sub.getName())) {
 					addMessage("ERROR: space id = "+sub.getId() +" has a duplicate name in space "+s.getId());
 				}
-				Assert.assertFalse(names.contains(sub.getName()));
+				Assertions.assertFalse(names.contains(sub.getName()));
 				names.add(sub.getName());
 			}
 		}

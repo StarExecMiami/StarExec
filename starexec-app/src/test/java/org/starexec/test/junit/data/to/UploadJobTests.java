@@ -1,9 +1,9 @@
 package org.starexec.test.junit.data.to;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.to.UploadJob;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class UploadJobTests {
 

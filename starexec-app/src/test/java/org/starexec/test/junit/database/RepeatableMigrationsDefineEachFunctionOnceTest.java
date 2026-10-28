@@ -1,6 +1,6 @@
 package org.starexec.test.junit.database;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.io.IOException;
@@ -14,9 +14,9 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * No function or procedure is created by more than one repeatable migration.
@@ -38,7 +38,7 @@ public class RepeatableMigrationsDefineEachFunctionOnceTest {
 		File dir = new File(getClass().getResource("/db/migration").toURI());
 		File[] files = dir.listFiles((d, name) -> name.startsWith("R__") && name.endsWith(".sql"));
 		assertNotNull(files);
-		assertTrue("expected at least R__functions.sql and R__procedures_and_views.sql", files.length >= 2);
+		assertTrue(files.length >= 2, "expected at least R__functions.sql and R__procedures_and_views.sql");
 
 		Map<String, List<String>> definedIn = new HashMap<>();
 		for (File f : files) {
@@ -58,7 +58,7 @@ public class RepeatableMigrationsDefineEachFunctionOnceTest {
 				}
 			}
 		}
-		assertTrue("the scan must find the routines it is about", definedIn.containsKey("getjobstatus"));
+		assertTrue(definedIn.containsKey("getjobstatus"), "the scan must find the routines it is about");
 
 		List<String> duplicated = new ArrayList<>();
 		for (Map.Entry<String, List<String>> e : definedIn.entrySet()) {
@@ -67,6 +67,6 @@ public class RepeatableMigrationsDefineEachFunctionOnceTest {
 			}
 		}
 		java.util.Collections.sort(duplicated);
-		assertEquals("routines defined by more than one repeatable migration", new ArrayList<String>(), duplicated);
+		assertEquals(new ArrayList<String>(), duplicated, "routines defined by more than one repeatable migration");
 	}
 }

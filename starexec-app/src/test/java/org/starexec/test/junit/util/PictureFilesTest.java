@@ -1,6 +1,6 @@
 package org.starexec.test.junit.util;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
@@ -8,9 +8,10 @@ import org.starexec.util.PictureFiles;
 
 import java.io.File;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The picture layout that upload writes and delete removes. It has to be the one GetPicture
@@ -40,8 +41,9 @@ public class PictureFilesTest {
 		assertFalse(PictureFiles.isKnownType(null));
 	}
 
-	@Test(expected = IllegalArgumentException.class)
+	@Test
 	public void refusesToNameAFileForAnUnknownType() {
-		PictureFiles.original("space", 1);
+		assertThrows(IllegalArgumentException.class, () ->
+			PictureFiles.original("space", 1));
 	}
 }

@@ -1,18 +1,17 @@
 package org.starexec.test.unit.util;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.util.XMLUtil;
 
 import java.io.File;
 import java.nio.file.Files;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The {@code primary} attribute of a {@code PipelineStage} is typed {@code xs:boolean}, and
@@ -28,8 +27,8 @@ public class XsdBooleanTest {
 	private static final String JOB_SCHEMA_REF =
 			"https://starexec.example.org/starexec/public/batchJobSchema.xsd";
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	/** All four lexical forms, and nothing else. */
 	@Test
@@ -52,8 +51,8 @@ public class XsdBooleanTest {
 	public void anythingElseIsUnknownRatherThanFalse() {
 		for (String outside : new String[]{"", " ", "TRUE", "True", "FALSE", "yes", "no", "2",
 				"-1", "01", "t", "f", "null"}) {
-			assertNull("'" + outside + "' is not in the xs:boolean lexical space",
-					XMLUtil.parseXsdBoolean(outside));
+			assertNull(XMLUtil.parseXsdBoolean(outside),
+					"'" + outside + "' is not in the xs:boolean lexical space");
 		}
 		assertNull(XMLUtil.parseXsdBoolean(null));
 	}
@@ -61,8 +60,8 @@ public class XsdBooleanTest {
 	/** The defect in one line: the JDK's parser disagrees with the schema on "1". */
 	@Test
 	public void theJdkParserDisagreesWithTheSchemaOnOne() {
-		assertFalse("this is why parseBoolean cannot read an xs:boolean",
-				Boolean.parseBoolean("1"));
+		assertFalse(Boolean.parseBoolean("1"),
+				"this is why parseBoolean cannot read an xs:boolean");
 		assertEquals(Boolean.TRUE, XMLUtil.parseXsdBoolean("1"));
 	}
 
@@ -75,14 +74,14 @@ public class XsdBooleanTest {
 	public void theSchemaAdmitsExactlyThatLexicalSpace() throws Exception {
 		for (String accepted : new String[]{"true", "false", "1", "0"}) {
 			ValidatorStatusCode status = validatePrimary(accepted);
-			assertTrue("primary=\"" + accepted + "\" is schema-valid but was rejected: "
-					+ status.getMessage(), status.isSuccess());
+			assertTrue(status.isSuccess(), "primary=\"" + accepted + "\" is schema-valid but was rejected: "
+					+ status.getMessage());
 		}
 
 		for (String rejected : new String[]{"TRUE", "True", "yes", "2", "-1", ""}) {
 			ValidatorStatusCode status = validatePrimary(rejected);
-			assertFalse("primary=\"" + rejected + "\" is not schema-valid but was accepted",
-					status.isSuccess());
+			assertFalse(status.isSuccess(),
+					"primary=\"" + rejected + "\" is not schema-valid but was accepted");
 		}
 	}
 
@@ -93,8 +92,8 @@ public class XsdBooleanTest {
 	@Test
 	public void anExplicitlyNonPrimaryStageIsSchemaValid() throws Exception {
 		ValidatorStatusCode status = validatePrimary("false");
-		assertTrue("primary=\"false\" must be a valid document: " + status.getMessage(),
-				status.isSuccess());
+		assertTrue(status.isSuccess(),
+				"primary=\"false\" must be a valid document: " + status.getMessage());
 		assertEquals(Boolean.FALSE, XMLUtil.parseXsdBoolean("false"));
 	}
 
@@ -103,8 +102,8 @@ public class XsdBooleanTest {
 	public void omittingTheAttributeIsSchemaValid() throws Exception {
 		ValidatorStatusCode status = XMLUtil.validateAgainstSchema(
 				pipelineDocument("<PipelineStage config-id=\"1\"/>"), JOB_SCHEMA_REF);
-		assertTrue("a stage with no primary attribute must be valid: " + status.getMessage(),
-				status.isSuccess());
+		assertTrue(status.isSuccess(),
+				"a stage with no primary attribute must be valid: " + status.getMessage());
 	}
 
 	private ValidatorStatusCode validatePrimary(String value) throws Exception {
@@ -114,7 +113,7 @@ public class XsdBooleanTest {
 	}
 
 	private File pipelineDocument(String stage) throws Exception {
-		File file = new File(folder.getRoot(), "pipeline.xml");
+		File file = new File(folder, "pipeline.xml");
 		Files.writeString(file.toPath(),
 				"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
 						+ "<tns:Jobs xmlns:tns=\"" + JOBS_NS + "\">\n"

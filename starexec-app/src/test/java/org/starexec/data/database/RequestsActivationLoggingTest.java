@@ -3,7 +3,7 @@ package org.starexec.data.database;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.slf4j.LoggerFactory;
 import org.starexec.data.to.User;
@@ -14,7 +14,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Optional;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.*;
 
 public class RequestsActivationLoggingTest {
@@ -54,10 +56,10 @@ public class RequestsActivationLoggingTest {
 			if (redeem) assertEquals(failure ? -1 : 42, Requests.redeemActivationCode(sentinel));
 			else assertEquals(!failure, Requests.addActivationCode(con, user, sentinel));
 			verify(stmt).setString(redeem ? 1 : 2, sentinel);
-			assertFalse("Expected an audit event", capture.list.isEmpty());
+			assertFalse(capture.list.isEmpty(), "Expected an audit event");
 			for (ILoggingEvent event : capture.list) {
-				assertFalse("Activation value leaked into log", event.getFormattedMessage().contains(sentinel));
-				assertNull("Token-bearing exception must not be attached", event.getThrowableProxy());
+				assertFalse(event.getFormattedMessage().contains(sentinel), "Activation value leaked into log");
+				assertNull(event.getThrowableProxy(), "Token-bearing exception must not be attached");
 			}
 			if (failure) errors.verify(() -> ErrorLogs.add(argThat(message -> !message.contains(sentinel)), any()));
 		} finally {
