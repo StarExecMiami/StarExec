@@ -55,7 +55,8 @@ import org.starexec.logger.StarLogger;
  * <ul>
  * <li><strong>STAREXEC_LOCAL_CONCURRENCY</strong>: Set no higher than the
  * distinct physical-core count in this process's effective affinity. Startup
- * fails closed when sysfs topology cannot prove that many cores. Ignored when
+ * fails closed when sysfs topology cannot prove that many cores. Unset, it is
+ * min(4, available processors), lowered to that count. Ignored when
  * {@code STAREXEC_LOCAL_CORE_LIST} is set.</li>
  * <li><strong>STAREXEC_LOCAL_CORE_LIST</strong>: Select one allowed logical CPU
  * per physical core. Startup rejects malformed or duplicate IDs, CPUs outside
@@ -123,9 +124,8 @@ public class LocalBackend implements Backend {
             LocalBackend.class);
 
     // Configuration constants with defaults
-    private static final int DEFAULT_CONCURRENCY = Math.min(
-            4,
-            Runtime.getRuntime().availableProcessors());
+    /** Upper bound of the concurrency used when STAREXEC_LOCAL_CONCURRENCY is unset. */
+    private static final int MAX_DEFAULT_CONCURRENCY = 4;
     private static final int DEFAULT_JOB_TIMEOUT_SECONDS = 3600; // 1 hour
     private static final int DEFAULT_GRACEFUL_SHUTDOWN_SECONDS = 30;
     private static final Path PROC_SELF_STATUS_PATH = Path.of("/proc/self/status");
@@ -1660,22 +1660,33 @@ public class LocalBackend implements Backend {
                     "Using validated core list for CPU pinning: " + configuredCores +
                             " (Concurrency: " + maxConcurrency + ")");
         } else {
-            maxConcurrency = getEnvInt(
-                    "STAREXEC_LOCAL_CONCURRENCY",
-                    DEFAULT_CONCURRENCY);
-            if (maxConcurrency < 1) {
-                log.warn(
-                        "Invalid concurrency " +
-                                maxConcurrency +
-                                ", using default: " +
-                                DEFAULT_CONCURRENCY);
-                maxConcurrency = DEFAULT_CONCURRENCY;
+            Map<Integer, List<Integer>> siblingTopology =
+                    CpuPartitionManager.readThreadSiblings(SYSFS_CPU_PATH);
+            OptionalInt configuredConcurrency = getEnvOptionalInt(
+                    "STAREXEC_LOCAL_CONCURRENCY");
+            if (configuredConcurrency.isPresent() && configuredConcurrency.getAsInt() >= 1) {
+                maxConcurrency = configuredConcurrency.getAsInt();
+            } else {
+                // Computed only without a valid value, so an explicit one never depends on
+                // the topology that a larger default would need.
+                maxConcurrency = defaultConcurrency(
+                        Runtime.getRuntime().availableProcessors(),
+                        effectiveAffinity,
+                        onlineCpus,
+                        siblingTopology);
+                if (configuredConcurrency.isPresent()) {
+                    log.warn(
+                            "Invalid concurrency " +
+                                    configuredConcurrency.getAsInt() +
+                                    ", using default: " +
+                                    maxConcurrency);
+                }
             }
             configuredCores = selectDefaultCoreList(
                     maxConcurrency,
                     effectiveAffinity,
                     onlineCpus,
-                    CpuPartitionManager.readThreadSiblings(SYSFS_CPU_PATH));
+                    siblingTopology);
             log.info(
                     "STAREXEC_LOCAL_CORE_LIST not set. Using one allowed logical CPU " +
                             "from each of " + maxConcurrency + " physical cores: " +
@@ -1821,6 +1832,33 @@ public class LocalBackend implements Backend {
         }
 
         return Collections.unmodifiableList(new ArrayList<>(cores));
+    }
+
+    /**
+     * The concurrency used when STAREXEC_LOCAL_CONCURRENCY is unset: the largest value up to
+     * {@code min(4, availableProcessors)} for which {@link #selectDefaultCoreList} finds that
+     * many distinct physical cores. The JVM counts logical CPUs, so on an SMT host with fewer
+     * than four physical cores in the affinity (GitHub's runner: two cores, four threads) that
+     * bound alone asked for more cores than exist, and startup failed with nothing configured.
+     * Topology that cannot be read, or is inconsistent, still fails closed for more than one
+     * lease, as it does for an explicit value.
+     */
+    static int defaultConcurrency(
+            int availableProcessors,
+            List<Integer> effectiveAffinity,
+            List<Integer> onlineCpus,
+            Map<Integer, List<Integer>> siblingTopology) {
+        for (int concurrency = Math.min(MAX_DEFAULT_CONCURRENCY, availableProcessors);
+                concurrency > 1;
+                concurrency--) {
+            try {
+                selectDefaultCoreList(concurrency, effectiveAffinity, onlineCpus, siblingTopology);
+                return concurrency;
+            } catch (IllegalArgumentException fewerCoresThanRequested) {
+                // selectDefaultCoreList reports only a shortfall this way; ask for one fewer.
+            }
+        }
+        return 1;
     }
 
     /**
@@ -2035,15 +2073,23 @@ public class LocalBackend implements Backend {
     }
 
     private int getEnvInt(String key, int defaultValue) {
+        return getEnvOptionalInt(key).orElse(defaultValue);
+    }
+
+    /**
+     * The variable's value as an integer; empty when it is unset or empty, or when it is
+     * not an integer, which is logged.
+     */
+    private OptionalInt getEnvOptionalInt(String key) {
         String value = System.getenv(key);
         if (value != null && !value.isEmpty()) {
             try {
-                return Integer.parseInt(value.trim());
+                return OptionalInt.of(Integer.parseInt(value.trim()));
             } catch (NumberFormatException e) {
                 log.warn("Invalid integer for " + key + ": " + value);
             }
         }
-        return defaultValue;
+        return OptionalInt.empty();
     }
 
     private boolean getEnvBoolean(String key, boolean defaultValue) {

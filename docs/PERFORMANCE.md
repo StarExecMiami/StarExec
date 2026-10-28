@@ -20,7 +20,7 @@ This guide covers:
 
 | Parameter | Default | Tuning Goal |
 |-----------|---------|-------------|
-| `STAREXEC_LOCAL_CONCURRENCY` | `min(4, JVM available processors)` | Select this many distinct physical cores from the online portion of process affinity; use `STAREXEC_LOCAL_CORE_LIST` to choose exact CPUs |
+| `STAREXEC_LOCAL_CONCURRENCY` | `min(4, JVM available processors)`, lowered to the distinct physical-core count | Select this many distinct physical cores from the online portion of process affinity; use `STAREXEC_LOCAL_CORE_LIST` to choose exact CPUs |
 | `STAREXEC_LOCAL_CORE_LIST` | unset | One online, allowed logical CPU per physical core; its validated length sets LocalBackend concurrency |
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` | 5 | Keep queue 50-100 deep |
 | `STAREXEC_CONTAINER_POLL_INTERVAL_MS` | 5000 | Lower for latency, higher for scale |

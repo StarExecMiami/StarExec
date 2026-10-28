@@ -197,6 +197,49 @@ public class LocalCoreListValidationTest {
     }
 
     @Test
+    public void defaultConcurrencyFitsTwoCoresWithFourThreads() {
+        // GitHub's runner: CPUs 0-3, where 0-1 and 2-3 are SMT siblings.
+        Map<Integer, List<Integer>> topology = new LinkedHashMap<>();
+        topology.put(0, Arrays.asList(0, 1));
+        topology.put(1, Arrays.asList(0, 1));
+        topology.put(2, Arrays.asList(2, 3));
+        topology.put(3, Arrays.asList(2, 3));
+        List<Integer> cpus = Arrays.asList(0, 1, 2, 3);
+
+        int concurrency = LocalBackend.defaultConcurrency(4, cpus, cpus, topology);
+
+        assertEquals(2, concurrency);
+        assertEquals(
+                Arrays.asList(0, 2),
+                LocalBackend.selectDefaultCoreList(concurrency, cpus, cpus, topology));
+    }
+
+    @Test
+    public void defaultConcurrencyKeepsItsBoundsWhereCoresSuffice() {
+        List<Integer> cpus = Arrays.asList(0, 1, 2, 3, 4, 5, 6, 7);
+        Map<Integer, List<Integer>> topology = singletonTopology(0, 1, 2, 3, 4, 5, 6, 7);
+
+        assertEquals(4, LocalBackend.defaultConcurrency(8, cpus, cpus, topology));
+        assertEquals(3, LocalBackend.defaultConcurrency(3, cpus, cpus, topology));
+    }
+
+    @Test
+    public void defaultConcurrencyOfOneNeedsNoTopology() {
+        List<Integer> cpus = Arrays.asList(0, 1);
+
+        assertEquals(1, LocalBackend.defaultConcurrency(1, cpus, cpus, Collections.emptyMap()));
+    }
+
+    @Test
+    public void defaultConcurrencyStillFailsClosedWithoutTopology() {
+        List<Integer> cpus = Arrays.asList(0, 1, 2, 3);
+
+        expectIllegalState(
+                () -> LocalBackend.defaultConcurrency(4, cpus, cpus, Collections.emptyMap()),
+                "topology is unavailable");
+    }
+
+    @Test
     public void defaultCoreSelectionRejectsConcurrencyAboveOnlineIntersection() {
         expectIllegalArgument(
                 () -> LocalBackend.selectDefaultCoreList(
