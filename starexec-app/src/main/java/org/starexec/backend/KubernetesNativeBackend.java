@@ -86,6 +86,9 @@
 
 package org.starexec.backend;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import io.fabric8.kubernetes.api.model.Affinity;
@@ -95,14 +98,24 @@ import io.fabric8.kubernetes.api.model.Node;
 import io.fabric8.kubernetes.api.model.NodeCondition;
 import io.fabric8.kubernetes.api.model.NodeList;
 import io.fabric8.kubernetes.api.model.NodeSpec;
+import io.fabric8.kubernetes.api.model.PodSecurityContext;
+import io.fabric8.kubernetes.api.model.PodSecurityContextBuilder;
 import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.kubernetes.api.model.ResourceRequirementsBuilder;
+import io.fabric8.kubernetes.api.model.SecurityContext;
+import io.fabric8.kubernetes.api.model.SecurityContextBuilder;
+import io.fabric8.kubernetes.api.model.Volume;
+import io.fabric8.kubernetes.api.model.VolumeBuilder;
+import io.fabric8.kubernetes.api.model.VolumeMount;
+import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
 import io.fabric8.kubernetes.api.model.batch.v1.JobList;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientBuilder;
+import io.fabric8.kubernetes.client.dsl.base.PatchContext;
+import io.fabric8.kubernetes.client.dsl.base.PatchType;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -118,9 +131,11 @@ import java.util.concurrent.TimeUnit;
 import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
+import org.starexec.data.database.Cluster;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.database.StageStatusBatchResult;
+import org.starexec.data.to.JobPair;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
 
@@ -149,6 +164,10 @@ public class KubernetesNativeBackend implements Backend {
     /** Label key used to identify StarExec queues on nodes */
     private static final String DEFAULT_QUEUE_LABEL = "starexec/queue";
 
+    /** Default identity of a job pod; see {@link #jobRunAsUser} (#237). */
+    private static final int DEFAULT_JOB_RUN_AS_USER = 1000;
+    private static final int DEFAULT_JOB_RUN_AS_GROUP = 999;
+
     /** Label prefix for StarExec-managed resources */
     private static final String LABEL_PREFIX = "starexec.org/";
 
@@ -160,6 +179,26 @@ public class KubernetesNativeBackend implements Backend {
 
     /** Label key for job pair ID */
     private static final String PAIR_ID_LABEL = LABEL_PREFIX + "pair-id";
+    /** The pair attempt this Job was submitted for; absent on Jobs from before #185. */
+    static final String ATTEMPT_NO_LABEL = LABEL_PREFIX + "attempt-no";
+
+    /** Where the job container mounts the shared data volume. */
+    private static final String DATA_MOUNT_PATH = "/app/data";
+
+    /** Where the job container mounts its emptyDir for temporary files. */
+    private static final String TMP_MOUNT_PATH = "/tmp";
+
+    /** Name of the job pod's emptyDir for the backend working directory, when it needs one. */
+    private static final String WORK_VOLUME = "work";
+
+    /**
+     * The job container's HOME: an emptyDir of its own, per pod, whatever uid runs. Not under
+     * the working directory, which a deployment may put on the shared data volume.
+     */
+    private static final String HOME_MOUNT_PATH = "/app/home";
+
+    /** Name of the job pod's emptyDir for HOME. */
+    private static final String HOME_VOLUME = "home";
 
     /** Label key for StarExec label schema version */
     private static final String LABEL_VERSION = LABEL_PREFIX + "label-version";
@@ -329,6 +368,17 @@ public class KubernetesNativeBackend implements Backend {
     private final Map<Integer, Path> execIdToOutputDir =
         new ConcurrentHashMap<>();
 
+    /**
+     * Maps StarExec execution IDs to the pair attempt they were submitted for (#185).
+     *
+     * <p>Every result write carries this so the database can refuse a write from an
+     * execution whose pair has since been rerun. An id with no entry is UNFENCED, not
+     * attempt 0: Jobs created before this label existed have none, and a rerun cannot
+     * be told apart for them. Released wherever {@code execIdToOutputDir} is.
+     */
+    private final Map<Integer, Integer> execIdToAttemptNo =
+        new ConcurrentHashMap<>();
+
     /** Execution ID generator */
     private int nextExecId = 1;
 
@@ -372,9 +422,6 @@ public class KubernetesNativeBackend implements Backend {
      */
     private volatile Map<String, Long> queueMaxAllocatableCpuMillis = Collections.emptyMap();
 
-    /** Human-readable reason the CPU capacity gate is holding dispatch, or "" when clear. */
-    private volatile String cpuCapacityBlockDetail = "";
-
     private volatile long queueViewRefreshedAt = 0L;
 
     /**
@@ -391,6 +438,105 @@ public class KubernetesNativeBackend implements Backend {
 
     private final Object queueViewLock = new Object();
 
+    /**
+     * How long a dispatch hold, or a node listing that keeps failing, goes before it is logged
+     * again: the interval of JobManager's queue conditions and of the stuck-job report.
+     */
+    private static final long HOLD_REPEAT_MILLIS = TimeUnit.HOURS.toMillis(6);
+
+    /** Ends each line that reports a dispatch hold or a failing node listing. */
+    private static final String HOLD_REPEATED =
+        " Reported again every 6 hours while it lasts, and at INFO when it ends.";
+
+    // Why dispatch is held for a queue: what a hold is keyed on, and what its end names.
+    private static final String HOLD_ADMISSION = "admission is degraded";
+    private static final String HOLD_VIEW_NEVER_LOADED = "the queue view has never loaded";
+    private static final String HOLD_CPU_UNKNOWN = "CPU capacity is unknown";
+    private static final String HOLD_CPU_TOO_LARGE = "no node can fit the CPU request";
+    private static final String HOLD_NO_SCHEDULABLE_NODE = "no node is schedulable";
+
+    /** The one key of {@link #queueViewFailures}. */
+    private static final String QUEUE_VIEW_LISTING = "node listing";
+
+    /**
+     * What holds dispatch for each queue that is held, keyed by queue name.
+     *
+     * <p>JobManager asks {@link #isQueueDispatchable} on every pass, every 20 seconds by default,
+     * for each queue with pairs waiting, and StarLogger writes every WARN and ERROR to the
+     * error_logs table. Logged on every call, a hold that lasted wrote three rows a minute per
+     * queue. A hold is logged when it starts or its reason changes, again every
+     * {@link #HOLD_REPEAT_MILLIS} while it lasts, and its end once at INFO.
+     */
+    private final LastingConditions dispatchHolds = new LastingConditions();
+
+    /**
+     * The node listing behind the queue view, while it keeps failing. A failed listing leaves the
+     * view stale, so the next check lists again: logged on every one, an API outage wrote a WARN
+     * with its stack trace per check.
+     */
+    private final LastingConditions queueViewFailures = new LastingConditions();
+
+    /**
+     * When to log a condition that can last: when it starts or its cause changes, again every
+     * {@link #HOLD_REPEAT_MILLIS} while it lasts, and its end once.
+     *
+     * <p>The policy of JobManager's queue conditions. This package cannot use that class:
+     * {@code org.starexec.jobs} depends on {@code org.starexec.backend}, not the other way round.
+     */
+    private static final class LastingConditions {
+
+        private static final class Condition {
+            final String cause;
+            final long since;
+            long lastLogged;
+
+            Condition(String cause, long now) {
+                this.cause = cause;
+                this.since = now;
+                this.lastLogged = now;
+            }
+        }
+
+        private final Map<String, Condition> current = new ConcurrentHashMap<>();
+
+        /**
+         * Records that {@code key} is in a condition with this cause at {@code now}.
+         *
+         * @return -1 when nothing is due; otherwise the minutes the condition has lasted, which
+         *         is 0 when it starts or its cause changes
+         */
+        long report(String key, String cause, long now) {
+            long[] due = {-1};
+            current.compute(key, (k, condition) -> {
+                if (condition == null || !condition.cause.equals(cause)) {
+                    due[0] = 0;
+                    return new Condition(cause, now);
+                }
+                if (now - condition.lastLogged >= HOLD_REPEAT_MILLIS) {
+                    condition.lastLogged = now;
+                    due[0] = TimeUnit.MILLISECONDS.toMinutes(now - condition.since);
+                }
+                return condition;
+            });
+            return due[0];
+        }
+
+        /** Ends the condition of {@code key}: returns it, or null when there was none. */
+        Condition end(String key) {
+            return current.remove(key);
+        }
+    }
+
+    /** " (first seen N minutes ago)" for a condition that has lasted, and "" when it starts. */
+    private static String lasting(long minutes) {
+        return minutes > 0 ? " (first seen " + minutes + " minutes ago)" : "";
+    }
+
+    /** Whole minutes from {@code since} to {@code now}; never negative after the clock steps back. */
+    private static long minutesSince(long since, long now) {
+        return Math.max(0L, TimeUnit.MILLISECONDS.toMinutes(now - since));
+    }
+
     /** Hard concurrency cap to prevent unbounded K8s Job creation */
     private int maxConcurrentJobs = 50;
 
@@ -402,6 +548,50 @@ public class KubernetesNativeBackend implements Backend {
      * {@code KubernetesJobMonitor.clock}; production never replaces it.
      */
     private volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
+
+    /**
+     * How long a finished execution's missing status.json is taken to be not visible yet,
+     * rather than absent (#324).
+     *
+     * <p>Job output lands on shared storage that the job pod writes from one node and this
+     * process reads on another. On Quokka that is NFS 4.1 with default caching. At submit,
+     * {@code clearStaleAttemptArtifacts} deletes the previous status.json from this process,
+     * which leaves a negative entry in this client's directory cache; the pod then creates the
+     * file on another node, and this process keeps seeing it as absent until the directory is
+     * revalidated ({@code acdirmin}..{@code acdirmax}, 30 to 60 s by default). A pair that
+     * finished faster than that (observed: 16 s) was declared to have no status.json, abandoned
+     * as an intervention, and later swept into ERROR_SUBMIT_FAIL although its result was on
+     * disk. Twice the NFS maximum; {@code STAREXEC_K8S_STATUS_GRACE_SECONDS}.
+     */
+    private volatile long statusVisibilityGraceMillis = 120_000L;
+
+    /**
+     * How long a kill waits for its foreground deletion to finish before reporting UNPROVEN.
+     *
+     * <p>Foreground propagation keeps a Job behind its finalizer until its pods are gone, so
+     * right after the delete a running pod's Job is always still there. Reporting that at once
+     * made every kill of a running pod unproven: deleting a running job left its pairs RUNNING
+     * with nothing coming back to retire them, and deleting a user with a running job was
+     * refused. Long enough for the default 30 s termination grace period plus API latency;
+     * {@code STAREXEC_K8S_KILL_CONFIRM_SECONDS}. Zero until {@code initialize} reads it, so a
+     * backend that was never initialised keeps the immediate check.
+     */
+    private volatile long killConfirmWaitMillis = 0L;
+
+    /** How often that wait re-reads the Job; a field so tests need not sleep for real. */
+    private volatile long killConfirmPollMillis = 1_000L;
+
+    /**
+     * When {@link #requestStop} asked for an execution to stop. Its confirmation measures the
+     * wait from then, not from when it gets its turn, so a batch whose stops were all
+     * requested up front shares one wait instead of queueing one per execution: a node whose
+     * pods hang in Terminating would otherwise hold the caller for the wait times the number
+     * of pods.
+     */
+    private final Map<Integer, Long> stopRequestedAtNanos = new ConcurrentHashMap<>();
+
+    /** When a finished execution was first found without a visible status.json. */
+    private final Map<ExecutionRef, Long> statusAbsentSince = new ConcurrentHashMap<>();
 
     /** Tracks active K8s Jobs against the concurrency cap */
     private final AtomicInteger activeJobCount = new AtomicInteger(0);
@@ -436,6 +626,13 @@ public class KubernetesNativeBackend implements Backend {
      * two are being told apart rather than conflated.
      */
     private final Set<Integer> legacyKilledExecIds = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Nodes a running pod was found on that the nodes table did not hold, each warned about
+     * once until it is registered. The monitor asks again on every poll, and StarLogger writes
+     * every WARN to error_logs, so a line per poll would fill that table.
+     */
+    private final Set<String> unregisteredNodesWarned = ConcurrentHashMap.newKeySet();
 
     /**
      * Guards the compound (jobsHoldingSlot, activeJobCount) reservation so the set and
@@ -596,6 +793,17 @@ public class KubernetesNativeBackend implements Backend {
     private String dataPvcName;
     private String dataPvcAccessMode;
     private String serviceAccountName;
+    /**
+     * UID and GID a job pod runs as, and the fsGroup of its volumes (#237).
+     *
+     * <p>Defaults match the chart's {@code security.app.runAsUser/runAsGroup}, which is
+     * also what the chart's init container chowns the shared volumes to. A job pod that
+     * ran as anyone else would either be unable to write the pair's output, or would
+     * write it with an owner the application cannot manage. Both are overridable so a
+     * deployment that changes the application identity does not silently break execution.
+     */
+    private int jobRunAsUser = DEFAULT_JOB_RUN_AS_USER;
+    private int jobRunAsGroup = DEFAULT_JOB_RUN_AS_GROUP;
     private String appNodeName;
     private String queueLabelKey;
     private String memoryLimit;
@@ -691,11 +899,32 @@ public class KubernetesNativeBackend implements Backend {
             "STAREXEC_K8S_SERVICE_ACCOUNT",
             "starexec-job"
         );
+        jobRunAsUser = getEnvInt("STAREXEC_K8S_JOB_RUN_AS_USER", DEFAULT_JOB_RUN_AS_USER);
+        jobRunAsGroup = getEnvInt("STAREXEC_K8S_JOB_RUN_AS_GROUP", DEFAULT_JOB_RUN_AS_GROUP);
+        if (jobRunAsUser <= 0) {
+            log.warn(
+                "Invalid STAREXEC_K8S_JOB_RUN_AS_USER value: " + jobRunAsUser +
+                ". A job pod must not run as root; falling back to " +
+                DEFAULT_JOB_RUN_AS_USER + "."
+            );
+            jobRunAsUser = DEFAULT_JOB_RUN_AS_USER;
+        }
+        if (jobRunAsGroup <= 0) {
+            log.warn(
+                "Invalid STAREXEC_K8S_JOB_RUN_AS_GROUP value: " + jobRunAsGroup +
+                ". Falling back to " + DEFAULT_JOB_RUN_AS_GROUP + "."
+            );
+            jobRunAsGroup = DEFAULT_JOB_RUN_AS_GROUP;
+        }
         appNodeName = getEnv("STAREXEC_K8S_APP_NODE_NAME", "");
         queueLabelKey = getEnv("STAREXEC_K8S_QUEUE_LABEL", DEFAULT_QUEUE_LABEL);
         memoryLimit = getEnv("STAREXEC_K8S_MEMORY_LIMIT", "2Gi");
         cpuLimit = getEnv("STAREXEC_K8S_CPU_LIMIT", "1");
         ttlSecondsAfterFinished = getEnvInt("STAREXEC_K8S_JOB_TTL_SECONDS", 3600);
+        statusVisibilityGraceMillis =
+            1000L * Math.max(0, getEnvInt("STAREXEC_K8S_STATUS_GRACE_SECONDS", 120));
+        killConfirmWaitMillis =
+            1000L * Math.max(0, getEnvInt("STAREXEC_K8S_KILL_CONFIRM_SECONDS", 45));
         backoffLimit = getEnvInt("STAREXEC_K8S_JOB_BACKOFF_LIMIT", 0);
         maxConcurrentJobs = getEnvInt("STAREXEC_K8S_MAX_CONCURRENT_JOBS", 50);
         if (maxConcurrentJobs < 1) {
@@ -744,22 +973,27 @@ public class KubernetesNativeBackend implements Backend {
         // exhausting the node. Isolation by accident, and it disappears the moment the
         // memory limit is lowered.
         //
-        // The flag now means what its name says: assert that the request can yield
-        // exclusive cores, rather than shrink it to one. Kubernetes grants exclusive CPUs
-        // only for a Guaranteed pod whose cpu request is a whole number, and only when
-        // the kubelet runs --cpu-manager-policy=static. Requests already equal limits in
-        // buildKubernetesJob, so the remaining requirement is the integer.
+        // The flag now asserts that the request can yield exclusive CPUs, rather than
+        // shrink it to one. Kubernetes grants exclusive CPUs only for a Guaranteed pod
+        // whose cpu request is a whole number, and only when the kubelet runs
+        // --cpu-manager-policy=static; whole physical cores, rather than hardware
+        // threads, also need the full-pcpus-only policy option or SMT off. Requests
+        // already equal limits in buildKubernetesJob, so the remaining pod-side
+        // requirement is the integer.
         if (strictOnePairPerCpu) {
             cpuLimit = resolveCpuLimitForStrictMode(cpuLimit);
-            // Not detectable from the API -- kubelet configuration is not exposed on the
-            // Node object -- so it is stated rather than checked. Without it the request
-            // below is a quota and the pinning is a fiction.
+            // Not checked: kubelet configuration is not on the Node object, and reading it
+            // through the node proxy needs nodes/proxy, which the chart does not grant. So
+            // it is stated. Without the static policy the request below is a quota and the
+            // pinning is a fiction.
             log.info(
                 "STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true with cpu=" + cpuLimit +
-                ". This grants exclusive cores ONLY if worker nodes run kubelet with" +
-                " --cpu-manager-policy=static. Without it Kubernetes applies a CFS" +
-                " bandwidth quota instead, solver threads float across all cores, and" +
-                " recorded timings are perturbed by co-scheduled work."
+                ". This grants exclusive CPUs ONLY if worker nodes run kubelet with" +
+                " --cpu-manager-policy=static, and whole physical cores only if they" +
+                " also set --cpu-manager-policy-options=full-pcpus-only=true or have" +
+                " SMT off. StarExec does not check either. Without the static policy" +
+                " Kubernetes applies a CFS bandwidth quota instead, solver threads float" +
+                " across all cores, and recorded timings are perturbed by co-scheduled work."
             );
         }
 
@@ -810,6 +1044,70 @@ public class KubernetesNativeBackend implements Backend {
         return (jobImagePullPolicy == null || jobImagePullPolicy.isEmpty())
             ? null
             : jobImagePullPolicy;
+    }
+
+    /**
+     * The pod-level security context for a job pod (#237).
+     *
+     * <p>Job pods run untrusted solvers, and they mount the shared data volume that holds
+     * every tenant's benchmarks, outputs and application data. They therefore run as the
+     * volume's owner, without root and without the ability to become it: {@code
+     * runAsNonRoot} refuses to start the container if the image or the runtime would give
+     * it UID 0, and {@code fsGroup} with {@code OnRootMismatch} keeps the volume writable
+     * for that identity without an ownership sweep on every pod start.
+     *
+     * <p>Seccomp defaults to the runtime's profile rather than {@code Unconfined}.
+     */
+    PodSecurityContext jobPodSecurityContext() {
+        return new PodSecurityContextBuilder()
+            .withRunAsNonRoot(true)
+            .withRunAsUser((long) jobRunAsUser)
+            .withRunAsGroup((long) jobRunAsGroup)
+            .withFsGroup((long) jobRunAsGroup)
+            .withFsGroupChangePolicy("OnRootMismatch")
+            .withNewSeccompProfile()
+                .withType("RuntimeDefault")
+            .endSeccompProfile()
+            .build();
+    }
+
+    /**
+     * Whether the backend working directory needs an emptyDir of its own in the job pod:
+     * true unless it is, or lies under, the data volume, {@code /tmp} or HOME, which are
+     * mounted already (a second mount at the same path would make Kubernetes reject the
+     * Job). Compared by path component, so {@code /app/database} is not under
+     * {@code /app/data}. A blank path gets no mount.
+     */
+    static boolean needsOwnWorkingDirVolume(String workingDirectoryPath) {
+        if (workingDirectoryPath == null || workingDirectoryPath.isBlank()) {
+            return false;
+        }
+        Path dir = Path.of(workingDirectoryPath).normalize();
+        return !dir.startsWith(DATA_MOUNT_PATH)
+            && !dir.startsWith(TMP_MOUNT_PATH)
+            && !dir.startsWith(HOME_MOUNT_PATH);
+    }
+
+    /**
+     * The container-level security context for the job container (#237).
+     *
+     * <p>The container's writes are confined to the data volume, {@code /tmp}, its HOME and the
+     * backend working directory: the job builder mounts {@code /tmp} and HOME as emptyDirs,
+     * and the working directory as another unless the data volume or {@code /tmp} already
+     * holds it. The image's own
+     * filesystem is read-only, so a solver cannot modify the measurement instrument it runs
+     * under. No capability is granted: execution needs none, and
+     * {@code allowPrivilegeEscalation} is what would turn a setuid binary in a solver upload
+     * into a way back to root.
+     */
+    SecurityContext jobContainerSecurityContext() {
+        return new SecurityContextBuilder()
+            .withAllowPrivilegeEscalation(false)
+            .withReadOnlyRootFilesystem(true)
+            .withNewCapabilities()
+                .withDrop("ALL")
+            .endCapabilities()
+            .build();
     }
 
     private int getEnvInt(String key, int defaultValue) {
@@ -1000,6 +1298,7 @@ public class KubernetesNativeBackend implements Backend {
         execIdToJobUid.clear();
         execIdToPairId.clear();
         execIdToOutputDir.clear();
+        execIdToAttemptNo.clear();
         initialized = false;
         log.info("KubernetesNativeBackend shut down");
     }
@@ -1101,6 +1400,7 @@ public class KubernetesNativeBackend implements Backend {
                 execIdToJobUid.remove(execId);
                 execIdToPairId.remove(execId);
                 execIdToOutputDir.remove(execId);
+                execIdToAttemptNo.remove(execId);
                 releaseSubmissionSlot(execId);
                 unverifiedExecutions.remove(execId);
                 deleted++;
@@ -1248,10 +1548,12 @@ public class KubernetesNativeBackend implements Backend {
                 "Execution " + execId + " is now confirmed safe (" + record +
                     "); releasing its retained accounting."
             );
+            stopRequestedAtNanos.remove(execId);
             execIdToJobName.remove(execId);
             execIdToJobUid.remove(execId);
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
+            execIdToAttemptNo.remove(execId);
             ambiguousSubmissions.remove(execId);
             // Deliberately NOT recordExecutionStopped. That set means "explicitly
             // killed, so ignore any callback for it", and every terminal callback
@@ -1399,13 +1701,13 @@ public class KubernetesNativeBackend implements Backend {
      * at all, and which can take work now — so the two never cost separate API calls.
      */
     private void refreshQueueViewIfStale() {
-        if (System.currentTimeMillis() - queueViewRefreshedAt < QUEUE_VIEW_TTL_MS) {
+        if (clock.getAsLong() - queueViewRefreshedAt < QUEUE_VIEW_TTL_MS) {
             return;
         }
         synchronized (queueViewLock) {
             // Re-checked inside the lock: several dispatch threads can arrive together
             // and only the first should pay for the refresh.
-            if (System.currentTimeMillis() - queueViewRefreshedAt < QUEUE_VIEW_TTL_MS) {
+            if (clock.getAsLong() - queueViewRefreshedAt < QUEUE_VIEW_TTL_MS) {
                 return;
             }
             try {
@@ -1442,14 +1744,28 @@ public class KubernetesNativeBackend implements Backend {
                 labelledQueues = Collections.unmodifiableSet(labelled);
                 schedulableQueues = Collections.unmodifiableSet(schedulable);
                 queueMaxAllocatableCpuMillis = Collections.unmodifiableMap(maxCpu);
-                queueViewRefreshedAt = System.currentTimeMillis();
+                queueViewRefreshedAt = clock.getAsLong();
                 queueViewLoaded = true;
+                LastingConditions.Condition failing = queueViewFailures.end(QUEUE_VIEW_LISTING);
+                if (failing != null) {
+                    log.info(
+                        "Refreshed the Kubernetes queue view again; it was first seen failing " +
+                            minutesSince(failing.since, queueViewRefreshedAt) + " minute(s) ago"
+                    );
+                }
             } catch (Exception e) {
                 // Leave the previous view in place rather than emptying it. Treating an
                 // API blip as "no queue can run anything" would stall all dispatch, and
                 // treating it as "every queue is fine" would resume the pending-pod
                 // black hole. The stale view is the least wrong of the three.
-                log.warn("Could not refresh the Kubernetes queue view; reusing the previous one", e);
+                long minutes = queueViewFailures.report(QUEUE_VIEW_LISTING, "failing", clock.getAsLong());
+                if (minutes >= 0) {
+                    log.warn(
+                        "Could not refresh the Kubernetes queue view" + lasting(minutes) +
+                            "; reusing the previous one." + HOLD_REPEATED,
+                        e
+                    );
+                }
             }
         }
     }
@@ -1459,32 +1775,39 @@ public class KubernetesNativeBackend implements Backend {
         if (!initialized || shuttingDown) {
             return false;
         }
+        String name = (queueName == null || queueName.trim().isEmpty())
+            ? DEFAULT_QUEUE_NAME
+            : queueName.trim();
         // A managed pod exists that StarExec cannot account for, so it may be occupying a
         // node that no capacity check knows about. Deferring through this channel is
         // deliberate: pairs stay enqueued and dispatch resumes on its own once a successful
         // inventory shows the object is gone. It must never surface as ERROR_SGE_REJECT or
         // ERROR_SUBMIT_FAIL — this is a transient safety hold, not a rejected submission.
         if (admissionDegraded.get()) {
-            log.warn(
-                "Deferring dispatch for queue '" + queueName + "': admission is degraded" +
-                    " because a managed pod cannot be accounted for (" +
-                    admissionDegradedDetail + ")"
-            );
+            long minutes = holdDue(name, HOLD_ADMISSION);
+            if (minutes >= 0) {
+                log.warn(
+                    "Deferring dispatch for queue '" + name + "'" + lasting(minutes) +
+                        ": admission is degraded because a managed pod cannot be accounted for (" +
+                        admissionDegradedDetail + ")." + HOLD_REPEATED
+                );
+            }
             return false;
         }
         refreshQueueViewIfStale();
-        String name = (queueName == null || queueName.trim().isEmpty())
-            ? DEFAULT_QUEUE_NAME
-            : queueName.trim();
 
         // Never seen the cluster. An empty view is not evidence of anything, and the
         // branch below reads it as permanent misconfiguration, so defer instead: the
         // pairs stay enqueued and dispatch resumes as soon as a listing succeeds.
         if (!queueViewLoaded) {
-            log.warn(
-                "The Kubernetes queue view has never loaded, so whether queue '" + name +
-                "' has nodes is unknown; deferring its pairs rather than failing them"
-            );
+            long minutes = holdDue(name, HOLD_VIEW_NEVER_LOADED);
+            if (minutes >= 0) {
+                log.warn(
+                    "The Kubernetes queue view has never loaded, so whether queue '" + name +
+                        "' has nodes is unknown; deferring its pairs rather than failing them" +
+                        lasting(minutes) + "." + HOLD_REPEATED
+                );
+            }
             return false;
         }
 
@@ -1505,48 +1828,72 @@ public class KubernetesNativeBackend implements Backend {
             if (requestMillis < 0 || maxAllocatable == null || maxAllocatable <= 0) {
                 // Unreadable quantities are not evidence of room. Defer rather than dispatch
                 // into a cluster whose capacity could not be established.
-                log.warn(
-                    "Cannot establish CPU capacity for queue '" + name + "' (request=" +
-                        cpuLimit + ", parsed=" + requestMillis + "m, maxAllocatable=" +
-                        maxAllocatable + "); deferring dispatch rather than assuming it fits"
-                );
+                long minutes = holdDue(name, HOLD_CPU_UNKNOWN);
+                if (minutes >= 0) {
+                    log.warn(
+                        "Cannot establish CPU capacity for queue '" + name + "' (request=" +
+                            cpuLimit + ", parsed=" + requestMillis + "m, maxAllocatable=" +
+                            maxAllocatable + "); deferring dispatch rather than assuming it fits" +
+                            lasting(minutes) + "." + HOLD_REPEATED
+                    );
+                }
                 return false;
             }
             if (requestMillis >= maxAllocatable) {
-                cpuCapacityBlockDetail =
-                    "queue '" + name + "' requests " + cpuLimit + " (" + requestMillis +
-                    "m) but its largest schedulable node allocates only " + maxAllocatable + "m";
-                log.error(
-                    "Impossible CPU configuration: STAREXEC_K8S_CPU_LIMIT=" + cpuLimit +
-                        " (" + requestMillis + "m) is not smaller than the largest" +
-                        " allocatable CPU on any schedulable node of queue '" + name +
-                        "' (" + maxAllocatable + "m). Every pod would stay Pending for ever," +
-                        " so dispatch is being held and pairs remain enqueued rather than" +
-                        " failed. Remediation: lower STAREXEC_K8S_CPU_LIMIT below " +
-                        maxAllocatable + "m (chart key kubernetes.resources.limits.cpu)," +
-                        " leaving room for node DaemonSets, or add a node with more CPU."
-                );
+                long minutes = holdDue(name, HOLD_CPU_TOO_LARGE);
+                if (minutes >= 0) {
+                    log.error(
+                        "Impossible CPU configuration" + lasting(minutes) + ": STAREXEC_K8S_CPU_LIMIT=" +
+                            cpuLimit + " (" + requestMillis + "m) is not smaller than the largest" +
+                            " allocatable CPU on any schedulable node of queue '" + name +
+                            "' (" + maxAllocatable + "m). Every pod would stay Pending for ever," +
+                            " so dispatch is being held and pairs remain enqueued rather than" +
+                            " failed. Remediation: lower STAREXEC_K8S_CPU_LIMIT below " +
+                            maxAllocatable + "m (chart key kubernetes.resources.limits.cpu)," +
+                            " leaving room for node DaemonSets, or add a node with more CPU." +
+                            HOLD_REPEATED
+                    );
+                }
                 return false;
             }
-            if (!cpuCapacityBlockDetail.isEmpty()) {
-                log.info("CPU capacity gate cleared for queue '" + name + "'");
-                cpuCapacityBlockDetail = "";
-            }
+            endHold(name);
             return true;
         }
         if (labelledQueues.contains(name)) {
             // Nodes carry this queue but none can take work: a drain, or nodes that have
             // gone NotReady. Transient, so defer rather than fail the pairs.
-            log.warn(
-                "Queue '" + name + "' has nodes but none are schedulable right now" +
-                " (cordoned or NotReady); deferring dispatch"
-            );
+            long minutes = holdDue(name, HOLD_NO_SCHEDULABLE_NODE);
+            if (minutes >= 0) {
+                log.warn(
+                    "Queue '" + name + "' has nodes but none are schedulable right now" +
+                        " (cordoned or NotReady); deferring dispatch" + lasting(minutes) + "." +
+                        HOLD_REPEATED
+                );
+            }
             return false;
         }
         // No node carries this queue at all. Permanent until someone fixes it, so let the
         // pairs reach submitScript and be rejected there where the failure is visible,
-        // rather than silently deferring for ever.
+        // rather than silently deferring for ever. The backend no longer holds the queue,
+        // which is all the line that ends a hold says.
+        endHold(name);
         return true;
+    }
+
+    /** Records that dispatch for {@code queue} is held for {@code reason}; see {@link LastingConditions#report}. */
+    private long holdDue(String queue, String reason) {
+        return dispatchHolds.report(queue, reason, clock.getAsLong());
+    }
+
+    /** Ends the hold on {@code queue}, if it has one, and logs that once. */
+    private void endHold(String queue) {
+        LastingConditions.Condition hold = dispatchHolds.end(queue);
+        if (hold != null) {
+            log.info(
+                "Kubernetes no longer holds dispatch for queue '" + queue + "'; the hold (" + hold.cause +
+                    ") was first seen " + minutesSince(hold.since, clock.getAsLong()) + " minute(s) ago"
+            );
+        }
     }
 
     @Override
@@ -1638,6 +1985,27 @@ public class KubernetesNativeBackend implements Backend {
             );
         }
 
+        // The attempt this execution is for (#185), read now, while the pair is the one the
+        // caller just claimed. It is carried on the Job and handed to every result write, so
+        // a rerun that has moved the pair on refuses this execution's late results.
+        // Read failure defers rather than submits unfenced or terminally rejects: no Job
+        // exists yet, so the pair simply stays queued and the read is retried next pass.
+        Integer attemptNo = null;
+        if (pairId > 0) {
+            try {
+                attemptNo = JobPairs.getCurrentAttemptNo(pairId);
+            } catch (Exception e) {
+                log.error(
+                    "Could not read the current attempt of pair " + pairId +
+                    "; deferring its submission", e
+                );
+                releaseSubmissionSlot(execId);
+                throw new SubmissionDeferredException(
+                    "attempt of pair " + pairId + " unreadable; pair stays queued"
+                );
+            }
+        }
+
         log.info(
             "Submitting K8s Job: execId=" +
                 execId +
@@ -1654,7 +2022,8 @@ public class KubernetesNativeBackend implements Backend {
                 jobName,
                 scriptPath,
                 workingDirectoryPath,
-                logPath
+                logPath,
+                attemptNo
             );
 
             // Clear the previous attempt's result artifacts before this Job can write new
@@ -1737,6 +2106,7 @@ public class KubernetesNativeBackend implements Backend {
             // callback that arrives between these writes would otherwise own the id while
             // still reading the previous execution's pair.
             execIdToPairId.put(execId, pairId);
+            putAttemptNo(execId, attemptNo);
             execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
             execIdToJobName.put(execId, submitted.jobName());
             execIdToJobUid.put(execId, submitted.jobUid());
@@ -1761,7 +2131,16 @@ public class KubernetesNativeBackend implements Backend {
             throw e;
         } catch (Exception e) {
             log.error("Failed to submit Kubernetes Job: " + jobName, e);
-            return resolveAmbiguousSubmission(execId, pairId, jobName, logPath);
+            return resolveAmbiguousSubmission(execId, pairId, jobName, logPath, attemptNo);
+        }
+    }
+
+    /** Records the attempt for an execution; null means unfenced and stores nothing. */
+    private void putAttemptNo(int execId, Integer attemptNo) {
+        if (attemptNo == null) {
+            execIdToAttemptNo.remove(execId);
+        } else {
+            execIdToAttemptNo.put(execId, attemptNo);
         }
     }
 
@@ -1798,7 +2177,8 @@ public class KubernetesNativeBackend implements Backend {
         int execId,
         int pairId,
         String jobName,
-        String logPath
+        String logPath,
+        Integer attemptNo
     ) {
         // Tri-state, NOT kubernetesJobExists. That helper reports true when it cannot tell,
         // which is the correct fail-closed answer to "may I release this execution" but the
@@ -1814,6 +2194,7 @@ public class KubernetesNativeBackend implements Backend {
             execIdToJobUid.remove(execId);
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
+            execIdToAttemptNo.remove(execId);
             releaseSubmissionSlot(execId);
             log.warn(
                 "Submission of pair " + pairId + " failed and the cluster confirms nothing" +
@@ -1834,11 +2215,12 @@ public class KubernetesNativeBackend implements Backend {
         // something that was never established.
         execIdToJobUid.remove(execId);
         execIdToPairId.put(execId, pairId);
+        putAttemptNo(execId, attemptNo);
         try {
             execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
         } catch (Exception ignored) {
-            // The output dir is recoverable later from the pair's stdout path; not having
-            // it must not cost us the accounting.
+            // Tracking rebuilt after a restart reads it back from the Job's output-dir
+            // annotation; not having it must not cost us the accounting.
         }
         restoreSubmissionSlot(execId);
         // Register a retry owner. Neither the job monitor nor the orphan inventory can
@@ -1859,6 +2241,7 @@ public class KubernetesNativeBackend implements Backend {
         return execId;
     }
 
+    /** As below, for an execution with no attempt to fence on (no label is written). */
     private Job buildKubernetesJob(
         int pairId,
         int execId,
@@ -1867,12 +2250,48 @@ public class KubernetesNativeBackend implements Backend {
         String workingDirectoryPath,
         String logPath
     ) {
+        return buildKubernetesJob(
+            pairId, execId, jobName, scriptPath, workingDirectoryPath, logPath, null);
+    }
+
+    private Job buildKubernetesJob(
+        int pairId,
+        int execId,
+        String jobName,
+        String scriptPath,
+        String workingDirectoryPath,
+        String logPath,
+        Integer attemptNo
+    ) {
         Map<String, String> labels = new HashMap<>();
         labels.put(MANAGED_LABEL, "true");
         labels.put(EXEC_ID_LABEL, String.valueOf(execId));
         labels.put(PAIR_ID_LABEL, String.valueOf(pairId));
+        // Survives a restart, which the in-memory map does not: recovery reads it back.
+        if (attemptNo != null) {
+            labels.put(ATTEMPT_NO_LABEL, String.valueOf(attemptNo));
+        }
 
         Path outputDir = resolveOutputDirectory(logPath);
+
+        // The root filesystem is read-only (#237), so every path execution writes to must be
+        // a mount. The working directory is the jobscript's WORKING_DIR_BASE (both come from
+        // R.BACKEND_WORKING_DIR), under which it creates each pair's private workspace; unless
+        // the data volume or /tmp already holds it, it gets an emptyDir of its own. Mounting
+        // one there anyway would hide what is on that volume at the path.
+        List<VolumeMount> workingDirMounts = new ArrayList<>();
+        List<Volume> workingDirVolumes = new ArrayList<>();
+        if (needsOwnWorkingDirVolume(workingDirectoryPath)) {
+            workingDirMounts.add(new VolumeMountBuilder()
+                .withName(WORK_VOLUME)
+                .withMountPath(workingDirectoryPath)
+                .build());
+            workingDirVolumes.add(new VolumeBuilder()
+                .withName(WORK_VOLUME)
+                .withNewEmptyDir()
+                .endEmptyDir()
+                .build());
+        }
 
         ResourceRequirementsBuilder resourcesBuilder = new ResourceRequirementsBuilder()
             .addToRequests("memory", new Quantity(memoryLimit))
@@ -1931,6 +2350,9 @@ public class KubernetesNativeBackend implements Backend {
                 .withName(jobName)
                 .withNamespace(namespace)
                 .addToLabels(labels)
+                // Survives a restart, as the labels do: tracking rebuilt from this Job
+                // reads the output directory back instead of recomputing it.
+                .addToAnnotations(OUTPUT_DIR_ANNOTATION, outputDir.toString())
             .endMetadata()
             .withNewSpec()
                 .withBackoffLimit(backoffLimit)
@@ -1941,6 +2363,7 @@ public class KubernetesNativeBackend implements Backend {
                     .endMetadata()
                     .withNewSpec()
                         .withServiceAccountName(serviceAccountName)
+                        .withSecurityContext(jobPodSecurityContext())
                         .withRestartPolicy("Never")
                         .withNodeName(pinnedNodeName)
                         .withNodeSelector(nodeSelector)
@@ -1963,6 +2386,14 @@ public class KubernetesNativeBackend implements Backend {
                             .addNewEnv()
                                 .withName("STAREXEC_OUTPUT_DIR")
                                 .withValue(outputDir.toString())
+                            .endEnv()
+                            // A writable home of the pod's own. The passwd home of the
+                            // configured runAsUser lies on the read-only root, so solvers
+                            // that keep state under ~ (~/.cache, ~/.elan, Java prefs) failed
+                            // or degraded; set explicitly, it holds whatever uid runs.
+                            .addNewEnv()
+                                .withName("HOME")
+                                .withValue(HOME_MOUNT_PATH)
                             .endEnv()
                             // The node this pair actually ran on, from the downward API.
                             //
@@ -1997,8 +2428,20 @@ public class KubernetesNativeBackend implements Backend {
                             .endEnv()
                             .addNewVolumeMount()
                                 .withName("starexec-data")
-                                .withMountPath("/app/data")
+                                .withMountPath(DATA_MOUNT_PATH)
                             .endVolumeMount()
+                            // The job container's root filesystem is read-only, so /tmp and
+                            // the working directory (below) are mounts too.
+                            .addNewVolumeMount()
+                                .withName("tmp")
+                                .withMountPath(TMP_MOUNT_PATH)
+                            .endVolumeMount()
+                            .addNewVolumeMount()
+                                .withName(HOME_VOLUME)
+                                .withMountPath(HOME_MOUNT_PATH)
+                            .endVolumeMount()
+                            .addAllToVolumeMounts(workingDirMounts)
+                            .withSecurityContext(jobContainerSecurityContext())
                             .withResources(resourcesBuilder.build())
                         .endContainer()
                         .addNewVolume()
@@ -2007,6 +2450,17 @@ public class KubernetesNativeBackend implements Backend {
                                 .withClaimName(dataPvcName)
                             .endPersistentVolumeClaim()
                         .endVolume()
+                        .addNewVolume()
+                            .withName("tmp")
+                            .withNewEmptyDir()
+                            .endEmptyDir()
+                        .endVolume()
+                        .addNewVolume()
+                            .withName(HOME_VOLUME)
+                            .withNewEmptyDir()
+                            .endEmptyDir()
+                        .endVolume()
+                        .addAllToVolumes(workingDirVolumes)
                     .endSpec()
                 .endTemplate()
             .endSpec()
@@ -2307,6 +2761,7 @@ public class KubernetesNativeBackend implements Backend {
                     execIdToJobUid.remove(execId);
                     execIdToPairId.remove(execId);
                     execIdToOutputDir.remove(execId);
+                    execIdToAttemptNo.remove(execId);
                     releaseSubmissionSlot(execId);
 
                     // But the RECORD survives until the database agrees. Dropping it here
@@ -2431,6 +2886,7 @@ public class KubernetesNativeBackend implements Backend {
         execIdToJobUid.remove(execId);
         execIdToPairId.remove(execId);
         execIdToOutputDir.remove(execId);
+        execIdToAttemptNo.remove(execId);
         ambiguousSubmissions.remove(execId);
         unverifiedExecutions.remove(execId);
         releaseSubmissionSlot(execId);
@@ -2536,8 +2992,8 @@ public class KubernetesNativeBackend implements Backend {
                 StatusCode.STATUS_RUNNING.getVal());
 
             int enqueuedReset = 0, enqueuedProcessed = 0, enqueuedRebuilt = 0;
-            int runningFailed = 0, runningProcessed = 0, runningRebuilt = 0;
-            int enqueuedWithheld = 0, runningWithheld = 0;
+            int runningUnresolved = 0, runningProcessed = 0, runningRebuilt = 0;
+            int enqueuedWithheld = 0;
 
             for (int pairId : enqueuedIds) {
                 Job activeJob = pairIdToActiveJob.get(pairId);
@@ -2567,11 +3023,16 @@ public class KubernetesNativeBackend implements Backend {
                     if (processReconciledJobThroughCallback(terminalJob, pods)) {
                         runningProcessed++;
                     }
-                } else if (!reconciledPairIsSafe(pairId, "mark failed")) {
-                    runningWithheld++;
-                } else if (JobPairs.tryMarkRunningAsFailed(pairId)
-                        == JobPairs.ConditionalPairUpdateResult.UPDATED) {
-                    runningFailed++;
+                } else {
+                    // A missing Job is lifecycle evidence only. Even when a fresh pod census
+                    // proves that nothing can still run, it says neither which solver stage
+                    // executed nor how it ended. Keep the scientific result unresolved.
+                    runningUnresolved++;
+                    log.error(
+                        "RECONCILIATION INTERVENTION REQUIRED: RUNNING pair " + pairId +
+                            " has no attributable Kubernetes Job. It remains unresolved;" +
+                            " no solver result or stage was invented."
+                    );
                 }
             }
 
@@ -2592,14 +3053,12 @@ public class KubernetesNativeBackend implements Backend {
                     enqueuedRebuilt +
                     " withheld=" +
                     enqueuedWithheld +
-                    "; RUNNING failed=" +
-                    runningFailed +
+                    "; RUNNING unresolved=" +
+                    runningUnresolved +
                     " processed=" +
                     runningProcessed +
                     " rebuilt=" +
                     runningRebuilt +
-                    " withheld=" +
-                    runningWithheld +
                     "; malformedJobs=" +
                     malformedJobs +
                     "; orphanedKubernetesJobs=" +
@@ -2619,8 +3078,10 @@ public class KubernetesNativeBackend implements Backend {
      * exactly this state. Both reconciliation branches are replacement authorizations:
      * resetting an ENQUEUED pair makes it dispatchable again, and marking a RUNNING pair
      * failed gives it an {@code end_time} and so makes it eligible for an automatic rerun.
-     * Either one, performed while a Pod for that pair still runs, produces two executions
-     * writing results for one pair.
+     * Resetting an ENQUEUED pair while a Pod for that pair still runs produces two
+     * executions writing results for one pair. RUNNING pairs with no attributable Job are
+     * left unresolved regardless of this census because pod absence is not terminal solver
+     * evidence.
      *
      * <p>Identified by pair id rather than execution id because that is all a pair with no
      * Job offers. A pair id is stable across reruns, so this over-matches — pods of earlier
@@ -2679,6 +3140,8 @@ public class KubernetesNativeBackend implements Backend {
         // Pair and output directory first, then the identity that grants ownership of them.
         ExecutionRef execution = ExecutionRef.fromJob(execId, job);
         execIdToPairId.put(execId, pairId);
+        // Null (no label: a Job from before #185) is stored as absent, i.e. unfenced.
+        putAttemptNo(execId, extractIntegerLabel(job, ATTEMPT_NO_LABEL));
         execIdToOutputDir.put(execId, resolveOutputDirectory(job, pairId));
         execIdToJobName.put(execId, jobName);
         if (execution != null) {
@@ -2946,14 +3409,27 @@ public class KubernetesNativeBackend implements Backend {
             }
         }
 
+        // A Job submitted before the annotation existed. Submission took the parent of the
+        // pair's log file (JobManager passes JobPairs.getLogFilePath as the log path), which
+        // is where the pod writes status.json, its snapshots and stats. This used to take the
+        // parent of the pair's stdout instead -- a directory in a different tree -- so every
+        // execution in flight across a restart had its status.json looked for in the wrong
+        // place, and its result was reported as an ingestion intervention instead of being
+        // recorded: 48 pairs of the job 5 rerun after one deploy on Quokka (2026-10-15).
         try {
-            return resolveOutputDirectory(JobPairs.getStdout(pairId));
+            JobPair pair = JobPairs.getPair(pairId);
+            if (pair != null) {
+                return resolveOutputDirectory(JobPairs.getLogFilePath(pair));
+            }
         } catch (Exception e) {
             log.warn(
                 "Could not reconstruct output directory for pair " + pairId +
                 "; using default", e);
             return Paths.get(R.JOB_OUTPUT_DIRECTORY);
         }
+        log.warn("Could not reconstruct output directory for pair " + pairId +
+            ": the pair was not found; using default");
+        return Paths.get(R.JOB_OUTPUT_DIRECTORY);
     }
 
     /**
@@ -2978,10 +3454,13 @@ public class KubernetesNativeBackend implements Backend {
      * submission slot -- belongs to whichever execution holds the id now. An event from a
      * different Job must not read or write any of it, which is what this question gates.
      *
-     * <p>Tracking without a recorded UID matches on the Job name alone. That is the
-     * pre-existing state of an execution reconstructed from a Job the API returned without
-     * one, and refusing it outright would strand executions that predate this change; the
-     * name is a weaker discriminator, not a meaningless one.
+     * <p>The Job name must always match. When a UID is recorded it must match as well;
+     * otherwise the publication window in which a reused id has its new name but still its
+     * old UID would temporarily grant both executions ownership. Tracking without a recorded
+     * UID matches on the name alone. That is the pre-existing state of an execution
+     * reconstructed from a Job the API returned without one, and refusing it outright would
+     * strand executions that predate this change; the name is a weaker discriminator, not a
+     * meaningless one.
      */
     private boolean ownsTracking(ExecutionRef execution) {
         if (execution == null) {
@@ -2991,11 +3470,14 @@ public class KubernetesNativeBackend implements Backend {
         if (trackedName == null) {
             return false;
         }
+        if (!trackedName.equals(execution.jobName())) {
+            return false;
+        }
         String trackedUid = execIdToJobUid.get(execution.execId());
         if (trackedUid != null) {
             return trackedUid.equals(execution.jobUid());
         }
-        return trackedName.equals(execution.jobName());
+        return true;
     }
 
     /**
@@ -3020,11 +3502,14 @@ public class KubernetesNativeBackend implements Backend {
         if (trackedName == null) {
             return false;
         }
+        if (!trackedName.equals(execution.jobName())) {
+            return true;
+        }
         String trackedUid = execIdToJobUid.get(execution.execId());
         if (trackedUid != null) {
             return !trackedUid.equals(execution.jobUid());
         }
-        return !trackedName.equals(execution.jobName());
+        return false;
     }
 
     private Integer extractExecId(Job job) {
@@ -3184,6 +3669,21 @@ public class KubernetesNativeBackend implements Backend {
         if (kubernetesClient == null) {
             return false;
         }
+        requestForegroundDeletion(jobName);
+        // The delete RESULT is deliberately not consulted. A non-empty StatusDetails list
+        // means "the API accepted the request", and under Foreground propagation that is
+        // returned at the exact moment the Job is still present with its finalizer
+        // attached. This method used to return true on that result without reading, so it
+        // answered a different question from the one its name asks. Only a read can
+        // answer this one.
+        return !kubernetesJobExists(jobName);
+    }
+
+    /**
+     * Asks the API server to delete a Job with Foreground propagation, without reading back.
+     * Failures are logged, not thrown: whoever needs the outcome reads the Job afterwards.
+     */
+    private void requestForegroundDeletion(String jobName) {
         try {
             // Foreground, explicitly.
             //
@@ -3207,13 +3707,49 @@ public class KubernetesNativeBackend implements Backend {
         } catch (Exception e) {
             log.warn("Failed to delete Kubernetes Job: " + jobName, e);
         }
-        // The delete RESULT is deliberately not consulted. A non-empty StatusDetails list
-        // means "the API accepted the request", and under Foreground propagation that is
-        // returned at the exact moment the Job is still present with its finalizer
-        // attached. This method used to return true on that result without reading, so it
-        // answered a different question from the one its name asks. Only a read can
-        // answer this one.
-        return !kubernetesJobExists(jobName);
+    }
+
+    /**
+     * Starts the foreground deletion of a tracked execution's Job and records when, so that
+     * its {@link #killPairConfirmed} waits from now rather than from its turn in the batch.
+     * Never evidence of anything: tracking and accounting are untouched until the
+     * confirmation establishes that the execution stopped.
+     */
+    @Override
+    public void requestStop(int execId) {
+        String jobName = execIdToJobName.get(execId);
+        if (jobName == null || kubernetesClient == null) {
+            // Nothing to name, or no client: the confirmation handles both, from scratch.
+            return;
+        }
+        stopRequestedAtNanos.putIfAbsent(execId, System.nanoTime());
+        requestForegroundDeletion(jobName);
+    }
+
+    /**
+     * Waits, until {@code deadlineNanos}, for a Job whose foreground deletion has been
+     * requested to disappear. Reads fail closed exactly as {@link #kubernetesJobExists} does:
+     * a read that cannot see the API counts as "still there".
+     *
+     * <p>Runs on real time, not {@code clock}: a test that freezes the clock must not be able
+     * to turn this into an endless loop.
+     *
+     * @return true once the Job is confirmed absent; false if it outlasted the wait or the
+     *         thread was interrupted
+     */
+    private boolean awaitKubernetesJobGone(String jobName, long deadlineNanos) {
+        while (System.nanoTime() < deadlineNanos) {
+            try {
+                Thread.sleep(Math.max(1L, killConfirmPollMillis));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            if (!kubernetesJobExists(jobName)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** A Job observation that keeps "absent" and "cannot tell" apart. */
@@ -3314,6 +3850,11 @@ public class KubernetesNativeBackend implements Backend {
      */
     @Override
     public KillOutcome killPairConfirmed(int execId) {
+        // From requestStop when the caller asked for every stop up front, so the batch shares
+        // one wait; otherwise from now.
+        Long stopRequested = stopRequestedAtNanos.remove(execId);
+        long waitDeadlineNanos = (stopRequested != null ? stopRequested : System.nanoTime())
+            + TimeUnit.MILLISECONDS.toNanos(killConfirmWaitMillis);
         String jobName = execIdToJobName.get(execId);
         if (jobName == null) {
             // Absent local bookkeeping is NOT proof that the execution stopped. This is
@@ -3363,6 +3904,7 @@ public class KubernetesNativeBackend implements Backend {
                 execIdToJobUid.remove(execId);
                 execIdToPairId.remove(execId);
                 execIdToOutputDir.remove(execId);
+                execIdToAttemptNo.remove(execId);
                 ambiguousSubmissions.remove(execId);
                 unverifiedExecutions.remove(execId);
                 releaseSubmissionSlot(execId);
@@ -3398,12 +3940,21 @@ public class KubernetesNativeBackend implements Backend {
             return KillOutcome.UNPROVEN;
         }
 
-        if (!ensureKubernetesJobGone(jobName)) {
+        // A running pod's Job is still present right after the delete: foreground propagation
+        // keeps it behind its finalizer until the pod is gone. So wait, bounded, for that to
+        // happen before calling the kill unproven; the pod normally terminates well inside
+        // its grace period.
+        if (!ensureKubernetesJobGone(jobName)
+                && !awaitKubernetesJobGone(jobName, waitDeadlineNanos)) {
             log.error(
                 "Kubernetes Job " + jobName + " (execId " + execId + ") is still present" +
-                " after a foreground delete; refusing to release its accounting because a" +
-                " pod for it may still execute and a replacement could then run twice."
+                " " + (killConfirmWaitMillis / 1000) + " s after its foreground delete was" +
+                " requested; refusing to release its accounting because a pod for it may" +
+                " still execute and a replacement could then run twice."
             );
+            // Past the wait the pod has outlived its grace period, so the hold must have an
+            // owner that comes back once it is gone, or the slot stays reserved until restart.
+            recordUnverified(execId, "kill of " + jobName + ": Job still present after delete");
             return KillOutcome.UNPROVEN;
         }
 
@@ -3428,6 +3979,7 @@ public class KubernetesNativeBackend implements Backend {
         execIdToJobUid.remove(execId);
         execIdToPairId.remove(execId);
         execIdToOutputDir.remove(execId);
+        execIdToAttemptNo.remove(execId);
         ambiguousSubmissions.remove(execId);
         unverifiedExecutions.remove(execId);
         releaseSubmissionSlot(execId);
@@ -3612,10 +4164,14 @@ public class KubernetesNativeBackend implements Backend {
                 execIdToJobUid.remove(execId);
                 execIdToPairId.remove(execId);
                 execIdToOutputDir.remove(execId);
+                execIdToAttemptNo.remove(execId);
                 releaseSubmissionSlot(execId);
                 released++;
             } else {
                 retained++;
+                // Retained, and handed to the safety sweep so the hold is revisited rather
+                // than kept until the JVM restarts.
+                recordUnverified(execId, "killAll of " + jobName);
                 log.error(
                     "Cannot establish that execId " + execId + " (K8s job " + jobName +
                     ") has stopped during killAll: " +
@@ -3693,7 +4249,22 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     /**
-     * Get all active execution IDs.
+     * Get all active execution IDs: every execution that is running, waiting to run, or
+     * finished with a result the monitor has not ingested yet.
+     *
+     * <p>{@code Jobs.setBrokenPairsToErrorStatus} declares every RUNNING or ENQUEUED pair whose
+     * execution is not in this set a submit failure. A finished Job used to drop out of it at
+     * once, while its result still waited for {@code KubernetesJobMonitor}, so a sweep landing
+     * in that window filed a pair that had run to completion as ERROR_SUBMIT_FAIL, and the
+     * real result was then refused as a conflicting terminal status. On Quokka that was 8,527
+     * pairs of one job, each with its status.json on disk (#324). LocalBackend closed the same
+     * window with its awaiting-ingestion set; here the backend's own tracking is that set,
+     * because every exit from the completion callbacks releases it.
+     *
+     * <p>An ingestion that keeps failing keeps its Job active, and so out of the sweep, until
+     * the Job is reaped by {@code ttlSecondsAfterFinished} ({@code STAREXEC_K8S_JOB_TTL_SECONDS});
+     * after that it is reported as gone and the sweep resolves the pair as before. Tracking
+     * lost across a restart is rebuilt by {@code reconcileOrphanedPairs} during initialisation.
      *
      * @return Set of active execution IDs
      */
@@ -3711,14 +4282,6 @@ public class KubernetesNativeBackend implements Backend {
                 .list();
 
             for (Job job : jobs.getItems()) {
-                if (job.getStatus() != null) {
-                    Integer succeeded = job.getStatus().getSucceeded();
-                    Integer failed = job.getStatus().getFailed();
-                    if ((succeeded != null && succeeded > 0) || (failed != null && failed > 0)) {
-                        continue;
-                    }
-                }
-
                 if (job.getMetadata() == null || job.getMetadata().getLabels() == null) {
                     continue;
                 }
@@ -3728,11 +4291,27 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
 
+                int execId;
                 try {
-                    activeIds.add(Integer.parseInt(execIdValue));
+                    execId = Integer.parseInt(execIdValue);
                 } catch (NumberFormatException e) {
                     log.warn("Skipping job with malformed exec ID label: " + execIdValue);
+                    continue;
                 }
+
+                boolean finished = false;
+                if (job.getStatus() != null) {
+                    Integer succeeded = job.getStatus().getSucceeded();
+                    Integer failed = job.getStatus().getFailed();
+                    finished = (succeeded != null && succeeded > 0) || (failed != null && failed > 0);
+                }
+                // A finished Job still owes its pair an ingestion for as long as this
+                // execution is tracked. One that is not tracked is a genuine orphan: nothing
+                // will complete its pair, and the sweep is right to.
+                if (finished && !ownsTracking(ExecutionRef.fromJob(execId, job))) {
+                    continue;
+                }
+                activeIds.add(execId);
             }
             return activeIds;
         } catch (Exception e) {
@@ -3891,15 +4470,11 @@ public class KubernetesNativeBackend implements Backend {
                 }
                 NodeSpec spec = node.getSpec();
                 if (spec != null && Boolean.TRUE.equals(spec.getUnschedulable())) {
-                    kubernetesClient
-                        .nodes()
-                        .withName(node.getMetadata().getName())
-                        .edit(n -> {
-                            if (n.getSpec() != null) {
-                                n.getSpec().setUnschedulable(false);
-                            }
-                            return n;
-                        });
+                    JsonObject uncordon = new JsonObject();
+                    uncordon.addProperty("unschedulable", false);
+                    JsonObject patch = new JsonObject();
+                    patch.add("spec", uncordon);
+                    mergePatchNode(node.getMetadata().getName(), patch);
                 }
             }
 
@@ -3931,15 +4506,9 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
 
-                kubernetesClient
-                    .nodes()
-                    .withName(node.getMetadata().getName())
-                    .edit(n -> {
-                        if (n.getMetadata() != null && n.getMetadata().getLabels() != null) {
-                            n.getMetadata().getLabels().remove(queueLabelKey);
-                        }
-                        return n;
-                    });
+                mergePatchNode(
+                    node.getMetadata().getName(),
+                    labelPatch(Collections.singletonMap(queueLabelKey, null)));
             }
         } catch (Exception e) {
             log.error("Failed to delete queue from Kubernetes nodes: " + queueName, e);
@@ -3999,24 +4568,14 @@ public class KubernetesNativeBackend implements Backend {
                 " slots"
         );
 
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put(queueLabelKey, newQueueName);
+        if (slots != null) {
+            labels.put(LABEL_PREFIX + "slots", String.valueOf(slots));
+        }
         try {
             for (String nodeName : nodeNames) {
-                kubernetesClient
-                    .nodes()
-                    .withName(nodeName)
-                    .edit(n -> {
-                        if (n.getMetadata() == null) {
-                            return n;
-                        }
-                        if (n.getMetadata().getLabels() == null) {
-                            n.getMetadata().setLabels(new HashMap<>());
-                        }
-                        n.getMetadata().getLabels().put(queueLabelKey, newQueueName);
-                        if (slots != null) {
-                            n.getMetadata().getLabels().put(LABEL_PREFIX + "slots", String.valueOf(slots));
-                        }
-                        return n;
-                    });
+                mergePatchNode(nodeName, labelPatch(labels));
             }
             return true;
         } catch (Exception e) {
@@ -4050,33 +4609,55 @@ public class KubernetesNativeBackend implements Backend {
                 "'"
         );
 
+        // Accepts either spelling of the default queue. Queues.removeQueue passes the SGE
+        // short form "all", which previously failed this test and was written as a literal
+        // label value. A default-queue node carries no queue label, so the label is removed.
+        String label = isDefaultQueueName(destQueueName) ? null : destQueueName;
+        JsonObject patch = labelPatch(Collections.singletonMap(queueLabelKey, label));
         for (String nodeName : nodeNames) {
             try {
-                kubernetesClient
-                    .nodes()
-                    .withName(nodeName)
-                    .edit(n -> {
-                        if (n.getMetadata() == null) {
-                            return n;
-                        }
-                        if (n.getMetadata().getLabels() == null) {
-                            n.getMetadata().setLabels(new HashMap<>());
-                        }
-
-                        // Accepts either spelling of the default queue. Queues.removeQueue
-                        // passes the SGE short form "all", which previously failed this
-                        // test and was written as a literal label value.
-                        if (isDefaultQueueName(destQueueName)) {
-                            n.getMetadata().getLabels().remove(queueLabelKey);
-                        } else {
-                            n.getMetadata().getLabels().put(queueLabelKey, destQueueName);
-                        }
-                        return n;
-                    });
+                mergePatchNode(nodeName, patch);
             } catch (Exception e) {
                 log.error("Failed to move node to queue: node=" + nodeName + ", queue=" + destQueueName, e);
             }
         }
+    }
+
+    /** Writes merge patches. Nulls must survive: a null is how a merge patch removes a label. */
+    private static final Gson MERGE_PATCH_GSON = new GsonBuilder().serializeNulls().create();
+
+    /**
+     * Applies a JSON merge patch (RFC 7386) to a node.
+     *
+     * <p>Every change to a node goes through here rather than {@code edit()}. fabric8 6.10's
+     * {@code edit()} first clones the live Node through Jackson, and with the Jackson this
+     * build ships (2.21, raised for CVE fixes) that clone throws on the node's managedFields
+     * ("keySerializer" is null). Every queue operation therefore failed before a request
+     * left the application (Quokka, 2026-10-15). A merge patch carries only the fields it
+     * names and never serializes an object the server returned.
+     */
+    private void mergePatchNode(String nodeName, JsonObject patch) {
+        kubernetesClient
+            .nodes()
+            .withName(nodeName)
+            .patch(PatchContext.of(PatchType.JSON_MERGE), MERGE_PATCH_GSON.toJson(patch));
+    }
+
+    /** A merge patch of a node's labels, in which a null value removes that label. */
+    private static JsonObject labelPatch(Map<String, String> labels) {
+        JsonObject values = new JsonObject();
+        for (Map.Entry<String, String> label : labels.entrySet()) {
+            if (label.getValue() == null) {
+                values.add(label.getKey(), JsonNull.INSTANCE);
+            } else {
+                values.addProperty(label.getKey(), label.getValue());
+            }
+        }
+        JsonObject metadata = new JsonObject();
+        metadata.add("labels", values);
+        JsonObject patch = new JsonObject();
+        patch.add("metadata", metadata);
+        return patch;
     }
 
     /**
@@ -4117,8 +4698,84 @@ public class KubernetesNativeBackend implements Backend {
                 JobPairs.ConditionalPairUpdateResult.ERROR;
         }
 
+        /**
+         * Records the node a running pair's pod is on, which is what lists the pair in the
+         * cluster page's node view while it runs.
+         *
+         * <p>Without it a Kubernetes pair got its node only from its statistics, once it had
+         * finished. The write is the one the Podman backend makes when a container starts,
+         * and it changes nothing for a pair that has finished or whose job is paused, killed
+         * or deleted. The pair is found the way {@link #onJobRunning} finds it.
+         *
+         * <p>The node is looked up by name, as the statistics are. A name the nodes table does
+         * not hold yet is warned about once, and the monitor asks again on its next poll: the
+         * periodic cluster refresh registers new nodes.
+         */
+        @Override
+        public boolean onJobPlaced(ExecutionRef execution, String nodeName) {
+            if (isStopped(execution)) {
+                log.debug("Skipping node update for stopped " + execution);
+                return true;
+            }
+
+            Integer pairId = resolvePairId(execution);
+            if (pairId == null) {
+                // onJobRunning and resolvePairId report why; nothing is lost by asking again.
+                log.debug("No pair resolved for " + execution + " yet; recording its node later");
+                return false;
+            }
+
+            int nodeId = Cluster.getNodeIdByName(nodeName);
+            if (nodeId <= 0) {
+                if (unregisteredNodesWarned.add(nodeName)) {
+                    log.warn(
+                        "Pair " + pairId + " runs on node " + nodeName + " (" + execution +
+                        "), which the nodes table does not hold, so the node view does not" +
+                        " list it. Its node is recorded once the cluster refresh registers" +
+                        " the node. Logged once per node."
+                    );
+                }
+                return false;
+            }
+            if (unregisteredNodesWarned.remove(nodeName)) {
+                log.info("Node " + nodeName + " is registered now; recording it for pair " + pairId);
+            }
+
+            JobPairs.ConditionalPairUpdateResult result =
+                JobPairs.tryUpdatePairExecutionHost(pairId, nodeId);
+            switch (result) {
+                case UPDATED:
+                    log.debug("Recorded node " + nodeName + " for pair " + pairId);
+                    return true;
+                case STALE:
+                    log.debug(
+                        "Not recording node " + nodeName + " for pair " + pairId +
+                        ": it has finished, or its job is paused, killed or deleted"
+                    );
+                    return true;
+                default:
+                    log.warn(
+                        "Failed to record node " + nodeName + " for pair " + pairId + " (" +
+                        execution + "); retrying on the next poll"
+                    );
+                    return false;
+            }
+        }
+
         @Override
         public boolean onJobComplete(ExecutionRef execution) {
+            return ingestCompletion(execution, true);
+        }
+
+        /**
+         * Records a finished execution's result from its retained output.
+         *
+         * @param statusMayBeLate whether a missing status.json may only be not visible yet:
+         *        true for an execution that ran, false for one that looked stuck pending
+         *        but wrote one before its Job was removed (see
+         *        {@link #awaitingStatusVisibility})
+         */
+        private boolean ingestCompletion(ExecutionRef execution, boolean statusMayBeLate) {
             // Skip processing if THIS execution was stopped — the kill path already removed
             // its tracking maps and released its concurrency slot. Another execution having
             // been stopped under the same number is not this one's business.
@@ -4150,6 +4807,8 @@ public class KubernetesNativeBackend implements Backend {
                 log.warn("Unable to resolve pair ID for completed job: " + execution);
                 return false;
             }
+            // After the pair: resolvePairId may refill the attempt from the Job's label.
+            Integer attemptNo = resolveAttemptNo(execution);
 
             try {
                 // Guard: skip DB update when the pair row has disappeared or the
@@ -4177,18 +4836,73 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
+                // An execution this process does not track, whose pair already holds a
+                // terminal status, was recorded before: by the process that ran before a
+                // restart, whose finished Job the cluster keeps for ttlSecondsAfterFinished.
+                // No output directory is tracked for it, so there is nothing to read, and
+                // nothing to write; an intervention report would be false. A deploy during the
+                // job 5 rerun on Quokka (2026-10-15) raised 122 of them, for pairs that already
+                // held their results. An untracked execution whose pair is not terminal is
+                // still reported below: that one did lose its result.
+                if (resolveStatusPath(execution) == null
+                        && StatusCode.toStatusCode(lookup.getStatusCode())
+                            .isTerminalExecutionResult()) {
+                    log.info(
+                        "Not ingesting " + execution + " again: pair " + pairId +
+                        " already holds terminal status " + lookup.getStatusCode() +
+                        " and this process does not track the execution, which finished" +
+                        " before it started"
+                    );
+                    releaseAccountingIfSafe(
+                        execution, "already-recorded completion of " + execution
+                    );
+                    return true;
+                }
+
                 // One parse feeds both fields, so they cannot come from two different
                 // writes of a file each stage truncates.
                 JsonObject statusRecord = readStatusRecord(execution);
-                int terminalStatus = readTerminalStatus(
-                    execution, statusRecord, StatusCode.STATUS_COMPLETE.getVal());
-                int stageNumber = readStageNumber(execution, statusRecord, 1);
+                // Only when there is an output directory to look in: without one the file
+                // cannot appear later, however long this waits.
+                if (statusRecord == null && statusMayBeLate
+                        && resolveStatusPath(execution) != null
+                        && awaitingStatusVisibility(execution)) {
+                    // Not absent yet: shared storage may expose it late. Retried next poll,
+                    // with tracking and accounting held, which is exactly what false means.
+                    return false;
+                }
+                statusAbsentSince.remove(execution);
+                if (statusRecord == null) {
+                    throw new StageStatusSnapshots.InvalidSnapshotException(
+                        "completed " + execution + " has no status.json, so neither its"
+                            + " result nor stage is known"
+                    );
+                }
+                int terminalStatus = readTerminalStatus(execution, statusRecord);
+                int stageNumber = readStageNumber(execution, statusRecord);
 
                 // Earlier stages, from the per-stage snapshots the job script writes beside
                 // status.json. That file is a single slot every stage truncates, so without
                 // this the pair keeps only its final stage and every earlier one stays at
                 // whatever it was enqueued with.
-                if (!ingestEarlierStageStatuses(execution, pairId, stageNumber)) {
+                EarlierStages earlier =
+                    ingestEarlierStageStatuses(execution, pairId, stageNumber, attemptNo);
+                if (earlier == EarlierStages.STALE_ATTEMPT) {
+                    return releaseStaleExecution(execution, pairId, "earlier stage statuses");
+                }
+                if (earlier == EarlierStages.RETRY) {
+                    return false;
+                }
+
+                // Reading and validating files takes real time. A rerun may take this
+                // execution id after that work, so authority must be checked at the terminal
+                // mutation boundary as well as at the artifact reads. The old execution's
+                // valid bytes are not authority to publish after its tracking is superseded.
+                if (!ownsTracking(execution)) {
+                    log.info(
+                        "Not recording terminal status for " + execution
+                            + ": it lost ownership while its evidence was being ingested"
+                    );
                     return false;
                 }
 
@@ -4210,16 +4924,14 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                PairStatusResult updated = JobPairs.setPairStatusPreciseResult(
-                    pairId,
-                    stageNumber,
-                    terminalStatus,
-                    StatusCode.STATUS_NOT_REACHED.getVal(),
-                    false
-                );
+                PairStatusResult updated =
+                    recordTerminalResult(pairId, stageNumber, terminalStatus, attemptNo);
+                if (updated == PairStatusResult.STALE_ATTEMPT) {
+                    return releaseStaleExecution(execution, pairId, "terminal status");
+                }
                 if (updated == PairStatusResult.REJECTED_INVALID_STAGE) {
-                    // status.json named no stage, and 0 cannot become a precise stage
-                    // identity without giving NOT_REACHED to every stage the pair has.
+                    // The stage named is not a stage this pair has, so there is nothing to
+                    // record this result against.
                     //
                     // Returning true rather than false, for the reason the SUPERSEDED branch
                     // below records: false leaves the execution out of completedExecutions
@@ -4232,14 +4944,15 @@ public class KubernetesNativeBackend implements Backend {
                     log.error(
                         "Refusing to record status " + terminalStatus + " for pair " + pairId +
                         " (" + execution + "): stage number " + stageNumber + " names no" +
-                        " stage. The pair is left unresolved and its output is retained."
+                        " stage of that pair. The pair is left unresolved and its output is" +
+                        " retained."
                     );
                     // Accounting is released on the way out, as it is on every other exit from
                     // this callback. The execution has finished either way, and holding its
                     // slot because its status could not be recorded would leak capacity once
                     // per such pair -- a refusal that costs the cluster is not a safe refusal.
                     releaseAccountingIfSafe(
-                        execution, "refused stage-zero status for " + execution
+                        execution, "refused unknown-stage status for " + execution
                     );
                     return true;
                 }
@@ -4272,16 +4985,19 @@ public class KubernetesNativeBackend implements Backend {
                 // but stage-status ingestion makes a retry an ordinary event, and a pair's
                 // recorded finish time must not move every time one happens.
                 //
-                // Only the completion path changes. onJobFailed and onJobStuckPending keep
-                // their own calls: those record statuses through routines that do not write
-                // end_time themselves.
+                // Failure and stuck-pending callbacks reuse this evidence-only path, so they
+                // receive the same atomic status/end-time behavior when evidence exists.
 
                 // Persist run-solver statistics (wallclock, cpu, memory, disk)
                 // so K8s-native jobs produce the same data as container jobs.
-                persistRunSolverStats(execution, pairId, stageNumber);
+                if (!persistRunSolverStats(execution, pairId, stageNumber, attemptNo)) {
+                    return releaseStaleExecution(execution, pairId, "run-solver stats");
+                }
 
                 // Persist attributes generated by post-processors
-                persistAttributes(execution, pairId, stageNumber);
+                if (!persistAttributes(execution, pairId, stageNumber, attemptNo)) {
+                    return releaseStaleExecution(execution, pairId, "attributes");
+                }
             } catch (StageStatusSnapshots.InvalidSnapshotException e) {
                 // No usable stage identity, so nothing was written and nothing will be. The
                 // pair keeps its non-terminal status and its output stays on the PVC.
@@ -4307,136 +5023,88 @@ public class KubernetesNativeBackend implements Backend {
             return true;
         }
 
+        /**
+         * Whether a missing status.json is still inside its visibility window.
+         *
+         * <p>The window starts the first time the file is found missing, not when the Job
+         * finished: that is when this process could first have cached the negative lookup.
+         * Once it has passed the absence is taken as real and the existing intervention
+         * path applies unchanged.
+         */
+        private boolean awaitingStatusVisibility(ExecutionRef execution) {
+            long now = clock.getAsLong();
+            Long first = statusAbsentSince.putIfAbsent(execution, now);
+            long since = first == null ? now : first;
+            if (now - since < statusVisibilityGraceMillis) {
+                log.info(
+                    "status.json for " + execution + " is not visible yet; retrying for up to " +
+                    ((statusVisibilityGraceMillis - (now - since)) / 1000) +
+                    "s more before treating it as absent"
+                );
+                return true;
+            }
+            return false;
+        }
+
+        /** Outcome of recording the earlier stages of a finished execution. */
+        private enum EarlierStages { RECORDED, RETRY, STALE_ATTEMPT }
+
+        /**
+         * The attempt this execution was submitted for, or null when it is unfenced.
+         *
+         * <p>Read only while the execution owns its id, and re-checked after the read as
+         * {@link #resolvePairId} does: the map entry belongs to whoever holds the id.
+         */
+        private Integer resolveAttemptNo(ExecutionRef execution) {
+            if (!ownsTracking(execution)) {
+                return null;
+            }
+            Integer attemptNo = execIdToAttemptNo.get(execution.execId());
+            return ownsTracking(execution) ? attemptNo : null;
+        }
+
+        /**
+         * The database refused a result write because the pair has moved on to a later
+         * attempt (#185). Nothing this execution holds is valid any more, so it is finished:
+         * not retried (the refusal cannot heal), not recorded as applied, and its
+         * accounting released as on every other completed exit.
+         */
+        private boolean releaseStaleExecution(
+            ExecutionRef execution,
+            int pairId,
+            String write
+        ) {
+            log.info(
+                "Discarding the result of " + execution + " for pair " + pairId + ": its " +
+                write + " write was refused because the pair has been rerun since this" +
+                " execution was submitted. No further results are written for it."
+            );
+            releaseAccountingIfSafe(execution, "stale attempt for " + execution);
+            return true;
+        }
+
         @Override
         public boolean onJobFailed(ExecutionRef execution, String reason) {
-            // Skip processing if THIS execution was stopped — the kill path already removed
-            // its tracking maps and released its concurrency slot.
-            if (isStopped(execution)) {
-                log.debug("Skipping failure callback for stopped " + execution);
-                killedExecutions.remove(execution);
-                return true;
-            }
-
-            // A superseded execution publishes nothing. Its pair id can still be read from
-            // its own Job label, but everything else this path needs -- the output
-            // directory the status, stats and attributes are read from, the submission slot
-            // -- is keyed on the execution id, and the id now belongs to another execution.
-            // Applying a result from those artifacts would record one execution's run
-            // against the other's pair.
-            if (isSuperseded(execution)) {
-                log.warn(
-                    "Not applying the failure of " + execution + ": execution id " +
-                    execution.execId() + " is now held by " +
-                    execIdToJobName.get(execution.execId()) + ", whose artifacts and" +
-                    " accounting this event must not touch."
-                );
-                return true;
-            }
-
-            String jobName = execution.jobName();
-            Integer pairId = resolvePairId(execution);
-            if (pairId == null) {
-                log.warn("Unable to resolve pair ID for failed job: " + execution + ". Reason: " + reason);
-                return false;
-            }
-
-            try {
-                // Guard: skip DB update when the pair row has disappeared or the
-                // job is no longer submit-eligible.
-                JobPairs.PairStatusLookupResult lookup = JobPairs.getPairStatusLookup(pairId);
-                if (lookup.isMissing()) {
-                    log.debug(
-                        "Skipping failure update for stale pair " +
-                        pairId +
-                        " (K8s job " +
-                        jobName +
-                        ")"
-                    );
-                    releaseAccountingIfSafe(execution, "terminal callback for " + execution);
-                    return true;
-                }
-                if (lookup.isError()) {
-                    log.warn(
-                        "Could not determine whether pair " +
-                        pairId +
-                        " still exists after K8s job failure; retrying"
-                    );
-                    return false;
-                }
-
-                int stageNumber = readStageNumber(execution, 1);
-
-                PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
-                    pairId,
-                    stageNumber,
-                    StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal(),
-                    false
-                );
-                if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
-                    // status.json named no stage, so there is nothing to record this failure
-                    // against. Reported as handled rather than retried: the file will read the
-                    // same way on every poll, and returning false here would reprocess this
-                    // job forever.
-                    log.error(
-                        "Refusing to record the failure of pair " + pairId + " (" + execution +
-                        "): stage number " + stageNumber + " names no stage. Reason: " +
-                        reason + ". The pair is left unresolved and its output is retained."
-                    );
-                    releaseAccountingIfSafe(
-                        execution, "refused stage-zero failure status for " + execution
-                    );
-                    return true;
-                }
-                boolean updated = statusResult == PairStatusResult.APPLIED;
-                if (!updated) {
-                    log.warn(
-                        "Failed updating failed status for pair " +
-                        pairId +
-                        ". Reason: " +
-                        reason +
-                        "; Kubernetes completion will be retried"
-                    );
-                    return false;
-                }
-
-                // Set end_time for the failed pair.
-                try {
-                    if (!JobPairs.setEndTime(pairId)) {
-                        log.warn("setEndTime found no row for failed pair " + pairId);
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to set end_time for failed pair " + pairId, e);
-                }
-            } catch (StageStatusSnapshots.InvalidSnapshotException e) {
-                // As in the completion callback: nothing to attribute the failure to, and the
-                // same bytes on every retry. Handled rather than re-polled.
-                log.error(
-                    "INGESTION INTERVENTION REQUIRED: the failure of pair " + pairId + " (" +
-                    execution + ") could not be recorded because status.json carries no usable" +
-                    " stage identity. Reason: " + reason + ". The pair is left unresolved and" +
-                    " its output is retained.", e);
-                releaseAccountingIfSafe(execution, "unusable stage identity for " + execution);
-                return true;
-            } catch (Exception e) {
-                log.error("Failed updating failed status for pair " + pairId + ". Reason: " + reason, e);
-                return false;
-            }
-
-            releaseAccountingIfSafe(execution, "terminal callback for " + execution);
-            return true;
+            // Kubernetes knows that its Job failed, but that lifecycle fact identifies
+            // neither a solver result nor the stage that produced one. Reuse the completion
+            // ingestion path so only retained terminal evidence can update the pair. With no
+            // status.json it leaves the pair unresolved; with one it preserves the result and
+            // stage the execution actually wrote, including an evidenced ERROR_RUNSCRIPT.
+            log.warn(
+                "Kubernetes reported " + execution + " failed (" + reason + "); terminal" +
+                " scientific status will be accepted only from its retained output"
+            );
+            return onJobComplete(execution);
         }
 
         /**
          * A pod that has waited past the timeout without starting.
          *
-         * <p>Recorded as ERROR_RUNSCRIPT because that is StarExec's existing bounded-retry
-         * channel, not because a run script was missing. RERUN_FAILED_PAIRS reruns pairs at
-         * exactly that code, and GetJobPairIdsWithStatusNotRerunAfterDate excludes anything
-         * already in pairs_rerun, so the retry happens exactly once, is recorded in the
-         * database, and survives a restart. Nothing ran, so retrying cannot contaminate a
-         * measurement; if the second attempt also cannot be scheduled it stays failed and
-         * visible.
+         * <p>This is lifecycle evidence that the pod did not start, not scientific evidence
+         * of a run-script result or stage. The Job is removed so it cannot start later. Once
+         * the absence of a status.json is proven, the pair is queued again once, or filed
+         * ERROR_SUBMIT_FAIL when its automatic retry is spent; no result or stage is written.
+         * If a status.json may exist, it goes through completion ingestion instead.
          *
          * <p>The Kubernetes Job is deleted first. Left alone it would keep the pod pending,
          * and if capacity later appeared the pod would run and write results for a pair
@@ -4499,26 +5167,13 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                // Order is load-bearing. The invariant: the Job is gone before anything
-                // that makes this pair eligible for an automatic rerun is written.
+                // Order is load-bearing. The Job must be gone before this lifecycle
+                // transition is considered handled: otherwise a pod could start later and
+                // write output after the monitor released its accounting.
                 //
-                // ERROR_RUNSCRIPT plus a non-null end_time is exactly what
-                // GetJobPairIdsWithStatusNotRerunAfterDate selects, and RERUN_FAILED_PAIRS
-                // dispatches a fresh execution for it. Both rerun paths now confirm the
-                // old execution stopped before resetting, but neither can confirm anything
-                // about a Job this callback has not yet deleted, so publishing that state
-                // while the old Job still
-                // exists leaves a pod that can start later and write a second set of
-                // results for the same pair. Deleting first removes that possibility
-                // rather than relying on the deletion retry winning a 90-minute race.
-                //
-                // The obvious objection to deleting first is that the Job is the monitor's
-                // retry trigger, so a later failure could never be retried. That is why
-                // KubernetesJobMonitor keeps its own cleanup-pending record and drains it
-                // independently of the Job listing -- see drainCleanupPending. Every step
-                // here is safe to repeat: ensureKubernetesJobGone reports an absent Job as
-                // success, UpdatePairStatusPrecise treats a duplicate terminal write as
-                // idempotent success by design, and setEndTime is an unconditional UPDATE.
+                // Deleting first costs the monitor its natural retry trigger. KubernetesJobMonitor
+                // therefore keeps a cleanup-pending record and drains it independently of the
+                // Job listing when deletion or evidence ingestion needs another attempt.
                 if (!ensureKubernetesJobGone(jobName)) {
                     log.warn(
                         "Kubernetes job " +
@@ -4531,13 +5186,10 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                // Deleting the NAMED Job is not the same as establishing that this execution
+                // Deleting the named Job is not the same as establishing that this execution
                 // is over. A retried submission can have left a second controller carrying
                 // the same exec-id label, and foreground propagation can return with the pod
-                // still terminating. The status about to be written is precisely the one
-                // that makes the pair rerun-eligible, so it must not be published while
-                // anything for this execution can still run or write: a late pod would
-                // otherwise overwrite the results of the replacement.
+                // still terminating. Do not ingest or release anything while it could write.
                 if (observeExecutionSafety(execId) != KillOutcome.CONFIRMED_SAFE) {
                     log.warn(
                         "Pair " + pairId + " (execId " + execId + ") looks stuck, but its" +
@@ -4556,92 +5208,106 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                int stageNumber = readStageNumber(execution, 1);
-
-                PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
-                    pairId,
-                    stageNumber,
-                    StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal(),
-                    false
-                );
-                if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
-                    // As in the failure callback: nothing to record the escalation against,
-                    // and the same read on every retry. Reported as handled so the monitor
-                    // stops reprocessing it.
-                    log.error(
-                        "Refusing to record the stuck-pending escalation of pair " + pairId +
-                        " (" + execution + "): stage number " + stageNumber + " names no" +
-                        " stage. The pair is left unresolved and its output is retained."
+                // Queued again only once the absence of a status.json is proven. One that
+                // exists means the pod did start after all, between the last observation and
+                // the delete, and its evidence goes through ingestion as any completion's
+                // would. So does an output directory this execution does not own or cannot
+                // read: "cannot tell" is not "absent" (see confirmedAbsent), and queueing on it
+                // would spend the pair's one retry and let the next attempt clear whatever
+                // evidence is there. Nothing ran long enough to write a file that is merely
+                // not visible yet, so no visibility window.
+                Path statusPath = resolveStatusPath(execution);
+                if (statusPath == null || !confirmedAbsent(statusPath)) {
+                    log.info(
+                        "Pair " + pairId + " looked stuck pending, but " + execution +
+                        (statusPath == null
+                            ? " has no output directory this backend owns"
+                            : " may have written " + statusPath) +
+                        "; handing it to completion ingestion instead of queueing it again. " +
+                        reason
                     );
-                    releaseAccountingIfSafe(
-                        execution, "refused stage-zero stuck-pending status for " + execution
-                    );
-                    return true;
+                    return ingestCompletion(execution, false);
                 }
-                boolean updated = statusResult == PairStatusResult.APPLIED;
-                if (!updated) {
-                    log.warn(
-                        "Failed recording stuck-pending status for pair " +
-                        pairId +
-                        "; the job is already gone, so the monitor's cleanup-pending" +
-                        " record is what brings this back"
-                    );
-                    return false;
-                }
-
-                // Mandatory, not tidiness: GetJobPairIdsWithStatusNotRerunAfterDate also
-                // requires (end_time >= cutoff OR end_time < epoch). With end_time NULL
-                // both comparisons are NULL, the row is excluded, and the rerun this
-                // status exists to trigger would silently never happen. That is why a
-                // failure here returns rather than being logged and stepped over.
-                boolean endTimeRecorded;
-                try {
-                    endTimeRecorded = JobPairs.setEndTime(pairId);
-                } catch (Exception e) {
-                    log.warn("Failed to set end_time for stuck pair " + pairId, e);
-                    endTimeRecorded = false;
-                }
-                if (!endTimeRecorded) {
-                    // The pair is ERROR_RUNSCRIPT with a null end_time, which the rerun
-                    // query excludes -- so it is not yet rerun-eligible and no duplicate
-                    // execution can be dispatched. The cleanup-pending record brings this
-                    // back to finish the job.
-                    log.warn(
-                        "Could not record end_time for stuck pair " +
-                        pairId +
-                        "; without it the pair stays failed and is never rerun, so this" +
-                        " is retried"
-                    );
-                    return false;
-                }
-
-                log.warn(
-                    "Pair " +
-                    pairId +
-                    " never started: its pod waited past the configured timeout and the" +
-                    " Kubernetes job has been removed so the pair can be rerun. " +
-                    reason
-                );
-            } catch (StageStatusSnapshots.InvalidSnapshotException e) {
-                // A pod that never started writes no status.json at all, and that case still
-                // takes the default above -- this is a file that exists and cannot be used.
-                log.error(
-                    "INGESTION INTERVENTION REQUIRED: the stuck-pending escalation of pair " +
-                    pairId + " (" + execution + ") could not be recorded because status.json" +
-                    " carries no usable stage identity. The pair is left unresolved and its" +
-                    " output is retained.", e);
-                releaseAccountingIfSafe(execution, "unusable stage identity for " + execution);
-                return true;
+                return settleNeverStarted(execution, pairId, reason);
             } catch (Exception e) {
                 log.error(
-                    "Failed recording stuck-pending status for pair " + pairId,
+                    "Failed handling stuck-pending lifecycle for pair " + pairId,
                     e
                 );
                 return false;
             }
+        }
 
-            releaseAccountingIfSafe(execution, "terminal callback for " + execution);
+        /**
+         * Settles the pair of a pod that never started, once its Job is gone and the
+         * execution is proven unable to run: queued again once, or filed ERROR_SUBMIT_FAIL
+         * when its automatic retry is already spent (see
+         * {@code starexec.RetryNeverStartedPair}). Nothing ran, so no solver result, stage or
+         * measurement is recorded.
+         *
+         * <p>This used to go through completion ingestion, which found no status.json -- the
+         * pod cannot have written one -- and reported an ingestion intervention for output
+         * that does not exist. The pair stayed ENQUEUED with no execution until
+         * FIND_BROKEN_JOB_PAIRS filed it ERROR_SUBMIT_FAIL hours later, a status
+         * RERUN_FAILED_PAIRS never selects, so it was never retried at all.
+         *
+         * <p>Any outcome the database reports is final for this execution, so its accounting
+         * is released. An unknown one keeps it, and the monitor's cleanup-pending record
+         * brings the pair back.
+         */
+        private boolean settleNeverStarted(ExecutionRef execution, int pairId, String reason) {
+            Integer attemptNo = resolveAttemptNo(execution);
+            if (attemptNo == null) {
+                // Without its attempt, this execution's claim cannot be told from a
+                // re-dispatch's, which keeps the previous execution id until the new one is
+                // persisted (see starexec.RetryNeverStartedPair). The pair is not touched;
+                // ENQUEUED with no execution, FIND_BROKEN_JOB_PAIRS files it.
+                log.warn(
+                    "Pair " + pairId + " never started, but " + execution + " carries no" +
+                    " attempt to fence a retry on; leaving it for FIND_BROKEN_JOB_PAIRS," +
+                    " which files it ERROR_SUBMIT_FAIL. " + reason
+                );
+                releaseAccountingIfSafe(
+                    execution, "never-started " + execution + " without an attempt"
+                );
+                return true;
+            }
+            JobPairs.NeverStartedRetryResult result =
+                JobPairs.retryNeverStartedPair(pairId, execution.execId(), attemptNo);
+            if (result == null) {
+                result = JobPairs.NeverStartedRetryResult.ERROR;
+            }
+            switch (result) {
+                case REQUEUED:
+                    log.warn(
+                        "Pair " + pairId + " never started: its pod waited past the configured" +
+                        " timeout and its Kubernetes Job has been removed. Queued again, which" +
+                        " spends its one automatic retry; nothing ran, so no result or stage" +
+                        " is recorded. " + reason
+                    );
+                    break;
+                case FILED:
+                    log.warn(
+                        "Pair " + pairId + " never started again, and its one automatic retry" +
+                        " is already spent: filed as ERROR_SUBMIT_FAIL. A manual rerun can" +
+                        " try it again. " + reason
+                    );
+                    break;
+                case STALE:
+                    log.info(
+                        "Pair " + pairId + " is no longer waiting on " + execution +
+                        ", whose pod never started; nothing changed. " + reason
+                    );
+                    break;
+                default:
+                    // ERROR, and anything else this method cannot know to be final.
+                    log.warn(
+                        "Could not settle pair " + pairId + ", whose pod never started (" +
+                        execution + "); retrying"
+                    );
+                    return false;
+            }
+            releaseAccountingIfSafe(execution, "settling never-started " + execution);
             return true;
         }
 
@@ -4725,6 +5391,9 @@ public class KubernetesNativeBackend implements Backend {
                 Integer parsed = Integer.parseInt(pairIdValue);
                 if (ownsTracking(execution)) {
                     execIdToPairId.put(execId, parsed);
+                    // The attempt comes from the same object, so it is refilled with the
+                    // pair (clearPairTracking drops the pair, not the attempt).
+                    putAttemptNo(execId, extractIntegerLabel(job, ATTEMPT_NO_LABEL));
                 }
                 return parsed;
             } catch (Exception e) {
@@ -4734,8 +5403,9 @@ public class KubernetesNativeBackend implements Backend {
         }
 
         /**
-         * The terminal status for a finished pair, with runsolver's own limit verdict
-         * taking precedence over status.json.
+         * The terminal status for a finished pair. A valid non-complete status.json result
+         * is authoritative; runsolver's own limit verdict may only correct a claimed clean
+         * completion.
          *
          * <p>status.json's status field is not an independent measurement: functions.bash
          * writes it from {@code jobscript:581-589}, which greps runsolver's English prose
@@ -4752,34 +5422,39 @@ public class KubernetesNativeBackend implements Backend {
          * {@link ContainerJobMonitor} by reading runsolver's booleans directly. It did not
          * touch this backend, so the one path used in Kubernetes deployments kept the
          * defect the commit existed to remove. Ordering matches
-         * {@code ContainerJobMonitor.determineStatus}: a limit verdict wins, and
-         * status.json decides only when runsolver reports no breach.
+         * {@code ContainerJobMonitor.determineStatus}: status.json decides non-complete
+         * outcomes, while a runsolver limit verdict may correct STATUS_COMPLETE.
          */
         /**
          * The status this execution's result reports.
          *
-         * <p>{@code defaultStatus} applies only when the pair produced no status file at all.
-         * A file that exists must say what happened.
-         *
-         * <p>It used to fall back to the same default whenever the field was missing, null,
-         * unparsable or a shape gson would coerce -- and {@code onJobComplete} passes
-         * {@code STATUS_COMPLETE} as that default. So a truncated or malformed status file
+         * <p>It used to fall back to a caller default whenever the file or field was missing,
+         * null,
+         * unparsable or a shape gson would coerce. The completion caller used to pass
+         * {@code STATUS_COMPLETE} as that default, so a truncated or malformed status file
          * recorded the pair as a **successful solver run**, stamped an {@code end_time} and a
          * completion row, and became indistinguishable from a genuine result in every
          * downstream query. A wrong stage misattributes a result; this invented one.
          *
-         * @param record the parsed status file, or null when there is none
+         * @param record the parsed status file; null is refused as absent evidence
          */
-        private int readTerminalStatus(ExecutionRef execution, JsonObject record,
-                int defaultStatus) throws StageStatusSnapshots.InvalidSnapshotException {
+        private int readTerminalStatus(ExecutionRef execution, JsonObject record)
+                throws StageStatusSnapshots.InvalidSnapshotException {
+            if (record == null) {
+                throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for " + execution + " is absent, so its result is unknown"
+                );
+            }
+            int statusFromRecord =
+                FinalStatusStage.requireStatus(record, String.valueOf(execution));
+            if (statusFromRecord != StatusCode.STATUS_COMPLETE.getVal()) {
+                return statusFromRecord;
+            }
             StatusCode limit = readRunsolverVerdict(execution);
             if (limit != null) {
                 return limit.getVal();
             }
-            if (record == null) {
-                return defaultStatus;
-            }
-            return FinalStatusStage.requireStatus(record, String.valueOf(execution));
+            return statusFromRecord;
         }
 
         /**
@@ -4918,12 +5593,15 @@ public class KubernetesNativeBackend implements Backend {
          * be believed is an evidence problem, and answering it with {@code ERROR_RUNSCRIPT}
          * would put a scientific failure on a pair whose solver may have been perfectly fine.
          *
-         * @return true when the earlier stages are recorded, or when there are none to record
+         * @return RECORDED when the earlier stages are recorded or there are none to record,
+         *         STALE_ATTEMPT when the database refused them for a superseded attempt,
+         *         RETRY for every other failure
          */
-        private boolean ingestEarlierStageStatuses(
+        private EarlierStages ingestEarlierStageStatuses(
             ExecutionRef execution,
             int pairId,
-            int terminalStage
+            int terminalStage,
+            Integer attemptNo
         ) {
             // Ownership dominates artifact ownership. ownedOutputDir is gated on positive
             // ownership of execId, job name and UID; the output directory is keyed by pair
@@ -4931,37 +5609,52 @@ public class KubernetesNativeBackend implements Backend {
             // directory is exactly the case this must refuse.
             Path outputDir = ownedOutputDir(execution);
             if (outputDir == null) {
-                log.info(
-                    "Not ingesting stage snapshots for " + execution +
-                    ": this execution no longer owns its tracking"
-                );
-                return true;
+                // Both states still refuse ingestion. Only the diagnostic differs:
+                // missing artifacts for an owned execution are not a stale callback.
+                if (ownsTracking(execution)) {
+                    log.warn("Not ingesting stage snapshots for " + execution +
+                        ": execution owns its tracking but has no output directory mapping");
+                } else {
+                    log.info("Not ingesting stage snapshots for " + execution +
+                        ": this execution no longer owns its tracking");
+                }
+                return EarlierStages.RETRY;
             }
 
             // The terminal stage's own status comes from the runsolver artifacts, and a pair
-            // killed mid-stage legitimately leaves that snapshot non-terminal. Both are expressed
-            // by the bound, so the read never returns a record this method would have to discard.
+            // killed mid-stage legitimately leaves that snapshot non-terminal. Neither is
+            // returned, so the read never hands this method a record it would have to discard.
+            //
+            // Which read expresses that depends on what the result names: a stage-level result
+            // bounds by that stage, while a pair-level result names no stage, so nothing can be
+            // bounded out -- every stage that finished is earlier than it (#165), and one that
+            // did not finish is skipped rather than refused.
             Map<Integer, Integer> earlier;
             try {
-                earlier = StageStatusSnapshots.read(outputDir, pairId, terminalStage);
+                earlier = terminalStage == FinalStatusStage.PAIR_LEVEL
+                    ? StageStatusSnapshots.readForPairLevelResult(outputDir, pairId)
+                    : StageStatusSnapshots.read(outputDir, pairId, terminalStage);
+                // See LocalJobMonitor: reported by the reader, logged here, because a WARN is a
+                // database write and the reader is documented as holding no connection.
+                StageStatusSnapshots.lastContradiction().ifPresent(log::warn);
             } catch (StageStatusSnapshots.InvalidSnapshotException e) {
                 log.error(
                     "Refusing the stage snapshots for pair " + pairId + " (" + execution +
                     "); nothing was written and the output is retained for diagnosis",
                     e
                 );
-                return false;
+                return EarlierStages.RETRY;
             } catch (Exception e) {
                 log.error(
                     "Could not read the stage snapshots for pair " + pairId + " (" + execution +
                     "); results are retained and ingestion will retry",
                     e
                 );
-                return false;
+                return EarlierStages.RETRY;
             }
 
             if (earlier.isEmpty()) {
-                return true;
+                return EarlierStages.RECORDED;
             }
 
             // Re-checked at the mutation boundary, as the terminal write is. Everything above
@@ -4975,71 +5668,128 @@ public class KubernetesNativeBackend implements Backend {
                     "Discarding stage snapshots for " + execution +
                     ": ownership changed while its output was being read"
                 );
-                return false;
+                return EarlierStages.RETRY;
             }
 
-            StageStatusBatchResult result = JobPairs.setEarlierStageStatuses(pairId, earlier);
+            // Null attempt (a Job from before #185) keeps the unfenced call.
+            StageStatusBatchResult result = attemptNo == null
+                ? JobPairs.setEarlierStageStatuses(pairId, earlier)
+                : JobPairs.setEarlierStageStatuses(pairId, earlier, attemptNo);
             if (result == StageStatusBatchResult.APPLIED) {
-                return true;
+                return EarlierStages.RECORDED;
+            }
+            if (result == StageStatusBatchResult.STALE_ATTEMPT) {
+                // Not a failure and not applied: the pair was rerun, so this execution's
+                // stages are not its stages any more. Retrying cannot change that.
+                return EarlierStages.STALE_ATTEMPT;
             }
             log.error(
                 "Could not record earlier stage statuses " + earlier + " for pair " + pairId +
                 " (" + result + "); nothing was written and completion will be retried"
             );
-            return false;
+            return EarlierStages.RETRY;
+        }
+
+        /**
+         * Records this execution's terminal result against whatever the status names.
+         *
+         * <p>One place, because all three callbacks -- completion, failure and the
+         * stuck-pending escalation -- have to make the same choice from the same field, and
+         * three copies of it would drift.
+         */
+        private PairStatusResult recordTerminalResult(
+            int pairId,
+            int stageNumber,
+            int terminalStatus
+        ) {
+            return recordTerminalResult(pairId, stageNumber, terminalStatus, null);
+        }
+
+        private PairStatusResult recordTerminalResult(
+            int pairId,
+            int stageNumber,
+            int terminalStatus,
+            Integer attemptNo
+        ) {
+            // Stage 0 is the pair-level channel: the pair failed outside any stage, so there
+            // is no stage to carry the result and it is recorded against the pair (#165).
+            // The stages it prevented take the same status rather than NOT_REACHED: no
+            // earlier stage failed, and listings and statistics read the stage.
+            // A null attempt (a Job from before #185) keeps the unfenced overloads.
+            if (stageNumber == FinalStatusStage.PAIR_LEVEL) {
+                return attemptNo == null
+                    ? JobPairs.setPairLevelStatusResult(
+                        pairId,
+                        terminalStatus,
+                        terminalStatus
+                    )
+                    : JobPairs.setPairLevelStatusResult(
+                        pairId,
+                        terminalStatus,
+                        terminalStatus,
+                        attemptNo
+                    );
+            }
+            return attemptNo == null
+                ? JobPairs.setPairStatusPreciseResult(
+                    pairId,
+                    stageNumber,
+                    terminalStatus,
+                    StatusCode.STATUS_NOT_REACHED.getVal(),
+                    false
+                )
+                : JobPairs.setPairStatusPreciseResult(
+                    pairId,
+                    stageNumber,
+                    terminalStatus,
+                    StatusCode.STATUS_NOT_REACHED.getVal(),
+                    false,
+                    attemptNo
+                );
         }
 
         /**
          * The stage this execution's result belongs to.
          *
-         * <p>{@code defaultStage} applies only when the pair produced no status file at all,
-         * which is an ordinary outcome for a pod that never started: there is nothing to
-         * attribute, and the caller still has to record a platform verdict so the pair can be
-         * rerun.
-         *
-         * <p>A file that exists must say which stage it is about. It used to fall back to the
-         * same default whenever the field was missing, unparsable or a shape gson would coerce,
+         * <p>It used to fall back to a caller default when the file was absent or the field was
+         * missing, unparsable or a shape gson would coerce,
          * and that number was then handed to {@code UpdatePairStatusPrecise} as an authoritative
          * identity -- terminal status onto that stage, NOT_REACHED onto every stage above it.
          * A malformed file therefore produced a confident write against an invented stage.
          *
-         * @throws StageStatusSnapshots.InvalidSnapshotException if a status file exists but does
-         *         not carry a usable stage identity
+         * @throws StageStatusSnapshots.InvalidSnapshotException if terminal evidence is absent
+         *         or does not carry a usable stage identity
          */
-        /** As {@link #readStageNumber(ExecutionRef, int)}, but on an already-parsed record. */
-        private int readStageNumber(ExecutionRef execution, JsonObject record, int defaultStage)
+        private int readStageNumber(ExecutionRef execution, JsonObject record)
                 throws StageStatusSnapshots.InvalidSnapshotException {
             if (record == null) {
-                return defaultStage;
+                throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for " + execution + " is absent, so its stage is unknown; "
+                        + missingOutputDiagnostic(execution)
+                );
             }
-            return FinalStatusStage.require(record, String.valueOf(execution));
+            return FinalStatusStage.requireStageOrPairLevel(record, String.valueOf(execution));
         }
 
-        private int readStageNumber(ExecutionRef execution, int defaultStage)
-                throws StageStatusSnapshots.InvalidSnapshotException, IOException {
-            Path statusPath = resolveStatusPath(execution);
-            if (statusPath == null || !Files.exists(statusPath)) {
-                return defaultStage;
+        /** Diagnose the existing absent-record refusal without changing its classification. */
+        private String missingOutputDiagnostic(ExecutionRef execution) {
+            Path outputDir = ownedOutputDir(execution);
+            if (outputDir == null) {
+                return ownsTracking(execution)
+                    ? "execution owns its tracking but has no output directory mapping"
+                    : "this execution no longer owns its tracking";
             }
-
-            JsonObject root;
-            try {
-                String json = Files.readString(statusPath);
-                root = JsonParser.parseString(json).getAsJsonObject();
-            } catch (IOException e) {
-                // Deliberately not converted into a refusal. The output directory is on a
-                // shared volume and a read that fails now is the storage, not the contents --
-                // IngestionOutcome.classify says the same of an IOException, and
-                // StageStatusSnapshots.read rethrows it unwrapped for this reason. Wrapping it
-                // would retire the execution and strand the pair over a transient blip.
-                throw e;
-            } catch (Exception e) {
-                // It parsed as something that is not a status record, and will again.
-                throw new StageStatusSnapshots.InvalidSnapshotException(
-                    "status.json for " + execution + " exists but is not a status record, so"
-                        + " the stage that produced this result is unknown", e);
+            try (java.nio.file.DirectoryStream<Path> entries = Files.newDirectoryStream(outputDir)) {
+                // Some providers defer access failures until iteration starts.
+                entries.iterator().hasNext();
+                return "output directory is readable but status.json is missing";
+            } catch (java.nio.file.NoSuchFileException e) {
+                return "output directory is missing";
+            } catch (java.nio.file.NotDirectoryException e) {
+                return "output path is not a directory";
+            } catch (IOException | java.nio.file.DirectoryIteratorException | SecurityException e) {
+                return "output directory cannot be read: " + e.getClass().getSimpleName();
             }
-            return FinalStatusStage.require(root, String.valueOf(execution));
         }
 
         private Path resolveStatusPath(ExecutionRef execution) {
@@ -5061,18 +5811,26 @@ public class KubernetesNativeBackend implements Backend {
          * stage's measurements were lost, and a final stage that never reached copyOutput was
          * given the previous stage's.
          */
-        private void persistRunSolverStats(ExecutionRef execution, int pairId, int stageNumber) {
+        private boolean persistRunSolverStats(
+            ExecutionRef execution,
+            int pairId,
+            int stageNumber,
+            Integer attemptNo
+        ) {
             Path outputDir = ownedOutputDir(execution);
             if (outputDir == null) {
-                return;
+                return true;
             }
 
             Map<Integer, StageStatsFiles.Stats> byStage;
             try {
                 // Already read and validated by ingestEarlierStageStatuses before the status
                 // write; read again rather than threaded through, as persistAttributes does.
-                Set<Integer> finishedEarlier =
-                    StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
+                // Bounded by the reported stage, not by that method's bound: a pair-level
+                // result names no stage, so nothing is published for any of them (#165).
+                Set<Integer> finishedEarlier = stageNumber == FinalStatusStage.PAIR_LEVEL
+                    ? Set.of()
+                    : StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
                 byStage = StageStatsFiles.select(
                     outputDir,
                     pairId,
@@ -5082,7 +5840,7 @@ public class KubernetesNativeBackend implements Backend {
                 );
             } catch (Exception e) {
                 log.warn("Failed to select the run stats to persist for pair " + pairId, e);
-                return;
+                return true;
             }
 
             for (Map.Entry<Integer, StageStatsFiles.Stats> entry : byStage.entrySet()) {
@@ -5105,21 +5863,40 @@ public class KubernetesNativeBackend implements Backend {
                         );
                         continue;
                     }
-                    boolean ok = JobPairs.updateRunSolverStats(
-                        pairId,
-                        nodeName,
-                        stats.wallclockTime,
-                        stats.cpuTime,
-                        stats.userTime,
-                        stats.systemTime,
-                        stats.maxVirtualMemory,
-                        stats.maxResidentSetSize,
-                        entry.getKey(),
-                        stats.diskSize
-                    );
+                    // Null attempt (a Job from before #185) keeps the unfenced overload.
+                    boolean ok = attemptNo == null
+                        ? JobPairs.updateRunSolverStats(
+                            pairId,
+                            nodeName,
+                            stats.wallclockTime,
+                            stats.cpuTime,
+                            stats.userTime,
+                            stats.systemTime,
+                            stats.maxVirtualMemory,
+                            stats.maxResidentSetSize,
+                            entry.getKey(),
+                            stats.diskSize
+                        )
+                        : JobPairs.updateRunSolverStats(
+                            pairId,
+                            nodeName,
+                            stats.wallclockTime,
+                            stats.cpuTime,
+                            stats.userTime,
+                            stats.systemTime,
+                            stats.maxVirtualMemory,
+                            stats.maxResidentSetSize,
+                            entry.getKey(),
+                            stats.diskSize,
+                            attemptNo
+                        );
                     if (ok) {
                         log.debug("Persisted run stats for pair " + pairId + " stage " +
                             entry.getKey() + ": " + stats);
+                    } else if (isStaleAttempt(pairId, attemptNo)) {
+                        // false also means "refused as stale"; that is not a failure, and
+                        // no later stage's stats would be accepted either.
+                        return false;
                     } else {
                         log.warn("Failed to persist run stats for pair " + pairId + " stage " +
                             entry.getKey());
@@ -5128,6 +5905,25 @@ public class KubernetesNativeBackend implements Backend {
                     log.warn("Exception persisting run stats for pair " + pairId + " stage " +
                         entry.getKey(), e);
                 }
+            }
+            return true;
+        }
+
+        /**
+         * Whether a boolean-returning fenced write that reported false did so because the
+         * pair has moved past {@code attemptNo}, rather than because it failed. Those
+         * writers cannot say which, so the pair's current attempt is asked. An unreadable
+         * answer is "not known to be stale": it is reported as the ordinary failure.
+         */
+        private boolean isStaleAttempt(int pairId, Integer attemptNo) {
+            if (attemptNo == null) {
+                return false;
+            }
+            try {
+                return JobPairs.getCurrentAttemptNo(pairId) != attemptNo;
+            } catch (Exception e) {
+                log.warn("Could not re-read the attempt of pair " + pairId, e);
+                return false;
             }
         }
 
@@ -5145,16 +5941,24 @@ public class KubernetesNativeBackend implements Backend {
          * {@code starexec-unknown} so downstream correctness logic treats
          * timeout/unknown outcomes consistently.</p>
          */
-        private void persistAttributes(ExecutionRef execution, int pairId, int stageNumber) {
+        private boolean persistAttributes(
+            ExecutionRef execution,
+            int pairId,
+            int stageNumber,
+            Integer attemptNo
+        ) {
             Path outputDir = ownedOutputDir(execution);
-            if (outputDir == null) return;
+            if (outputDir == null) return true;
 
             Map<Integer, Properties> byStage;
             try {
                 // Already read and validated by ingestEarlierStageStatuses before the status
                 // write; read again rather than threaded through, as the stats path does.
-                Set<Integer> finishedEarlier =
-                    StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
+                // Bounded by the reported stage, not by that method's bound: a pair-level
+                // result names no stage, so nothing is published for any of them (#165).
+                Set<Integer> finishedEarlier = stageNumber == FinalStatusStage.PAIR_LEVEL
+                    ? Set.of()
+                    : StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
                 byStage = StageAttributeFiles.select(
                     outputDir,
                     pairId,
@@ -5165,7 +5969,7 @@ public class KubernetesNativeBackend implements Backend {
                 );
             } catch (Exception e) {
                 log.warn("Failed to select the attributes to persist for pair " + pairId, e);
-                return;
+                return true;
             }
 
             for (Map.Entry<Integer, Properties> entry : byStage.entrySet()) {
@@ -5173,14 +5977,27 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
                 try {
-                    JobPairs.addJobPairAttributes(pairId, entry.getKey(), entry.getValue());
-                    log.debug("Persisted attributes for pair " + pairId + " stage " +
-                        entry.getKey() + ": " + entry.getValue().size());
+                    // Null attempt (a Job from before #185) keeps the unfenced overload.
+                    boolean ok = attemptNo == null
+                        ? JobPairs.addJobPairAttributes(pairId, entry.getKey(), entry.getValue())
+                        : JobPairs.addJobPairAttributes(
+                            pairId, entry.getKey(), entry.getValue(), attemptNo);
+                    if (ok) {
+                        log.debug("Persisted attributes for pair " + pairId + " stage " +
+                            entry.getKey() + ": " + entry.getValue().size());
+                    } else if (isStaleAttempt(pairId, attemptNo)) {
+                        // Refused as stale: not a failure, and later stages are refused too.
+                        return false;
+                    } else {
+                        log.warn("Failed to persist attributes for pair " + pairId + " stage " +
+                            entry.getKey());
+                    }
                 } catch (Exception e) {
                     log.warn("Failed to persist attributes for pair " + pairId + " stage " +
                         entry.getKey(), e);
                 }
             }
+            return true;
         }
 
         /** The legacy attributes.txt, parsed; empty when absent or unreadable. */

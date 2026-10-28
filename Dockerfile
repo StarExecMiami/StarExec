@@ -1,7 +1,7 @@
 # ==============================================================================
 # Stage 1: Compile SCSS/CSS Assets
 # ==============================================================================
-FROM docker.io/library/node:20-alpine AS assets
+FROM docker.io/library/node:24-alpine AS assets
 
 LABEL stage=assets
 
@@ -221,12 +221,14 @@ ENV CATALINA_HOME=/opt/tomcat \
     STAREXEC_LOG_DIR=/var/log/starexec \
     PATH="/home/starexec/bin:${PATH}"
 
-# Download and install Tomcat
+# Download, verify and install Tomcat
 RUN cd /tmp && \
-    curl -L https://archive.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz -o tomcat.tar.gz && \
+    curl -fsSL -o tomcat.tar.gz "https://archive.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz" && \
+    curl -fsSL -o tomcat.tar.gz.sha512 "https://archive.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz.sha512" && \
+    echo "$(awk '{print $1}' tomcat.tar.gz.sha512)  tomcat.tar.gz" | sha512sum -c - && \
     tar xzf tomcat.tar.gz && \
     mv apache-tomcat-${TOMCAT_VERSION} ${CATALINA_HOME} && \
-    rm tomcat.tar.gz && \
+    rm tomcat.tar.gz tomcat.tar.gz.sha512 && \
     # Remove default webapps for security (keep ROOT for loading page)
     rm -rf ${CATALINA_HOME}/webapps/examples \
     ${CATALINA_HOME}/webapps/docs \
@@ -307,7 +309,8 @@ COPY --chown=starexec:starexec docker/loading.html ${CATALINA_HOME}/webapps/ROOT
 # Copy entrypoint and configuration scripts
 COPY --chown=starexec:starexec docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chown=starexec:starexec docker/migrations.sh /usr/local/bin/migrations.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/migrations.sh
+COPY --chown=starexec:starexec docker/sync-sge-scripts.sh /usr/local/bin/sync-sge-scripts.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/migrations.sh /usr/local/bin/sync-sge-scripts.sh
 
 # Create sandbox users for job execution
 RUN addgroup -g 2001 starexec1 && \

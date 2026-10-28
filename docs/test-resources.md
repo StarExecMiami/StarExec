@@ -5,16 +5,13 @@ This document outlines the test resources available in StarExec's Maven structur
 ## Structure
 
 ```bash
-src/test/resources/
+starexec-app/src/test/resources/
 ├── upload-test/           # Resources for testing data uploads
+│   ├── dependencies/
 │   ├── testDataCommands.txt
-│   ├── uploadTestData.sh
-│   ├── benchmarks/
-│   ├── solvers/
-│   ├── post-procs/
-│   └── bench-procs/
+│   └── uploadTestData.sh
 └── test-pipeline/         # Resources for pipeline testing
-    ├── README.md
+    ├── README.MD
     ├── DummySolver.c
     ├── bench.txt
     ├── test.xml
@@ -27,10 +24,8 @@ Upload a standard set of resources (solvers, benchmarks, processors) to a StarEx
 
 Usage:
 
-- Maven:  
-  `mvn clean package -P upload-test-data`
 - Direct Script:  
-  `cd src/test/resources/upload-test && ./uploadTestData.sh`
+  `cd starexec-app/src/test/resources/upload-test && ./uploadTestData.sh`
 
 ## Test Pipeline
 
@@ -38,12 +33,10 @@ Test the pipeline functionality using provided resources.
 
 Usage:
 
-- Maven:  
-  `mvn clean package -P build-test-pipeline`
 - Direct Script:
 
   ```bash
-  cd src/test/resources/test-pipeline
+  cd starexec-app/src/test/resources/test-pipeline
   ./build-test-pipeline.sh compile    # Compile the solver
   ./build-test-pipeline.sh package    # Package resources
   ./build-test-pipeline.sh clean      # Clean generated files
@@ -73,8 +66,8 @@ Workflow:
 
 ```bash
 mvn clean package                    # Build the entire project
-mvn clean package -P upload-test-data  # Upload test data to StarExec
-mvn clean package -P build-test-pipeline # Prepare test-pipeline resources
+cd starexec-app/src/test/resources/upload-test && ./uploadTestData.sh
+cd starexec-app/src/test/resources/test-pipeline && ./build-test-pipeline.sh package
 ```
 
 ## Migration

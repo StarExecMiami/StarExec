@@ -3,6 +3,7 @@ package org.starexec.test.junit.backend;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -23,6 +24,8 @@ import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.PodmanBackend;
 import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.PairStatusResult;
+import org.starexec.data.database.StageStatusBatchResult;
 import org.starexec.data.to.Status.StatusCode;
 
 public class ContainerJobMonitorTests {
@@ -36,6 +39,50 @@ public class ContainerJobMonitorTests {
     public void setUp() {
         MockitoAnnotations.openMocks(this);
         monitor = new ContainerJobMonitor(backend);
+    }
+
+    @Test
+    public void missingOutputParentHasDistinctDiagnostic() throws Exception {
+        java.nio.file.Path parent = java.nio.file.Files.createTempDirectory("missing-output");
+        assertOutputDiagnostic(parent.resolve("absent"), "output directory is missing");
+    }
+
+    @Test
+    public void nonDirectoryOutputParentHasDistinctDiagnostic() throws Exception {
+        assertOutputDiagnostic(java.nio.file.Files.createTempFile("output-file", ".tmp"),
+            "output path is not a directory");
+    }
+
+    @Test
+    public void emptyReadableOutputParentHasDistinctDiagnostic() throws Exception {
+        assertOutputDiagnostic(java.nio.file.Files.createTempDirectory("empty-output"),
+            "output directory is readable but status.json is missing");
+    }
+
+    @Test
+    public void deniedOutputParentHasDistinctDiagnostic() throws Exception {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("denied-output");
+        try (MockedStatic<java.nio.file.Files> files = Mockito.mockStatic(
+                java.nio.file.Files.class, Mockito.CALLS_REAL_METHODS)) {
+            files.when(() -> java.nio.file.Files.newDirectoryStream(dir))
+                .thenThrow(new java.nio.file.AccessDeniedException(dir.toString()));
+            assertOutputDiagnostic(dir, "output directory cannot be read: AccessDeniedException");
+            files.verify(() -> java.nio.file.Files.newDirectoryStream(dir));
+        }
+    }
+
+    private void assertOutputDiagnostic(java.nio.file.Path dir, String expected) throws Exception {
+        try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+            try {
+                invokeProcessCompletedJob(new PodmanBackend.CompletedContainerInfo(
+                    "diagnostic-container", 77, dir.toString(), 0));
+                fail("missing evidence must still be refused");
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                assertTrue(e.getCause() instanceof org.starexec.backend.StageStatusSnapshots.InvalidSnapshotException);
+                assertTrue(e.getCause().getMessage(), e.getCause().getMessage().contains(expected));
+            }
+            pairs.verifyNoInteractions();
+        }
     }
 
     @Test
@@ -78,6 +125,38 @@ public class ContainerJobMonitorTests {
         invokeCheckCompletedJobs();
 
         verify(backend).cleanupStaleExitedContainers(anySet());
+    }
+
+    @Test
+    public void clearPairTrackingDiscardsOnlyThatPairsExitedContainers() throws Exception {
+        String matching = "exited-pair-77";
+        String other = "exited-pair-78";
+        when(backend.getCompletedContainers()).thenReturn(java.util.Arrays.asList(
+            new PodmanBackend.CompletedContainerInfo(matching, 77, "/tmp/77", 0),
+            new PodmanBackend.CompletedContainerInfo(other, 78, "/tmp/78", 0)
+        ));
+        when(backend.discardCompletedContainer(matching)).thenReturn(true);
+
+        monitor.clearPairTracking(77);
+
+        verify(backend).discardCompletedContainer(matching);
+        verify(backend, never()).discardCompletedContainer(other);
+    }
+
+    @Test
+    public void clearPairTrackingFailsClosedWhenExitedContainerCannotBeDiscarded() throws Exception {
+        String container = "exited-pair-77";
+        when(backend.getCompletedContainers()).thenReturn(java.util.Collections.singletonList(
+            new PodmanBackend.CompletedContainerInfo(container, 77, "/tmp/77", 0)
+        ));
+        when(backend.discardCompletedContainer(container)).thenReturn(false);
+
+        try {
+            monitor.clearPairTracking(77);
+            fail("pair retirement must fail if an exited container remains discoverable");
+        } catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage().contains("pair 77"));
+        }
     }
 
     private AdaptivePollInterval getPollInterval() throws Exception {
@@ -341,9 +420,9 @@ public class ContainerJobMonitorTests {
     private StatusCode determineStatus(Object stats, java.nio.file.Path dir)
         throws Exception {
         Method m = ContainerJobMonitor.class.getDeclaredMethod(
-            "determineStatus", stats.getClass(), java.nio.file.Path.class);
+            "determineStatus", stats.getClass(), StatusCode.class);
         m.setAccessible(true);
-        return (StatusCode) m.invoke(monitor, stats, dir);
+        return (StatusCode) m.invoke(monitor, stats, StatusCode.STATUS_COMPLETE);
     }
 
     @Test
@@ -413,6 +492,178 @@ public class ContainerJobMonitorTests {
     private static final int HELD_PAIR = 4242;
 
     @Test
+    public void unreadableStatusRecordIsRetriedWithoutInventingAResult() throws Exception {
+        java.nio.file.Path out = java.nio.file.Files.createTempDirectory("cjm-status-io");
+        out.toFile().deleteOnExit();
+        java.nio.file.Path statusPath = java.nio.file.Files.createDirectory(
+            out.resolve("status.json")
+        );
+        statusPath.toFile().deleteOnExit();
+        String container = "container-status-io";
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            pollTwice(out, container);
+
+            verify(backend, never()).removeCompletedContainer(container);
+            verify(backend, times(1)).releaseSlotForCompletedContainer(container);
+            jobPairs.verifyNoInteractions();
+        }
+        assertFalse("a filesystem failure may recover and must use bounded retry",
+            quarantine().contains(container));
+        assertTrue("the failed read must be scheduled for retry with backoff",
+            attempts().containsKey(container));
+        assertTrue("the unreadable terminal evidence must be retained",
+            java.nio.file.Files.isDirectory(statusPath));
+    }
+
+    @Test
+    public void reconciliationRetainsUnreadableStatusWithoutInventingAResult()
+        throws Exception {
+        java.nio.file.Path out = java.nio.file.Files.createTempDirectory("cjm-reconcile-io");
+        out.toFile().deleteOnExit();
+        java.nio.file.Path statusPath = java.nio.file.Files.createDirectory(
+            out.resolve("status.json")
+        );
+        statusPath.toFile().deleteOnExit();
+        PodmanBackend.CompletedContainerInfo info =
+            new PodmanBackend.CompletedContainerInfo(
+                "container-reconcile-io", HELD_PAIR, out.toString(), 0
+            );
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            assertFalse("unreadable evidence must not be reported as ingested",
+                invokeProcessReconciledJob(info));
+            jobPairs.verifyNoInteractions();
+        }
+        verify(backend, never()).removeCompletedContainer(info.containerId);
+        assertTrue("reconciliation must retain the container output for recovery",
+            java.nio.file.Files.isDirectory(statusPath));
+    }
+
+    @Test
+    public void unownedTerminalEvidenceIsHeldWithoutWritingItsClaimedPair() throws Exception {
+        java.nio.file.Path out = terminalOutput(StatusCode.STATUS_COMPLETE, 2);
+        String container = "container-without-authoritative-pair";
+        PodmanBackend.CompletedContainerInfo info =
+            new PodmanBackend.CompletedContainerInfo(container, -1, out.toString(), 0);
+        when(backend.getCompletedContainers())
+            .thenReturn(java.util.Collections.singletonList(info));
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            invokeCheckCompletedJobs();
+
+            jobPairs.verifyNoInteractions();
+            verify(backend, never()).removeCompletedContainer(container);
+            verify(backend).releaseSlotForCompletedContainer(container);
+        }
+        assertTrue("unknown output ownership must be quarantined for inspection",
+            quarantine().contains(container));
+        assertTrue("unowned evidence must remain on disk",
+            java.nio.file.Files.exists(out.resolve("status.json")));
+    }
+
+    @Test
+    public void validTerminalEvidencePersistsItsActualResultAndStage() throws Exception {
+        assertTerminalEvidenceIngested(StatusCode.STATUS_COMPLETE, 3);
+    }
+
+    @Test
+    public void evidencedRunscriptFailureIsNotReplacedByContainerExitStatus() throws Exception {
+        assertTerminalEvidenceIngested(StatusCode.ERROR_RUNSCRIPT, 2);
+    }
+
+    @Test
+    public void terminalRecordWithoutAResultIsHeldWithoutInventingOne() throws Exception {
+        java.nio.file.Path out = java.nio.file.Files.createTempDirectory("cjm-no-result");
+        out.toFile().deleteOnExit();
+        java.nio.file.Files.writeString(
+            out.resolve("status.json"),
+            "{\"pairId\":" + HELD_PAIR + ",\"stageNumber\":2}\n"
+        );
+
+        assertHeld(out, "no-result");
+    }
+
+    @Test
+    public void unexpectedFailureBeforeTerminalWriteRetainsEvidenceWithoutFallback()
+        throws Exception {
+        java.nio.file.Path out = terminalOutput(StatusCode.STATUS_COMPLETE, 2);
+        String container = "container-before-write";
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.setEarlierStageStatuses(
+                    HELD_PAIR, java.util.Collections.emptyMap()))
+                .thenThrow(new IllegalStateException("database unavailable"));
+
+            pollTwice(out, container);
+
+            jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                    Mockito.anyInt(), Mockito.anyBoolean()), Mockito.never());
+            jobPairs.verify(() -> JobPairs.setPairStatusPrecise(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()),
+                Mockito.never());
+            verify(backend, never()).removeCompletedContainer(container);
+            verify(backend, times(1)).releaseSlotForCompletedContainer(container);
+        }
+        assertTrue("unexpected operational failures must use bounded retry",
+            attempts().containsKey(container));
+        assertTrue("valid evidence must survive an operational ingestion failure",
+            java.nio.file.Files.exists(out.resolve("status.json")));
+    }
+
+    @Test
+    public void laterIngestionFailureDoesNotOverwriteTheEvidencedResult() throws Exception {
+        java.nio.file.Path out = terminalOutput(StatusCode.STATUS_COMPLETE, 2);
+        java.nio.file.Files.writeString(out.resolve("attributes.txt"), "answer=sat\n");
+        String container = "container-after-write";
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.setEarlierStageStatuses(
+                    HELD_PAIR, java.util.Collections.emptyMap()))
+                .thenReturn(StageStatusBatchResult.APPLIED);
+            jobPairs.when(() -> JobPairs.setPairStatusPreciseResult(
+                    HELD_PAIR, 2, StatusCode.STATUS_COMPLETE.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal(), false))
+                .thenReturn(PairStatusResult.APPLIED);
+            jobPairs.when(() -> JobPairs.getStageNumbers(HELD_PAIR))
+                .thenThrow(new IllegalStateException("database unavailable"));
+
+            pollTwice(out, container);
+
+            jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+                HELD_PAIR, 2, StatusCode.STATUS_COMPLETE.getVal(),
+                StatusCode.STATUS_NOT_REACHED.getVal(), false));
+            jobPairs.verify(() -> JobPairs.setPairStatusPrecise(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()),
+                Mockito.never());
+            verify(backend, never()).removeCompletedContainer(container);
+            verify(backend, times(1)).releaseSlotForCompletedContainer(container);
+        }
+        assertTrue("post-status ingestion failures must retry without deleting evidence",
+            attempts().containsKey(container));
+    }
+
+    @Test
+    public void anAbsentStatusFileIsHeldWithoutInventingAResult() throws Exception {
+        java.nio.file.Path out = java.nio.file.Files.createTempDirectory("cjm-held-absent");
+        out.toFile().deleteOnExit();
+        String container = "container-absent";
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            pollTwice(out, container);
+
+            verify(backend, never()).removeCompletedContainer(container);
+            verify(backend, times(1)).releaseSlotForCompletedContainer(container);
+            jobPairs.verifyNoInteractions();
+        }
+        assertTrue("the completed container must be held for intervention",
+            quarantine().contains(container));
+        assertTrue("refusing an absent status file must not delete its output directory",
+            java.nio.file.Files.isDirectory(out));
+    }
+
+    @Test
     public void aMalformedSnapshotIsHeldWithItsContainer() throws Exception {
         java.nio.file.Path out = finishedAtStageTwo("malformed");
         writeSnapshotFile(out, "1.json", "{not json");
@@ -448,6 +699,40 @@ public class ContainerJobMonitorTests {
         assertHeld(out, "running");
     }
 
+    /**
+     * A pair that died while a stage was still running reports at the pair level -- stage 0 --
+     * and leaves that stage's snapshot reading RUNNING for good. That is what a missing
+     * benchmark dependency looks like (jobscript:217 reports after sendNode has published
+     * stage 1 as RUNNING), and holding it made every such pair unresolvable. It is ingested.
+     */
+    @Test
+    public void aPairThatDiedWhileAStageRanIsIngestedRatherThanHeld() throws Exception {
+        java.nio.file.Path out = failedBeforeAnyStage("mid-stage");
+        writeSnapshotFile(out, "1.json",
+            snapshotRecord(HELD_PAIR, 1, StatusCode.STATUS_RUNNING.getVal()));
+        String container = "container-mid-stage";
+        PodmanBackend.CompletedContainerInfo info =
+            new PodmanBackend.CompletedContainerInfo(container, HELD_PAIR, out.toString(), 0);
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.setPairLevelStatusResult(
+                    HELD_PAIR,
+                    StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal(),
+                    StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal()))
+                .thenReturn(PairStatusResult.APPLIED);
+
+            invokeProcessCompletedJob(info);
+
+            jobPairs.verify(() -> JobPairs.setPairLevelStatusResult(
+                HELD_PAIR,
+                StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal(),
+                StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal()));
+        }
+        assertFalse("an unfinished stage under a pair-level result is not a bad artifact",
+            quarantine().contains(container));
+    }
+
+    /** The control, unchanged: under a result that NAMES a stage, an unfinished one is held. */
     @Test
     public void anEarlierStageClaimingProcessingIsHeldWithItsContainer() throws Exception {
         java.nio.file.Path out = finishedAtStageTwo("processing");
@@ -520,6 +805,15 @@ public class ContainerJobMonitorTests {
         invokeCheckCompletedJobs();
     }
 
+    /** A labelled pair whose status.json reports a failure that belongs to no stage. */
+    private static java.nio.file.Path failedBeforeAnyStage(String label) throws IOException {
+        java.nio.file.Path out = java.nio.file.Files.createTempDirectory("cjm-pair-" + label);
+        out.toFile().deleteOnExit();
+        java.nio.file.Files.writeString(out.resolve("status.json"),
+            snapshotRecord(HELD_PAIR, 0, StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal()));
+        return out;
+    }
+
     /** A labelled pair whose status.json says stage 2 finished cleanly. */
     private static java.nio.file.Path finishedAtStageTwo(String label) throws IOException {
         java.nio.file.Path out = java.nio.file.Files.createTempDirectory("cjm-held-" + label);
@@ -545,6 +839,67 @@ public class ContainerJobMonitorTests {
 
     private static int complete() {
         return StatusCode.STATUS_COMPLETE.getVal();
+    }
+
+    private boolean invokeProcessReconciledJob(PodmanBackend.CompletedContainerInfo info)
+        throws Exception {
+        Method method = ContainerJobMonitor.class.getDeclaredMethod(
+            "processReconciledJob", PodmanBackend.CompletedContainerInfo.class
+        );
+        method.setAccessible(true);
+        return (boolean) method.invoke(monitor, info);
+    }
+
+    private void invokeProcessCompletedJob(PodmanBackend.CompletedContainerInfo info)
+        throws Exception {
+        Method method = ContainerJobMonitor.class.getDeclaredMethod(
+            "processCompletedJob", PodmanBackend.CompletedContainerInfo.class
+        );
+        method.setAccessible(true);
+        method.invoke(monitor, info);
+    }
+
+    private void assertTerminalEvidenceIngested(StatusCode status, int stage) throws Exception {
+        java.nio.file.Path out = terminalOutput(status, stage);
+        PodmanBackend.CompletedContainerInfo info =
+            new PodmanBackend.CompletedContainerInfo(
+                "container-evidenced-" + status + "-" + stage,
+                HELD_PAIR,
+                out.toString(),
+                0
+            );
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.setEarlierStageStatuses(
+                    HELD_PAIR, java.util.Collections.emptyMap()))
+                .thenReturn(StageStatusBatchResult.APPLIED);
+            jobPairs.when(() -> JobPairs.setPairStatusPreciseResult(
+                    HELD_PAIR, stage, status.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal(), false))
+                .thenReturn(PairStatusResult.APPLIED);
+
+            invokeProcessCompletedJob(info);
+
+            jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+                HELD_PAIR, stage, status.getVal(),
+                StatusCode.STATUS_NOT_REACHED.getVal(), false));
+            jobPairs.verify(() -> JobPairs.setPairStatusPrecise(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()),
+                Mockito.never());
+        }
+    }
+
+    private static java.nio.file.Path terminalOutput(StatusCode status, int stage)
+        throws IOException {
+        java.nio.file.Path out = java.nio.file.Files.createTempDirectory("cjm-evidence");
+        out.toFile().deleteOnExit();
+        java.nio.file.Path statusPath = out.resolve("status.json");
+        java.nio.file.Files.writeString(
+            statusPath,
+            snapshotRecord(HELD_PAIR, stage, status.getVal())
+        );
+        statusPath.toFile().deleteOnExit();
+        return out;
     }
 
     @SuppressWarnings("unchecked")

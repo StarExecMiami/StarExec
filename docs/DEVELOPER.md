@@ -99,33 +99,36 @@ node --version    # Should show 20+ (optional)
 
 ```
 StarExec/
-├── src/
-│   ├── main/
-│   │   ├── java/org/starexec/    # Java source code
-│   │   │   ├── app/              # Application bootstrap
-│   │   │   ├── backend/          # Execution backends
-│   │   │   ├── command/          # CLI (StarExecCommand)
-│   │   │   ├── constants/        # Constants and configuration
-│   │   │   ├── data/             # Data access layer
-│   │   │   ├── jobs/             # Job management
-│   │   │   ├── servlets/         # HTTP handlers
-│   │   │   ├── services/         # REST services
-│   │   │   └── util/             # Utilities
-│   │   └── webapp/               # Web resources
-│   │       ├── css/              # SCSS stylesheets
-│   │       ├── js/               # JavaScript
-│   │       ├── images/           # Static images
-│   │       └── secure/           # JSP pages
-│   └── test/java/                # Unit tests
-├── sql/                          # Flyway migrations
-├── charts/starexec/              # Helm chart
-├── scripts/                      # DevOps scripts
-├── docker/                       # Container files
-├── docs/                         # Documentation
-├── Dockerfile                    # Container build
-├── Makefile                      # DevOps automation
-├── pom.xml                       # Maven configuration
-└── docker-compose.yml            # Docker Compose config
+├── starexec-app/                 # Live Maven module
+│   ├── src/
+│   │   ├── main/
+│   │   │   ├── java/org/starexec/  # Java source code
+│   │   │   │   ├── app/            # Application bootstrap
+│   │   │   │   ├── backend/        # Execution backends
+│   │   │   │   ├── command/        # CLI (StarExecCommand)
+│   │   │   │   ├── constants/      # Constants and configuration
+│   │   │   │   ├── data/           # Data access layer
+│   │   │   │   ├── jobs/           # Job management
+│   │   │   │   ├── servlets/       # HTTP handlers
+│   │   │   │   ├── services/       # REST services
+│   │   │   │   └── util/           # Utilities
+│   │   │   ├── resources/db/migration/  # Flyway migrations
+│   │   │   └── webapp/             # Web resources
+│   │   │       ├── css/            # SCSS stylesheets
+│   │   │       ├── js/             # JavaScript
+│   │   │       ├── images/         # Static images
+│   │   │       └── secure/         # JSP pages
+│   │   └── test/java/              # Unit tests
+│   └── pom.xml                     # Application Maven configuration
+├── sql/                            # Audit/repair SQL scripts (not migrations)
+├── charts/starexec/                # Helm chart
+├── scripts/                        # DevOps scripts
+├── docker/                         # Container files
+├── docs/                           # Documentation
+├── Dockerfile                      # Container build
+├── Makefile                        # DevOps automation
+├── pom.xml                         # Parent Maven configuration
+└── docker-compose.yml              # Docker Compose config
 ```
 
 ---
@@ -154,7 +157,7 @@ make build-prod IMAGE_TAG=v1.2.3
 
 ### Security Considerations: Cache Freshness
 
-Note: Relying entirely on cached images via `--pull=missing` means your local environment will not receive upstream security patches for base images (Alpine, OpenJDK, Node.js). If a CVE is published for `eclipse-temurin:17-jre-alpine` or `node:20-alpine`, your cached copy remains vulnerable.
+Note: Relying entirely on cached images via `--pull=missing` means your local environment will not receive upstream security patches for base images (Alpine, OpenJDK, Node.js). If a CVE is published for `eclipse-temurin:17-jre-alpine` or `node:24-alpine`, your cached copy remains vulnerable.
 
 **Recommendation:** Run `make build-fresh` periodically (at minimum weekly, ideally before each major feature branch or CI merge) to ensure parity with the CI environment and receive upstream security patches.
 
@@ -190,7 +193,7 @@ node --version
 npm install -g sass
 
 # Compile manually
-sass src/main/webapp/css/global.scss:src/main/webapp/css/global.css
+sass starexec-app/src/main/webapp/css/global.scss:starexec-app/src/main/webapp/css/global.css
 ```
 
 #### Java Version Mismatch
@@ -223,7 +226,8 @@ make logs
 # Check status
 make status
 
-# Complete reset (deletes data)
+# Complete reset: deletes every volume of the environment (database and
+# files) and the image
 make reset ENV=dev
 ```
 
@@ -236,7 +240,8 @@ docker compose up --build
 # Stop
 docker compose down
 
-# With fresh database
+# Start over with empty volumes: -v deletes every volume of the stack,
+# the database and the files alike
 docker compose down -v && docker compose up --build
 ```
 
@@ -251,8 +256,14 @@ podman run -d --name starexec-postgres \
   -p 5432:5432 \
   postgres:15
 
-# Run application
-mvn tomcat7:run
+# Run the application (recommended paths)
+make build && make start LOCAL=1   # Podman deployment of your checkout
+# or
+docker compose up --build  # Docker Compose
+
+# Manual WAR deployment: build with
+#   mvn -pl starexec-app clean package -DskipTests
+# then deploy starexec-app/target/starexec.war to a Tomcat 9 container.
 ```
 
 ---
@@ -268,13 +279,13 @@ mvn test
 ### Specific Test Class
 
 ```bash
-mvn test -Dtest=LocalBackendTest
+mvn test -Dtest=LocalBackendTests
 ```
 
 ### Specific Test Method
 
 ```bash
-mvn test -Dtest=LocalBackendTest#testJobSubmission
+mvn test -Dtest=LocalBackendTests#testSubmitJob
 ```
 
 ### Skip Tests During Build
@@ -294,7 +305,7 @@ mvn jacoco:report
 
 ```bash
 # Requires running database
-mvn verify -Pintegration-tests
+mvn verify -Pit
 ```
 
 ---
@@ -379,14 +390,14 @@ podman exec -it starexec-postgres psql -U starexec
 
 ### Creating Migrations
 
-1. Create a new file in `sql/`:
+1. Create a new file in `starexec-app/src/main/resources/db/migration/`:
    ```bash
-   touch sql/V{next_version}__Description_of_change.sql
+   touch starexec-app/src/main/resources/db/migration/V{next_version}__Description_of_change.sql
    ```
 
 2. Add SQL statements:
    ```sql
-   -- V15__Add_job_priority.sql
+   -- V0118__Add_job_priority.sql
    ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0;
    CREATE INDEX idx_jobs_priority ON jobs(priority);
    ```
@@ -550,8 +561,8 @@ git checkout -b feature/my-feature
 # Run tests
 mvn test
 
-# Build and test locally
-make stop && make build && make start
+# Build and test locally (LOCAL=1 deploys the image you just built)
+make stop && make build && make start LOCAL=1
 ```
 
 ### 4. Commit Changes
@@ -656,11 +667,12 @@ make build-fresh        # Build without cache
 make build-prod         # Production build
 
 # Deployment
-make start              # Start environment
+make start              # Start environment with the registry's latest image
+make start LOCAL=1      # Start environment with the image from make build
 make stop               # Stop environment
 make status             # Check status
 make logs               # View logs
-make reset              # Full reset
+make reset              # Delete all data and the image
 
 # Database
 make db-shell           # Database CLI
@@ -698,17 +710,25 @@ mvn clean package -U
 # Check logs
 podman logs starexec-app
 
-# Reset environment
+# Redeploy; volumes and their data are kept
+make stop && make start ENV=dev
+
+# Last resort: delete every volume of the environment and the image
 make reset ENV=dev
 ```
 
 ### Database Issues
 
+`make volumes-delete` has no `VOLUMES=` option: it deletes all five volumes of
+the environment, files included, so there is no database-only reset. To start
+the development environment over with empty volumes:
+
 ```bash
-# Reset database
-make volumes-delete ENV=dev VOLUMES=postgres
+make stop
+make volumes-backup ENV=dev   # optional copy, taken while stopped
+make volumes-delete ENV=dev   # asks you to type DELETE
 make volumes-create ENV=dev
-make start
+make start ENV=dev            # migrations run on startup
 ```
 
 ### Port Already in Use
@@ -733,7 +753,7 @@ make deploy-podman APP_PORT=8080
 - **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues
 - **[Test Resources](test-resources.md)** - Maven test profiles and test-data fixtures
 - **[Database Standards](DATABASE_STANDARDS.md)** - Schema conventions and FK constraints
-- **[Local Backend Isolation](LOCAL_BACKEND_ISOLATION.md)** - CPU pinning for reproducible benchmark results
+- **[CPU Partition Scheduling](cpu-partition-scheduling.md)** - CPU pinning for reproducible benchmark results
 
 ### External Resources
 
@@ -754,7 +774,7 @@ make deploy-podman APP_PORT=8080
 
 After setting up your development environment:
 
-1. **Explore the codebase** - Start with `src/main/java/org/starexec/app/`
+1. **Explore the codebase** - Start with `starexec-app/src/main/java/org/starexec/app/`
 2. **Run the tests** - `mvn test`
 3. **Pick a good first issue** - Look for `good first issue` label
 4. **Join discussions** - Participate in GitHub discussions

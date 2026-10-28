@@ -52,6 +52,8 @@ public class C {
 	public static final String URL_GETPRIMJSON = "services/details/{type}/{id}/";
 	public static final String URL_GETUSERPRIM = "services/users/{id}/{type}/pagination";
 	public static final String URL_GET_BENCH_UPLOAD_STATUS = "services/benchmarks/uploadDescription/{statusId}";
+	// A server that processes benchmark uploads in the background reports each as an upload job.
+	public static final String URL_GET_UPLOAD_JOB_STATUS = "services/uploads/jobs/{jobId}";
 	public static final String URL_GETID = "services/users/getid";
 	public static final String URL_COPYBENCH = "services/spaces/{spaceID}/add/benchmark";
 	public static final String URL_COPYSOLVER = "services/spaces/{spaceID}/add/solver";

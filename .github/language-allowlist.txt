@@ -1,0 +1,3 @@
+# Words that scripts/english_only.py must not flag (one per line, case-insensitive).
+# Use for proper names or quoted terms that legitimately contain non-English letters.
+# Do not add ordinary Spanish words to silence the check; rewrite the text in English.

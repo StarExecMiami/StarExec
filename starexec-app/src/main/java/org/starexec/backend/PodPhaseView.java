@@ -624,6 +624,24 @@ public final class PodPhaseView {
         return (observation == null) ? "no pod found for this execution id" : observation.reason;
     }
 
+    /**
+     * The node {@code execution}'s own pod runs on, or null.
+     *
+     * <p>Only a running pod answers. A Pending pod can already be bound to a node and still
+     * never start there, and a finished one runs nowhere. Null too when the listing failed,
+     * when it holds no pod of this execution, and when the pod reports no node.
+     *
+     * <p>The value is the pod's {@code spec.nodeName}, the Node's {@code metadata.name}: the
+     * string {@code Cluster.loadWorkerNodes} stores in {@code nodes.name}.
+     */
+    public String nodeNameFor(ExecutionRef execution) {
+        Observation observation = observationFor(execution);
+        if (observation == null || observation.phase != Phase.RUNNING) {
+            return null;
+        }
+        return observation.nodeName;
+    }
+
     // =========================================================================
     // Internals
     // =========================================================================
@@ -777,17 +795,22 @@ public final class PodPhaseView {
 
         PodStatus status = pod.getStatus();
         String phase = (status == null) ? null : status.getPhase();
+        String nodeName = (pod.getSpec() == null) ? null : pod.getSpec().getNodeName();
+        if (nodeName != null && nodeName.trim().isEmpty()) {
+            nodeName = null;
+        }
 
         if ("Running".equalsIgnoreCase(phase)) {
-            return new Observation(Phase.RUNNING, createdAt, "pod is running");
+            return new Observation(Phase.RUNNING, createdAt, "pod is running", nodeName);
         }
         if ("Pending".equalsIgnoreCase(phase)) {
-            return new Observation(Phase.PENDING, createdAt, describePending(status));
+            return new Observation(Phase.PENDING, createdAt, describePending(status), nodeName);
         }
         return new Observation(
             Phase.UNKNOWN,
             createdAt,
-            "pod phase is " + ((phase == null) ? "not reported" : phase)
+            "pod phase is " + ((phase == null) ? "not reported" : phase),
+            nodeName
         );
     }
 
@@ -867,11 +890,14 @@ public final class PodPhaseView {
         private final Phase phase;
         private final long createdAtMillis;
         private final String reason;
+        /** The pod's {@code spec.nodeName}, or null if it reports none. */
+        private final String nodeName;
 
-        private Observation(Phase phase, long createdAtMillis, String reason) {
+        private Observation(Phase phase, long createdAtMillis, String reason, String nodeName) {
             this.phase = phase;
             this.createdAtMillis = createdAtMillis;
             this.reason = reason;
+            this.nodeName = nodeName;
         }
     }
 }

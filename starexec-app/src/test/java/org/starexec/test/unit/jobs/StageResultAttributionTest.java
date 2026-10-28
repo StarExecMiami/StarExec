@@ -574,6 +574,44 @@ public class StageResultAttributionTest {
 	}
 
 	/**
+	 * A time below 1e-4 s is recorded as runsolver wrote it. runsolver keeps its times as C++
+	 * floats and prints them in the stream's default format, which is exponent form there
+	 * (Watcher.hh:453-463). On a Kubernetes run, a pair whose solver ended 99 microseconds into
+	 * runsolver's clock had WCTIME=9.90467e-05, and none of its measurements were recorded. All
+	 * four times are in that form here.
+	 */
+	@Test
+	public void aTimeInExponentFormBelowATenThousandthIsRecordedExactly() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.varFile(1, "WCTIME=9.90467e-05\nCPUTIME=8.32e-05\nUSERTIME=4.1e-05\n"
+				+ "SYSTEMTIME=4.22e-05\nMAXVM=0\nTIMEOUT=false\nMEMOUT=false\n");
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+
+		assertMeasured(ingest(pair, 1, 2), Map.of(
+				1, List.of("node-7", 9.90467e-05, 8.32e-05, 4.1e-05, 4.22e-05, 0.0, 10L, 100L),
+				2, measured(0, 2)));
+	}
+
+	/** From 1e6 s the same format is exponent form again, with a positive exponent. */
+	@Test
+	public void aTimeInExponentFormFromAMillionSecondsIsRecordedExactly() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.varFile(1, "WCTIME=39825.3\nCPUTIME=1.23457e+06\nUSERTIME=1.23e+06\n"
+				+ "SYSTEMTIME=4567.89\nMAXVM=8240\nTIMEOUT=false\nMEMOUT=false\n");
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+
+		assertMeasured(ingest(pair, 1, 2), Map.of(
+				1, List.of("node-7", 39825.3, 1234570.0, 1230000.0, 4567.89, 8240.0, 10L, 100L),
+				2, measured(0, 2)));
+	}
+
+	/**
 	 * Every stage is charged its own disk, as the grid-engine path always charged it: stage 1's
 	 * saved output against stage 1, stage 2's against stage 2. Before, only the final stage's
 	 * output was charged at all.

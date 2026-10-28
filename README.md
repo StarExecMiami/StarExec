@@ -23,8 +23,8 @@ Choose your deployment method:
 # Fastest path - Docker Compose
 docker compose up --build
 
-# Production path - Podman
-make start
+# Production path - Podman (create the values file first: docs/DEPLOYMENT.md)
+make deploy-podman ENV=prod VALS=charts/starexec/values-podman-prod.yaml
 
 # Kubernetes - Helm
 helm repo add starexec https://starexecmiami.github.io/StarExec
@@ -73,7 +73,7 @@ The list below is the canonical public documentation set.
 
 ## Architecture
 
-**Stack:** Java 17 web application (Spring/Tomcat) → PostgreSQL database → Backend scheduler → Compute nodes
+**Stack:** Java 17 web application (Servlet/JSP on Tomcat 9) → PostgreSQL database → Backend scheduler → Compute nodes
 
 See [Architecture Overview](docs/ARCHITECTURE.md) for detailed system design.
 

@@ -32,13 +32,13 @@
     </Realm>
   </Realm>
 
-  <!-- Legacy cookie processor to match app expectations.
-       Note: sameSiteCookies attribute intentionally omitted (defaults to unset/none).
-       Reason: Cross-origin authentication flows (e.g., StarExecCommand, Python API)
-       require cookies to be sent on cross-site requests. CSRF protection is handled
-       at the application level via session tokens and origin validation in SessionFilter.
-       If only browser-based access is needed, consider adding sameSiteCookies="lax". -->
-  <CookieProcessor className="org.apache.tomcat.util.http.Rfc6265CookieProcessor" />
+  <!-- SameSite=Lax limits cross-site cookie transmission in browsers.
+       StarExecCommand and the Python API use cookie jars rather than browsers,
+       so SameSite does not apply to them. CSRF protection for /secure/* and
+       /public/registration/ is enforced by CsrfFilter; SessionFilter does not
+       perform Origin/Referer validation. -->
+  <CookieProcessor className="org.apache.tomcat.util.http.Rfc6265CookieProcessor"
+                   sameSiteCookies="lax" />
 
   <!-- Fix 408 login timeout - Tomcat 9.0.74+ defaults authenticationSessionTimeout to 120 seconds.
        Set to 3600 (1 hour) to match web.xml session-timeout and prevent timeout during login. -->

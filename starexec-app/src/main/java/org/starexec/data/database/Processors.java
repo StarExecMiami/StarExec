@@ -1,7 +1,19 @@
 package org.starexec.data.database;
 
 import java.io.File;
+import java.io.IOException;
 import java.lang.NumberFormatException;
+import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.FileVisitResult;
+import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -207,17 +219,15 @@ public class Processors {
             Connection con = null;
             PreparedStatement ps = null;
             ResultSet rs = null;
-            File processorFile = null;
+            String path = null;
             try {
                 con = Common.getConnection();
                 ps = con.prepareStatement("SELECT starexec.DeleteProcessor(?)");
                 ps.setInt(1, processorId);
                 rs = ps.executeQuery();
-                String path = null;
                 if (rs.next()) {
                     path = rs.getString(1);
                 }
-                processorFile = new File(path == null ? "" : path);
             } finally {
                 Common.safeClose(rs);
                 Common.safeClose(ps);
@@ -229,26 +239,24 @@ public class Processors {
             );
             log.debug(method, message);
 
-            // Try and delete file referenced by processor_path and its parent directory
-            if (processorFile.exists()) {
-                if (processorFile.delete()) {
-                    message = String.format(
-                        "File [%s] was deleted at [%s] because it was not inter referenced " +
-                            "anywhere.",
-                        processorFile.getName(),
-                        processorFile.getAbsolutePath()
-                    );
-                    log.debug(method, message);
-                }
-                if (processorFile.getParentFile() != null) {
-                    if (processorFile.getParentFile().delete()) {
-                        message = String.format(
-                            "Directory [%s] was deleted because it was empty.",
-                            processorFile.getParentFile().getAbsolutePath()
-                        );
-                        log.debug(method, message);
-                    }
-                }
+            // The row is already gone, so a file cleanup failure must not turn this into a
+            // failed delete: the return value of this method still means "the row was deleted",
+            // and only the warning below reports the files left behind.
+            if (
+                !deleteProcessorFiles(
+                    Paths.get(R.getProcessorDir()),
+                    path
+                )
+            ) {
+                log.warn(
+                    method,
+                    String.format(
+                        "Processor [id=%d] was removed from the database, but its files at [%s] " +
+                            "could not be fully cleaned up.",
+                        processorId,
+                        path
+                    )
+                );
             }
             return true;
         } catch (SQLException e) {
@@ -262,6 +270,214 @@ public class Processors {
             );
         }
         return false;
+    }
+
+    /**
+     * Deletes a processor's directory, refusing anything outside the processor root.
+     *
+     * <p>processor_path names a directory, not a file, so the tree must be walked instead of
+     * calling {@link File#delete()}. Symbolic links are removed as links and never followed, and
+     * the parent directory is removed only when it is empty and strictly inside the root.
+     *
+     * @param processorRoot the root every processor path must be strictly inside
+     * @param processorPath the path stored for the processor; null, empty or unparseable means
+     *     there is nothing to delete
+     * @return true when nothing remains at processorPath, false when the deletion was refused or
+     *     failed
+     */
+    public static boolean deleteProcessorFiles(
+        Path processorRoot,
+        String processorPath
+    ) {
+        final String method = "deleteProcessorFiles";
+
+        if (Util.isNullOrEmpty(processorPath)) {
+            log.debug(method, "Processor has no path to delete.");
+            return true;
+        }
+
+        Path target;
+        try {
+            Path stored = Paths.get(processorPath).toAbsolutePath();
+            target = stored.normalize();
+            // A processor named "." or ".." was stored as <date>/. or <date>/.., which
+            // normalizes to the date or community directory: other processors' files. Rows
+            // created before names made only of dots were refused can still hold such a path.
+            if (!stored.equals(target)) {
+                log.warn(
+                    method,
+                    "Refusing to delete [" + processorPath + "]: it contains . or .. segments."
+                );
+                return false;
+            }
+        } catch (InvalidPathException e) {
+            log.debug(
+                method,
+                "Processor path [" + processorPath + "] cannot be parsed."
+            );
+            return true;
+        }
+
+        if (processorRoot == null) {
+            log.warn(
+                method,
+                "Refusing to delete [" + target + "]: no processor root was given."
+            );
+            return false;
+        }
+
+        Path root;
+        try {
+            root = processorRoot.toAbsolutePath().normalize();
+        } catch (InvalidPathException e) {
+            log.warn(
+                method,
+                "Refusing to delete [" + target + "]: the processor root cannot be parsed."
+            );
+            return false;
+        }
+
+        final boolean targetExists = Files.exists(
+            target,
+            LinkOption.NOFOLLOW_LINKS
+        );
+        if (targetExists) {
+            // Resolve links in the root and in every component above the target so that a
+            // symlinked intermediate directory cannot be used to escape the root. Resolve the
+            // parent normally, then append the final name without resolving it: passing
+            // NOFOLLOW_LINKS to target.toRealPath() would also preserve intermediate symlinks.
+            // The final component must remain unresolved so a symlink at processorPath is
+            // removed as a link.
+            try {
+                Path targetParent = target.getParent();
+                Path targetName = target.getFileName();
+                if (targetParent == null || targetName == null) {
+                    log.warn(
+                        method,
+                        "Refusing to delete [" + target + "]: it has no parent or file name."
+                    );
+                    return false;
+                }
+                root = root.toRealPath();
+                target = targetParent.toRealPath().resolve(targetName);
+            } catch (IOException e) {
+                log.warn(
+                    method,
+                    "Refusing to delete [" + target + "] because it could not be resolved: " +
+                        e.getMessage()
+                );
+                return false;
+            }
+        }
+
+        if (target.equals(root) || !target.startsWith(root)) {
+            log.warn(
+                method,
+                "Refusing to delete [" + target + "]: it is not strictly inside [" + root + "]."
+            );
+            return false;
+        }
+
+        if (!targetExists) {
+            return true;
+        }
+
+        try {
+            deletePathWithoutFollowingLinks(target);
+            removeParentIfEmpty(target.getParent(), root);
+        } catch (IOException e) {
+            log.warn(
+                method,
+                "Failed to delete processor files at [" + target + "]: " + e.getMessage(),
+                e
+            );
+            return false;
+        }
+
+        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            log.warn(
+                method,
+                "Processor files at [" + target + "] still exist after the delete."
+            );
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Deletes a file, a symbolic link or a directory tree. Links are deleted as links and
+     * symlinked directories are never descended into.
+     *
+     * @param path the file or directory to delete
+     * @throws IOException if any entry cannot be deleted
+     */
+    private static void deletePathWithoutFollowingLinks(Path path)
+        throws IOException {
+        if (
+            Files.isSymbolicLink(path) ||
+            !Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)
+        ) {
+            Files.deleteIfExists(path);
+            return;
+        }
+        Files.walkFileTree(
+            path,
+            new SimpleFileVisitor<Path>() {
+                @Override
+                public FileVisitResult visitFile(
+                    Path file,
+                    BasicFileAttributes attrs
+                ) throws IOException {
+                    Files.delete(file);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(
+                    Path directory,
+                    IOException failure
+                ) throws IOException {
+                    if (failure != null) {
+                        throw failure;
+                    }
+                    Files.delete(directory);
+                    return FileVisitResult.CONTINUE;
+                }
+            }
+        );
+    }
+
+    /**
+     * Removes a deleted processor's parent directory when it is empty and strictly inside the
+     * processor root. This is what cleans up the timestamp directory a processor was stored in.
+     *
+     * @param parent the directory that held the deleted processor
+     * @param root the processor root; the parent is never removed when it equals the root
+     * @throws IOException if the parent cannot be inspected or removed
+     */
+    private static void removeParentIfEmpty(Path parent, Path root)
+        throws IOException {
+        if (parent == null || parent.equals(root) || !parent.startsWith(root)) {
+            return;
+        }
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(parent)) {
+            if (entries.iterator().hasNext()) {
+                return;
+            }
+        } catch (NoSuchFileException e) {
+            // The parent is already gone, so there is nothing left to clean up.
+            return;
+        }
+        try {
+            Files.delete(parent);
+        } catch (NoSuchFileException e) {
+            // Another actor removed the parent after the emptiness check.
+        } catch (DirectoryNotEmptyException e) {
+            // Another actor put something in the parent after the emptiness check. The
+            // processor's own directory is already gone, which is what this call is for,
+            // so a parent that now has other contents is nothing left to tidy -- and must
+            // not be reported as a failure to clean up the processor.
+        }
     }
 
     /**
@@ -517,7 +733,52 @@ public class Processors {
         return false;
     }
 
+    /**
+     * Whether a time limit can be stored as written.
+     *
+     * <p>{@code processors.time_limit} is {@code SMALLINT} and
+     * {@code starexec.UpdateProcessorTimeLimit} takes a {@code SMALLINT}, so anything above
+     * {@link Short#MAX_VALUE} cannot be represented. It used to be narrowed with a cast, which
+     * wraps: 40000 became -25536 and the processor was given a negative limit while the request
+     * reported success.
+     *
+     * <p>Zero is storable and is deliberately allowed. The column is nullable, and the row
+     * mapper reads a NULL {@code time_limit} as 0 ({@link #resultSetToProcessor}), so a
+     * processor can already hold it. Downstream, {@code functions.bash} runs the processor
+     * under {@code timeout --signal=SIGKILL $((LIMIT))m}, and a duration of 0 disables the
+     * timeout -- so 0 means "no limit", not "no time". Refusing it here would reject a value
+     * the system already produces for itself.
+     *
+     * <p>Negative values are refused: no caller produces one except the truncation this
+     * method exists to prevent, and {@code timeout -1m} is not a command.
+     *
+     * <p>This answers only whether the value can be stored. Whether it is a sensible limit
+     * for a human to pick is a separate question, and belongs at the request boundary --
+     * {@code secure/edit/processor.jsp} offers 1..60 minutes.
+     *
+     * @param timeLimit the requested limit
+     * @return true if the column can hold this value
+     */
+    public static boolean isStorableTimeLimit(int timeLimit) {
+        return timeLimit >= 0 && timeLimit <= Short.MAX_VALUE;
+    }
+
     public static boolean updateTimeLimit(int processorId, int timeLimit) {
+        // Before the connection: a value the column cannot hold is not a database failure, and
+        // must not be silently narrowed into one that fits.
+        if (!isStorableTimeLimit(timeLimit)) {
+            log.warn(
+                "updateTimeLimit",
+                String.format(
+                    "Refusing to set processor [id=%d] time limit to [%d]: the column holds " +
+                        "0..%d.",
+                    processorId,
+                    timeLimit,
+                    (int) Short.MAX_VALUE
+                )
+            );
+            return false;
+        }
         Connection con = null;
         PreparedStatement ps = null;
         try {

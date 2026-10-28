@@ -82,11 +82,19 @@ function initLiveJobLogStream() {
 		setLiveBadgeState(badgeElement, "live", "Live: on");
 	});
 
+	// pair.jsp renders the whole log into the page, and a first connection streams the log from byte 0,
+	// so the first chunk that starts at byte 0 replaces the rendered copy instead of repeating it.
+	var renderedLogReplaced = false;
+
 	eventSource.addEventListener("chunk", function(event) {
 		var payload = safeJsonParse(event.data);
 		if (!payload || typeof payload.text !== "string" || payload.text.length === 0) {
 			return;
 		}
+		if (!renderedLogReplaced && payload.offsetStart === 0) {
+			logElement.textContent = "";
+		}
+		renderedLogReplaced = true;
 		appendLogText(logElement, payload.text, autoScrollCheckbox.checked);
 	});
 
@@ -96,6 +104,7 @@ function initLiveJobLogStream() {
 	});
 
 	eventSource.addEventListener("reset", function() {
+		renderedLogReplaced = true;
 		logElement.textContent = "";
 		appendLogText(logElement, "[log stream reset]\n", autoScrollCheckbox.checked);
 	});

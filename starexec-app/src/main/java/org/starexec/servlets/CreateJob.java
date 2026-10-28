@@ -284,11 +284,12 @@ public class CreateJob extends HttpServlet {
 				}
 			}
 
-			//Setup the job's attributes
+			//Setup the job's attributes. An absent description is passed on as null, and the job keeps its
+			//default description, as it does for an empty one.
 			Job j = JobManager
 					.setupJob(userId, (String) request.getParameter(name), (String) request.getParameter(description),
-							  Integer.parseInt((String) request.getParameter(preProcessor)),
-							  Integer.parseInt((String) request.getParameter(postProcessor)),
+							  optionalProcessorId(request, preProcessor),
+							  optionalProcessorId(request, postProcessor),
 							  Integer.parseInt((String) request.getParameter(workerQueue)), seed, cpuLimit, runLimit,
 							  memoryLimit, suppressTimestamp, resultsIntervalNum, option, framework
 					);
@@ -312,6 +313,11 @@ public class CreateJob extends HttpServlet {
 			String selection = request.getParameter(run);
 			String benchMethod = request.getParameter(benchChoice);
 			String traversalMethod = request.getParameter(traversal);
+			if (Util.isNullOrEmpty(traversalMethod)) {
+				// The web forms default the radio to depth-first and the manual documents depth-first
+				// as the default; absence must behave the same, not throw.
+				traversalMethod = "depth";
+			}
 			//Depending on our run selection, handle each case differently
 			//if the user created a quickJob, they uploaded a single text benchmark and a solver to run
 			switch (selection) {
@@ -424,8 +430,14 @@ public class CreateJob extends HttpServlet {
 				return;
 			}
 
-			boolean submitSuccess = Jobs.add(j, space);
+			// Resolved before the job is written so a missing value cannot throw after Jobs.add
+			// has already persisted the job. Absence defaults to "no", as both web forms do.
 			String start_paused = request.getParameter(pause);
+			if (Util.isNullOrEmpty(start_paused)) {
+				start_paused = "no";
+			}
+
+			boolean submitSuccess = Jobs.add(j, space);
 
 			//if the user chose to immediately pause the job
 			if (start_paused.equals("yes")) {
@@ -446,7 +458,7 @@ public class CreateJob extends HttpServlet {
 				}
 
 				// If the submission was successful, send back to space explorer
-				response.addCookie(new Cookie("New_ID", String.valueOf(j.getId())));
+				response.addCookie(Util.createIdCookie("New_ID", String.valueOf(j.getId())));
 
 				if (selection.equals("quickJob")) {
 					Analytics.JOB_CREATE_QUICKJOB.record(userId);
@@ -468,6 +480,19 @@ public class CreateJob extends HttpServlet {
 			throw e;
 			
 		}
+	}
+
+	/**
+	 * A processor id the request may leave out (docs/API_GUIDE.md). Absent or blank means no processor: -1, the
+	 * value StarexecCommand and the web forms send for "none". A present value has already passed
+	 * {@link #isValid(HttpServletRequest)}, which applies the same absent-or-blank test.
+	 *
+	 * @param request the create-job request
+	 * @param parameter the name of the processor parameter
+	 * @return the processor id, or -1 for none
+	 */
+	private static int optionalProcessorId(HttpServletRequest request, String parameter) {
+		return Util.paramExists(parameter, request) ? Integer.parseInt(request.getParameter(parameter)) : -1;
 	}
 
 	/**
@@ -578,8 +603,10 @@ public class CreateJob extends HttpServlet {
 			}
 			// Make sure the queue is a valid selection and user has access to it
 			Integer queueId = Integer.parseInt(request.getParameter(workerQueue));
-			// Ensure the job description is valid
-			if (!Validator.isValidPrimDescription((String) request.getParameter(description))) {
+			// Ensure the job description is valid. It is optional (docs/API_GUIDE.md): StarexecCommand sends an
+			// empty one by default, and an absent or blank one is stored the same way.
+			if (Util.paramExists(description, request) &&
+					!Validator.isValidPrimDescription((String) request.getParameter(description))) {
 				return new ValidatorStatusCode(false,
 											   "The given description is invalid, please see the help files to " +
 													   "see the valid format"
@@ -587,6 +614,20 @@ public class CreateJob extends HttpServlet {
 			}
 			if (!Util.paramExists(run, request)) {
 				return new ValidatorStatusCode(false, "You need to select a run choice for this job");
+			}
+			if (Util.paramExists(traversal, request)) {
+				String traversalMethod = request.getParameter(traversal);
+				if (!traversalMethod.equals("depth") && !traversalMethod.equals("robin")) {
+					return new ValidatorStatusCode(false,
+											   "The job-pair traversal must be either \"depth\" or \"robin\"");
+				}
+			}
+			if (Util.paramExists(pause, request)) {
+				String startPaused = request.getParameter(pause);
+				if (!startPaused.equals("yes") && !startPaused.equals("no")) {
+					return new ValidatorStatusCode(false,
+											   "Whether to pause the job on creation must be either \"yes\" or \"no\"");
+				}
 			}
 			if (Util.paramExists(otherOutputOption, request)) {
 				if (!Validator.isValidBool(request.getParameter(otherOutputOption))) {

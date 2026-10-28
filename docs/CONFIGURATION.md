@@ -6,10 +6,13 @@ Complete guide to configuring StarExec.
 
 StarExec uses a layered configuration system:
 
+Sources, from lowest to highest priority:
+
 1. **Java defaults** (`EnvironmentConfig.java`) - Fallback values
-2. **Helm values** (`values.yaml`, `values-ENV.yaml`) - Deployment-specific
-3. **Environment variables** - Runtime overrides (highest priority)
+2. **Base Helm values** (`values.yaml`) - Base defaults
+3. **Environment Helm values** (`values-ENV.yaml`) - Deployment-specific
 4. **Kubernetes secrets** - Sensitive data (production)
+5. **Environment variables** - Runtime overrides (highest priority)
 
 ## Quick Configuration
 
@@ -35,8 +38,11 @@ export STAREXEC_DB_USER=starexec
 Use environment variables or Kubernetes secrets:
 
 ```bash
-export STAREXEC_DB_PASSWORD=$(cat /run/secrets/db-password)
+# Preferred: point at a mounted secret file (takes precedence when set)
 export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
+
+# Alternative: inline value from a secret manager
+# export STAREXEC_DB_PASSWORD="$(vault kv get -field=password secret/starexec/db)"
 ```
 
 ## Environment Variables Reference
@@ -52,7 +58,7 @@ export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
 | `STAREXEC_DB_PASSWORD` | *(empty)* | **Yes** | `s3cr3t` | ⚠️ **Sensitive** |
 | `STAREXEC_DB_PASSWORD_FILE` | *(empty)* | No | `/run/secrets/db-pwd` | Path to password file (preferred) |
 
-**Security Note:** Use `STAREXEC_DB_PASSWORD_FILE` in production to avoid exposing passwords in process listings.
+**Security Note:** Use `STAREXEC_DB_PASSWORD_FILE` in production to avoid exposing passwords in process listings. The Makefile and `docker-compose.yml` default the password to `starexec_dev_password` for development; production deployments must override it.
 
 ### Cluster Compute Configuration
 
@@ -69,12 +75,14 @@ export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
 | `STAREXEC_EMAIL_PORT` | `25` | No | `587` | SMTP port |
 | `STAREXEC_EMAIL_USER` | *(empty)* | No | `mailer@example.org` | ⚠️ **Sensitive** |
 | `STAREXEC_EMAIL_PASSWORD` | *(empty)* | No | `...` | ⚠️ **Sensitive** |
+| `STAREXEC_EMAIL_FROM` | `starexec@localhost` | No | `starexec@example.org` | Sender address. When `STAREXEC_EMAIL_USER` is set, that value is the sender instead |
+| `STAREXEC_CONTACT_EMAIL` | `admin@starexec.org` | No | `support@example.org` | Shown to users who need help, including when an email could not be sent |
 
 ### Backend / System Configuration
 
 | Variable | Default | Required | Example | Notes |
 |----------|---------|----------|---------|-------|
-| `STAREXEC_BACKEND_TYPE` | `local` | No | `podman` | Backend: local, podman, kubernetes, sge, oar. Note: Makefile `make start` uses Podman deployment by default. |
+| `STAREXEC_BACKEND_TYPE` | `local` | No | `podman` | Backend: local, podman, kubernetes, k8s, kubernetes-native, sge, oar (legacy). Note: Makefile `make start` uses Podman deployment by default. |
 | `STAREXEC_DATA_DIR` | `/tmp/starexec/data` | No | `/var/lib/starexec/data` | Data directory path |
 | `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` | `1800` | No | `3600` | Timeout for async benchmark archive extraction only. Applies to resumable upload job extraction, not all shell commands globally. |
 | `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` | `107374182400` | No | `214748364800` | Hard cap for total extracted bytes during async benchmark archive extraction. Effective limit is the smaller of this value and the uploader's remaining disk quota. |
@@ -107,14 +115,16 @@ These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYP
 | `STAREXEC_K8S_JOB_IMAGE` | `starexec/job-runner:latest` | No | `ghcr.io/starexecmiami/starexec-job-runner:latest` | Container image for job execution |
 | `STAREXEC_K8S_DATA_PVC` | `starexec-data` | No | `starexec-data` | PVC name for shared data volume |
 | `STAREXEC_K8S_SERVICE_ACCOUNT` | `starexec-job` | No | `starexec-job` | ServiceAccount for job pods |
-| `STAREXEC_K8S_QUEUE_LABEL` | `starexec/queue` | No | `starexec/queue` | Label key for queue discovery and node grouping. Current Kubernetes-native job placement does not yet add queue-specific selectors. |
+| `STAREXEC_K8S_QUEUE_LABEL` | `starexec/queue` | No | `starexec/queue` | Label key that assigns worker nodes to queues. A named queue's pods run only on worker nodes labelled `<key>=<queue name>`, and the default queue's on workers without the key; see BACKENDS.md, Queue Management. |
 | `STAREXEC_K8S_MEMORY_LIMIT` | `2Gi` | No | `4Gi` | Memory limit per job pod |
 | `STAREXEC_K8S_CPU_LIMIT` | `1` | No | `2` | CPU core limit per job pod |
 | `STAREXEC_K8S_JOB_TTL_SECONDS` | `3600` | No | `7200` | Job cleanup TTL after completion |
+| `STAREXEC_K8S_KILL_CONFIRM_SECONDS` | `45` | No | `90` | How long a kill waits for the foreground deletion of a running pod's Job to finish before it reports the stop as unproven. Keep it above the job pods' termination grace period (30 s by default): below it, deleting a running job leaves its pairs running and deleting its owner is refused. `0` checks once, immediately. |
+| `STAREXEC_K8S_STATUS_GRACE_SECONDS` | `120` | No | `180` | How long a finished execution's missing `status.json` is treated as not yet visible on shared storage (NFS directory caching) rather than absent. Keep it above the NFS `acdirmax` of the app's mount. |
 | `STAREXEC_K8S_JOB_BACKOFF_LIMIT` | `0` | No | `3` | Kubernetes job retry limit |
-| `STAREXEC_K8S_MAX_CONCURRENT_JOBS` | `50` | No | `100` | Soft cap on concurrently tracked Kubernetes jobs. New submissions above the cap are rejected until an existing job completes, is killed, or is reconciled away. |
+| `STAREXEC_K8S_MAX_CONCURRENT_JOBS` | `50` | No | `6` | Cap on concurrently tracked Kubernetes jobs. A submission above the cap is deferred, not rejected: the pair returns to the queue and is submitted once an existing job completes, is killed, or is reconciled away. Set it to the number of job pods the workers can run at once (workers x pods that fit per worker at the job's cpu/memory limits); Jobs beyond that wait as Pending pods, which the pending timeout cannot tell apart from pods that will never start. |
 | `STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS` | `300000` | No | `60000` | Periodic sweep interval for deleting managed Kubernetes Jobs whose DB pair rows disappeared while StarExec stayed online. Set to `0` to disable the sweep. |
-| `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU` | `true` | No | `false` | Enforce 1 job pair per physical CPU core for benchmark fidelity. Keep enabled for SAT/SMT competition or academic measurement workloads unless you have measured evidence that relaxing it preserves timing and memory reproducibility. |
+| `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU` | `true` | No | `false` | Refuses a `STAREXEC_K8S_CPU_LIMIT` that is not a whole number of CPUs; with one, the Kubernetes backend fails to initialize. Job pods always request exactly their limits (Guaranteed QoS), so this makes them eligible for exclusive CPUs. It does not pin CPUs, and StarExec does not check the kubelet configuration that does: exclusive CPUs need the kubelet's `static` CPU manager policy on every worker, and whole physical cores also need its `full-pcpus-only` option or SMT turned off. See [What Kubernetes needs for exclusive cores](BACKENDS.md#what-kubernetes-needs-for-exclusive-cores). Keep enabled for SAT/SMT competition or academic measurement workloads unless you have measured evidence that relaxing it preserves timing and memory reproducibility. |
 | `STAREXEC_K8S_WORKER_SELECTOR_KEY` | `starexec.org/worker` | No | `starexec.org/worker` | Node selector key for worker nodes |
 | `STAREXEC_K8S_WORKER_SELECTOR_VALUE` | `true` | No | `true` | Node selector value for worker nodes |
 
@@ -135,9 +145,19 @@ These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYP
 |----------|---------|-------------|
 | `STAREXEC_LOCAL_CONCURRENCY` | `min(4, CPU_cores)` | Max parallel jobs (local backend) |
 | `STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS` | `3600` | Job timeout (1 hour) |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `4096` | Memory per container (4GB) |
-| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | `1` | CPU cores per container |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `2048` | Podman cgroup memory ceiling per container (MiB). It caps every job's memory limit: a solver the kernel stops there is recorded as `EXCEED_MEM` |
+| `STAREXEC_CPU_PARTITION_COUNT` | `auto` | `N > 1` creates topology-aware Podman partitions; `auto` uses multiple NUMA nodes and otherwise remains unpinned |
+| `STAREXEC_CPU_PARTITIONS` | unset | Explicit Podman cpusets; overrides the partition count |
+| `STAREXEC_PARTITION_MAX_JOBS` | `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS` | Maximum concurrent jobs in each CPU partition |
+| `STAREXEC_CONTAINER_CPU_QUOTA_CORES` | `0` | CFS bandwidth cap, in cores, only for unpartitioned Podman containers; it does not provide affinity |
 | `STAREXEC_CONTAINER_EXITED_CLEANUP_AGE_SECONDS` | `86400` | Minimum age before sweeping an exited managed Podman container that was not processed by the normal completion monitor (`0` disables the sweep) |
+
+CPU-time and wallclock budgets are generated from the selected StarExec queue and
+job. The former `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` and
+`STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` settings never controlled those
+budgets and have been removed. For reproducible CPU placement, follow
+[CPU partition scheduling](cpu-partition-scheduling.md); use a CFS quota only as
+an operational bound on an unpartitioned host.
 
 ### Live Log Streaming (SSE)
 
@@ -149,7 +169,7 @@ These settings tune the live pair log stream endpoint (`/services/jobs/pairs/{id
 | `STAREXEC_PAIR_LOG_STREAM_MAX_ACTIVE` | `100` | `30` | Max concurrent active live log streams |
 | `STAREXEC_PAIR_LOG_STREAM_POLL_INTERVAL_MS` | `1000` | `2500` | Interval for checking newly appended log bytes |
 | `STAREXEC_PAIR_LOG_STREAM_STATUS_POLL_INTERVAL_MS` | `5000` | `15000` | Interval for polling pair terminal status |
-| `STAREXEC_PAIR_LOG_STREAM_READ_CHUNK_BYTES` | `8192` | `8192` | Max bytes emitted per SSE chunk event |
+| `STAREXEC_PAIR_LOG_STREAM_READ_CHUNK_BYTES` | `8192` | `8192` | Max bytes emitted per SSE chunk event. One poll sends at most 32 chunks; a stream still behind its log polls again at once |
 | `STAREXEC_PAIR_LOG_STREAM_HEARTBEAT_SECONDS` | `15` | `25` | Heartbeat comment interval to keep connections alive |
 | `STAREXEC_PAIR_LOG_STREAM_MAX_DURATION_SECONDS` | `1800` | `900` | Max lifetime for one stream connection |
 | `STAREXEC_PAIR_LOG_STREAM_RETRY_AFTER_SECONDS` | `10` | `10` | Retry-After value when stream capacity is saturated |
@@ -167,36 +187,34 @@ Helm values are organized by environment:
 
 ```
 charts/starexec/
-├── values.yaml           # Base defaults
-├── values-local-dev.yaml # Local Podman development overrides
-├── values-dev.yaml       # Quokka Kubernetes development overrides
-├── values-ci.yaml        # CI/testing overrides
-└── values-prod.yaml      # Production overrides
+├── values.yaml                 # Base defaults
+├── values-local-dev.yaml       # Local Podman development overrides
+├── values-dev.yaml             # Quokka Kubernetes development overrides
+├── values-ci.yaml              # CI/testing overrides
+├── values-kubernetes.yaml      # Kubernetes-native backend profile
+├── values-microk8s.yaml        # Single-node MicroK8s profile
+├── values-podman.yaml.example  # Template for Podman values; copies are gitignored
+├── values-auto-detected.yaml   # Generated by `make k8s-generate-values`
+└── values-prod.yaml            # Kubernetes production overrides
 ```
 
 ### Base Values Example
 
 ```yaml
-# values-local-dev.yaml
+# values-local-dev.yaml (abridged)
 image:
-  repository: starexec
-  tag: latest
+  repository: localhost/local/starexec
+  tag: dev
   pullPolicy: Never
 
 postgres:
-  host: starexec-postgres
+  host: localhost          # In-pod embedded PostgreSQL
   port: 5432
   user: starexec
   database: starexec
-  password: "starexec_dev_password"  # Override in production!
-
-resources:
-  limits:
-    memory: 4Gi
-    cpu: 2
-  requests:
-    memory: 2Gi
-    cpu: 1
+  password: "starexec_dev_password"      # Dev only!
+  rootPassword: "starexec_dev_password"  # Dev only!
+  allowInsecureDevCredentials: true
 
 backend:
   type: podman
@@ -218,17 +236,18 @@ postgres:
   existingSecret: starexec-postgres-secret
 
 resources:
-  limits:
-    memory: 8Gi
-    cpu: 4
-  requests:
-    memory: 4Gi
-    cpu: 2
+  app:
+    limits:
+      memory: 8Gi
+      cpu: 4
+    requests:
+      memory: 4Gi
+      cpu: 2
 
 persistence:
   enabled: true
   storageClass: "fast-ssd"
-  size: 100Gi
+  appDataSize: 100Gi
 
 backend:
   type: kubernetes
@@ -330,9 +349,9 @@ make deploy-podman ENV=ci
 
 ```bash
 # Production deployment requires env-specific values + secure password
-cp charts/starexec/values-podman.yaml charts/starexec/values-podman-prod.yaml
-# Edit values-podman-prod.yaml for production limits, credentials, and socket path
-export STAREXEC_DB_PASSWORD="$(generate-secure-password)"
+cp charts/starexec/values-podman.yaml.example charts/starexec/values-podman-prod.yaml
+# Edit values-podman-prod.yaml: set postgres.password and postgres.rootPassword
+export STAREXEC_DB_PASSWORD='<the postgres.password you set>'
 
 # Live log streaming (benchmark-priority profile)
 export STAREXEC_PAIR_LOG_STREAM_ENABLED=true
@@ -344,7 +363,7 @@ export STAREXEC_PAIR_LOG_STREAM_HEARTBEAT_SECONDS=25
 export STAREXEC_PAIR_LOG_STREAM_MAX_DURATION_SECONDS=900
 export STAREXEC_PAIR_LOG_STREAM_RETRY_AFTER_SECONDS=10
 
-make deploy-podman ENV=prod
+make deploy-podman ENV=prod VALS=charts/starexec/values-podman-prod.yaml
 ```
 
 These values prioritize benchmark execution throughput over live log latency.
@@ -365,9 +384,10 @@ postgres:
   existingSecret: company-db-secret
 
 resources:
-  limits:
-    memory: 16Gi
-    cpu: 8
+  app:
+    limits:
+      memory: 16Gi
+      cpu: 8
 
 # SSE live log stream tuning (benchmark-priority profile)
 env:
@@ -398,9 +418,12 @@ helm install starexec starexec/starexec \
 Create secrets for sensitive data:
 
 ```bash
-# Create database secret
+# Create database secret. The chart reads three keys from it: user, password and database
+# (postgres.existingSecretKeys sets their names). A missing key stops the pod from starting.
 kubectl create secret generic starexec-postgres-secret \
-  --from-literal=password="$(generate-password)" \
+  --from-literal=user=starexec \
+  --from-literal=password="$(openssl rand -base64 32)" \
+  --from-literal=database=starexec \
   -n starexec
 
 # Create SMTP secret
@@ -422,15 +445,27 @@ email:
 
 ### Java System Properties
 
-Advanced users can set JVM properties:
+The image starts Tomcat with this `JAVA_OPTS` (set in the `Dockerfile`):
 
-```bash
-# Via environment variable
-export JAVA_OPTS="-Xmx4g -XX:+UseG1GC"
-
-# Via Helm values
-javaOpts: "-Xmx4g -XX:+UseG1GC"
+```text
+-Djava.security.egd=file:/dev/./urandom -Djava.awt.headless=true -Xms512m -Xmx2048m -XX:+UseG1GC -XX:+UseStringDeduplication
 ```
+
+To change it, set `JAVA_OPTS` under `env` in your Helm values. The value replaces the image's whole setting, so repeat the flags you keep:
+
+```yaml
+env:
+  JAVA_OPTS: "-Djava.security.egd=file:/dev/./urandom -Djava.awt.headless=true -Xms512m -Xmx4g -XX:+UseG1GC -XX:+UseStringDeduplication"
+
+resources:
+  app:
+    limits:
+      memory: 6Gi
+```
+
+Keep `-Xmx` well below `resources.app.limits.memory`: the JVM also uses memory outside the heap, and when its total use reaches the limit the kernel kills the container. Under Podman, on a host with swap, it moves what does not fit to swap instead, while swap has room, because `podman kube play` gives the pod no swap limit. A `JAVA_OPTS` exported in your shell does not reach the container.
+
+Every values profile in the chart keeps the image's 2 GiB heap at or below 75% of the app's limit (the defaults, `values-local-dev.yaml` and `values-ci.yaml` set 3Gi), and `scripts/check-chart-app-heap.py` fails the Helm validation workflow when one does not. Size the heap with `-Xmx`, not `-XX:MaxRAMPercentage`: a percentage needs a limit the JVM can read. Under rootless Podman, `/sys/fs/cgroup` in the container has mode `0750` and belongs to the user and group the host user is mapped to: the container's root by default, or the host user's own uid and gid with `--userns=keep-id`, which `make start` uses. So the image's user (uid and gid 1000) can read the limit under `make start` when the host user is uid 1000, and not without keep-id or for a host user whose uid and gid are not 1000. When it cannot, the JVM reports `Memory Limit: Unlimited` and takes the percentage of the host's memory.
 
 ## Configuration Precedence
 

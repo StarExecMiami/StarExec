@@ -69,7 +69,8 @@ resources:
       memory: "512Mi"
       cpu: "500m"
     limits:
-      memory: "1Gi"
+      # Above the image's 2 GiB heap (-Xmx2048m); see resources.app in values.yaml.
+      memory: "3Gi"
       cpu: "1000m"
   postgres:
     requests:

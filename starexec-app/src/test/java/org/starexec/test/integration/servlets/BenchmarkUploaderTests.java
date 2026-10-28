@@ -9,7 +9,7 @@ import org.starexec.test.resources.ResourceLoader;
 import org.starexec.util.Util;
 
 import java.io.File;
-import java.io.FileNotFoundException;
+import java.io.IOException;
 
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -17,7 +17,7 @@ import static org.junit.Assert.fail;
 public class BenchmarkUploaderTests extends TestSequence {
 
     static class BenchmarkUploaderWrapper {
-        public File getDirectoryForBenchmarkUpload(int userId, String name) throws FileNotFoundException {
+        public File getDirectoryForBenchmarkUpload(int userId, String name) throws IOException {
             return UploadBenchmark.getDirectoryForBenchmarkUpload(userId, name);
         }
     }
@@ -34,7 +34,7 @@ public class BenchmarkUploaderTests extends TestSequence {
 
             assertTrue("Directory could not be deleted.", dir.delete());
 
-        } catch (FileNotFoundException e) {
+        } catch (IOException e) {
             fail("Directory was not created: " + Util.getStackTrace(e));
         }
     }

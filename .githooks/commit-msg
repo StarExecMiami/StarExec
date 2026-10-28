@@ -1,0 +1,19 @@
+#!/bin/sh
+# Enforces the English-only rule for commit messages (see scripts/english_only.py).
+# Enable with: scripts/install-git-hooks.sh
+command -v python3 >/dev/null 2>&1 || {
+    echo "warning: python3 not found; skipping the English-only commit check" >&2
+    exit 0
+}
+# Prefer the script that ships next to this hook; fall back to the current work tree.
+# Worktrees cut from a commit that predates the guard have neither, so fail open.
+script=$(dirname "$0")/../scripts/english_only.py
+if [ ! -f "$script" ]; then
+    root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+    script=$root/scripts/english_only.py
+fi
+[ -f "$script" ] || {
+    echo "warning: scripts/english_only.py not found; skipping the English-only commit check" >&2
+    exit 0
+}
+exec python3 "$script" commit-msg "$1"

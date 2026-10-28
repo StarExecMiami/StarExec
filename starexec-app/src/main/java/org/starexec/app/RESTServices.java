@@ -176,6 +176,13 @@ public class RESTServices {
 	}
 
 	private static final AtomicInteger activePairLogStreams = new AtomicInteger(0);
+
+	/**
+	 * The most chunk events one poll of a pair log stream sends. Each send waits for the client, so the cap
+	 * keeps one long log from holding a stream worker past the stream's deadline, which is checked between
+	 * polls. A stream the cap leaves behind its log polls again at once.
+	 */
+	private static final int PAIR_LOG_STREAM_MAX_CHUNKS_PER_POLL = 32;
 	private static final byte[] NEWLINE = "\n".getBytes(StandardCharsets.UTF_8);
 	private static final int MAX_UPLOAD_SESSION_CREATE_BODY_BYTES = 64 * 1024;
 
@@ -655,12 +662,17 @@ public class RESTServices {
 			return gson.toJson(new ValidatorStatusCode(false, "Upload session path is invalid"));
 		}
 
+		// Only the chunks directory is created here. The session's own directory was created with
+		// the session, so if it is missing, a user deletion removed it along with the session's row:
+		// creating it again would leave this chunk behind with no row that refers to it (#275).
 		try {
-			java.nio.file.Path parent = stagingPath.getParent();
-			if (parent != null) {
-				Files.createDirectories(parent);
+			try {
+				Files.createDirectory(chunksDir);
+			} catch (FileAlreadyExistsException e) {
+				if (!Files.isDirectory(chunksDir, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+					throw e;
+				}
 			}
-			Files.createDirectories(chunksDir);
 		} catch (IOException e) {
 			log.error("uploadSessionChunk", "Failed to prepare upload staging directory for session " + sessionId, e);
 			return gson.toJson(new ValidatorStatusCode(false, "Failed to prepare upload staging directory"));
@@ -803,6 +815,7 @@ public class RESTServices {
 			.depRootSpaceId(session.getDepRootSpaceId())
 			.linked(session.isLinked())
 			.uploadSessionId(session.getId())
+			.spacePermissions(UploadJob.decodeSpacePermissions(session.getSpacePermissions()))
 			.build();
 
 		Optional<Long> jobId = UploadSessions.finalizeSessionWithUploadJob(
@@ -1103,7 +1116,9 @@ public class RESTServices {
 	/**
 	 * @param id      the ID of the job pair
 	 * @param request HTTP Request
-	 * @return a text string that holds the log of job pair with the given id
+	 * @return a text string that holds the log of job pair with the given id, or
+	 *         "not available" (HTTP 200, see RESTException) when the pair has no
+	 *         log or the user may not see it
 	 * @author Tyler Jensen
 	 */
 	@GET
@@ -1113,7 +1128,8 @@ public class RESTServices {
 		int userId = SessionUtil.getUserId(request);
 		ValidatorStatusCode status = JobSecurity.canUserSeeJobWithPair(id, userId);
 		if (!status.isSuccess()) {
-			return ("user " + userId + " does not have access to see job " + id);
+			// The answer to a missing log, which the REST layer gives for every refusal (RESTException).
+			throw RESTException.FORBIDDEN;
 		}
 
 		String log = JobPairs.getJobLog(id);
@@ -1298,6 +1314,9 @@ public class RESTServices {
 		long offset = resolveInitialOffset(logFile, lastEventId);
 		long lastStatusCheckAt = 0L;
 		long lastHeartbeatAt = 0L;
+		// Once the pair has finished, its status is not read again: the polls that follow send the rest of
+		// its log, and then complete.
+		boolean pairFinished = false;
 
 		while (true) {
 			long now = System.currentTimeMillis();
@@ -1306,30 +1325,33 @@ public class RESTServices {
 				return;
 			}
 
-			if (now - lastStatusCheckAt >= statusPollIntervalMillis) {
+			if (!pairFinished && now - lastStatusCheckAt >= statusPollIntervalMillis) {
 				JobPair pair = JobPairs.getPair(pairId);
 				if (pair == null) {
 					writeSseEvent(output, "error", "{\"code\":\"NOT_AVAILABLE\",\"message\":\"not available\"}");
 					return;
 				}
-				if (!pair.getStatus().getCode().incomplete()) {
-					if (logFile.exists()) {
-						offset = streamAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
-						if (offset < 0L) {
-							return;
-						}
-					}
-					writeSseEvent(output, "complete", "{\"pairId\":" + pairId + "}");
-					return;
-				}
+				pairFinished = !pair.getStatus().getCode().incomplete();
 				lastStatusCheckAt = now;
 			}
 
+			boolean behind = false;
 			if (logFile.exists()) {
-				offset = streamAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
+				long target = logFile.length();
+				long before = offset;
+				offset = drainAvailableBytes(pairId, output, logFile, offset, target, maxChunkBytes, pairFinished);
 				if (offset < 0L) {
 					return;
 				}
+				// Stopped by the cap, short of the log's size when the poll began. A poll that sent nothing is not
+				// behind, even if the size says so: a size can be stale, as NFS caches it, and polling again at
+				// once would spin.
+				behind = offset != before && offset < target;
+			}
+
+			if (pairFinished && !behind) {
+				writeSseEvent(output, "complete", "{\"pairId\":" + pairId + "}");
+				return;
 			}
 
 			now = System.currentTimeMillis();
@@ -1340,6 +1362,9 @@ public class RESTServices {
 				lastHeartbeatAt = now;
 			}
 
+			if (behind) {
+				continue;
+			}
 			try {
 				Thread.sleep(pollIntervalMillis);
 			} catch (InterruptedException e) {
@@ -1384,8 +1409,16 @@ public class RESTServices {
 		}
 	}
 
+	/**
+	 * Sends the next chunk event: at most {@code maxChunkBytes} of what the log holds from
+	 * {@code currentOffset}, as many of them as {@link #wholeCharacterLength} allows, or nothing.
+	 *
+	 * @param logIsFinal true once the pair has finished, so nothing more will be written to its log
+	 * @return the offset after the last byte sent, the offset it read from if it sent no chunk, or -1 if
+	 *         sending failed
+	 */
 	private static long streamAvailableBytesSse(int pairId, SseEventSink eventSink, Sse sse, File logFile,
-												 long currentOffset, int maxChunkBytes) {
+												 long currentOffset, int maxChunkBytes, boolean logIsFinal) {
 		long fileSize = logFile.length();
 		long offset = currentOffset;
 
@@ -1410,8 +1443,12 @@ public class RESTServices {
 			if (read <= 0) {
 				return offset;
 			}
-			offset += read;
-			String text = new String(bytes, 0, read, StandardCharsets.UTF_8).replace("\r\n", "\n");
+			int whole = wholeCharacterLength(bytes, read, logIsFinal);
+			if (whole == 0) {
+				return offset; // the log so far ends partway through a character; wait for the rest
+			}
+			offset += whole;
+			String text = new String(bytes, 0, whole, StandardCharsets.UTF_8).replace("\r\n", "\n");
 			String data = "{\"pairId\":" + pairId +
 					",\"offsetStart\":" + start +
 					",\"offsetEnd\":" + offset +
@@ -1425,6 +1462,35 @@ public class RESTServices {
 			sendSseEvent(pairId, eventSink, sse, null, "error", "{\"code\":\"LOG_READ_FAILED\",\"message\":\"log read failed\"}");
 			return -1L;
 		}
+	}
+
+	/**
+	 * Sends what the log holds between {@code currentOffset} and {@code target}, its size when the poll
+	 * began, as consecutive chunk events of at most {@code maxChunkBytes} each, and at most
+	 * {@link #PAIR_LOG_STREAM_MAX_CHUNKS_PER_POLL} of them. The chunk size bounds one event, not one poll
+	 * (docs/CONFIGURATION.md): a single chunk per poll let a fast log fall behind, and cut a finished pair's
+	 * log off after its first chunk, because {@code complete} followed it. A caller left short of
+	 * {@code target} polls again at once. While the pair runs, it stops before a character only partly
+	 * written to the log, which a later poll sends whole.
+	 *
+	 * @param logIsFinal true once the pair has finished, so nothing more will be written to its log
+	 * @return the offset after the last byte sent, or -1 if sending failed
+	 */
+	private static long drainAvailableBytesSse(int pairId, SseEventSink eventSink, Sse sse, File logFile,
+			long currentOffset, long target, int maxChunkBytes, boolean logIsFinal) {
+		long offset = currentOffset;
+		for (int chunks = 0; offset != target && chunks < PAIR_LOG_STREAM_MAX_CHUNKS_PER_POLL; chunks++) {
+			long next = streamAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes, logIsFinal);
+			if (next < 0L || next == offset) {
+				return next;
+			}
+			offset = next;
+			if (offset > target) {
+				// The log grew while it was being sent; the next poll sends the rest.
+				return offset;
+			}
+		}
+		return offset;
 	}
 
 	private static final class PairLogStreamSession {
@@ -1444,6 +1510,9 @@ public class RESTServices {
 		private volatile long offset;
 		private volatile long lastStatusCheckAt = 0L;
 		private volatile long lastHeartbeatAt = 0L;
+		// Once the pair has finished, its status is not read again: the ticks that follow send the rest of
+		// its log, and then complete.
+		private volatile boolean pairFinished;
 
 		private PairLogStreamSession(int pairId, SseEventSink eventSink, Sse sse, String lastEventId) {
 			this.pairId = pairId;
@@ -1496,6 +1565,7 @@ public class RESTServices {
 				return;
 			}
 
+			long nextTickDelayMillis = -1L; // stays negative when the stream has ended
 			try {
 				long now = System.currentTimeMillis();
 				if (now - startedAt >= maxDurationMillis) {
@@ -1503,36 +1573,38 @@ public class RESTServices {
 					return;
 				}
 
-				if (now - lastStatusCheckAt >= statusPollIntervalMillis) {
+				if (!pairFinished && now - lastStatusCheckAt >= statusPollIntervalMillis) {
 					JobPair pair = JobPairs.getPair(pairId);
 					if (pair == null) {
 						sendAndCloseError("NOT_AVAILABLE", "not available");
 						return;
 					}
-					if (!pair.getStatus().getCode().incomplete()) {
-						if (logFile != null && logFile.exists()) {
-							offset = streamAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
-							if (offset < 0L) {
-								closeAndRelease();
-								return;
-							}
-						}
-						if (!sendSseEvent(pairId, eventSink, sse, null, "complete", "{\"pairId\":" + pairId + "}")) {
-							closeAndRelease();
-							return;
-						}
-						closeAndRelease();
-						return;
-					}
+					pairFinished = !pair.getStatus().getCode().incomplete();
 					lastStatusCheckAt = now;
 				}
 
+				boolean behind = false;
 				if (logFile != null && logFile.exists()) {
-					offset = streamAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
+					long target = logFile.length();
+					long before = offset;
+					offset = drainAvailableBytesSse(pairId, eventSink, sse, logFile, offset, target, maxChunkBytes, pairFinished);
 					if (offset < 0L) {
 						closeAndRelease();
 						return;
 					}
+					// Stopped by the cap, short of the log's size when the tick began. A tick that sent nothing is
+					// not behind, even if the size says so: a size can be stale, as NFS caches it, and ticking
+					// again at once would spin.
+					behind = offset != before && offset < target;
+				}
+
+				if (pairFinished && !behind) {
+					if (!sendSseEvent(pairId, eventSink, sse, null, "complete", "{\"pairId\":" + pairId + "}")) {
+						closeAndRelease();
+						return;
+					}
+					closeAndRelease();
+					return;
 				}
 
 				now = System.currentTimeMillis();
@@ -1544,12 +1616,17 @@ public class RESTServices {
 					lastHeartbeatAt = now;
 				}
 
-				schedule(pollIntervalMillis);
+				nextTickDelayMillis = behind ? 0L : pollIntervalMillis;
 			} catch (RuntimeException e) {
 				log.warn("streamPairLogEventsAsync", "Live log stream failed for pair " + pairId, e);
 				sendAndCloseError("STREAM_FAILURE", "stream unavailable");
 			} finally {
 				tickRunning.set(false);
+			}
+			// Only once the guard is released: a pool thread can start a tick due at once before this one
+			// returns, and a tick that found the guard held would put itself off by a whole poll interval.
+			if (nextTickDelayMillis >= 0L) {
+				schedule(nextTickDelayMillis);
 			}
 		}
 
@@ -1594,7 +1671,15 @@ public class RESTServices {
 		return 0L;
 	}
 
-	private static long streamAvailableBytes(int pairId, OutputStream output, File logFile, long currentOffset, int maxChunkBytes) {
+	/**
+	 * The synchronous counterpart of {@link #streamAvailableBytesSse}, for the legacy stream wrapper.
+	 *
+	 * @param logIsFinal true once the pair has finished, so nothing more will be written to its log
+	 * @return the offset after the last byte sent, the offset it read from if it wrote no chunk, or -1 if
+	 *         writing failed
+	 */
+	private static long streamAvailableBytes(int pairId, OutputStream output, File logFile, long currentOffset,
+			int maxChunkBytes, boolean logIsFinal) {
 		long fileSize = logFile.length();
 		long offset = currentOffset;
 
@@ -1619,8 +1704,12 @@ public class RESTServices {
 			if (read <= 0) {
 				return offset;
 			}
-			offset += read;
-			String text = new String(bytes, 0, read, StandardCharsets.UTF_8).replace("\r\n", "\n");
+			int whole = wholeCharacterLength(bytes, read, logIsFinal);
+			if (whole == 0) {
+				return offset; // the log so far ends partway through a character; wait for the rest
+			}
+			offset += whole;
+			String text = new String(bytes, 0, whole, StandardCharsets.UTF_8).replace("\r\n", "\n");
 			String data = "{\"pairId\":" + pairId +
 					",\"offsetStart\":" + start +
 					",\"offsetEnd\":" + offset +
@@ -1634,6 +1723,58 @@ public class RESTServices {
 			writeSseEvent(output, "error", "{\"code\":\"LOG_READ_FAILED\",\"message\":\"log read failed\"}");
 			return -1L;
 		}
+	}
+
+	/**
+	 * The synchronous counterpart of {@link #drainAvailableBytesSse}, for the legacy stream wrapper.
+	 *
+	 * @param logIsFinal true once the pair has finished, so nothing more will be written to its log
+	 * @return the offset after the last byte sent, or -1 if writing failed
+	 */
+	private static long drainAvailableBytes(int pairId, OutputStream output, File logFile, long currentOffset,
+			long target, int maxChunkBytes, boolean logIsFinal) {
+		long offset = currentOffset;
+		for (int chunks = 0; offset != target && chunks < PAIR_LOG_STREAM_MAX_CHUNKS_PER_POLL; chunks++) {
+			long next = streamAvailableBytes(pairId, output, logFile, offset, maxChunkBytes, logIsFinal);
+			if (next < 0L || next == offset) {
+				return next;
+			}
+			offset = next;
+			if (offset > target) {
+				// The log grew while it was being sent; the next poll sends the rest.
+				return offset;
+			}
+		}
+		return offset;
+	}
+
+	/**
+	 * How many of the {@code read} bytes to send so that a chunk never ends inside a UTF-8 character: each
+	 * chunk is decoded on its own, so both parts of a split character would become replacement characters
+	 * (U+FFFD). The 1 to 3 bytes of a character the read cut off start the next chunk. When the read holds
+	 * nothing but the start of one character, the log so far ends partway through it. While the pair runs,
+	 * the rest is still to be written, so nothing is sent yet and the result is 0. Once the log is final,
+	 * nothing more will come: the bytes are sent as they are, so that the stream still reaches the log's end.
+	 *
+	 * @param logIsFinal true once the pair has finished, so nothing more will be written to its log
+	 */
+	private static int wholeCharacterLength(byte[] bytes, int read, boolean logIsFinal) {
+		// A character is at most 4 bytes, so only the last 3 can belong to one the read cut off.
+		for (int back = 1; back <= Math.min(3, read); back++) {
+			int b = bytes[read - back] & 0xFF;
+			if ((b & 0xC0) == 0x80) {
+				continue; // a continuation byte: the character starts further back
+			}
+			int size = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : b >= 0xC0 ? 2 : 1;
+			if (size <= back) {
+				return read; // the last character is whole
+			}
+			if (back < read) {
+				return read - back; // the cut character starts the next chunk
+			}
+			return logIsFinal ? read : 0;
+		}
+		return read;
 	}
 
 	private static boolean writeSseComment(OutputStream output, String comment) {
@@ -2031,15 +2172,17 @@ public class RESTServices {
 	@Produces("application/json")
 	public String getPermissionDetails(@PathParam("id") int userid, @PathParam("spaceId") int spaceId,
 			@Context HttpServletRequest request) {
+		ValidatorStatusCode status = SpaceSecurity.canViewUserPermissions(spaceId, userid,
+				SessionUtil.getUserId(request));
+		if (!status.isSuccess()) {
+			return gson.toJson(status);
+		}
 		User requester = SessionUtil.getUser(request);
 		Permission perm = Permissions.get(userid, spaceId);
-		Space space = Spaces.get(spaceId);
 		Integer parentId = Spaces.getParentSpace(spaceId);
 		boolean isCommunity = parentId == 1;
-		User user = Users.get(userid);
 
-		return gson.toJson(new RESTHelpers.PermissionDetails(perm, space, user, requester, isCommunity));
-
+		return limitGson.toJson(new RESTHelpers.PermissionDetails(perm, requester, isCommunity));
 	}
 
 	/**
@@ -4395,6 +4538,24 @@ public class RESTServices {
 			return gson.toJson(status);
 		}
 
+		// Validated before the first write, not beside its own update. Each field below commits
+		// on its own, so a rejection raised further down returns after the name, description and
+		// syntax have already been stored -- the user is told the edit failed while part of it
+		// has landed. Refusing the whole request up front is the only point at which "nothing
+		// was changed" is still true.
+		Integer requestedTimeLimit = null;
+		if (Util.paramExists("timelimit", request)) {
+			try {
+				requestedTimeLimit = Integer.parseInt(request.getParameter("timelimit"));
+			} catch (NumberFormatException e) {
+				return gson.toJson(ERROR_INVALID_PARAMS);
+			}
+			if (!Processors.isStorableTimeLimit(requestedTimeLimit)) {
+				return gson.toJson(new ValidatorStatusCode(false,
+						"The time limit must be between 0 and " + Short.MAX_VALUE + "."));
+			}
+		}
+
 		if (!p.getName().equals(name)) {
 			boolean success = Processors.updateName(pid, name);
 			if (!success) {
@@ -4419,13 +4580,10 @@ public class RESTServices {
 			}
 		}
 
-		if (Util.paramExists("timelimit", request)) {
-			int timeLimit = Integer.parseInt(request.getParameter("timelimit"));
-			if (p.getTimeLimit() != timeLimit) {
-				boolean success = Processors.updateTimeLimit(pid, timeLimit);
-				if (!success) {
-					return gson.toJson(ERROR_DATABASE);
-				}
+		if (requestedTimeLimit != null && p.getTimeLimit() != requestedTimeLimit) {
+			boolean success = Processors.updateTimeLimit(pid, requestedTimeLimit);
+			if (!success) {
+				return gson.toJson(ERROR_DATABASE);
 			}
 		}
 
@@ -4740,6 +4898,38 @@ public class RESTServices {
 	 *         7: there exists a primitive with the same name
 	 * @author Tyler Jensen & Todd Elvers
 	 */
+	/**
+	 * What to tell the user after a copy or link, given how many solvers could not be copied.
+	 *
+	 * <p>A partial failure is reported as a failure naming the count, not as success: the copies
+	 * that did succeed are kept either way, so silence would leave the user believing they have
+	 * solvers they do not have.
+	 *
+	 * <p>This message reaches an HTML sink: the client passes it to showMessage, which falls back
+	 * to showMessageLegacy, and that inserts it with {@code .html(message)} (master.js:466). It is
+	 * safe because every part of it is built here from literals and ints. Interpolating anything a
+	 * user chose, a solver's name above all, would make this an XSS sink and would need escaping
+	 * at the sink, not here.
+	 *
+	 * @param failedCopies solvers copySolvers could not copy
+	 * @param associated solvers that were copied and associated with the space
+	 * @param copy true for a copy, false for a link
+	 */
+	protected static ValidatorStatusCode solverCopyStatus(int failedCopies, int associated, boolean copy) {
+		if (failedCopies == 0) {
+			return new ValidatorStatusCode(true,
+					copy ? "Solver(s) copied successfully" : "Solver(s) linked successfully");
+		}
+		int requested = failedCopies + associated;
+		if (associated == 0) {
+			return new ValidatorStatusCode(false,
+					"None of the " + requested + " solver(s) could be copied");
+		}
+		return new ValidatorStatusCode(false,
+				failedCopies + " of " + requested + " solver(s) could not be copied; the remaining "
+						+ associated + (associated == 1 ? " was" : " were") + " copied successfully");
+	}
+
 	@POST
 	@Path("/spaces/{spaceId}/add/solver")
 	@Produces("application/json")
@@ -4783,18 +4973,34 @@ public class RESTServices {
 			if (!status.isSuccess()) {
 				return gson.toJson(status);
 			}
+			int failedCopies = 0;
 			if (copy) {
 				List<Solver> oldSolvers = Solvers.get(selectedSolvers);
-				selectedSolvers = Solvers.copySolvers(oldSolvers, requestUserId, spaceId);
-				response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(selectedSolvers)));
+				List<Integer> copied = Solvers.copySolvers(oldSolvers, requestUserId, spaceId);
+				// copySolvers reports a solver it could not copy as a non-positive id. Carrying
+				// those on said "copied successfully" while the solver was missing, so count them
+				// and keep only the copies that exist.
+				selectedSolvers = new ArrayList<>();
+				for (Integer id : copied) {
+					if (id != null && id > 0) {
+						selectedSolvers.add(id);
+					} else {
+						failedCopies++;
+					}
+				}
+				// Only when there is something to name: makeCommaSeparatedList deletes a trailing
+				// comma it never wrote for an empty list, and the exception would be reported as a
+				// database error instead of the failure that actually happened.
+				if (!selectedSolvers.isEmpty()) {
+					response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(selectedSolvers)));
+				}
 			}
 
 			// if we did a copy, the solvers are already associated with the root space, so
 			// we don't need to link to that one
 			return Solvers.associate(selectedSolvers, spaceId, copyToSubspaces, requestUserId, !copy)
 					// Fix: was "Solver(s) moved successfully" — see GitHub issue #85 audit
-					? gson.toJson(new ValidatorStatusCode(true,
-							copy ? "Solver(s) copied successfully" : "Solver(s) linked successfully"))
+					? gson.toJson(solverCopyStatus(failedCopies, selectedSolvers.size(), copy))
 					: gson.toJson(ERROR_DATABASE);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -4876,13 +5082,13 @@ public class RESTServices {
 							"Failed to copy all " + failed.size() + " benchmark(s). "
 							+ "The source files may be missing on disk. Check the server logs for details."));
 				} else {
-					response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
+					response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
 					return gson.toJson(new ValidatorStatusCode(false,
 							succeeded.size() + " benchmark(s) copied successfully, but "
 							+ failed.size() + " failed. Check the server logs for details."));
 				}
 			}
-			response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
+			response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
 			return gson.toJson(new ValidatorStatusCode(true, "The selected benchmark(s) were copied successfully"));
 		} else {
 			// Return a value based on results from database operation
@@ -5148,8 +5354,85 @@ public class RESTServices {
 	}
 
 	/**
+	 * Removes the picture of a user, solver or benchmark, so the default image is served again.
+	 * Allowed to whoever may upload that picture ({@link PictureSecurity#canChangePicture}).
+	 * Only the entity's own upload is touched: the files are named by the entity's id, which
+	 * must be a real entity's, and never the shared default images. Removing a picture that does
+	 * not exist succeeds, so a repeated request is harmless.
+	 *
+	 * @param type    user, solver or benchmark
+	 * @param id      the id of the entity whose picture is removed
+	 * @param request HTTP request
+	 * @return json ValidatorStatusCode
+	 */
+	@POST
+	@Path("/delete/picture/{type}/{id}")
+	@Produces("application/json")
+	public String deletePicture(@PathParam("type") String type, @PathParam("id") int id,
+			@Context HttpServletRequest request) {
+		final String methodName = "deletePicture";
+		int userIdOfCaller = SessionUtil.getUserId(request);
+		if (id < 1 || !PictureSecurity.canChangePicture(type, id, userIdOfCaller)) {
+			return gson.toJson(new ValidatorStatusCode(false, "You do not have permission to remove this picture"));
+		}
+		boolean exists;
+		switch (type) {
+			case PictureFiles.USER:
+				exists = Users.get(id) != null;
+				break;
+			case PictureFiles.SOLVER:
+				exists = Solvers.get(id) != null;
+				break;
+			case PictureFiles.BENCHMARK:
+				exists = Benchmarks.get(id) != null;
+				break;
+			default:
+				// Unreachable: canChangePicture has already refused every type but these
+				// three. Named rather than left to a default that means "benchmark", so a
+				// fourth picture type is refused here instead of being silently checked
+				// against the benchmark table -- the wrong entity, under a different
+				// ownership rule.
+				return gson.toJson(new ValidatorStatusCode(false, "Unknown picture type"));
+		}
+		if (!exists) {
+			return gson.toJson(new ValidatorStatusCode(false, "There is no such " + type));
+		}
+		// Counted, not inferred from the failures: deleteIfExists returns false for a file
+		// that was not there, which is not a deletion. Inferring made "absent original plus
+		// a thumbnail that would not delete" report a partial removal, though nothing at all
+		// had been removed.
+		int deleted = 0;
+		int failed = 0;
+		for (File picture : List.of(PictureFiles.original(type, id), PictureFiles.thumbnail(type, id))) {
+			try {
+				if (Files.deleteIfExists(picture.toPath())) {
+					deleted++;
+				}
+			} catch (IOException e) {
+				log.error(methodName, "could not delete " + picture, e);
+				failed++;
+			}
+		}
+		if (failed == 0) {
+			if (deleted > 0) {
+				// A destructive action an administrator may take against another user's
+				// data, so it leaves a record, as the sibling delete endpoints do. Nothing
+				// removed is nothing to record.
+				log.info(methodName, "user " + userIdOfCaller + " removed the picture of " + type + " " + id);
+			}
+			return gson.toJson(new ValidatorStatusCode(true, "Picture removed"));
+		}
+		// What survived decides what the caller is still looking at: with the thumbnail gone
+		// and the original kept, the full-size picture is still served, and saying "could not
+		// be removed" would claim nothing happened.
+		return gson.toJson(new ValidatorStatusCode(false, deleted > 0
+				? "The picture was only partly removed; please try again"
+				: "The picture could not be removed"));
+	}
+
+	/**
 	 * Permanently deletes a user from the system. This is an admin-only function
-	 * 
+	 *
 	 * @param userToDeleteId The id of the user to be deleted.
 	 * @param request        HTTP request
 	 * @return json ValidatorStatusCode
@@ -5204,6 +5487,10 @@ public class RESTServices {
 	 * structured fields only. No part of the underlying cause reaches the client.
 	 */
 	private static String describeDeletionBlocker(UserDeletionBlockedException e) {
+		if (UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED.equals(e.getReasonCode())) {
+			return "Cannot delete this user yet: one or more active jobs could not be safely stopped and retired. "
+					+ "Resolve the backend state and retry the deletion.";
+		}
 		if (UserDeletionBlockedException.AMBIGUOUS_PERSONAL_SPACE.equals(e.getReasonCode())) {
 			StringBuilder sb = new StringBuilder(
 					"Cannot delete this user: more than one personal space matches, so the "
@@ -6343,6 +6630,12 @@ public class RESTServices {
 
 		// Convert the subSpaces to copy to an int list
 		List<Integer> selectedSubSpaces = Util.toIntegerList(request.getParameterValues("selectedIds[]"));
+		// Refused rather than reported as a copy of nothing. canCopySpace iterates the
+		// selection, so an empty one passes every check, the copy loop runs zero times, and
+		// the handler used to answer "Space copied successfully" for spaces it never copied.
+		if (selectedSubSpaces.isEmpty()) {
+			return gson.toJson(new ValidatorStatusCode(false, "No spaces were selected to copy"));
+		}
 		ValidatorStatusCode status = SpaceSecurity.canCopySpace(spaceId, requestUserId, selectedSubSpaces);
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
@@ -6362,7 +6655,7 @@ public class RESTServices {
 				return gson.toJson(new ValidatorStatusCode(false, e.getMessage()));
 			}
 		}
-		response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(newSpaceIds)));
+		response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(newSpaceIds)));
 		return gson.toJson(new ValidatorStatusCode(true, "Space copied successfully"));
 	}
 

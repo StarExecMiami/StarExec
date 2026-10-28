@@ -18,11 +18,9 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Allows for the uploading of space hierarchies represented in xml. Files can come in .zip, .tar, or .tar.gz format.
@@ -38,7 +36,6 @@ import java.util.List;
 public class UploadSpaceXML extends HttpServlet {
 
 	private static final StarLogger log = StarLogger.getLogger(UploadSpaceXML.class);
-	private final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 	private static final String SPACE_ID = R.SPACE;
 	private static final String UPLOAD_FILE = "f";
 
@@ -104,51 +101,69 @@ public class UploadSpaceXML extends HttpServlet {
 			final int userId, final int spaceId, final HashMap<String, Object> form, final BatchUtil batchUtil,
 			final int statusId
 	) {
+		// Only ever the directory this upload claimed: its parent holds other uploads' directories.
+		File uniqueDir = null;
+		boolean handedOff = false;
+		// Set by whichever deletes the directory: the task once it starts, or else the request. Deleting it
+		// twice could remove a directory that another upload has claimed under the same name since.
+		final AtomicBoolean cleanupClaimed = new AtomicBoolean();
 		try {
 			log.debug("Handling Upload of XML File from User " + userId);
 			PartWrapper item = (PartWrapper) form.get(UploadSpaceXML.UPLOAD_FILE);
-			// Don't need to keep file long - just using download directory
-			File uniqueDir = new File(R.getBatchSpaceXMLDir(), "" + userId);
-			uniqueDir = new File(uniqueDir, "TEMP_XML_FOLDER_");
-			uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
-
-			uniqueDir.mkdirs();
+			// The directory holds the archive and its XML only until the spaces are created.
+			File parent = new File(new File(R.getBatchSpaceXMLDir(), "" + userId), "TEMP_XML_FOLDER_");
+			uniqueDir = Util.claimNewDirectory(new File(parent, Util.pathDate()));
 
 			//Process the archive file and extract
 
 			File archiveFile = new File(uniqueDir, FilenameUtils.getName(item.getName()));
-			new File(archiveFile.getParent()).mkdir();
 			item.write(archiveFile);
 			final String archivePath = uniqueDir.getCanonicalPath();
 			Util.threadPoolExecute(() -> {
+				if (!cleanupClaimed.compareAndSet(false, true)) {
+					return; // the request has given this upload up and deleted its directory
+				}
 				try {
-					ArchiveUtil.extractArchive(archiveFile.getAbsolutePath());
+					boolean extracted = ArchiveUtil.extractArchive(archiveFile.getAbsolutePath());
 					archiveFile.delete();
 					Uploads.XMLFileUploadComplete(statusId);
+					if (!extracted) {
+						Uploads.setXMLErrorMessage(statusId, ArchiveUtil.NOT_EXTRACTED);
+					} else {
 //create new file reference for inside the scope of the Runnable, same as uniqueDir:
-					File archiveLocation = new File(archivePath);
-					//Typically there will just be 1 file, but might as well allow more
-					for (File file : archiveLocation.listFiles()) {
-						if (!file.isFile()) {
-							Uploads.setXMLErrorMessage(
-									statusId, "The file '" + file.getName() +
-											"' is not a regular file.  Only regular files containing space XML are " +
-											"allowed in the uploaded archive.");
-						} else {
-							List<Integer> current = batchUtil.createSpacesFromFile(file, userId, spaceId, statusId);
-							if (current == null) {
-								Uploads.setXMLErrorMessage(statusId, batchUtil.getErrorMessage());
+						File archiveLocation = new File(archivePath);
+						//Typically there will just be 1 file, but might as well allow more
+						for (File file : archiveLocation.listFiles()) {
+							if (!file.isFile()) {
+								Uploads.setXMLErrorMessage(
+										statusId, "The file '" + file.getName() +
+												"' is not a regular file.  Only regular files containing space XML are " +
+												"allowed in the uploaded archive.");
+							} else {
+								List<Integer> current = batchUtil.createSpacesFromFile(file, userId, spaceId, statusId);
+								if (current == null) {
+									Uploads.setXMLErrorMessage(statusId, batchUtil.getErrorMessage());
+								}
 							}
 						}
 					}
 				} catch (Exception e) {
 					log.error(Util.getStackTrace(e));
 					Uploads.setBenchmarkErrorMessage(statusId, e.getMessage());
+				} finally {
+					Util.safeDeleteDirectory(archivePath);
 				}
 				Uploads.XMLEverythingComplete(statusId);
 			});
+			handedOff = true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
+		} finally {
+			// Once the task is handed off or has started, the task deletes the directory. It can start in this
+			// thread, when the pool's queue is full, and throw before handedOff is set.
+			if (!handedOff && uniqueDir != null && cleanupClaimed.compareAndSet(false, true)) {
+				Util.safeDeleteDirectory(uniqueDir.getAbsolutePath());
+			}
 		}
 	}
 

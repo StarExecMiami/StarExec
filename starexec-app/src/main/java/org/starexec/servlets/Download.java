@@ -42,6 +42,18 @@ public class Download extends HttpServlet {
 	private static final String PARAM_ANON_ID = "anonId";
 	private static final String PARAM_REUPLOAD = "reupload";
 
+	private static ValidatorStatusCode forbidden(String message) {
+		return new ValidatorStatusCode(false, message, HttpServletResponse.SC_FORBIDDEN);
+	}
+
+	private static ValidatorStatusCode notFound(String message) {
+		return new ValidatorStatusCode(false, message, HttpServletResponse.SC_NOT_FOUND);
+	}
+
+	private static int getValidationFailureStatus(ValidatorStatusCode status) {
+		return status.getStatusCode() == 0 ? HttpServletResponse.SC_BAD_REQUEST : status.getStatusCode();
+	}
+
 	private static Optional<Solver> handleSolverAndSolverSrc(HttpServletRequest request, HttpServletResponse response)
 			throws IOException, SQLException {
 		final String methodName = "handleSolverAndSolverSrc";
@@ -747,8 +759,22 @@ public class Download extends HttpServlet {
 
 	private static ValidatorStatusCode validateForAnonymousLink(
 			String universallyUniqueId, String type, HttpServletRequest request
-	) {
-		return new ValidatorStatusCode(true);
+	) throws SQLException {
+		switch (type) {
+		case R.SOLVER:
+		case R.SOLVER_SOURCE:
+			if (AnonymousLinks.getIdOfSolverAssociatedWithLink(universallyUniqueId).isPresent()) {
+				return new ValidatorStatusCode(true);
+			}
+			return notFound("Solver not found.");
+		case R.BENCHMARK:
+			if (AnonymousLinks.getIdOfBenchmarkAssociatedWithLink(universallyUniqueId).isPresent()) {
+				return new ValidatorStatusCode(true);
+			}
+			return notFound("Benchmark not found.");
+		default:
+			return forbidden("Anonymous downloads are not supported for this download type.");
+		}
 	}
 
 	private static ValidatorStatusCode validateForUser(int userId, String type, HttpServletRequest request) {
@@ -830,12 +856,20 @@ public class Download extends HttpServlet {
 		boolean success;
 		String shortName = null;
 		try {
+			if (request.getParameter(PARAM_ANON_ID) != null && request.getParameter(PARAM_ID) != null) {
+				response.sendError(
+						HttpServletResponse.SC_BAD_REQUEST,
+						"Invalid request: cannot combine anonId with sequential id"
+				);
+				return;
+			}
+
 			ValidatorStatusCode status = validateRequest(request);
 			if (!status.isSuccess()) {
 				log.debug("Bad download Request--" + status.getMessage());
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
 				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
-				response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());
+				response.sendError(getValidationFailureStatus(status), status.getMessage());
 				return;
 			}
 

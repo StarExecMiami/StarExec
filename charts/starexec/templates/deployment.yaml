@@ -89,9 +89,27 @@ spec:
               mkdir -p /var/lib/postgresql/data
 {{- end }}
 {{- if .Values.security.volumePermissions.enabled }}
-              chown -R {{ .Values.security.app.runAsUser }}:{{ .Values.security.app.runAsGroup }} /app/data /app/sandbox /app/backend /app/work
+              # Recursive only when the top of a volume has the wrong owner: the same
+              # rule as fsGroupChangePolicy: OnRootMismatch above. An unconditional
+              # chown -R walks every file of every job's output on each start -- on NFS
+              # one call per file -- and under the Recreate strategy the old pod is
+              # already gone while it runs. On Quokka (job 5: 80k+ pairs) it kept
+              # production down past Helm's 15 min --atomic timeout. A full sweep, if
+              # one is ever needed (say after a restore), is a one-off chown -R by hand.
+              fix_owner() {
+                owner="$1"
+                shift
+                for dir in "$@"; do
+                  current="$(stat -c %u:%g "$dir")"
+                  if [ "$current" != "$owner" ]; then
+                    echo "chown -R $owner $dir (root was $current)"
+                    chown -R "$owner" "$dir"
+                  fi
+                done
+              }
+              fix_owner {{ .Values.security.app.runAsUser }}:{{ .Values.security.app.runAsGroup }} /app/data /app/sandbox /app/backend /app/work
 {{- if $embeddedPostgres }}
-              chown -R 999:999 /var/lib/postgresql/data
+              fix_owner 999:999 /var/lib/postgresql/data
 {{- end }}
               chmod 0770 /app/data /app/sandbox /app/backend /app/work
 {{- if $embeddedPostgres }}
@@ -160,7 +178,7 @@ spec:
              - name: http
                containerPort: 8080
 {{- if eq .Values.backend.type "podman" }}
-               hostPort: 7827
+               hostPort: {{ required "podman.hostPort is required when backend.type is podman" .Values.podman.hostPort }}
 {{- end }}
           env:
             - name: STAREXEC_DB_HOST
@@ -219,6 +237,13 @@ spec:
               value: "{{ .Release.Namespace }}"
             - name: STAREXEC_K8S_JOB_IMAGE
               value: "{{ .Values.kubernetes.jobImage }}"
+            # The identity job pods run as. It must match the owner of the shared
+            # volumes (the init container chowns them to security.app.runAsUser), or a
+            # pair's output lands with an owner the application cannot manage (#237).
+            - name: STAREXEC_K8S_JOB_RUN_AS_USER
+              value: "{{ .Values.security.app.runAsUser }}"
+            - name: STAREXEC_K8S_JOB_RUN_AS_GROUP
+              value: "{{ .Values.security.app.runAsGroup }}"
 {{- if .Values.kubernetes.jobImagePullPolicy }}
             - name: STAREXEC_K8S_JOB_IMAGE_PULL_POLICY
               value: "{{ .Values.kubernetes.jobImagePullPolicy }}"

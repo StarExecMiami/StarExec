@@ -39,8 +39,8 @@ public class BundledSchemaResolverTest {
 	@Test
 	public void aBundledReferenceResolvesToThePackagedCopy() throws Exception {
 		LSInput input = resolver.resolveResource(
-				TYPE, "@Web.URL@public/jobSchemaTypes.xsd", null,
-				"@Web.URL@public/jobSchemaTypes.xsd", null);
+				TYPE, "https://www.starexec.org/starexec/public/jobSchemaTypes.xsd", null,
+				"https://www.starexec.org/starexec/public/jobSchemaTypes.xsd", null);
 
 		assertNotNull("a bundled import must resolve", input);
 		try (InputStream stream = input.getByteStream()) {
@@ -48,7 +48,7 @@ public class BundledSchemaResolverTest {
 			String schema = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
 			assertTrue("the resolved document must be jobSchemaTypes.xsd, was:\n"
 							+ schema.substring(0, Math.min(200, schema.length())),
-					schema.contains("targetNamespace=\"@Web.URL@public/jobSchemaTypes.xsd\""));
+					schema.contains("targetNamespace=\"https://www.starexec.org/starexec/public/jobSchemaTypes.xsd\""));
 		}
 	}
 

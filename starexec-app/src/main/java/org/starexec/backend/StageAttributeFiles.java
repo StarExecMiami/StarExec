@@ -48,7 +48,9 @@ import java.util.TreeMap;
  *       a final stage without a post-processor leaves the previous stage's file behind.</li>
  * </ul>
  *
- * <p>Like {@link StageStatusSnapshots} this holds no database connection and writes nothing.
+ * <p>Like {@link StageStatusSnapshots} this holds no database connection of its own and writes
+ * no files. StarLogger stores its WARN lines as {@code error_logs} rows, so a finished stage
+ * without a file, the normal outcome of a stage without a post-processor, is logged at DEBUG.
  * The pair's stage numbers come from the caller, fetched only when there is something to decide.
  */
 public final class StageAttributeFiles {
@@ -129,6 +131,7 @@ public final class StageAttributeFiles {
             outputDir.resolve(DIRECTORY),
             ".txt",
             "attributes",
+            StageResultFiles.Absence.NORMAL,
             pairId,
             finishedEarlier,
             terminalStage,

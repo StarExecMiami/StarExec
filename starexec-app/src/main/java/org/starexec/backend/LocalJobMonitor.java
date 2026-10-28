@@ -127,8 +127,20 @@ public class LocalJobMonitor {
         final boolean ingestionBlocked;
         final String lastIngestionFailure;
 
+        /**
+         * The pair's attempt number captured when it was submitted (#185), or null when it
+         * could not be captured, in which case every write is unfenced as it was before.
+         * Carried on the state so a rerun's replacement record carries the new attempt.
+         */
+        final Integer attemptNo;
+
         PairExecutionState(String logDir, long generation, int parseFailures) {
-            this(logDir, generation, parseFailures, 0, 0L, false, null);
+            this(logDir, generation, parseFailures, 0, 0L, false, null, null);
+        }
+
+        PairExecutionState(String logDir, long generation, int parseFailures,
+                Integer attemptNo) {
+            this(logDir, generation, parseFailures, 0, 0L, false, null, attemptNo);
         }
 
         PairExecutionState(
@@ -139,6 +151,19 @@ public class LocalJobMonitor {
                 long nextRetryAtNanos,
                 boolean ingestionBlocked,
                 String lastIngestionFailure) {
+            this(logDir, generation, parseFailures, ingestionFailures, nextRetryAtNanos,
+                    ingestionBlocked, lastIngestionFailure, null);
+        }
+
+        PairExecutionState(
+                String logDir,
+                long generation,
+                int parseFailures,
+                int ingestionFailures,
+                long nextRetryAtNanos,
+                boolean ingestionBlocked,
+                String lastIngestionFailure,
+                Integer attemptNo) {
             this.logDir = logDir;
             this.generation = generation;
             this.parseFailures = parseFailures;
@@ -146,21 +171,23 @@ public class LocalJobMonitor {
             this.nextRetryAtNanos = nextRetryAtNanos;
             this.ingestionBlocked = ingestionBlocked;
             this.lastIngestionFailure = lastIngestionFailure;
+            this.attemptNo = attemptNo;
         }
 
         PairExecutionState withParseFailures(int failures) {
             return new PairExecutionState(logDir, generation, failures,
-                    ingestionFailures, nextRetryAtNanos, ingestionBlocked, lastIngestionFailure);
+                    ingestionFailures, nextRetryAtNanos, ingestionBlocked, lastIngestionFailure,
+                    attemptNo);
         }
 
         PairExecutionState withIngestionRetry(long dueAtNanos, String cause) {
             return new PairExecutionState(logDir, generation, parseFailures,
-                    ingestionFailures + 1, dueAtNanos, false, cause);
+                    ingestionFailures + 1, dueAtNanos, false, cause, attemptNo);
         }
 
         PairExecutionState blockedForIngestion(String cause) {
             return new PairExecutionState(logDir, generation, parseFailures,
-                    ingestionFailures + 1, nextRetryAtNanos, true, cause);
+                    ingestionFailures + 1, nextRetryAtNanos, true, cause, attemptNo);
         }
     }
 
@@ -223,23 +250,38 @@ public class LocalJobMonitor {
      * <p>Throws rather than returning a flag, so every failure reaches the outer lifecycle and
      * is classified there. A snapshot this monitor cannot believe is an evidence problem; it
      * must never become a solver status.
+     *
+     * @return true when the database refused the write as belonging to a superseded attempt
      */
-    private void ingestEarlierStageStatuses(
+    private boolean ingestEarlierStageStatuses(
             int pairId,
             PairExecutionState state,
             Path outputDir,
             int terminalStage) throws Exception {
 
         // The terminal stage's own snapshot is not used -- its status comes from the runsolver
-        // artifacts -- and while a stage is still running its snapshot legitimately reads
-        // STATUS_RUNNING. Both are expressed by the bound, so the read never returns a record
-        // this method would have to discard. Selecting here as well would put the rule in two
-        // places, which is how the running stage came to be validated at all.
+        // artifacts -- and a stage still running legitimately reads STATUS_RUNNING. Neither is
+        // returned, so the read never hands this method a record it would have to discard, and
+        // selecting here as well would put the rule in two places -- which is how the running
+        // stage came to be validated at all.
+        //
+        // Which read expresses that depends on what the result names. A stage-level result
+        // bounds by that stage. A pair-level result names no stage, so nothing can be bounded
+        // out: every stage that finished is earlier than it (#165), and the stage that did not
+        // finish is skipped instead of refused, because a pair dying mid-stage is exactly what
+        // leaves it unfinished.
         Map<Integer, Integer> earlier =
-                StageStatusSnapshots.read(outputDir, pairId, terminalStage);
+                terminalStage == FinalStatusStage.PAIR_LEVEL
+                        ? StageStatusSnapshots.readForPairLevelResult(outputDir, pairId)
+                        : StageStatusSnapshots.read(outputDir, pairId, terminalStage);
+        // Reported here rather than by the reader: that class holds no database connection by
+        // contract, and in this codebase a log.warn is one -- StarLogger routes WARN through
+        // ErrorLogs.add. One line per pair, only when the pair's own records contradict
+        // each other, which no producer path should ever create.
+        StageStatusSnapshots.lastContradiction().ifPresent(log::warn);
 
         if (earlier.isEmpty()) {
-            return;
+            return false;
         }
 
         // The mutation boundary. Everything above read files; a rerun that landed while it
@@ -248,12 +290,21 @@ public class LocalJobMonitor {
         if (!isCurrent(pairId, state)) {
             log.info("Monitor: pairId=" + pairId + " was rerun while its stage snapshots were"
                     + " read; discarding the superseded run's stage history");
-            return;
+            return false;
         }
 
-        StageStatusBatchResult result = JobPairs.setEarlierStageStatuses(pairId, earlier);
+        StageStatusBatchResult result =
+                FencedResultWrites.setEarlierStageStatuses(pairId, earlier, state.attemptNo);
         if (result == StageStatusBatchResult.APPLIED) {
-            return;
+            return false;
+        }
+        if (result == StageStatusBatchResult.STALE_ATTEMPT) {
+            // A rerun replaced the attempt this execution belongs to (#185). Not a failure and
+            // not retryable: the write can never succeed. Reported to the caller, which stops
+            // writing for this execution and lets the pair be released.
+            log.info("Monitor: pairId=" + pairId + " stage history refused as stale (attempt "
+                    + state.attemptNo + "); the pair was rerun, discarding this execution");
+            return true;
         }
         if (result == StageStatusBatchResult.REJECTED_UNKNOWN_STAGE) {
             // The output names a stage this pair does not have. No retry changes that, so it
@@ -350,7 +401,7 @@ public class LocalJobMonitor {
         pairs.computeIfPresent(pairId, (key, current) ->
                 current.generation == state.generation && current.ingestionFailures != 0
                         ? new PairExecutionState(current.logDir, current.generation,
-                                current.parseFailures)
+                                current.parseFailures, current.attemptNo)
                         : current);
     }
 
@@ -379,6 +430,15 @@ public class LocalJobMonitor {
      * @param pairId The database pair ID for this job
      */
     public synchronized void registerJob(String logDir, int pairId) {
+        registerJob(logDir, pairId, null);
+    }
+
+    /**
+     * As {@link #registerJob(String, int)}, carrying the attempt number the pair was submitted
+     * under so every result write is fenced on it (#185). Null means the attempt is unknown
+     * and writes are unfenced.
+     */
+    public synchronized void registerJob(String logDir, int pairId, Integer attemptNo) {
         // A fresh generation supersedes whatever was in flight: a poll that started
         // before this point finds its generation stale and declines to record its
         // result. This single put replaces what used to be three separate mutations
@@ -390,7 +450,7 @@ public class LocalJobMonitor {
         // otherwise store the lower generation last and leave the map describing an
         // older run than the one actually starting.
         long generation = generationSequence.incrementAndGet();
-        pairs.put(pairId, new PairExecutionState(logDir, generation, 0));
+        pairs.put(pairId, new PairExecutionState(logDir, generation, 0, attemptNo));
 
         // Reset poll interval to base for responsive detection of new job completion
         pollInterval.resetToBase();
@@ -754,23 +814,42 @@ public class LocalJobMonitor {
         //    snapshot's pairId is validation data, not routing authority. Ownership is
         //    re-checked inside, immediately before the write, for the same reason step 4
         //    re-checks it -- reading files takes real time and a rerun may have landed.
-        ingestEarlierStageStatuses(pairId, state, outputDir, ss.stageNumber);
+        // A pair-level result names no stage, so every stage that finished is "earlier" than
+        // it: the bound is all stages rather than the one that produced the result (#165).
+        if (ingestEarlierStageStatuses(pairId, state, outputDir, ss.stageNumber)) {
+            return true;
+        }
 
         // 6. Update database, with runsolver's verdict allowed to correct the status
         //    bash derived by grepping prose.
-        updateDatabase(
+        //    A stale attempt (#185) ends this execution: nothing later would be accepted, so it
+        //    is neither retried nor recorded. Returning true retires the tracking.
+        if (updateDatabase(
             pairId,
             reconcileWithRunsolver(pairId, ss.status, stats),
-            ss.stageNumber
-        );
+            ss.stageNumber,
+            state.attemptNo
+        )) {
+            return true;
+        }
 
         // 7. Measurements and attributes, each against the stage that produced it. Only after the
         //    status write above has been accepted: a refused status throws out of
         //    updateDatabase, and nothing may be recorded against a result the database declined.
         //    Ownership is re-checked inside, immediately before each write, as in step 5. The
         //    runsolver stats parsed in step 2 decide the status only.
-        Set<Integer> finishedEarlier =
-                StageStatusSnapshots.read(outputDir, pairId, ss.stageNumber).keySet();
+        // Bounded by the reported stage: a pair-level result names no stage, so nothing is
+        // published for any of them. Recording a stage's status from its own snapshot is what
+        // the snapshot is for; publishing its measurements and attributes off the back of a
+        // pair that then failed outside every stage is a separate decision, and the one
+        // already made is that nothing is published (#165).
+        //
+        // Skipped rather than read and discarded, which is not only wasted work: reading it
+        // with a bound of 0 validated every snapshot for terminality, so a pair that died with
+        // a stage still RUNNING was refused here even when step 5 had accepted it.
+        Set<Integer> finishedEarlier = ss.stageNumber == FinalStatusStage.PAIR_LEVEL
+                ? Set.of()
+                : StageStatusSnapshots.read(outputDir, pairId, ss.stageNumber).keySet();
         int terminalStage = ss.status.isTerminalExecutionResult() ? ss.stageNumber : 0;
         recordMeasurements(pairId, state, outputDir, finishedEarlier, terminalStage);
         recordAttributes(pairId, state, outputDir, finishedEarlier, terminalStage, attributes);
@@ -844,9 +923,9 @@ public class LocalJobMonitor {
     /**
      * Reads status and stageNumber from status.json using Gson.
      *
-     * <p>A missing file still returns the {@link StatusCode#ERROR_RUNSCRIPT} sentinel: a pair
-     * that produced no output at all is a different situation from one whose output cannot be
-     * believed, and it has always been reported this way.
+     * <p>The poll loop normally waits until the file exists. If it disappears between that
+     * check and this read, however, there is no solver result or stage identity to record. That
+     * race is refused as missing evidence rather than manufactured as ERROR_RUNSCRIPT/stage 1.
      *
      * <p>A file that exists and carries a status must carry a usable stage identity. It used
      * to substitute stage 1 for a missing or unusable {@code stageNumber}, which handed
@@ -859,8 +938,9 @@ public class LocalJobMonitor {
             throws StageStatusSnapshots.InvalidSnapshotException {
         Path statusFile = outputDir.resolve("status.json");
         if (!Files.exists(statusFile)) {
-            log.warn("No status.json found for pairId=" + pairId);
-            return new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
+            throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for pair " + pairId + " disappeared before it could be read;"
+                            + " neither its result nor stage is known");
         }
 
         try {
@@ -887,7 +967,7 @@ public class LocalJobMonitor {
                                 + e.getMessage());
             }
             StatusCode resolved = StatusCode.toStatusCode(statusCode);
-            int stageNumber = FinalStatusStage.require(obj, "pair " + pairId);
+            int stageNumber = FinalStatusStage.requireStageOrPairLevel(obj, "pair " + pairId);
 
             log.debug("Read status " + statusCode + " (" + resolved +
                     ") stageNumber=" + stageNumber + " from status.json for pairId=" + pairId);
@@ -1074,8 +1154,9 @@ public class LocalJobMonitor {
                 log.debug("Parsed stats from stats.json: " + stats);
             } catch (IOException | NumberFormatException e) {
                 // NumberFormatException for the same reason var.out and watcher.out catch
-                // it above. The ...Or helpers match on [0-9.]+ / [0-9]+, which admits
-                // "1.2.3", "." and digit strings past Integer/Long range -- a garbled
+                // it above. The ...Or helpers match a digit or dot followed by digits,
+                // dots and exponent characters, or [0-9]+ for the integers, which admits
+                // "1.2.3", ".", "1e" and digit strings past Integer/Long range -- a garbled
                 // value throws out of the parse instead of failing to match, so without
                 // this it escapes parseRunSolverStats entirely. Aborting here leaves every
                 // remaining field at the value var.out and watcher.out already established
@@ -1096,10 +1177,16 @@ public class LocalJobMonitor {
      *
      * <p>Distinct from {@link #extractDouble}, which cannot tell "absent" from "zero"
      * and so would overwrite a good value with 0 when a field is missing.
+     *
+     * <p>The value may be in exponent form: runsolver prints a time below 1e-4 s or
+     * from 1e6 s that way, and the job script writes it to stats.json as it is. Digits
+     * and dots alone read 9.90467e-05 as 9.90467. The exponent's letters and signs are
+     * matched along with the digits, so a garbled value such as "1e" still reaches
+     * Double.parseDouble and throws rather than being cut short.
      */
     private double extractDoubleOr(String json, String key, double fallback) {
         Matcher m = Pattern.compile(
-                "\"" + key + "\"\\s*:\\s*([0-9.]+)").matcher(json);
+                "\"" + key + "\"\\s*:\\s*([0-9.][0-9.eE+-]*)").matcher(json);
         return m.find() ? Double.parseDouble(m.group(1)) : fallback;
     }
 
@@ -1139,10 +1226,11 @@ public class LocalJobMonitor {
      * to {@code status} and all later stages to STATUS_NOT_REACHED, eliminating
      * the dirty-read window present in the former double-call pattern.</p>
      */
-    private void updateDatabase(
+    private boolean updateDatabase(
             int pairId,
             StatusCode status,
-            int stageNumber) throws Exception {
+            int stageNumber,
+            Integer attemptNo) throws Exception {
         // status.json comes from the job script, in a directory the job itself can write. The
         // protocol has it carry exactly two kinds of pair-level status: STATUS_RUNNING while a
         // stage is in flight, and a terminal execution result once one finishes. Anything else
@@ -1170,12 +1258,39 @@ public class LocalJobMonitor {
         log.info(
                 "Updating database for pairId=" + pairId + " with status=" + status
                 + " stageNumber=" + stageNumber);
-        PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
-                pairId,
-                stageNumber,
-                status.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal(),
-                false);
+
+        // Stage 0 is the pair-level channel: the pair failed outside any stage, so there is no
+        // stage to carry the result (#165). A RUNNING record on that channel is the transient
+        // one the job script writes before it knows the stage, and writing it would say nothing
+        // the pair's own status does not already say.
+        if (stageNumber == FinalStatusStage.PAIR_LEVEL
+                && status == StatusCode.STATUS_RUNNING) {
+            log.debug("Pair " + pairId + " reports RUNNING with no stage; nothing to record");
+            return false;
+        }
+        // A pair-level failure gives its own status to the stages it prevented, not
+        // NOT_REACHED: no earlier stage failed, and listings and statistics read the stage.
+        PairStatusResult statusResult = stageNumber == FinalStatusStage.PAIR_LEVEL
+                ? FencedResultWrites.setPairLevelStatusResult(
+                        pairId,
+                        status.getVal(),
+                        status.getVal(),
+                        attemptNo)
+                : FencedResultWrites.setPairStatusPreciseResult(
+                        pairId,
+                        stageNumber,
+                        status.getVal(),
+                        StatusCode.STATUS_NOT_REACHED.getVal(),
+                        false,
+                        attemptNo);
+        if (statusResult == PairStatusResult.STALE_ATTEMPT) {
+            // The pair was rerun after this execution was submitted (#185). Nothing was
+            // written and a retry can never succeed, so it is not FAILED; the stats and
+            // attribute writes would be refused too, so the caller skips them.
+            log.info("Pair " + pairId + ": status " + status + " refused as stale (attempt "
+                    + attemptNo + "); the pair was rerun, discarding this execution");
+            return true;
+        }
         if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
             // status.json named no stage. The job script's pair-level channel defaults to 0
             // -- exitJobscript, limitExceeded and the processor paths all take that default
@@ -1201,7 +1316,8 @@ public class LocalJobMonitor {
             // retry; it must never become a solver status.
             throw new org.starexec.backend.exception.RetryableIngestionException(
                     "Could not record terminal status " + status + " for pair " + pairId
-                            + " stage " + stageNumber);
+                            + (stageNumber == FinalStatusStage.PAIR_LEVEL
+                                    ? " at pair level" : " stage " + stageNumber));
         }
         if (statusResult == PairStatusResult.SUPERSEDED) {
             log.info("Pair " + pairId + " already had a different terminal status;"
@@ -1213,6 +1329,7 @@ public class LocalJobMonitor {
                         pairId +
                         ": status=" +
                         status);
+        return false;
     }
 
     /**
@@ -1251,7 +1368,7 @@ public class LocalJobMonitor {
             String nodeName = stats.hostname != null ? stats.hostname : "unknown";
             try {
                 // The result is logged rather than retried, as it always was here.
-                if (JobPairs.updateRunSolverStats(
+                if (FencedResultWrites.updateRunSolverStats(
                         pairId,
                         nodeName,
                         stats.wallclockTime,
@@ -1261,12 +1378,15 @@ public class LocalJobMonitor {
                         stats.maxVirtualMemory,
                         stats.maxResidentSetSize,
                         entry.getKey(),
-                        stats.diskSize)) {
+                        stats.diskSize,
+                        state.attemptNo)) {
                     log.debug("Persisted run stats for pair " + pairId + " stage "
                             + entry.getKey() + ": " + stats);
                 } else {
-                    log.warn("Failed to persist run stats for pair " + pairId + " stage "
-                            + entry.getKey());
+                    // False also covers a refusal as stale (#185), which JobPairs logs at
+                    // INFO; it is only logged here, never retried or escalated.
+                    log.warn("Run stats for pair " + pairId + " stage " + entry.getKey()
+                            + " were not persisted (failure, or refused as a stale attempt)");
                 }
             } catch (Exception e) {
                 log.warn("Exception persisting run stats for pair " + pairId + " stage "
@@ -1314,12 +1434,14 @@ public class LocalJobMonitor {
             }
             // The result is logged rather than retried, as it always was here: a retry replays
             // the whole ingestion, and that trade-off is not this change's to make.
-            if (JobPairs.addJobPairAttributes(pairId, entry.getKey(), entry.getValue())) {
+            if (FencedResultWrites.addJobPairAttributes(
+                    pairId, entry.getKey(), entry.getValue(), state.attemptNo)) {
                 log.debug("Added " + entry.getValue().size() + " attributes for pairId="
                         + pairId + " stage " + entry.getKey());
             } else {
-                log.warn("Failed to record the attributes of pair " + pairId + " stage "
-                        + entry.getKey());
+                // False also covers a refusal as stale (#185), which JobPairs logs at INFO.
+                log.warn("Attributes of pair " + pairId + " stage " + entry.getKey()
+                        + " were not recorded (failure, or refused as a stale attempt)");
             }
         }
     }
@@ -1340,6 +1462,35 @@ public class LocalJobMonitor {
      */
     public int getTrackedPairCount() {
         return pairs.size();
+    }
+
+    /**
+     * Whether this monitor still owns a result that has been produced but not yet recorded.
+     *
+     * <p>True when the pair is tracked and either its ingestion is held for intervention
+     * ({@code ingestionBlocked}) or its {@code status.json} parses, with Gson, to a terminal
+     * execution result. Such a pair has finished running; recording it is the monitor's job,
+     * and another component declaring it a submit failure would make the real result be
+     * refused as a conflicting terminal status. A tracked pair with no readable terminal
+     * status is not owned: its process is gone and nothing is going to complete it.
+     *
+     * @param pairId The pair ID
+     * @return true if a terminal result is waiting for this monitor to ingest it
+     */
+    public boolean holdsUningestedResult(int pairId) {
+        PairExecutionState state = pairs.get(pairId);
+        if (state == null) {
+            return false;
+        }
+        if (state.ingestionBlocked) {
+            return true;
+        }
+        try {
+            StatusAndStage ss = readStatusFile(Paths.get(state.logDir), pairId);
+            return ss != null && ss.status.isTerminalExecutionResult();
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**

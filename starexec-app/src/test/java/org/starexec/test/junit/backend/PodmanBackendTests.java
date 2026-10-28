@@ -27,6 +27,7 @@ import org.starexec.backend.PodmanBackend;
 import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
+import org.starexec.jobs.JobManager;
 
 /**
  * Unit tests for PodmanBackend container-based job execution.
@@ -128,6 +129,12 @@ public class PodmanBackendTests {
         Field dockerClientField = PodmanBackend.class.getDeclaredField("dockerClient");
         dockerClientField.setAccessible(true);
         dockerClientField.set(backend, mockDockerClient);
+
+        // These tests stand in for initialize() by injecting the client, so mark the backend
+        // initialized: one that is not refuses every submission (PodmanBackendInitGuardTest).
+        Field initializedField = PodmanBackend.class.getDeclaredField("initialized");
+        initializedField.setAccessible(true);
+        initializedField.set(backend, true);
     }
 
     /**
@@ -211,10 +218,162 @@ public class PodmanBackendTests {
         method.invoke(backend);
     }
 
+    private void invokeProcessReconciledContainer(int pairId, String containerId)
+        throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod(
+            "processReconciledContainerThroughMonitor", int.class, String.class
+        );
+        method.setAccessible(true);
+        method.invoke(backend, pairId, containerId);
+    }
+
     private void setJobMonitor(ContainerJobMonitor monitor) throws Exception {
         Field monitorField = PodmanBackend.class.getDeclaredField("jobMonitor");
         monitorField.setAccessible(true);
         monitorField.set(backend, monitor);
+    }
+
+    @Test
+    public void reconciliationInspectionFailureRetainsContainerWithoutInventingResult()
+        throws Exception {
+        String containerId = "reconcile-uninspectable";
+
+        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class)) {
+            invokeProcessReconciledContainer(4242, containerId);
+
+            jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+                    anyInt(), anyInt(), anyInt(), anyInt(), anyBoolean()),
+                never());
+        }
+        verify(mockDockerClient, never()).removeContainerCmd(containerId);
+    }
+
+    @Test
+    public void reconciliationMissingRunningContainerLeavesScientificResultUnresolved()
+        throws Exception {
+        int pairId = 4242;
+
+        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
+                    StatusCode.STATUS_ENQUEUED.getVal()))
+                .thenReturn(Collections.emptyList());
+            jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
+                    StatusCode.STATUS_RUNNING.getVal()))
+                .thenReturn(Collections.singletonList(pairId));
+
+            invokeReconcileOrphanedPairs();
+
+            jobPairs.verify(() -> JobPairs.tryMarkRunningAsFailed(anyInt()), never());
+            jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+                    anyInt(), anyInt(), anyInt(), anyInt(), anyBoolean()),
+                never());
+        }
+        verify(mockDockerClient, never()).removeContainerCmd(anyString());
+    }
+
+    @Test
+    public void startupReconciliationRetainsContainerAfterPostStatusIngestionFailure()
+        throws Exception {
+        int pairId = 4242;
+        int stalePairId = 5151;
+        String containerId = "reconcile-post-status-failure";
+        String staleContainerId = "reconcile-stale-terminal";
+        Path outputDir = Files.createDirectories(tempDir.resolve("reconcile-output"));
+        Files.writeString(
+            outputDir.resolve("status.json"),
+            "{\"pairId\":" + pairId +
+                ",\"status\":" + StatusCode.STATUS_COMPLETE.getVal() +
+                ",\"stageNumber\":2,\"timestamp\":1788818872}\n"
+        );
+        Files.writeString(outputDir.resolve("attributes.txt"), "answer=sat\n");
+
+        Container exitedContainer = mock(Container.class);
+        Map<String, String> labels = new HashMap<>();
+        labels.put("starexec.managed", "true");
+        labels.put("starexec.label.version", "2");
+        labels.put("starexec.kind", "job-pair");
+        labels.put("starexec.pair.id", Integer.toString(pairId));
+        when(exitedContainer.getId()).thenReturn(containerId);
+        when(exitedContainer.getLabels()).thenReturn(labels);
+
+        Container staleTerminalContainer = mock(Container.class);
+        Map<String, String> staleLabels = new HashMap<>(labels);
+        staleLabels.put("starexec.pair.id", Integer.toString(stalePairId));
+        when(staleTerminalContainer.getId()).thenReturn(staleContainerId);
+        when(staleTerminalContainer.getLabels()).thenReturn(staleLabels);
+        when(mockListContainersCmd.exec()).thenReturn(
+            Arrays.asList(exitedContainer, staleTerminalContainer)
+        );
+
+        ContainerConfig config = mock(ContainerConfig.class);
+        when(mockDockerClient.inspectContainerCmd(containerId))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockDockerClient.inspectContainerCmd(staleContainerId))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(false);
+        when(mockContainerState.getExitCodeLong()).thenReturn(0L);
+        when(mockInspectContainerResponse.getConfig()).thenReturn(config);
+        when(config.getEnv()).thenReturn(new String[]{
+            "STAREXEC_OUTPUT_DIR=" + outputDir
+        });
+
+        setJobMonitor(new ContainerJobMonitor(backend));
+
+        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
+                    StatusCode.STATUS_ENQUEUED.getVal()))
+                .thenReturn(Collections.emptyList());
+            jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
+                    StatusCode.STATUS_RUNNING.getVal()))
+                .thenReturn(Collections.singletonList(pairId));
+            jobPairs.when(() -> JobPairs.setEarlierStageStatuses(
+                    pairId, Collections.emptyMap()))
+                .thenReturn(org.starexec.data.database.StageStatusBatchResult.APPLIED);
+            jobPairs.when(() -> JobPairs.setPairStatusPreciseResult(
+                    pairId,
+                    2,
+                    StatusCode.STATUS_COMPLETE.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal(),
+                    false))
+                .thenReturn(org.starexec.data.database.PairStatusResult.APPLIED);
+            jobPairs.when(() -> JobPairs.getStageNumbers(pairId))
+                .thenThrow(new IllegalStateException("metadata database unavailable"));
+
+            JobPairs.PairStatusLookupResult terminalLookup =
+                mock(JobPairs.PairStatusLookupResult.class);
+            when(terminalLookup.isMissing()).thenReturn(false);
+            when(terminalLookup.isError()).thenReturn(false);
+            when(terminalLookup.getStatusCode())
+                .thenReturn(StatusCode.STATUS_COMPLETE.getVal());
+            jobPairs.when(() -> JobPairs.getPairStatusLookup(pairId))
+                .thenReturn(terminalLookup);
+            jobPairs.when(() -> JobPairs.getPairStatusLookup(stalePairId))
+                .thenReturn(terminalLookup);
+
+            invokeReconcileOrphanedPairs();
+
+            jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+                pairId,
+                2,
+                StatusCode.STATUS_COMPLETE.getVal(),
+                StatusCode.STATUS_NOT_REACHED.getVal(),
+                false));
+            jobPairs.verify(() -> JobPairs.setPairStatusPrecise(
+                    anyInt(), anyInt(), anyInt(), anyInt()),
+                never());
+        }
+
+        verify(mockDockerClient, never()).removeContainerCmd(containerId);
+        verify(mockDockerClient).removeContainerCmd(staleContainerId);
+        assertTrue(
+            "valid terminal evidence must remain available for metadata retry",
+            Files.exists(outputDir.resolve("status.json"))
+        );
+        assertTrue("exited reconciliation must not reserve a submission slot",
+            getSlotHolderSet().isEmpty());
+        assertEquals(0, getActiveSubmissionSlots());
     }
 
     private void setBackendField(String fieldName, Object value) throws Exception {
@@ -230,10 +389,136 @@ public class PodmanBackendTests {
             "ghcr.io/starexecmiami/starexec-job-runner:latest"
         );
         setBackendField("defaultMemoryMb", 2048L);
-        setBackendField("defaultCpuLimit", 600);
-        setBackendField("defaultWallclockLimit", 600);
         setBackendField("containerDataPath", "/app/data");
         setBackendField("hostDataPath", "");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> createEnvironmentVariables(
+        long pairId,
+        String workingDirectory,
+        String outputDirectory
+    ) throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod(
+            "createEnvironmentVariables",
+            long.class,
+            String.class,
+            String.class
+        );
+        method.setAccessible(true);
+        return (List<String>) method.invoke(
+            backend,
+            pairId,
+            workingDirectory,
+            outputDirectory
+        );
+    }
+
+    private HostConfig createHostConfig(
+        String workingDirectory,
+        String logPath,
+        CpuPartition partition
+    ) throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod(
+            "createHostConfig",
+            String.class,
+            String.class,
+            CpuPartition.class
+        );
+        method.setAccessible(true);
+        return (HostConfig) method.invoke(
+            backend,
+            workingDirectory,
+            logPath,
+            partition
+        );
+    }
+
+    @Test
+    public void pairBudgetsComeFromTheGeneratedJobscriptNotContainerDefaults()
+        throws Exception {
+        configureBackendForSubmitScript();
+
+        List<String> environment = createEnvironmentVariables(
+            42L,
+            "/app/data/jobin/job_1",
+            "/app/data/joboutput/job_1"
+        );
+
+        assertFalse(
+            "the container environment must not invent a CPU-time budget that the"
+                + " generated jobscript immediately replaces",
+            environment.stream().anyMatch(value ->
+                value.startsWith("STAREXEC_CPU_LIMIT="))
+        );
+        assertFalse(
+            "the container environment must not invent a wallclock budget that the"
+                + " generated jobscript immediately replaces",
+            environment.stream().anyMatch(value ->
+                value.startsWith("STAREXEC_WALLCLOCK_LIMIT="))
+        );
+
+        String jobscript = Files.readString(
+            Path.of("src/main/java/org/starexec/config/sge/jobscript")
+        );
+        String generated = JobManager.addParametersToJobscript(
+            jobscript,
+            Map.of("$$MAX_CPUTIME$$", "137", "$$MAX_RUNTIME$$", "251")
+        );
+        assertTrue(
+            "the per-pair CPU budget must remain a generated jobscript value",
+            generated.contains("export STAREXEC_CPU_LIMIT='137'")
+        );
+        assertTrue(
+            "the per-pair wallclock budget must remain a generated jobscript value",
+            generated.contains("export STAREXEC_WALLCLOCK_LIMIT='251'")
+        );
+    }
+
+    @Test
+    public void containerMemoryDefaultStillBoundsHostConfigAndIsExposed()
+        throws Exception {
+        configureBackendForSubmitScript();
+
+        HostConfig hostConfig = createHostConfig(
+            "/app/data/jobin/job_1",
+            tempDir.resolve("job.log").toString(),
+            new CpuPartition(0, "0", "0")
+        );
+        long expectedBytes = 2048L * 1024L * 1024L;
+        assertEquals(Long.valueOf(expectedBytes), hostConfig.getMemory());
+        assertEquals(Long.valueOf(expectedBytes), hostConfig.getMemorySwap());
+
+        List<String> environment = createEnvironmentVariables(
+            42L,
+            "/app/data/jobin/job_1",
+            "/app/data/joboutput/job_1"
+        );
+        assertTrue(
+            "GetComputerInfo must still receive the cgroup memory ceiling",
+            environment.contains("STAREXEC_MEM_LIMIT=2048")
+        );
+    }
+
+    /**
+     * Each pair runs in a container of its own, so an OOM kill counted in that container's cgroup is
+     * this pair's. The job script only attributes such a kill to the pair when told so: under the
+     * local backend every pair shares the application's cgroup.
+     */
+    @Test
+    public void eachPairsContainerTellsTheJobScriptItsCgroupIsThePairsOwn()
+        throws Exception {
+        configureBackendForSubmitScript();
+
+        List<String> environment = createEnvironmentVariables(
+            42L,
+            "/app/data/jobin/job_1",
+            "/app/data/joboutput/job_1"
+        );
+        assertTrue(
+            "the job script must be told the container's cgroup is the pair's own",
+            environment.contains("STAREXEC_PAIR_HAS_OWN_CGROUP=true")
+        );
     }
 
     private void configureCreateContainerSuccess(String containerId) {
@@ -475,6 +760,365 @@ public class PodmanBackendTests {
         assertFalse("Container should be removed from tracking", execIdMap.containsKey(TEST_EXEC_ID));
     }
 
+    // ==================== Confirmed Kill Tests ====================
+    // killPairConfirmed gates every rerun, job deletion and user deletion. Before it was
+    // overridden here the interface default answered UNPROVEN for every execution, so none
+    // of those could ever proceed on this backend.
+
+    private static Map<String, String> pairContainerLabels(int execId, Integer attemptNo) {
+        Map<String, String> labels = new HashMap<>();
+        labels.put("starexec.managed", "true");
+        labels.put("starexec.exec.id", String.valueOf(execId));
+        labels.put("starexec.pair.id", "42");
+        labels.put("starexec.kind", "job-pair");
+        labels.put("starexec.label.version", "2");
+        if (attemptNo != null) {
+            labels.put("starexec.attempt", String.valueOf(attemptNo));
+        }
+        return labels;
+    }
+
+    private static Container listedContainer(String containerId, Map<String, String> labels) {
+        Container container = mock(Container.class);
+        when(container.getId()).thenReturn(containerId);
+        when(container.getLabels()).thenReturn(labels);
+        return container;
+    }
+
+    private void stubInspectState(
+        String containerId, String status, Boolean running, Boolean paused, Boolean restarting
+    ) {
+        InspectContainerCmd command = mock(InspectContainerCmd.class);
+        InspectContainerResponse response = mock(InspectContainerResponse.class);
+        InspectContainerResponse.ContainerState state =
+            mock(InspectContainerResponse.ContainerState.class);
+        when(mockDockerClient.inspectContainerCmd(containerId)).thenReturn(command);
+        when(command.exec()).thenReturn(response);
+        when(response.getState()).thenReturn(state);
+        when(state.getStatus()).thenReturn(status);
+        when(state.getRunning()).thenReturn(running);
+        when(state.getPaused()).thenReturn(paused);
+        when(state.getRestarting()).thenReturn(restarting);
+    }
+
+    private void censusReturns(Container... containers) {
+        when(mockListContainersCmd.exec()).thenReturn(Arrays.asList(containers));
+    }
+
+    @Test
+    public void testKillPairConfirmed_FinishedUntrackedExecutionIsSafe() {
+        // A COMPLETE pair: its container was ingested and removed, so nothing tracks it and
+        // the engine has nothing for its exec id. This is every rerun of a finished pair.
+        assertEquals(
+            "An execution with no container left is confirmed stopped",
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_CensusSelectsByExecIdLabelAcrossAllStates() {
+        backend.killPairConfirmed(TEST_EXEC_ID);
+
+        verify(mockListContainersCmd).withShowAll(true);
+        verify(mockListContainersCmd).withLabelFilter(
+            Collections.singletonMap("starexec.exec.id", String.valueOf(TEST_EXEC_ID))
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_StopsTrackedRunningContainerThenConfirms() throws Exception {
+        Map<Integer, String> execIdMap = getExecIdMap();
+        execIdMap.put(TEST_EXEC_ID, TEST_CONTAINER_ID);
+        markSubmissionSlotHeld(TEST_EXEC_ID);
+
+        // After the stop and forced removal the engine lists nothing for the exec id.
+        assertEquals(
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+        verify(mockDockerClient).stopContainerCmd(TEST_CONTAINER_ID);
+        verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
+        assertFalse("Tracking is released", execIdMap.containsKey(TEST_EXEC_ID));
+        assertEquals("The slot is released", 0, getActiveSubmissionSlots());
+    }
+
+    @Test
+    public void testKillPairConfirmed_UntrackedRunningContainerIsUnprovenAndLeftAlone() {
+        // Exec ids restart with each application lifetime, so a running container that this
+        // backend does not track may belong to another pair: report it, never stop it.
+        censusReturns(listedContainer("other-lifetime", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("other-lifetime", "running", true, false, false);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+        verify(mockDockerClient, never()).stopContainerCmd(anyString());
+        verify(mockDockerClient, never()).removeContainerCmd(anyString());
+    }
+
+    @Test
+    public void testKillPairConfirmed_ContainerThatSurvivedTheStopIsUnproven() throws Exception {
+        Map<Integer, String> execIdMap = getExecIdMap();
+        execIdMap.put(TEST_EXEC_ID, TEST_CONTAINER_ID);
+        doThrow(new RuntimeException("engine timeout")).when(mockRemoveContainerCmd).exec();
+        censusReturns(listedContainer(TEST_CONTAINER_ID, pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState(TEST_CONTAINER_ID, "running", true, false, false);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+        assertTrue("A failed kill keeps the container tracked", execIdMap.containsKey(TEST_EXEC_ID));
+    }
+
+    @Test
+    public void testKillPairConfirmed_ListingFailureIsUnproven() {
+        when(mockListContainersCmd.exec()).thenThrow(new RuntimeException("connection refused"));
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ListingWithNoBodyIsUnproven() {
+        when(mockListContainersCmd.exec()).thenReturn(null);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_NoEngineClientIsUnproven() throws Exception {
+        setBackendField("dockerClient", null);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ExitedContainerFencedOnItsAttemptIsSafe() {
+        // A late ingestion carries attempt 3; a rerun has moved the pair past it, so the
+        // write is refused (#185).
+        censusReturns(listedContainer("exited-fenced", pairContainerLabels(TEST_EXEC_ID, 3)));
+        stubInspectState("exited-fenced", "exited", false, false, false);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ExitedUnfencedContainerIsUnprovenEvenWhenQuarantined()
+        throws Exception {
+        censusReturns(listedContainer("exited-unfenced", pairContainerLabels(TEST_EXEC_ID, null)));
+        stubInspectState("exited-unfenced", "exited", false, false, false);
+
+        assertEquals(
+            "An uningested result with no attempt label could land on the replacement",
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+
+        // The quarantine is held in memory: after a restart the monitor can ingest the
+        // container again, unfenced, into the attempt a rerun started.
+        ContainerJobMonitor monitor = mock(ContainerJobMonitor.class);
+        when(monitor.isQuarantined("exited-unfenced")).thenReturn(true);
+        setJobMonitor(monitor);
+        assertEquals(
+            "A quarantine does not outlive the application, so it proves nothing",
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_AttemptLabelThatDoesNotParseLeavesItUnfenced() {
+        // Ingestion fences only on a positive attempt (parseAttemptLabel); any other value
+        // leaves the late write unfenced.
+        for (String attempt : new String[] {"not-a-number", "", "0", "-3"}) {
+            Map<String, String> labels = pairContainerLabels(TEST_EXEC_ID, null);
+            labels.put("starexec.attempt", attempt);
+            String id = "attempt-" + attempt;
+            censusReturns(listedContainer(id, labels));
+            stubInspectState(id, "exited", false, false, false);
+            assertEquals(
+                "attempt label '" + attempt + "' fences nothing",
+                PodmanBackend.KillOutcome.UNPROVEN,
+                backend.killPairConfirmed(TEST_EXEC_ID)
+            );
+        }
+    }
+
+    @Test
+    public void testKillPairConfirmed_OneUnsafeContainerOutweighsSafeOnes() {
+        stubInspectState("fenced", "exited", false, false, false);
+        stubInspectState("never-started", "created", false, false, false);
+        stubInspectState("still-running", "running", true, false, false);
+        Container fenced = listedContainer("fenced", pairContainerLabels(TEST_EXEC_ID, 2));
+        Container neverStarted =
+            listedContainer("never-started", pairContainerLabels(TEST_EXEC_ID, 2));
+        Container stillRunning =
+            listedContainer("still-running", pairContainerLabels(TEST_EXEC_ID, 2));
+
+        censusReturns(fenced, stillRunning);
+        assertEquals(
+            "A safe container listed first does not decide",
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+
+        censusReturns(stillRunning, fenced);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        censusReturns(fenced, neverStarted);
+        assertEquals(
+            "Every container is safe, so the execution is",
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_NeverStartedContainerIsSafe() {
+        censusReturns(listedContainer("created-only", pairContainerLabels(TEST_EXEC_ID, null)));
+        stubInspectState("created-only", "created", false, false, false);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_PausedRestartingOrUnknownStateIsUnproven() {
+        censusReturns(listedContainer("paused", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("paused", "paused", false, true, false);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        censusReturns(listedContainer("restarting", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("restarting", "restarting", false, false, true);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        censusReturns(listedContainer("removing", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("removing", "removing", false, false, false);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        // An unset flag is no report of a stop, even beside an exited status and an attempt
+        // label that would otherwise make the container safe.
+        censusReturns(listedContainer("no-running-flag", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("no-running-flag", "exited", null, false, false);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        censusReturns(listedContainer("no-paused-flag", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("no-paused-flag", "exited", false, null, false);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        censusReturns(listedContainer("no-restarting-flag", pairContainerLabels(TEST_EXEC_ID, 1)));
+        stubInspectState("no-restarting-flag", "exited", false, false, null);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+    }
+
+    @Test
+    public void testKillPairConfirmed_InspectionFailureIsUnproven() {
+        censusReturns(listedContainer("uninspectable", pairContainerLabels(TEST_EXEC_ID, 1)));
+        InspectContainerCmd command = mock(InspectContainerCmd.class);
+        when(mockDockerClient.inspectContainerCmd("uninspectable")).thenReturn(command);
+        when(command.exec()).thenThrow(new RuntimeException("engine timeout"));
+
+        assertEquals(
+            PodmanBackend.KillOutcome.UNPROVEN,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ContainerRemovedAfterListingIsSafe() {
+        censusReturns(listedContainer("just-removed", pairContainerLabels(TEST_EXEC_ID, 1)));
+        InspectContainerCmd command = mock(InspectContainerCmd.class);
+        when(mockDockerClient.inspectContainerCmd("just-removed")).thenReturn(command);
+        when(command.exec()).thenThrow(new NotFoundException("No such container"));
+
+        assertEquals(
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_IgnoresContainersOfOtherExecutionsAndUnmanagedOnes() {
+        // An engine that ignored the filter would return everything: only this exec id's
+        // managed containers may decide.
+        Map<String, String> unmanaged = pairContainerLabels(TEST_EXEC_ID, 1);
+        unmanaged.remove("starexec.managed");
+        censusReturns(
+            listedContainer("other-exec", pairContainerLabels(TEST_EXEC_ID + 1, 1)),
+            listedContainer("unmanaged", unmanaged),
+            listedContainer("no-labels", null)
+        );
+        stubInspectState("other-exec", "running", true, false, false);
+        stubInspectState("unmanaged", "running", true, false, false);
+
+        assertEquals(
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ExitedMaintenanceContainerIsSafe() {
+        Map<String, String> maintenance = pairContainerLabels(TEST_EXEC_ID, null);
+        maintenance.put("starexec.kind", "maintenance");
+        maintenance.put("starexec.pair.id", "0");
+        censusReturns(listedContainer("maintenance", maintenance));
+        stubInspectState("maintenance", "exited", false, false, false);
+
+        assertEquals(
+            "The monitor records no pair result from a maintenance container",
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
+    @Test
+    public void testKillPairConfirmed_ExitedContainerIsJudgedByItsPairIdAsIngestionIs() {
+        // Ingestion keys on the pair id label, not on starexec.kind: a positive pair id with
+        // no kind label could still be ingested, so without an attempt it is not safe.
+        Map<String, String> noKind = pairContainerLabels(TEST_EXEC_ID, null);
+        noKind.remove("starexec.kind");
+        censusReturns(listedContainer("no-kind", noKind));
+        stubInspectState("no-kind", "exited", false, false, false);
+        assertEquals(PodmanBackend.KillOutcome.UNPROVEN, backend.killPairConfirmed(TEST_EXEC_ID));
+
+        Map<String, String> noPair = pairContainerLabels(TEST_EXEC_ID, null);
+        noPair.remove("starexec.pair.id");
+        censusReturns(listedContainer("no-pair", noPair));
+        stubInspectState("no-pair", "exited", false, false, false);
+        assertEquals(
+            "Ingestion skips a container with no pair id",
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+
+        Map<String, String> malformedPair = pairContainerLabels(TEST_EXEC_ID, null);
+        malformedPair.put("starexec.pair.id", "not-a-number");
+        censusReturns(listedContainer("malformed-pair", malformedPair));
+        stubInspectState("malformed-pair", "exited", false, false, false);
+        assertEquals(
+            "Ingestion skips a container whose pair id does not parse",
+            PodmanBackend.KillOutcome.CONFIRMED_SAFE,
+            backend.killPairConfirmed(TEST_EXEC_ID)
+        );
+    }
+
     // ==================== Kill All Tests ====================
 
     @Test
@@ -587,11 +1231,12 @@ public class PodmanBackendTests {
         Set<Integer> activeIds = backend.getActiveExecutionIds();
 
         // Verify
-        assertEquals("Should have one active container", 1, activeIds.size());
         assertTrue("Should contain running container ID", activeIds.contains(1001));
-        assertFalse("Should not contain stopped container ID", activeIds.contains(1002));
+        // An exited container that still exists has a result the monitor has not ingested yet
+        // (#324): it stays active so the broken-pair sweep cannot file it as a submit failure.
+        assertTrue("An exited, uningested container stays active", activeIds.contains(1002));
 
-        // Stopped container should be removed from tracking
+        // It no longer holds an execution slot, so it leaves slot tracking
         assertFalse("Stopped container should be removed from tracking", execIdMap.containsKey(1002));
     }
 
@@ -614,7 +1259,7 @@ public class PodmanBackendTests {
         Set<Integer> activeIds = backend.getActiveExecutionIds();
 
         // Verify
-        assertTrue("Stopped container should not be active", activeIds.isEmpty());
+        assertTrue("Its result is still owed, so it stays active", activeIds.contains(TEST_EXEC_ID));
         assertFalse("Slot holder should be released", getSlotHolderSet().contains(TEST_EXEC_ID));
         assertEquals("Active submission slots should be decremented", 0, getActiveSubmissionSlots());
     }
@@ -636,6 +1281,69 @@ public class PodmanBackendTests {
         // Verify
         assertTrue("Active IDs should be empty", activeIds.isEmpty());
         assertFalse("Deleted container should be removed from tracking", execIdMap.containsKey(1001));
+    }
+
+    /** Once the monitor has ingested and removed the container, the execution is over. */
+    @Test
+    public void testGetActiveExecutionIds_IngestedContainerIsNoLongerActive() throws Exception {
+        givenExitedTrackedContainer(1003, "ingested-container");
+        assertTrue(backend.getActiveExecutionIds().contains(1003));
+
+        backend.removeCompletedContainer("ingested-container");
+
+        assertFalse(backend.getActiveExecutionIds().contains(1003));
+    }
+
+    /** A container the monitor quarantined will never be ingested: the sweep may act. */
+    @Test
+    public void testGetActiveExecutionIds_QuarantinedContainerIsNotActive() throws Exception {
+        givenExitedTrackedContainer(1004, "quarantined-container");
+        assertTrue(backend.getActiveExecutionIds().contains(1004));
+        ContainerJobMonitor monitor = mock(ContainerJobMonitor.class);
+        when(monitor.isQuarantined("quarantined-container")).thenReturn(true);
+        Field monitorField = PodmanBackend.class.getDeclaredField("jobMonitor");
+        monitorField.setAccessible(true);
+        monitorField.set(backend, monitor);
+
+        assertFalse(backend.getActiveExecutionIds().contains(1004));
+    }
+
+    /** An exited container that disappeared without ingestion is not kept alive. */
+    @Test
+    public void testGetActiveExecutionIds_VanishedExitedContainerIsNotActive() throws Exception {
+        InspectContainerCmd inspect = givenExitedTrackedContainer(1005, "vanished-container");
+        assertTrue(backend.getActiveExecutionIds().contains(1005));
+        when(inspect.exec()).thenThrow(new NotFoundException("gone"));
+
+        assertFalse(backend.getActiveExecutionIds().contains(1005));
+    }
+
+    /** The retry path releases the slot of an exited container; its result is still owed. */
+    @Test
+    public void testReleaseSlotForCompletedContainer_KeepsTheExecutionActive() throws Exception {
+        Map<Integer, String> execIdMap = getExecIdMap();
+        execIdMap.put(1006, "retrying-container");
+        InspectContainerCmd inspect = mock(InspectContainerCmd.class);
+        when(mockDockerClient.inspectContainerCmd("retrying-container")).thenReturn(inspect);
+        when(inspect.exec()).thenReturn(mock(InspectContainerResponse.class));
+
+        backend.releaseSlotForCompletedContainer("retrying-container");
+
+        assertFalse(execIdMap.containsKey(1006));
+        assertTrue(backend.getActiveExecutionIds().contains(1006));
+    }
+
+    private InspectContainerCmd givenExitedTrackedContainer(int execId, String containerId)
+            throws Exception {
+        getExecIdMap().put(execId, containerId);
+        InspectContainerCmd inspect = mock(InspectContainerCmd.class);
+        InspectContainerResponse response = mock(InspectContainerResponse.class);
+        InspectContainerResponse.ContainerState state = mock(InspectContainerResponse.ContainerState.class);
+        when(mockDockerClient.inspectContainerCmd(containerId)).thenReturn(inspect);
+        when(inspect.exec()).thenReturn(response);
+        when(response.getState()).thenReturn(state);
+        when(state.getRunning()).thenReturn(false);
+        return inspect;
     }
 
     // ==================== No-op Method Tests ====================
@@ -752,6 +1460,34 @@ public class PodmanBackendTests {
 
         verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
         verify(mockRemoveContainerCmd).withRemoveVolumes(true);
+    }
+
+    @Test
+    public void discardCompletedContainerRemovesOnlyAnInspectedExitedContainer() throws Exception {
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(false);
+
+        assertTrue(backend.discardCompletedContainer(TEST_CONTAINER_ID));
+
+        verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
+        verify(mockRemoveContainerCmd).withForce(false);
+        verify(mockRemoveContainerCmd).withRemoveVolumes(true);
+    }
+
+    @Test
+    public void discardCompletedContainerRefusesWhenRunningStateIsUnknownOrActive() throws Exception {
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(true);
+
+        assertFalse(backend.discardCompletedContainer(TEST_CONTAINER_ID));
+
+        verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
     }
 
     @Test
@@ -935,6 +1671,42 @@ public class PodmanBackendTests {
             verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
             jobPairsMock.verify(() -> JobPairs.trySetPairRunning(42), times(1));
         }
+    }
+
+    @Test
+    public void testSubmitScript_AttemptReadFails_DefersAndReleasesSlot()
+        throws Exception {
+        // A transient database error while reading the pair's attempt (#185) is not the
+        // pair's fault. Returning -1 would become a terminal ERROR_SGE_REJECT in JobManager;
+        // the pair must be deferred so it stays queued, and its slot must be freed.
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+
+        String workingDir = "/app/data/jobin/job_5";
+        String scriptPath = "/app/data/jobin/job_5/run.sh";
+        String logPath = tempDir.resolve("out").resolve("job5.log").toString();
+
+        try (MockedStatic<JobPairs> jobPairsMock = mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getCurrentAttemptNo(55))
+                .thenThrow(new java.sql.SQLException("connection reset"));
+
+            try {
+                int execId = backend.submitScript(55, scriptPath, workingDir, logPath);
+                fail("a failed attempt read must defer, not return " + execId);
+            } catch (org.starexec.backend.exception.SubmissionDeferredException expected) {
+                assertTrue("names the pair: " + expected.getMessage(),
+                    expected.getMessage().contains("55"));
+                assertTrue("names the cause: " + expected.getMessage(),
+                    expected.getMessage().contains("connection reset"));
+            }
+        }
+
+        verify(mockDockerClient, never()).createContainerCmd(anyString());
+        verify(mockStartContainerCmd, never()).exec();
+        assertTrue("no execution may be registered", getExecIdMap().isEmpty());
+        assertTrue("the partition slot must be released", getSlotHolderSet().isEmpty());
+        assertEquals(0, getActiveSubmissionSlots());
     }
 
     @Test

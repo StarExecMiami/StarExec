@@ -24,7 +24,7 @@ MAKEFLAGS += --no-print-directory
 # IMAGE_TAG       - Image version tag (default: latest)
 # ENV             - Deployment environment: dev, ci, prod (default: dev)
 # FORCE           - Skip confirmation prompts: 0 or 1 (default: 0)
-# DRY_RUN         - Preview destructive ops without executing: 0 or 1 (default: 0)
+# DRY_RUN         - Preview volumes-delete, clean-hard, reset and nuke without executing: 0 or 1 (default: 0)
 #
 # Database Configuration:
 # STAREXEC_DB_PASSWORD      - Database password (⚠️ set for non-dev environments)
@@ -45,7 +45,7 @@ IMAGE_NAME?=$(IMAGE_REGISTRY)/starexec
 IMAGE_TAG?=latest
 CHART_DIR=./charts/starexec
 RELEASE_NAME?=starexec
-HELM_VALUES?=values.yaml
+HELM_VALUES?=charts/starexec/values-auto-detected.yaml
 SECRET_NAME=secret-postgres
 STAREXEC_DB_PASSWORD?=starexec_dev_password
 STAREXEC_DB_PASSWORD_FILE?=/run/secrets/starexec-db-password
@@ -82,14 +82,17 @@ VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
 # Podman deployments require values files that do not rely on pre-existing
 # Kubernetes secrets.  The K8s profiles (values-dev.yaml, values-prod.yaml)
 # use `existingSecret` which must be created before deployment.  The Podman
-# profiles (values-local-dev.yaml, values-podman.yaml) use
+# profiles (values-local-dev.yaml and copies of values-podman.yaml.example) use
 # `allowInsecureDevCredentials: true` so the Helm chart creates the secret.
 #
 #   ENV=dev  → values-local-dev.yaml (Podman local dev)
 #   ENV=ci   → values-ci.yaml          (CI — already Podman-compatible)
-#   ENV=prod → values-prod.yaml        (K8s only; use values-podman.yaml for Podman)
+#   ENV=prod → values-prod.yaml        (Kubernetes only; see below)
 #
-# Explicit command-line overrides (VALS=...) are always respected.
+# Explicit command-line overrides (VALS=...) are always respected. A Podman
+# deploy with Helm refuses values-prod.yaml however it was selected
+# (require_podman_values): on Podman, production passes
+# VALS=charts/starexec/values-podman-prod.yaml, a copy of the example.
 # ============================================================================
 PODMAN_DEV_VALUES_FILE := $(CHART_DIR)/values-local-dev.yaml
 ifneq ($(origin VALS),command line)
@@ -301,7 +304,7 @@ help:
 	@echo "  ENV=prod              Production (Kubernetes PVCs)"
 	@echo ""
 	@echo "Flags:"
-	@echo "  DRY_RUN=1             Preview destructive operations without executing"
+	@echo "  DRY_RUN=1             Preview volumes-delete, clean-hard, reset and nuke without executing"
 	@echo "  FORCE=1               Skip confirmation prompts (use with caution)"
 	@echo ""
 	@echo "Examples:"
@@ -337,13 +340,13 @@ build-prod:
 # Pre-fetch all base images required by the Dockerfile.
 # Run once while online; subsequent offline builds will use the local cache.
 # Base images:
-#   node:20-alpine             Stage 1 - SCSS/CSS asset compilation
+#   node:24-alpine             Stage 1 - SCSS/CSS asset compilation
 #   alpine:3.19                Stage 2 - runsolver build
 #   maven:3.9-eclipse-temurin-17-alpine  Stage 3 & 4 - credential handler + app build
 #   eclipse-temurin:17-jre-alpine        Stage 5 - runtime
 cache-images:
 	@echo "Pre-fetching base images for offline builds..."
-	$(PODMAN_CMD) pull docker.io/library/node:20-alpine
+	$(PODMAN_CMD) pull docker.io/library/node:24-alpine
 	$(PODMAN_CMD) pull docker.io/library/alpine:3.19
 	$(PODMAN_CMD) pull docker.io/library/maven:3.9-eclipse-temurin-17-alpine
 	$(PODMAN_CMD) pull docker.io/library/eclipse-temurin:17-jre-alpine
@@ -459,8 +462,8 @@ volumes-backup: verify-deps
 			printf "Continue with backup anyway? (y/N): "; \
 			read ans; \
 			if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
-				echo "Backup cancelled."; \
-				exit 0; \
+				echo "Backup cancelled; nothing was changed."; \
+				exit 1; \
 			fi; \
 		fi; \
 	fi
@@ -560,17 +563,23 @@ volumes-health:
 	@echo "Running volume health checks for environment: $(ENV)"
 	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) health-check $(ENV)
 
+# Each recipe line runs in its own shell, so `exit` in one line cannot stop the next. A guard therefore either
+# fails (`exit 1` stops make) or, for DRY_RUN, leaves the destructive lines out of the recipe altogether.
 volumes-delete:
-	@if [ "$(DRY_RUN)" = "1" ]; then \
-		echo "[DRY RUN] Would delete volumes for environment: $(ENV)"; \
-		echo "  - $(VOLUME_PREFIX)-$(ENV)-data"; \
-		echo "  - $(VOLUME_PREFIX)-$(ENV)-sandbox"; \
-		echo "  - $(VOLUME_PREFIX)-$(ENV)-backend"; \
-		echo "  - $(VOLUME_PREFIX)-$(ENV)-work"; \
-		echo "  - $(VOLUME_PREFIX)-$(ENV)-postgres"; \
-		exit 0; \
+ifeq ($(DRY_RUN),1)
+	@echo "[DRY RUN] Would delete volumes for environment: $(ENV)"
+	@echo "  - $(VOLUME_PREFIX)-$(ENV)-data"
+	@echo "  - $(VOLUME_PREFIX)-$(ENV)-sandbox"
+	@echo "  - $(VOLUME_PREFIX)-$(ENV)-backend"
+	@echo "  - $(VOLUME_PREFIX)-$(ENV)-work"
+	@echo "  - $(VOLUME_PREFIX)-$(ENV)-postgres"
+	@echo "  - $(VOLUME_PREFIX)-data and $(VOLUME_PREFIX)-postgres, if they exist (older layouts)"
+	@if [ "$${CLEAN_HOSTPATH:-0}" = "1" ]; then \
+		echo "  - host directories $${HOSTPATH_DATA:-/tmp/starexec-data} and $${HOSTPATH_POSTGRES:-/tmp/postgres-data} (CLEAN_HOSTPATH=1)"; \
 	fi
+else
 	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) delete $(ENV)
+endif
 
 volumes-help:
 	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) help
@@ -600,6 +609,31 @@ define require_values_file
 			echo "Available values files:"; \
 			ls -1 $(CHART_DIR)/values*.yaml $(CHART_DIR)/values*.yaml.example 2>/dev/null | sed 's/^/  /'; \
 		fi; \
+		echo ""; \
+		exit 1; \
+	fi
+endef
+
+# require_podman_values — refuse to deploy values-prod.yaml, the Kubernetes
+# profile, to Podman with Helm, however it was selected (ENV=prod selects it
+# unless VALS= names another file). Its pod reads a database Secret that the
+# render does not create, and cleanup_deployment removes the release's Podman
+# secrets before every deploy; it also mounts other volumes than the
+# starexec-$(ENV)-* volumes that job containers and volumes-backup use.
+# Runs before anything is pulled, created or stopped. Without Helm,
+# deploy-podman-direct renders no values file, so the check does not apply.
+# Usage: @$(call require_podman_values)
+define require_podman_values
+	if [ "$(abspath $(PODMAN_VALS))" = "$(abspath $(CHART_DIR)/values-prod.yaml)" ] && command -v helm >/dev/null 2>&1; then \
+		echo ""; \
+		echo "${RED}  ✗  values-prod.yaml is the Kubernetes profile; Podman cannot deploy it${RESET}"; \
+		echo "     Its pod needs a database Secret this deployment does not create, and"; \
+		echo "     it mounts other volumes than the starexec-$(ENV)-* volumes."; \
+		echo "     ENV=prod selects it unless VALS= names the Podman values file:"; \
+		echo ""; \
+		echo "  cp $(CHART_DIR)/values-podman.yaml.example $(CHART_DIR)/values-podman-prod.yaml"; \
+		echo "  # set postgres.password and postgres.rootPassword in it, then:"; \
+		echo "  make deploy-podman ENV=prod VALS=$(CHART_DIR)/values-podman-prod.yaml"; \
 		echo ""; \
 		exit 1; \
 	fi
@@ -921,7 +955,8 @@ db-shell:
 
 db-dump:
 	@echo "Creating PostgreSQL dump (uses volume script if available)"
-	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) dump-postgres $(ENV)
+	@$(call resolve_postgres_container); \
+	PG_CONTAINER="$$PG_CONTAINER" PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) dump-postgres $(ENV)
 
 db-migrate:
 	@echo "Running Flyway migrations (this may take 30-60 seconds)..."
@@ -1020,8 +1055,8 @@ migrate-podman:
 	@printf "Continue with manual migration? (y/N): "; \
 	read ans; \
 	if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
-		echo "Cancelled"; \
-		exit 0; \
+		echo "Cancelled; nothing was changed"; \
+		exit 1; \
 	fi
 	@echo "Running Flyway migration against Podman PostgreSQL"
 	@echo "Waiting for PostgreSQL to be ready..."
@@ -1160,6 +1195,7 @@ define cleanup_deployment
 endef
 
 deploy-podman: preflight-podman preflight-cgroup
+	@$(call require_podman_values)
 	@echo "${BOLD}${BLUE}Deploying to Podman with environment: $(ENV)${RESET}"
 	@$(MAKE) image
 	@$(MAKE) volumes-create
@@ -1195,6 +1231,7 @@ deploy-podman: preflight-podman preflight-cgroup
 	@echo "  ✓ PostgreSQL readiness gate passed"
 
 deploy-podman-helm:
+	@$(call require_podman_values)
 	@# Verify values file exists before proceeding
 	@if [ ! -f "$(PODMAN_VALS)" ]; then \
 		echo "${RED}✗ Values file not found: $(PODMAN_VALS)${RESET}"; \
@@ -1215,6 +1252,7 @@ deploy-podman-helm:
 		--set image.tag=$(IMAGE_TAG) \
 		--set image.pullPolicy=Never \
 		--set backend.type=podman \
+		--set podman.hostPort=$(APP_PORT) \
 		--set-string podman.containerSocket.enabled=true \
 		--set-string podman.containerSocket.hostPath="$(PODMAN_SOCKET_PATH)" \
 		$${SOCKET_GID:+--set security.pod.supplementalGroups[0]=$$SOCKET_GID} \
@@ -1413,16 +1451,13 @@ k8s-deploy-auto: k8s-detect
 # Deploy to Kubernetes with specified environment
 deploy-k8s:
 	@echo "Deploying to Kubernetes with environment: $(ENV)"
-	@# Use auto-generated values if they exist, otherwise use env-specific values
-	@if [ -f "charts/starexec/values-auto-detected.yaml" ] && [ "$(HELM_VALUES)" = "charts/starexec/values.yaml" ]; then \
-		VALUES_FILE="charts/starexec/values-auto-detected.yaml"; \
-		echo "${YELLOW}Using auto-detected values file: $$VALUES_FILE${RESET}"; \
-	else \
-		VALUES_FILE="$(HELM_VALUES)"; \
-	fi; \
+	@# HELM_VALUES names the values file: by default the one make k8s-generate-values writes.
+	@# A file that does not exist stops the deploy rather than being swapped for another profile.
+	@VALUES_FILE="$(HELM_VALUES)"; \
 	if [ ! -f "$$VALUES_FILE" ]; then \
-		VALUES_FILE="charts/starexec/values-kubernetes.yaml"; \
-		echo "${YELLOW}Using Kubernetes values file: $$VALUES_FILE${RESET}"; \
+		echo "${RED}✗ Values file not found: $$VALUES_FILE${RESET}"; \
+		echo "  Run 'make k8s-generate-values', or pass HELM_VALUES=<values file>."; \
+		exit 1; \
 	fi; \
 	TMP_KUBECONFIG=""; \
 	KUBECTL_CMD="kubectl"; \
@@ -1559,8 +1594,8 @@ clean-cache:
 		printf "Continue? (y/N): "; \
 		read ans; \
 		if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
-			echo "Cancelled"; \
-			exit 0; \
+			echo "Cancelled; nothing was changed"; \
+			exit 1; \
 		fi; \
 	else \
 		echo "${RED}Running non-interactively without FORCE=1. Aborting.${RESET}"; \
@@ -1577,15 +1612,17 @@ clean-all: clean-podman volumes-delete
 	@echo "${GREEN}✓ Full cleanup complete (pods, images, volumes removed; cache preserved)${RESET}"
 
 clean-hard:
-	@if [ "$(DRY_RUN)" = "1" ]; then \
-		echo "[DRY RUN] Would perform HARD RESET for ENV=$(ENV):"; \
-		echo "  - Remove pods: starexec, starexec-pod, $(POD_NAME)"; \
-		echo "  - Remove containers: $(APP_CONTAINER), $(DB_CONTAINER)"; \
-		echo "  - Remove secrets: $(RELEASE_NAME)-$(SECRET_NAME)-*"; \
-		echo "  - Remove volumes: $(VOLUME_PREFIX)-$(ENV)-data, $(VOLUME_PREFIX)-$(ENV)-sandbox, $(VOLUME_PREFIX)-$(ENV)-backend, $(VOLUME_PREFIX)-$(ENV)-work, $(VOLUME_PREFIX)-$(ENV)-postgres"; \
-		echo "  - Remove image: $(RELEASE_NAME):$(IMAGE_TAG)"; \
-		exit 0; \
+ifeq ($(DRY_RUN),1)
+	@echo "[DRY RUN] Would perform HARD RESET for ENV=$(ENV):"
+	@echo "  - Remove pods: starexec, starexec-pod, $(POD_NAME)"
+	@echo "  - Remove containers: $(APP_CONTAINER), $(DB_CONTAINER)"
+	@echo "  - Remove secrets: $(RELEASE_NAME)-$(SECRET_NAME)-*"
+	@echo "  - Remove volumes: $(VOLUME_PREFIX)-$(ENV)-data, $(VOLUME_PREFIX)-$(ENV)-sandbox, $(VOLUME_PREFIX)-$(ENV)-backend, $(VOLUME_PREFIX)-$(ENV)-work, $(VOLUME_PREFIX)-$(ENV)-postgres, and $(VOLUME_PREFIX)-data and $(VOLUME_PREFIX)-postgres if they exist"
+	@if [ "$${CLEAN_HOSTPATH:-0}" = "1" ]; then \
+		echo "  - Remove host directories: $${HOSTPATH_DATA:-/tmp/starexec-data}, $${HOSTPATH_POSTGRES:-/tmp/postgres-data} (CLEAN_HOSTPATH=1)"; \
 	fi
+	@echo "  - Remove image: $(RELEASE_NAME):$(IMAGE_TAG)"
+else
 	@echo "${YELLOW}⚠️  HARD RESET: Removes ALL StarExec resources for ENV=$(ENV)${RESET}"
 	@echo "${RED}This will delete:${RESET}"
 	@echo "  - Pods and containers"
@@ -1597,8 +1634,8 @@ clean-hard:
 		printf "Type '$(ENV)' to confirm: "; \
 		read ans; \
 		if [ "$$ans" != "$(ENV)" ]; then \
-			echo "${YELLOW}Cancelled${RESET}"; \
-			exit 0; \
+			echo "${YELLOW}Cancelled; nothing was changed${RESET}"; \
+			exit 1; \
 		fi; \
 	else \
 		echo "${YELLOW}FORCE=1 detected, skipping confirmation${RESET}"; \
@@ -1610,12 +1647,16 @@ clean-hard:
 	@echo "Removing StarExec image..."
 	@$(PODMAN_CMD) rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
 	@echo "${GREEN}✓ Hard reset complete for ENV=$(ENV)${RESET}"
+endif
 
 # ============================================================================
 # CONVENIENT CLEANUP ALIASES
 # ============================================================================
 
-reset: stop clean-hard
+# clean-hard removes the deployment itself, after its confirmation; a `stop` prerequisite would take the
+# deployment down before the question is even asked, and during a DRY_RUN.
+reset: clean-hard
+ifneq ($(DRY_RUN),1)
 	@echo ""
 	@echo "${GREEN}✓✓✓ Complete reset finished ✓✓✓${RESET}"
 	@echo "Environment ${BOLD}$(ENV)${RESET} has been completely cleaned:"
@@ -1624,9 +1665,12 @@ reset: stop clean-hard
 	@echo "  - All images removed"
 	@echo ""
 	@echo "To redeploy: ${BLUE}make deploy-podman ENV=$(ENV)${RESET}"
+endif
 
 nuke: reset
+ifneq ($(DRY_RUN),1)
 	@echo "${GREEN}Environment $(ENV) nuked successfully${RESET}"
+endif
 
 status:
 	@echo "${BOLD}${BLUE}══════════════════════════════════════════${RESET}"

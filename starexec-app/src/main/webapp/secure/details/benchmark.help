@@ -11,7 +11,7 @@ In addition to additional details about the benchmarks type, this page will show
 a number of system-level attributes (such as description, owner, size, and so on)
 for the benchmark as well as type-specific attributes.
 With a couple of exceptions (see the
-<a href="https://wiki.uiowa.edu/display/stardev/User+Guide#UserGuide-BenchmarkTypes">
+<a href="${starexecRoot}/public/StarExecUserGuide.pdf#page=6">
 User Guide</a>), the latter are user-defined attributes whose values are extracted
 from the benchmark at upload time by a type-specific preprocessor previously uploaded
 by a community leader.

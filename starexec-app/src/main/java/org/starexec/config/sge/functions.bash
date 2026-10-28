@@ -13,7 +13,7 @@
 # /////////////////////////////////////////////
 
 # Include the predefined status codes and functions
-. $SCRIPT_DIR/status_codes.bash
+. "$SCRIPT_DIR/status_codes.bash"
 
 # Strict mode: exit on command failure, unset variable use, and pipe failures.
 # Ensures staging failures (e.g. cp) terminate the script and the EXIT trap can send status.
@@ -47,6 +47,15 @@ CONTAINER_STATS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stats.json"
 CONTAINER_STAGE_ATTRS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-attributes"
 CONTAINER_STAGE_STATS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-stats"
 CONTAINER_LOG_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/${PAIR_ID}.txt"
+# Whether the job script's stdout already is that file. On the local backend it is: LocalBackend
+# redirects the script's output to the pair log, and STAREXEC_OUTPUT_DIR is the log's directory.
+# Kubernetes and Podman send stdout to the container runtime instead. Checked once, here: the
+# jobscript sources this file at its top level, where stdout is the script's own.
+if [ /dev/stdout -ef "$CONTAINER_LOG_FILE" ]; then
+	STDOUT_IS_CONTAINER_LOG=true
+else
+	STDOUT_IS_CONTAINER_LOG=false
+fi
 
 # Write status update for container mode
 function containerWriteStatus {
@@ -786,7 +795,10 @@ function initSandbox {
 function log {
 	local MESSAGE="$(date +'%D %r %Z'): $1"
 	echo "$MESSAGE"
-	if isContainerMode; then
+	# When stdout is the log, the echo above has already written the line there. Appending it too
+	# would write through a second descriptor, while the stdout one, opened without O_APPEND, keeps
+	# its own offset: the copy would land past it, and the script's next output would overwrite it.
+	if isContainerMode && [ "$STDOUT_IS_CONTAINER_LOG" != true ]; then
 		mkdir -p "$(dirname "$CONTAINER_LOG_FILE")"
 		echo "$MESSAGE" >> "$CONTAINER_LOG_FILE"
 	fi
@@ -845,8 +857,25 @@ function cleanForNextStage {
 	rm -f "$LOCAL_BENCH_PATH"
 }
 
+# Where killDeadlockedJobPair records that it fired. In the pair's working directory, which
+# container mode creates empty for each execution; the jobscript also removes the file before
+# arming each stage's watchdog, so it can only have been left by the current stage's.
+#
+# A function rather than a variable: the watchdog computes the path inside a command
+# substitution, so even a missing WORKING_DIR (set -u) fails only that write, never the kill.
+function deadlockWatchdogFiredFile {
+	echo "$WORKING_DIR/deadlock-watchdog-fired"
+}
+
+# Whether the current stage's watchdog has fired. Read from the record it leaves, not from
+# whether it is still running: a watchdog can end without firing -- killed by the kernel or a
+# stray signal, or ended by an error of its own -- and one that has fired may still be killing.
+function deadlockWatchdogFired {
+	[ -e "$(deadlockWatchdogFiredFile)" ]
+}
+
 # Kills all of a sandboxes processes if their job pair becomes deadlocked
-# and time out.
+# and time out. When it fires, it leaves deadlockWatchdogFiredFile behind.
 # Input:
 #    $1 - The timeout of the jobpair, currently the wallclock
 #    $2 - The extra time we give to the jobpair after the wallclock timeout
@@ -855,27 +884,184 @@ function cleanForNextStage {
 function killDeadlockedJobPair {
 	TIMEOUT=$1
 	EXTRA=$2
-	CURRENT_USER=$3
+	# Defaulted: under set -u a missing user would end this watchdog before it slept, and
+	# container mode reaps by process tree, never by user.
+	CURRENT_USER=${3:-}
 
-	log "Wallclock timeout for current jobpair = $TIMEOUT"
-	log "Extra time given to jobpair on top of wallclock timeout before we kill it = $EXTRA"
-	log "User whose job will be killed if it exceeds it's runtime = $CURRENT_USER"
+	# Every log line here is non-fatal: in container mode log() appends to the output
+	# volume, and under set -e a full disk or an NFS outage there would end this watchdog
+	# before it kills anything.
+	log "Combined watchdog sleep budget for current jobpair (pre-processor + wallclock + post-processor, B7) = $TIMEOUT" || true
+	log "Extra time given to jobpair on top of wallclock timeout before we kill it = $EXTRA" || true
+	log "User whose job will be killed if it exceeds it's runtime = $CURRENT_USER" || true
 
-	sleep $(( TIMEOUT + EXTRA ))
+	# Backgrounded and waited on, rather than run in the foreground, so the TERM that
+	# stopDeadlockWatchdog sends at the end of the stage can take it down too. A foreground
+	# sleep outlived the watchdog it belonged to: it was reparented and sat idle until its
+	# own timer ran out, one per stage on Local, where the jobscript is not in a container
+	# that takes them with it.
+	#
+	# The trap goes in before the sleep is started, not after: a TERM landing between the two
+	# would leak exactly the orphan this avoids. ${WATCHDOG_SLEEP_PID:-} is empty until the
+	# assignment runs, and `kill ""` is refused harmlessly.
+	#
+	# It is removed as soon as the sleep is over, so the reap below starts from a default TERM
+	# disposition and reapJobPairProcessTree's own `trap '' TERM` window is exactly what it was.
+	trap 'kill "${WATCHDOG_SLEEP_PID:-}" 2>/dev/null || true; exit 0' TERM
+	sleep $(( TIMEOUT + EXTRA )) &
+	WATCHDOG_SLEEP_PID=$!
+	wait "$WATCHDOG_SLEEP_PID" || true
+	trap - TERM
 
-	log "killDeadlockedJobPair: About to kill jobpair run by $CURRENT_USER because it has exceeded it's total allotted runtime."
-	cd $WORKING_DIR
+	# Recorded before anything is killed: the reap below ends the solver, and the jobscript's
+	# check after the solver must find the record by then. Not fatal, like the log lines: a
+	# failed write must not stop the kill. The stage is then judged on its own output, which
+	# after a reap is usually missing, so it ends as ERROR_RUNSCRIPT.
+	{ : > "$(deadlockWatchdogFiredFile)"; } 2>/dev/null || log "killDeadlockedJobPair: could not record that it fired" || true
 
-	# In container mode, we don't need sudo since we're already root with container isolation
+	log "killDeadlockedJobPair: About to kill jobpair run by $CURRENT_USER because it has exceeded it's total allotted runtime." || true
+
+	# Container mode (#254): nothing runs as the sandbox user here -- Podman runs the pair as
+	# root, Kubernetes as runAsUser, Local as Tomcat's own user -- and busybox killall has no
+	# --user anyway, so "kill by user" killed nothing (or, on Local, would kill Tomcat).
+	# Reap this jobscript's own process tree instead. Done before the cd below, which only
+	# the build-job cleanup needs, so a vanished working directory cannot prevent it.
 	if isContainerMode; then
-		killall -SIGKILL --user $CURRENT_USER 2>/dev/null || true
+		reapJobPairProcessTree
 	else
 		sudo -u $CURRENT_USER killall -SIGKILL --user $CURRENT_USER
 	fi
 
+	cd $WORKING_DIR
 	if [ $BUILD_JOB == "true" ]; then
 		cleanUpAfterKilledBuildJob
 	fi
+}
+
+# Echoes the PIDs of every live descendant of $1, one per line, skipping $2 and its whole
+# subtree. Read from /proc so it does not depend on which ps/pkill an image ships.
+function descendantPids {
+	local root=$1 prune=$2 dir stat rest ppid pid child
+	local -A children=()
+	for dir in /proc/[0-9]*; do
+		# The process may exit between the glob and the read. `read`, not $(<file): under
+		# set -e, bash 5.2 (the job image's) exits the whole shell when $(<file) names a
+		# missing file, even inside `|| continue`.
+		{ read -r stat < "$dir/stat"; } 2>/dev/null || continue
+		# comm (field 2) may contain spaces and parentheses; ppid follows the LAST ')'.
+		rest=${stat##*) }
+		read -r _ ppid _ <<< "$rest"
+		[[ $ppid =~ ^[0-9]+$ ]] || continue
+		children[$ppid]+="${dir#/proc/} "
+	done
+	local -a queue=("$root")
+	while ((${#queue[@]} > 0)); do
+		pid=${queue[0]}
+		queue=("${queue[@]:1}")
+		for child in ${children[$pid]:-}; do
+			[[ $child == "$prune" ]] && continue
+			echo "$child"
+			queue+=("$child")
+		done
+	done
+}
+
+# Called by the watchdog when the pair has overrun its budget (#254). SIGKILLs every
+# descendant of this jobscript ($$) except this watchdog's own subtree and the jobscript's
+# bash subshells (e.g. the incremental output copier), recognisable because a subshell keeps
+# the script's exact command line; the children of those subshells ARE reaped. Tomcat
+# (Local) and PID 1 are ancestors, never descendants, so they cannot be reached. The tree is
+# frozen with SIGSTOP and re-scanned until it stops growing, so a process forked mid-kill
+# cannot escape. The copier itself usually ends too, because its reaped child fails under
+# set -e; the jobscript stops it after the solver regardless, and the final copyOutput
+# supersedes any incremental copy the reap interrupted.
+function reapJobPairProcessTree {
+	local self=$BASHPID pid grew
+	local -A frozen=()
+	# stopDeadlockWatchdog ends this watchdog with SIGTERM when the stage finishes. Landing
+	# between the first SIGSTOP and the SIGKILLs, it would leave the frozen tree stopped for
+	# good, so TERM is ignored for exactly that span. The caller never waits on this process,
+	# and the span is at most five /proc scans and one kill per frozen process.
+	trap '' TERM
+	for _ in 1 2 3 4 5; do
+		grew=false
+		for pid in $(descendantPids "$$" "$self"); do
+			[[ -n ${frozen[$pid]:-} ]] && continue
+			if cmp -s "/proc/$$/cmdline" "/proc/$pid/cmdline" 2>/dev/null; then
+				continue
+			fi
+			kill -STOP "$pid" 2>/dev/null || continue
+			frozen[$pid]=1
+			grew=true
+		done
+		[[ $grew == true ]] || break
+	done
+	# Nothing that can fail may run between freezing and killing: a watchdog that died here
+	# would leave the whole tree stopped for good. So kill first, and log afterwards.
+	for pid in "${!frozen[@]}"; do
+		kill -KILL "$pid" 2>/dev/null || true
+	done
+	trap - TERM
+	log "killDeadlockedJobPair: reaped ${#frozen[@]} process(es) of job pair $PAIR_ID: ${!frozen[*]}" || true
+}
+
+# Stops the current stage's defensive killDeadlockedJobPair watchdog (B7), if one is
+# still running. Safe to call before the first watchdog of the script's life has
+# started (KILL_DEADLOCKED_JOB_PAIR_PID unset). The PID is cleared after it is
+# signaled, so the second call on a pair's last stage (explicit call after
+# copyOutput, then again from the EXIT trap via exitJobscript) is a no-op instead
+# of re-signaling a PID the OS may already have handed to an unrelated process.
+#
+# Deliberately does NOT verify the PID's identity before signaling it (e.g. by
+# matching `ps -o cmd=` the way isPairRunning above matches a sandbox PID): tested
+# directly against a real script-file invocation (not `bash -c`), a backgrounded
+# function's subshell reports its OWN script's invocation line as its `cmd`
+# ("bash /path/to/jobscript"), never the function's name, so a cmd-text match can
+# never succeed here and would silently turn this into a permanent no-op -- worse
+# than the PID-reuse window it would have tried to close, since a watchdog that is
+# never actually stopped survives to `killall` a later, unrelated, still-running
+# stage. The PID-reuse window this call is exposed to is unchanged from what
+# COPY_OUTPUT_INCREMENTALLY_PID (jobscript, unrelated to B7) already accepts.
+#
+# Then waits for the watchdog to exit. A watchdog already reaping ignores TERM until the
+# tree is killed (reapJobPairProcessTree), and until it exits it keeps rescanning this
+# script's descendants, so work started after this returns -- the next stage's solver,
+# copyOutput, the next watchdog -- would be frozen and killed with it. A sleeping watchdog
+# dies on the TERM itself, so the common case returns on the first poll.
+#
+# Bounded, because a wedged watchdog (a log append hanging on a dead NFS mount) must not
+# hold the pair. The cap, 30 s, is about 34 times a measured 880 ms reap of a 200-process
+# tree. Past it the watchdog is SIGKILLed; anything it had frozen then stays stopped, the
+# pre-fix leak, accepted because only a watchdog that is itself stuck gets there.
+function stopDeadlockWatchdog {
+	local pid=${KILL_DEADLOCKED_JOB_PAIR_PID:-} polls=0
+	local cap=${DEADLOCK_WATCHDOG_STOP_CAP_TENTHS:-300}
+	if [ -n "$pid" ]; then
+		kill "$pid" 2>/dev/null || true
+		KILL_DEADLOCKED_JOB_PAIR_PID=
+		while isOwnLiveChild "$pid"; do
+			if ((polls >= cap)); then
+				kill -KILL "$pid" 2>/dev/null || true
+				log "stopDeadlockWatchdog: watchdog $pid did not exit within $((cap / 10)) s of TERM; killed it" || true
+				break
+			fi
+			sleep 0.1 || true
+			polls=$((polls + 1))
+		done
+	fi
+}
+
+# Whether $1 is a running child of this script. A zombie is not running, and a PID whose
+# parent is someone else has been reused, so neither is waited on or killed. Not `wait`:
+# it has no timeout.
+function isOwnLiveChild {
+	local stat rest state ppid
+	# `read`, not $(<file): see descendantPids. The PID's /proc entry vanishes once it is reaped.
+	{ read -r stat < "/proc/$1/stat"; } 2>/dev/null || return 1
+	# comm (field 2) may contain spaces and parentheses; state and ppid follow the LAST ')'.
+	rest=${stat##*) }
+	read -r state ppid _ <<< "$rest"
+	[[ $state != Z && $ppid == "$$" ]]
 }
 
 # Calls copyOutput at an increment specified. Should be killed
@@ -889,8 +1075,13 @@ function copyOutputIncrementally {
 	PERIOD=$1
 	TIMEOUT=$2
 	while ((TIMEOUT > 0)); do
-		sleep $PERIOD
-		copyOutputNoStats $3 $4 $5
+		sleep "$PERIOD"
+		# The solver is still running and holds $OUT_DIR/output_files, so this snapshot
+		# must only copy from it (#159). A failed snapshot is logged and retried at the
+		# next interval; it must not end this loop, which runs under set -e.
+		if ! OUTPUT_FILES_TRANSFER="cp" copyOutputNoStats "$3" "$4" "$5"; then
+			log "incremental output copy failed; will retry at the next interval"
+		fi
 
 		if ((DISK_QUOTA_EXCEEDED == 1)); then
 			break
@@ -997,8 +1188,10 @@ function sendStageStatus {
 		# A successful intermediate stage is not a completed pair. The jobscript
 		# explicitly calls sendStatus after its final stage; publishing COMPLETE
 		# here lets a live monitor retire the pair before later stages execute.
-		# Keep failure publication so error helpers still attach the precise stage
-		# to their preceding pair-level (stage 0) failure notification.
+		# Keep failure publication: a failed stage ends the pair, and sendStageFailure
+		# writes this record alone, so it is the pair's result as well as the stage's.
+		# There is no longer a preceding pair-level (stage 0) notification for it to
+		# attach a stage to.
 		local WRITE_PAIR_STATUS=true
 		if [[ "$STATUS" == "$STATUS_COMPLETE" ]]; then
 			WRITE_PAIR_STATUS=false
@@ -1045,22 +1238,116 @@ function sendStatus {
 	fi
 }
 
+# Reports the failure of a stage: the pair's status and the stage it belongs to.
+# $1 the status, $2 the stage number
+function sendStageFailure {
+	if isContainerMode; then
+		# One stage-level record: status.json and this stage's snapshot. Writing the
+		# pair-level record first (as sendStatus with no stage does) published a terminal
+		# pair status while this stage's snapshot still read RUNNING; for a pair-level
+		# result the monitor validates every snapshot, and a Local monitor polling between
+		# the two writes held a finished pair for intervention for good. The stage-level
+		# record alone ends exactly where the two writes ended, and the monitor does not
+		# validate the snapshot of the stage a result names.
+		sendStageStatus "$1" "$2"
+	else
+		sendStatus "$1"
+		sendStageStatus "$1" "$2"
+	fi
+	# The failure is the pair's result: the stage loop ends on it, and only cleanup follows.
+	claimResult
+}
+
+# Marks the pair's result as recorded, so the EXIT trap's fail-closed fallback leaves it alone,
+# as limitExceeded does for its own.
+#
+# Called once the result is written: under set -e a cleanup command that fails afterwards (an
+# rm -rf racing the solver a breach just killed) ends the script, and the fallback then replaced
+# the recorded result with ERROR_RUNSCRIPT. A write that fails ends the script before this is
+# reached, so the fallback still covers a result that was never recorded.
+function claimResult {
+	STATUS_SENT=true
+}
+
 function sendWallclockExceededStatus {
 	log "epilog detects wall clock time exceeded"
-	sendStatus $EXCEED_RUNTIME
-	sendStageStatus $EXCEED_RUNTIME ${STAGE_NUMBERS[STAGE_INDEX]}
+	sendStageFailure $EXCEED_RUNTIME "${STAGE_NUMBERS[STAGE_INDEX]}"
 }
 
 function sendCpuExceededStatus {
 	log "epilog detects cpu time exceeded"
-	sendStatus $EXCEED_CPU
-	sendStageStatus $EXCEED_CPU ${STAGE_NUMBERS[STAGE_INDEX]}
+	sendStageFailure $EXCEED_CPU "${STAGE_NUMBERS[STAGE_INDEX]}"
 }
 
 function sendExceedMemStatus {
 	log "epilog detects max virtual memory exceeded"
-	sendStatus $EXCEED_MEM
-	sendStageStatus $EXCEED_MEM ${STAGE_NUMBERS[STAGE_INDEX]}
+	sendStageFailure $EXCEED_MEM "${STAGE_NUMBERS[STAGE_INDEX]}"
+}
+
+# Records a memory breach the kernel enforced: while the solver ran, the kernel's OOM killer stopped one
+# of the pair's processes, normally because the pair's container reached its memory limit.
+#
+# runsolver enforces only the stage's own memory limit. When the container's limit is lower, the kernel
+# acts first: runsolver then reports a solver ended by a signal and no limit of its own exceeded, and
+# without this the pair was recorded as complete.
+function sendContainerOomStatus {
+	local limit
+	limit=$(pairCgroupMemoryLimitMib)
+	if [ -n "$limit" ]; then
+		limit="$limit MiB"
+	else
+		limit="unknown"
+	fi
+	log "epilog detects that the kernel's OOM killer stopped a process of this pair while the solver ran: the container's memory limit is $limit, and this stage's memory limit is $CURRENT_STAGE_MEMORY MiB"
+	sendStageFailure $EXCEED_MEM "${STAGE_NUMBERS[STAGE_INDEX]}"
+}
+
+# Prints how many of this pair's processes the kernel's OOM killer has stopped, or nothing when that
+# cannot be known.
+#
+# Only a pair with a cgroup of its own has such a count. The Podman backend runs each pair in a container
+# of its own and says so with STAREXEC_PAIR_HAS_OWN_CGROUP; the container's private cgroup namespace makes
+# its cgroup the root of /sys/fs/cgroup. The local backend runs every pair inside the application's cgroup,
+# where a kill cannot be attributed to one pair, so it does not set the flag.
+#
+# cgroup v2 keeps the count in memory.events, v1 (Linux 4.13 and later) in memory.oom_control. The pair's
+# processes live in that cgroup, or on v2 possibly below it, where memory.events counts them too. Never
+# fails: callers run under set -e.
+function pairCgroupOomKills {
+	[ "${STAREXEC_PAIR_HAS_OWN_CGROUP:-}" = true ] || return 0
+	local root="${STAREXEC_CGROUP_ROOT:-/sys/fs/cgroup}"
+	local file
+	for file in "$root/memory.events" "$root/memory/memory.oom_control"; do
+		if [ -r "$file" ]; then
+			awk '$1 == "oom_kill" && $2 ~ /^[0-9]+$/ { print $2; exit }' "$file" 2>/dev/null || true
+			return 0
+		fi
+	done
+	return 0
+}
+
+# Prints the memory limit of this pair's cgroup in MiB, or nothing when it has none or it cannot be read.
+# Never fails, like pairCgroupOomKills.
+function pairCgroupMemoryLimitMib {
+	[ "${STAREXEC_PAIR_HAS_OWN_CGROUP:-}" = true ] || return 0
+	local root="${STAREXEC_CGROUP_ROOT:-/sys/fs/cgroup}"
+	local bytes=""
+	if [ -r "$root/memory.max" ]; then
+		bytes=$(cat "$root/memory.max" 2>/dev/null || true)
+	elif [ -r "$root/memory/memory.limit_in_bytes" ]; then
+		bytes=$(cat "$root/memory/memory.limit_in_bytes" 2>/dev/null || true)
+	fi
+	# No limit reads "max" on v2 and 9223372036854771712 on v1. No real limit has 19 digits (10^18 bytes).
+	if [[ $bytes =~ ^[0-9]+$ ]] && ((${#bytes} < 19)); then
+		echo $((bytes / 1048576))
+	fi
+	return 0
+}
+
+# True when two counts from pairCgroupOomKills, taken before and after the solver ran, show a kill. A
+# missing count is no evidence of anything, so it never is.
+function oomKillsRose {
+	isInteger "${1:-}" && isInteger "${2:-}" && (($2 > $1))
 }
 
 function setStartTime {
@@ -1110,7 +1397,8 @@ function limitExceeded {
 	# trap's fail-closed ERROR_BENCHMARK overwrote the limit that was actually breached,
 	# reporting a file-write limit as a missing benchmark.
 	STATUS_SENT=true
-	sendStatus $2
+	# limitExceeded fires while the solver runs, so the breach belongs to that stage (#145).
+	sendStatus $2 "${CURRENT_STAGE_NUMBER:-0}"
 	exit 1
 }
 
@@ -1181,10 +1469,20 @@ function updateStats {
 		VOL_CONTEXT_SWITCHES=0
 		INVOL_CONTEXT_SWITCHES=0
 	else
-		WALLCLOCK_TIME=$(sed -n 's/^WCTIME=\([0-9\.]*\)$/\1/p' $1)
-		CPU_TIME=$(sed -n 's/^CPUTIME=\([0-9\.]*\)$/\1/p' $1)
-		CPU_USER_TIME=$(sed -n 's/^USERTIME=\([0-9\.]*\)$/\1/p' $1)
-		SYSTEM_TIME=$(sed -n 's/^SYSTEMTIME=\([0-9\.]*\)$/\1/p' $1)
+		# runsolver keeps its times as floats and prints them in the stream's default
+		# format (RunSolverSource/Watcher.hh:453-463), which is exponent form below 1e-4 s
+		# and from 1e6 s: WCTIME=9.90467e-05. Read as digits and dots only, such a time
+		# was empty, stats.json was not valid JSON, and the stage lost all its
+		# measurements. A time is now read only as digits with an optional fraction and
+		# an optional exponent, the form in which that format prints a non-negative
+		# number; JSON and SQL both accept it (JSON would refuse an integer part such as
+		# 007, which the format never prints). Anything else is read as empty. MAXVM is
+		# an integer (KiB).
+		local RUNSOLVER_TIME='[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?'
+		WALLCLOCK_TIME=$(sed -n -E "s/^WCTIME=($RUNSOLVER_TIME)\$/\1/p" $1)
+		CPU_TIME=$(sed -n -E "s/^CPUTIME=($RUNSOLVER_TIME)\$/\1/p" $1)
+		CPU_USER_TIME=$(sed -n -E "s/^USERTIME=($RUNSOLVER_TIME)\$/\1/p" $1)
+		SYSTEM_TIME=$(sed -n -E "s/^SYSTEMTIME=($RUNSOLVER_TIME)\$/\1/p" $1)
 		MAX_VIRTUAL_MEMORY=$(sed -n 's/^MAXVM=\([0-9\.]*\)$/\1/p' $1)
 
 		log "the max virtual memory was $MAX_VIRTUAL_MEMORY"
@@ -1253,6 +1551,30 @@ function createDir {
 	fi
 }
 
+# Replaces $2 with a copy of directory $1 without ever touching $1. The copy is built next
+# to $2 and swapped in, so the previous snapshot survives until the new one is complete.
+# Never fatal: the source is live and may change or vanish mid-copy, so a failure is logged
+# and the caller keeps its previous snapshot.
+# $1 Source directory (may be held open by a running solver)
+# $2 Destination directory
+function snapshotOutputFiles {
+	local TMP_SNAPSHOT="$2.incremental.tmp"
+	if [ ! -d "$1" ]; then
+		log "incremental output: source '$1' does not exist; keeping the previous snapshot"
+		return 0
+	fi
+	rm -rf "$TMP_SNAPSHOT"
+	log "cp -r $1 $2 (snapshot)"
+	if cp -r -- "$1" "$TMP_SNAPSHOT"; then
+		rm -rf "$2"
+		mv -- "$TMP_SNAPSHOT" "$2" || log "incremental output: could not publish snapshot '$2'"
+	else
+		log "incremental output: copy of '$1' failed; keeping the previous snapshot"
+		rm -rf "$TMP_SNAPSHOT"
+	fi
+	return 0
+}
+
 # copys output without doing post-processing or updating the database stats
 # $1 The current stage number
 # $2 the stdout copy option (1 means don't save, otherwise save)
@@ -1279,15 +1601,36 @@ function copyOutputNoStats {
 		cp "$STDOUT_FILE" "$PAIR_OUTPUT_PATH"
 	fi
 
+	# OUTPUT_FILES_TRANSFER is "mv" (the default) once the solver has exited, and "cp" for
+	# incremental snapshots taken while it is still running: the live directory is then never
+	# removed, renamed or moved (#159). The incremental copier is the only caller that sets it.
+	local TRANSFER="${OUTPUT_FILES_TRANSFER:-mv}"
+
 	if (($3 != 1)); then
-		log "mv $OUT_DIR/output_files/ $PAIR_OTHER_OUTPUT_PATH"
-		rm -rf "$PAIR_OTHER_OUTPUT_PATH"
-		mv "$OUT_DIR/output_files/" "$PAIR_OTHER_OUTPUT_PATH"
+		if [[ "$TRANSFER" == cp ]]; then
+			snapshotOutputFiles "$OUT_DIR/output_files" "$PAIR_OTHER_OUTPUT_PATH"
+		else
+			log "mv $OUT_DIR/output_files/ $PAIR_OTHER_OUTPUT_PATH"
+			rm -rf "$PAIR_OTHER_OUTPUT_PATH"
+			mv "$OUT_DIR/output_files/" "$PAIR_OTHER_OUTPUT_PATH"
+		fi
 	fi
 	SAVED_PAIR_OUTPUT_PATH="$SAVED_OUTPUT_DIR/$1"
 	SAVED_PAIR_OTHER_OUTPUT_PATH=$SAVED_OUTPUT_DIR"/"$1"_output"
 
 	cp "$STDOUT_FILE" "$SAVED_PAIR_OUTPUT_PATH"
+	if [[ "$TRANSFER" == cp ]]; then
+		# Copy from the snapshot just taken when there is one, so both destinations agree.
+		if (($3 != 1)); then
+			snapshotOutputFiles "$PAIR_OTHER_OUTPUT_PATH" "$SAVED_PAIR_OTHER_OUTPUT_PATH"
+		else
+			snapshotOutputFiles "$OUT_DIR/output_files" "$SAVED_PAIR_OTHER_OUTPUT_PATH"
+		fi
+		return 0
+	fi
+
+	# The solver has exited: drop any half-written incremental snapshot, then finish as before.
+	rm -rf "$PAIR_OTHER_OUTPUT_PATH.incremental.tmp" "$SAVED_PAIR_OTHER_OUTPUT_PATH.incremental.tmp"
 	rm -rf "$SAVED_PAIR_OTHER_OUTPUT_PATH"
 	if [ -d "$OUT_DIR/output_files/" ]; then
 		log "mv $OUT_DIR/output_files/ $SAVED_PAIR_OTHER_OUTPUT_PATH"
@@ -1336,14 +1679,27 @@ function copyOutput {
 
 	if [ "${POST_PROCESSOR_PATH:-}" != "" ]; then
 		log "getting postprocessor"
-		mkdir $OUT_DIR/postProcessor
-		safeCpAll "copying post processor" "$POST_PROCESSOR_PATH" "$OUT_DIR/postProcessor"
-		chmod -R gu+rwx $OUT_DIR/postProcessor
-		# Recursively chmod to ensure all files and directories are executable
-		# The postprocessor may have a nested structure like process/process
-		find $OUT_DIR/postProcessor -type f -exec chmod a+x {} \;
-		find $OUT_DIR/postProcessor -type d -exec chmod a+x {} \;
-		cd "$OUT_DIR"/postProcessor
+		# This helper runs under set -e. Keep preparation in one guarded chain so a
+		# filesystem failure reaches the component-specific status below instead of
+		# falling through the EXIT trap's generic ERROR_RUNSCRIPT fallback.
+		# Recursively chmod to ensure all files and directories are executable. The
+		# postprocessor may have a nested structure like process/process.
+		if ! {
+			mkdir "$OUT_DIR/postProcessor" &&
+				safeCpAll "copying post processor" "$POST_PROCESSOR_PATH" "$OUT_DIR/postProcessor" &&
+				chmod -R gu+rwx "$OUT_DIR/postProcessor" &&
+				find "$OUT_DIR/postProcessor" -type f -exec chmod a+x {} \; &&
+				find "$OUT_DIR/postProcessor" -type d -exec chmod a+x {} \; &&
+				cd "$OUT_DIR/postProcessor"
+		}; then
+			log "post processor error: could not prepare the post processor"
+			STATUS_SENT=true
+			sendStatus "$ERROR_POST_PROCESSOR" "$1"
+			sendStatusToLaterStages "$ERROR_POST_PROCESSOR" 0
+			setRunStatsToZeroForLaterStages 0
+			setEndTime
+			exit 1
+		fi
 		log "executing post processor"
 		log "time limit: $POST_PROCESSOR_TIME_LIMIT minutes"
 		# The postprocessor may be in process/process subdirectory or directly as process
@@ -1383,7 +1739,6 @@ function copyOutput {
 		fi
 
 		log "processing attributes"
-		atts=$(<$OUT_DIR/attributes.txt)
 		processAttributes $OUT_DIR/attributes.txt $1
 
 		# In CONTAINER_MODE, copy attributes.txt to STAREXEC_OUTPUT_DIR for LocalJobMonitor to find
@@ -1523,6 +1878,13 @@ function sandboxWorkspace {
 
 #will see if a solver is cached and change the SOLVER_PATH to the cache if so
 function checkCache {
+	# Never for a build job. It builds the solver from its source, at the solver's path, which
+	# ends in "_src"; copySolverBack copies the build next to that path. A cached copy is what a
+	# run pair of the same solver copied: the built solver, or the source of a solver whose build
+	# failed. Build jobs never store one: copyDependencies skips them.
+	if [ "$BUILD_JOB" == "true" ]; then
+		return 0
+	fi
 	if [ -d "$SOLVER_CACHE_PATH" ]; then
 		if [ -d "$SOLVER_CACHE_PATH/finished.lock" ]; then
 			log "solver exists in cache at $SOLVER_CACHE_PATH"
@@ -1532,54 +1894,57 @@ function checkCache {
 	fi
 }
 
-#this is run after a solver is built on starexec
+# Saves a build job's output as its solver's build log, where the solver's page reads it, in
+# place of the last build's log. Best effort: a build killed before its output was saved has
+# no log to save, and the build's outcome does not depend on its log.
+function saveBuildLog {
+	local output="$PAIR_OUTPUT_DIRECTORY/$PAIR_ID.txt"
+	local dir="$SHARED_DIR/Solvers/buildoutput/$SOLVER_ID"
+	if [ ! -f "$output" ]; then
+		log "no build output at $output, so there is no build log to save"
+		return 0
+	fi
+	log "saving the build output $output as the build log in $dir"
+	if ! { mkdir -p "$dir" && cp "$output" "$dir/starexec_build_log"; }; then
+		log "the build log could not be saved in $dir"
+	fi
+	return 0
+}
+
+# Run once a build job's starexec_build has finished without error, before anything reports
+# the pair complete: the server records the build from that status, and looks for the built
+# solver at the solver's path without "_src". Nothing here touches the database.
 function copySolverBack {
-	NEW_SOLVER_PATH="${SOLVER_PATH/%????/}"
+	if [[ "$SOLVER_PATH" != *_src ]]; then
+		log "the solver path $SOLVER_PATH does not end in _src, so there is no built path to copy the solver to"
+		return 1
+	fi
+	NEW_SOLVER_PATH="${SOLVER_PATH%_src}"
 
 	log "OLD solver path: $SOLVER_PATH"
 	log "NEW solver path: $NEW_SOLVER_PATH"
 
-	if [ -e $LOCAL_RUNSOLVER_PATH ]; then
-		rm $LOCAL_RUNSOLVER_PATH
+	saveBuildLog
+
+	# The build script is not part of the built solver.
+	if [ -e "$LOCAL_CONFIG_PATH" ]; then
+		rm "$LOCAL_CONFIG_PATH"
 	fi
 
-	if [ -e $LOCAL_CONFIG_PATH ]; then
-		rm $LOCAL_CONFIG_PATH
-	fi
-
-	mkdir $SHARED_DIR/Solvers/buildoutput/$SOLVER_ID
-	log "the output to be copied back $PAIR_OUTPUT_DIRECTORY/$PAIR_ID.txt"
-	log "the directory copying to: $SHARED_DIR/Solvers/buildoutput/$SOLVER_ID"
-	cp "$PAIR_OUTPUT_DIRECTORY/$PAIR_ID.txt" $SHARED_DIR/Solvers/buildoutput/$SOLVER_ID/starexec_build_log
-
+	mkdir -p "$NEW_SOLVER_PATH"
 	safeCpAll "copying solver back" "$LOCAL_SOLVER_DIR" "$NEW_SOLVER_PATH"
-	log "solver copied back to head node"
+	log "solver copied back to $NEW_SOLVER_PATH"
 
-	log "updating build status to built and changing path for solver to $NEW_SOLVER_PATH"
-	log "set build status to built on starexec for $SOLVER_ID"
-	log "deleting build configuration from db for solver: $SOLVER_ID"
-	log "removing benchmark bench name: $BENCH_NAME id: $BENCH_ID from the db"
-	dbExec "
-		CALL SetSolverPath($((SOLVER_ID)), '$(dbEscape $NEW_SOLVER_PATH)');
-		CALL SetSolverBuildStatus($((SOLVER_ID)), 2);
-		CALL DeleteBuildConfig($((SOLVER_ID)));
-		CALL RemoveBenchmarkFromDatabase($((BENCH_ID)));
-	"
-
-	rm $BENCH_PATH
+	# The server deletes the build's helper benchmark when it records the build.
+	rm -f "$BENCH_PATH" || log "could not delete the build's helper benchmark $BENCH_PATH"
 }
 
-# For build jobs this cleans up files used in the build script.
+# For build jobs this cleans up files used in the build script. The server records the failed
+# build from the pair's status.
 function cleanUpAfterKilledBuildJob {
 	if [ $BUILD_JOB == "true" ]; then
 		log "Build job has been failed, cleaning up:"
-		log "deleting build configuration from db for solver: $SOLVER_ID"
-		log "removing benchmark bench name: $BENCH_NAME id: $BENCH_ID from the db"
-		dbExec "
-			CALL SetSolverBuildStatus($((SOLVER_ID)), 3);
-			CALL DeleteBuildConfig($((SOLVER_ID)));
-			CALL RemoveBenchmarkFromDatabase($((BENCH_ID)));
-		"
+		saveBuildLog
 
 		BENCH_PATH_DIR=$(dirname "$BENCH_PATH")
 		log "Deleting benchmark directory: $BENCH_PATH_DIR"
@@ -1819,7 +2184,7 @@ function verifyWorkspace {
 		# This failure is local to the attempt. Other attempts may be copying from
 		# the shared cache, so a missing configuration must not evict their source.
 		STATUS_SENT=true
-		sendStatus $ERROR_RUNSCRIPT
+		sendStatus $ERROR_RUNSCRIPT "${CURRENT_STAGE_NUMBER:-0}"
 		exit 1
 	fi
 	log "execution host solver configuration verified"
@@ -1828,7 +2193,7 @@ function verifyWorkspace {
 	if ! [ -r "$LOCAL_BENCH_PATH" ]; then
 		log "job error: could not locate the readable benchmark '$BENCH_NAME' on the execution host."
 		STATUS_SENT=true
-		sendStatus $ERROR_BENCHMARK
+		sendStatus $ERROR_BENCHMARK "${CURRENT_STAGE_NUMBER:-0}"
 		exit 1
 	fi
 	log "execution host benchmark verified"
@@ -1892,11 +2257,21 @@ function isOutputValid {
 
 function exitJobscript {
 	local EXIT_CODE=${1:-0}
+	# B7: safety net for the watchdog started before this stage's pre-processor --
+	# every early exit between there and the explicit stopDeadlockWatchdog call after
+	# copyOutput (a missing varfile/watchfile, invalid output, a pre/post-processor
+	# error) leaves it still sleeping otherwise. Idempotent with that later call and
+	# a no-op if no watchdog is currently running.
+	stopDeadlockWatchdog
 	# On non-zero exit, ensure orchestrator receives a terminal status (fail closed).
 	# Do not run commands that can fail and mask the original exit code.
 	if [ "$EXIT_CODE" -ne 0 ] && [ "$STATUS_SENT" != "true" ]; then
 		STATUS_SENT=true
-		sendStatus $ERROR_BENCHMARK || true
+		# The stage that was running, or 0 when none was: the monitor hands this number to
+		# UpdatePairStatusPrecise, and 0 names the pair rather than a stage. ERROR_RUNSCRIPT is
+		# what the other failures on this path report; ERROR_BENCHMARK named the benchmark for
+		# failures that had nothing to do with it (#145).
+		sendStatus $ERROR_RUNSCRIPT "${CURRENT_STAGE_NUMBER:-0}" || true
 	fi
 	removePrivateWorkspace
 	echo "Jobscript ending."

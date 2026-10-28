@@ -21,6 +21,20 @@
 				</div>
 			</div>
 		</c:if>
+		<c:if test="${not empty param.result and param.result == 'email_failed'}">
+			<div class="alert alert--warning" role="alert">
+				<span class="alert-icon" aria-hidden="true">
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M12 9v4"></path>
+						<circle cx="12" cy="12" r="10"></circle>
+					</svg>
+				</span>
+				<div class="alert-content">
+					<strong>Warning:</strong> User was created, but the email with their login details could not be sent.
+					Send them their password another way.
+				</div>
+			</div>
+		</c:if>
 		<ul id="actionList">
 			<li><a id="addUser"
 			       href="${starexecRoot}/secure/admin/addUser.jsp">Create New

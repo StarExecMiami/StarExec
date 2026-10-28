@@ -31,7 +31,7 @@ StarExec supports three deployment methods:
 
 - Linux (Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 38+)
 - Podman 4.0+ (rootless recommended)
-- Required packages: `passt`, `catatonit`, `fuse-overlayfs`, `yq`
+- Required packages: `passt`, `catatonit`, `fuse-overlayfs`, `uidmap`; `yq` is optional (only needed by `make config-show`)
 - cgroups v2 enabled
 
 ### Kubernetes + Helm
@@ -129,11 +129,22 @@ git checkout containerised
 make start
 
 # Production deployment (requires env-specific values + secure password)
-cp charts/starexec/values-podman.yaml charts/starexec/values-podman-prod.yaml
-# Edit values-podman-prod.yaml for production limits, credentials, and socket path
-export STAREXEC_DB_PASSWORD="$(openssl rand -base64 32)"
-make deploy-podman ENV=prod
+cp charts/starexec/values-podman.yaml.example charts/starexec/values-podman-prod.yaml
+# Edit values-podman-prod.yaml: set postgres.password and postgres.rootPassword
+# to strong values, and the production limits
+export STAREXEC_DB_PASSWORD='<the postgres.password you set>'
+make deploy-podman ENV=prod VALS=charts/starexec/values-podman-prod.yaml
 ```
+
+`VALS=` is required. `ENV=prod` alone selects the Kubernetes profile
+`values-prod.yaml`, whose pod needs a database Secret this deployment does not
+create and mounts other volumes than the `starexec-prod-*` volumes that job
+containers and `make volumes-backup ENV=prod` use; `make deploy-podman` refuses
+it. The database password is `postgres.password`. `make deploy-podman ENV=prod`
+also stops while `STAREXEC_DB_PASSWORD` is unset or the development default,
+and without Helm (`deploy-podman-direct`) the password comes from that variable
+instead, so set both to the same value. `values-podman-prod.yaml` is gitignored
+because it holds these passwords.
 
 ### Environment-Specific Configuration
 
@@ -141,16 +152,16 @@ make deploy-podman ENV=prod
 |-------------|---------|---------|
 | `dev` | `make deploy-podman ENV=dev` | Local development with defaults |
 | `ci` | `make deploy-podman ENV=ci` | CI/testing with ephemeral volumes |
-| `prod` | `make deploy-podman ENV=prod` | Production with secure settings (typically using a custom Podman override such as `charts/starexec/values-podman-prod.yaml`) |
+| `prod` | `make deploy-podman ENV=prod VALS=charts/starexec/values-podman-prod.yaml` | Production, with the Podman values file created above |
 
 ### Production Checklist
 
 Before deploying to production:
 
-- [ ] **Change default password**: `export STAREXEC_DB_PASSWORD="secure-value"`
-- [ ] **Create env-specific values file**: `cp charts/starexec/values-podman.yaml charts/starexec/values-podman-prod.yaml`
+- [ ] **Change default password**: set `postgres.password` in `values-podman-prod.yaml`, and `STAREXEC_DB_PASSWORD` to the same value
+- [ ] **Create env-specific values file**: `cp charts/starexec/values-podman.yaml.example charts/starexec/values-podman-prod.yaml`
 - [ ] **Create volumes**: `make volumes-create ENV=prod`
-- [ ] **Configure backups**: Set up automated `make volumes-backup ENV=prod`
+- [ ] **Configure backups**: Set up `make volumes-backup ENV=prod`, with the stack stopped for a consistent database copy (see [VOLUMES.md](VOLUMES.md#automated-backup))
 - [ ] **Set resource limits**: Configure CPU/memory in `values-podman-prod.yaml`
 - [ ] **Enable TLS**: Configure reverse proxy (nginx, traefik)
 - [ ] **Review security**: Follow [Security Guide](SECURITY.md)
@@ -175,13 +186,15 @@ make db-shell
 # Stop deployment
 make stop
 
-# Restart with fresh build
-make stop && make build-fresh && make start
+# Restart with a fresh build. LOCAL=1 deploys it; without it, make start
+# replaces it with the registry's latest image
+make stop && make build-fresh && make start LOCAL=1
 
 # View configuration
 make config-show ENV=dev
 
-# Complete reset (⚠️ deletes data)
+# Complete reset: deletes every volume of the environment (database and
+# files) and the image
 make reset ENV=dev
 ```
 
@@ -208,18 +221,28 @@ For a single-node MicroK8s deployment that uses this machine as the only compute
 helm repo add starexec https://starexecmiami.github.io/StarExec
 helm repo update
 
-# Install with defaults (development only)
-helm install starexec starexec/starexec \
-  --create-namespace \
-  -n starexec
+# The chart refuses to render without postgres.existingSecret or explicit
+# dev credentials. Create the secret first; the chart reads its keys user,
+# password and database.
+kubectl create namespace starexec
+kubectl -n starexec create secret generic starexec-postgres-credentials \
+  --from-literal=user=starexec \
+  --from-literal=password="$(openssl rand -base64 32)" \
+  --from-literal=database=starexec
 
-# Install with secure configuration
 helm install starexec starexec/starexec \
-  --create-namespace \
   -n starexec \
-  --set postgres.password="$(openssl rand -base64 32)" \
-  --set postgres.rootPassword="$(openssl rand -base64 32)"
+  --set postgres.existingSecret=starexec-postgres-credentials
 ```
+
+The embedded PostgreSQL (`postgres.host: localhost`, the default) keeps its data on
+its own PersistentVolumeClaim, `postgres.persistence.size` (20Gi) from
+`postgres.persistence.storageClass` or, when that is empty, the cluster's default
+StorageClass. On a cluster with neither, the claim stays Pending and so does the pod.
+`postgres.persistence.enabled=false` puts the database in an emptyDir instead, which
+starts empty whenever the pod is recreated (upgrade, node drain, eviction): every
+account, solver, benchmark and job result is lost. `values-ci.yaml` and
+`values-dev.yaml` set it to false.
 
 #### From Local Chart
 
@@ -235,7 +258,7 @@ helm install starexec ./charts/starexec \
   -f charts/starexec/values-dev.yaml
 ```
 
-For Helm-specific linting and credential-handling notes, see [charts/starexec/README.md](../charts/starexec/README.md).
+`values-dev.yaml` expects the pre-existing secret `starexec-postgres-credentials` in the release namespace. For Helm-specific linting and credential-handling notes, see [charts/starexec/README.md](../charts/starexec/README.md).
 
 ### Custom Values
 
@@ -259,18 +282,19 @@ postgres:
 
 # Resource limits
 resources:
-  limits:
-    memory: 4Gi
-    cpu: 2
-  requests:
-    memory: 2Gi
-    cpu: 1
+  app:
+    limits:
+      memory: 4Gi
+      cpu: 2
+    requests:
+      memory: 2Gi
+      cpu: 1
 
 # Persistence
 persistence:
   enabled: true
   storageClass: "standard"
-  size: 50Gi
+  appDataSize: 50Gi
 
 # Ingress (optional)
 ingress:
@@ -305,7 +329,7 @@ kubectl get pods -n starexec
 kubectl get svc -n starexec
 
 # View logs
-kubectl logs -n starexec -l app=starexec -f
+kubectl logs -n starexec -l app.kubernetes.io/name=starexec -f
 
 # Port forward for testing
 kubectl port-forward -n starexec svc/starexec 8080:8080
@@ -336,25 +360,54 @@ Jenkins.
 
 ### Upgrading
 
-```bash
-# Upgrade with new values
-helm upgrade starexec starexec/starexec \
-  -f my-values.yaml \
-  -n starexec
+On Quokka, upgrade through the Jenkins job above, never with `helm upgrade` by
+hand. Elsewhere, upgrade from the chart in your checkout and pass the complete
+values the release runs with. A `helm upgrade` that passes any `-f` or `--set`
+starts again from the chart's defaults: every earlier value the command does
+not repeat is dropped, an image digest set with `--set` included.
 
-# Upgrade to specific version
-helm upgrade starexec starexec/starexec \
-  --version 1.2.0 \
-  -n starexec
+```bash
+# Values the release runs with now
+helm get values starexec -n starexec
+
+# Upgrade with the whole values file and every --set the release uses
+helm upgrade starexec ./charts/starexec -n starexec \
+  -f charts/starexec/values-prod.yaml \
+  --set-string image.tag=sha-<full-git-sha> \
+  --set-string image.digest=sha256:<digest>
 ```
+
+The chart's version is always `0.1.0`, and each publish to the chart
+repository replaces everything published before, so `--version` cannot select
+another chart. To deploy an older StarExec, check out that commit and deploy
+its chart.
 
 ### Uninstalling
 
+`helm uninstall` leaves the PersistentVolumeClaims the chart created, and the
+data on them: the chart marks each one `helm.sh/resource-policy: keep`
+(`persistence.resourcePolicy` in `values.yaml`). An upgrade or rollback that
+stops rendering a claim, for example once `persistence.existingClaims` names
+another one, leaves it as well. A later install with the same release name in
+the same namespace takes the kept claims over again. `values-prod.yaml` uses
+claims created outside the chart, which Helm never deletes.
+
+A release installed before the chart carried the annotation gets it on its next
+`helm upgrade`; until then, `helm uninstall` still deletes its claims.
+
+Deleting a claim deletes its volume when the reclaim policy is `Delete` (the
+default for a StorageClass). Back up first (see
+[Backup and Disaster Recovery](#backup-and-disaster-recovery)).
+
 ```bash
-# Remove release (keeps PVCs)
+# Remove the release; the PVCs and their data stay
 helm uninstall starexec -n starexec
 
-# Remove namespace and all resources
+# Delete data as well: list the PVCs, then delete the ones you mean to
+kubectl get pvc -n starexec
+kubectl delete pvc <name> -n starexec
+
+# Remove the namespace and everything in it, PVCs included
 kubectl delete namespace starexec
 ```
 
@@ -421,27 +474,31 @@ affinity:
 ### Podman
 
 ```bash
-# Create backup
+# Create backup, with the stack stopped so the database copy is consistent
+make stop
 make volumes-backup ENV=prod
+# Restart production; VOLUMES.md (Manual Backup) explains each setting
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 
-# Backups stored in ./backups/
+# Backups stored in ./backups/ as starexec-prod-full-<timestamp>-<volume>.tar.gz
 ls -la backups/
 
-# Restore from backup
+# Restore a backup set (data and database volumes), named by its timestamp
 make stop
-make volumes-restore ENV=prod BACKUP=backups/starexec-prod-20250101-120000.tar.gz
-make start
+make volumes-restore ENV=prod RESTORE_TIMESTAMP=20250101-120000
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 ```
 
 ### Kubernetes
 
 ```bash
-# Backup using kubectl
-kubectl exec -n starexec starexec-postgres-0 -- \
+# Backup using kubectl (embedded PostgreSQL runs as the `postgres` sidecar
+# container of the app Deployment when postgres.host=localhost)
+kubectl exec -n starexec deploy/starexec -c postgres -- \
   pg_dump -U starexec starexec > backup.sql
 
 # Restore
-kubectl exec -i -n starexec starexec-postgres-0 -- \
+kubectl exec -i -n starexec deploy/starexec -c postgres -- \
   psql -U starexec starexec < backup.sql
 ```
 
@@ -457,21 +514,35 @@ See [Volume Management](VOLUMES.md) for detailed backup procedures.
 # Pull latest changes
 git pull origin containerised
 
-# Rebuild and redeploy
+# Back up with the stack stopped: the new version's migrations change the
+# database, and a rollback does not undo them
 make stop
+make volumes-backup ENV=prod
+
+# Rebuild and redeploy production
 make build-fresh
-make start
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 ```
+
+`ENV=prod` selects the `starexec-prod-*` volumes, and `VALS=` names the Podman
+production values file: with `ENV=prod` alone, make selects the Kubernetes
+profile `values-prod.yaml`, whose pod mounts other volumes. `LOCAL=1` deploys
+the image you just built; without it, `make start` replaces that image with
+the registry's `latest` whenever the registry is reachable. Run it in a shell
+where `STAREXEC_DB_PASSWORD` is set, as for the first deployment
+([Production Checklist](#production-checklist)): with `ENV=prod`, `make start`
+stops without it.
 
 ### Kubernetes
 
+On Quokka, run the Jenkins job. Elsewhere, upgrade as described under
+[Upgrading](#upgrading): a `helm upgrade` with no values keeps the release's
+values, its image included, so it does not move StarExec to a new version.
+Dump the database first (see
+[Backup and Disaster Recovery](#backup-and-disaster-recovery)): a rollback
+cannot undo a migration.
+
 ```bash
-# Update Helm repo
-helm repo update
-
-# Upgrade release
-helm upgrade starexec starexec/starexec -n starexec
-
 # Watch rollout
 kubectl rollout status deployment/starexec -n starexec
 ```
@@ -498,15 +569,25 @@ make logs-app | grep -i flyway
 ### Podman
 
 ```bash
-# Restore from backup
+# Restore the backup set taken before the upgrade, named by its timestamp
 make stop
-make volumes-restore ENV=prod BACKUP=backups/last-known-good.tar.gz
+make volumes-restore ENV=prod RESTORE_TIMESTAMP=<timestamp>
+
+# Build the previous version and deploy that image, with the settings
+# explained under Upgrading StarExec
 git checkout <previous-version>
 make build
-make start
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 ```
 
 ### Kubernetes
+
+`helm rollback` restores an earlier revision's manifests and values. It does
+not touch the database: Flyway has no undo, so an application rolled back past
+a migration runs on the newer schema. To go back past a migration, also restore
+the database dump taken before the upgrade. Jenkins deploys with `--atomic`,
+which rolls a failed upgrade back the same way, possibly after the new version
+has already migrated the database.
 
 ```bash
 # Rollback to previous revision
@@ -536,6 +617,8 @@ kubectl describe pod <pod-name> -n starexec
 
 Access health endpoints:
 
+- `/starexec/public/health/liveness` - Liveness probe
+- `/starexec/public/health/readiness` - Readiness probe
 - `/starexec/` - Main application
 - Database: `make db-shell` then `SELECT 1;`
 
@@ -546,7 +629,7 @@ Access health endpoints:
 make logs
 
 # Kubernetes logs
-kubectl logs -n starexec -l app=starexec --tail=100 -f
+kubectl logs -n starexec -l app.kubernetes.io/name=starexec --tail=100 -f
 ```
 
 ---
@@ -607,7 +690,7 @@ See [Troubleshooting Guide](TROUBLESHOOTING.md) for more solutions.
 | `STAREXEC_DB_NAME` | `starexec` | Database name |
 | `STAREXEC_DB_USER` | `starexec` | Database username |
 | `STAREXEC_DB_PASSWORD` | *(empty)* | Database password (**required**) |
-| `STAREXEC_BACKEND_TYPE` | `local` | Backend: local, podman, kubernetes. Runtime fallback default is `local`, but `make start` deploys Podman by default. |
+| `STAREXEC_BACKEND_TYPE` | `local` | Backend: local, podman, kubernetes, k8s, kubernetes-native, sge, oar (legacy). Runtime fallback default is `local`, but `make start` deploys Podman by default. |
 | `ENV` | `dev` | Environment: dev, ci, prod |
 | `APP_PORT` | `7827` | Application port (Podman) |
 

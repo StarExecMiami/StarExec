@@ -104,7 +104,7 @@ psql -h localhost -p 5432 -U starexec -d starexec
 
 StarExec uses [Flyway](https://flywaydb.org/) for database schema management:
 
-1. SQL migration files are stored in `src/main/resources/db/migration/`
+1. SQL migration files are stored in `starexec-app/src/main/resources/db/migration/`
 2. Files are named: `V{version}__{description}.sql`
 3. Flyway tracks applied migrations in `flyway_schema_history`
 4. Migrations run automatically on application startup
@@ -112,10 +112,10 @@ StarExec uses [Flyway](https://flywaydb.org/) for database schema management:
 ### Migration File Naming
 
 ```
-V1__Initial_schema.sql          # Version 1
-V2__Add_users_table.sql         # Version 2
-V3.1__Add_email_column.sql      # Version 3.1
-V10__Performance_indexes.sql    # Version 10
+V0001__baseline_schema.sql      # Version 1
+V0002__seed_minimal_data.sql    # Version 2
+V0003__schema_change_1_1.sql    # Version 3
+V0117__automatic_rerun_is_atomic.sql  # Version 117
 ```
 
 ### Notable Migrations
@@ -125,7 +125,7 @@ V10__Performance_indexes.sql    # Version 10
 | `V0001__baseline_schema.sql` | Full schema baseline |
 | `V0021__bcrypt_only_passwords.sql` | BCrypt password migration |
 | `V0025__batch_rerun_and_indexes.sql` | PL/pgSQL function `RerunJobPairsBatch(int[])` for efficient batch job pair resets (replaces N+1 loop) |
-| `V0026__add_missing_indexes.sql` | 13 performance indexes on hot-path columns; runs non-transactionally (`-- flyway:executeInTransaction=false`) to allow `CREATE INDEX CONCURRENTLY` |
+| `V0026__add_missing_indexes.sql` | 13 performance indexes on hot-path columns; uses regular `CREATE INDEX` inside Flyway's transaction. `CONCURRENTLY` is deliberately avoided because it deadlocks against Flyway's advisory lock (see the migration header). |
 | `V0110__fix_fk_delete_actions.sql` | Rebuilds legacy foreign keys with explicit `ON DELETE` behavior (`SET DEFAULT`, `RESTRICT`, `CASCADE`, `SET NULL`) and documents intentionally unconstrained historical snapshot columns |
 | `V0111__pipeline_anon_fk_constraints.sql` | Adds `solver_pipelines.user_id → users.id ON DELETE CASCADE` and documents why `anonymous_links.primitive_id` remains polymorphic and intentionally unconstrained |
 
@@ -185,9 +185,9 @@ make stop && make start
 
 ### Creating New Migrations
 
-1. Create a new file in `src/main/resources/db/migration/`:
+1. Create a new file in `starexec-app/src/main/resources/db/migration/`:
    ```bash
-   touch src/main/resources/db/migration/V{next_version}__Description.sql
+   touch starexec-app/src/main/resources/db/migration/V{next_version}__Description.sql
    ```
 
 2. Add SQL statements:
@@ -197,12 +197,9 @@ make stop && make start
    CREATE INDEX idx_jobs_priority ON jobs(priority);
    ```
 
-   If the migration contains `CREATE INDEX CONCURRENTLY`, add the following annotation
-   at the top of the file so Flyway does not wrap it in a transaction (PostgreSQL forbids
-   `CONCURRENTLY` inside a transaction block):
-   ```sql
-   -- flyway:executeInTransaction=false
-   ```
+   Migrations must not use `CREATE INDEX CONCURRENTLY`: it deadlocks against
+   Flyway's advisory lock (see `V0026__add_missing_indexes.sql` for the full
+   explanation). Use regular `CREATE INDEX`, which runs inside Flyway's transaction.
 
 3. Test locally:
    ```bash
@@ -244,35 +241,38 @@ podman exec starexec-postgres \
 
 ### Restoring Backups
 
-#### From SQL Dump
+The app and PostgreSQL run in one pod, and `make stop` removes the whole pod, PostgreSQL
+included. Stop only the app container. There is no `postgres` role: the database superuser is
+`STAREXEC_DB_USER` (default `starexec`).
 
 ```bash
-# Stop application
-make stop
+# starexec-app and starexec-postgres, or starexec-pod-app and starexec-pod-postgres with Helm
+APP=$(podman ps --format '{{.Names}}' | grep -E '^starexec(-pod)?-app$')
+PG=$(podman ps --format '{{.Names}}' | grep -E '^starexec(-pod)?-postgres$')
+```
 
-# Restore
-cat backup.sql | podman exec -i starexec-postgres psql -U starexec
+#### From SQL Dump
 
-# Start application
-make start
+A plain SQL dump restores into an empty database. Restored over the live one, it fails on every
+object that already exists and leaves a mix of old and new rows. These commands delete the
+current database, so dump it first (`make db-dump`).
+
+```bash
+podman stop "$APP"
+
+podman exec "$PG" psql -U starexec -d postgres -c "DROP DATABASE starexec;"
+podman exec "$PG" psql -U starexec -d postgres -c "CREATE DATABASE starexec OWNER starexec;"
+podman exec -i "$PG" psql -U starexec -d starexec -v ON_ERROR_STOP=1 < backup.sql
+
+podman start "$APP"
 ```
 
 #### From Custom Format
 
 ```bash
-podman exec -i starexec-postgres \
-  pg_restore -U starexec -d starexec < backup.dump
-```
-
-#### To Fresh Database
-
-```bash
-# Drop and recreate database
-podman exec starexec-postgres psql -U postgres -c "DROP DATABASE starexec;"
-podman exec starexec-postgres psql -U postgres -c "CREATE DATABASE starexec OWNER starexec;"
-
-# Restore
-cat backup.sql | podman exec -i starexec-postgres psql -U starexec
+podman stop "$APP"
+podman exec -i "$PG" pg_restore -U starexec -d starexec --clean --if-exists < backup.dump
+podman start "$APP"
 ```
 
 ### Automated Backups
@@ -292,7 +292,9 @@ Create a cron job:
 
 ```sql
 -- List all users
-SELECT id, email, first_name, last_name, role FROM users;
+SELECT u.id, u.email, u.first_name, u.last_name, ur.role
+FROM starexec.users u
+LEFT JOIN starexec.user_roles ur ON ur.email = u.email;
 
 -- Reset user password (hash required from application)
 -- Use application UI or API instead
@@ -304,38 +306,41 @@ UPDATE users SET enabled = false WHERE email = 'user@example.com';
 UPDATE users SET enabled = true WHERE email = 'user@example.com';
 
 -- Check admin users
-SELECT id, email FROM users WHERE role = 'admin';
+SELECT u.id, u.email
+FROM starexec.users u
+JOIN starexec.user_roles ur ON ur.email = u.email
+WHERE ur.role = 'admin';
 ```
 
 ### Job Management
 
 ```sql
--- Count jobs by status
-SELECT status_code, COUNT(*) 
-FROM jobs 
-GROUP BY status_code;
+-- Count pairs by status (a job's status comes from its pairs;
+-- jobs.status_code is never updated and stays 0)
+SELECT status_code, COUNT(*)
+FROM job_pairs
+GROUP BY status_code
+ORDER BY status_code;
 
--- Find stuck jobs (running > 24 hours)
-SELECT id, name, created 
-FROM jobs 
-WHERE status_code = 'RUNNING' 
-AND created < NOW() - INTERVAL '24 hours';
-
--- Cancel stuck job
-UPDATE jobs SET status_code = 'KILLED' WHERE id = ?;
-UPDATE job_pairs SET status_code = 16 WHERE job_id = ?;
-
--- Clean old completed jobs (> 90 days)
-DELETE FROM job_pairs 
-WHERE job_id IN (
-  SELECT id FROM jobs 
-  WHERE status_code = 'COMPLETE' 
-  AND completed < NOW() - INTERVAL '90 days'
-);
-DELETE FROM jobs 
-WHERE status_code = 'COMPLETE' 
-AND completed < NOW() - INTERVAL '90 days';
+-- Jobs with pairs enqueued (2) or running (4) that were submitted more than
+-- 24 hours ago
+SELECT jp.job_id, j.name, jp.status_code, COUNT(*) AS pairs,
+       MIN(jp.queuesub_time) AS oldest_submission
+FROM job_pairs jp
+JOIN jobs j ON j.id = jp.job_id
+WHERE NOT j.deleted
+  AND jp.status_code IN (2, 4)
+  AND jp.queuesub_time < NOW() - INTERVAL '24 hours'
+GROUP BY jp.job_id, j.name, jp.status_code
+ORDER BY oldest_submission;
 ```
+
+Stop or remove jobs from the job page (Pause, Delete), not with `UPDATE` or
+`DELETE`. Delete stops the job's running pairs, removes its pairs and its
+output directory, and gives its disk usage back to the owner's quota. Setting
+`status_code` in SQL stops nothing and overwrites results that were already
+recorded. Deleting `job_pairs` rows cascades into eight tables of results,
+while the output files and the quota charge stay behind.
 
 ### Space Management
 
@@ -363,10 +368,10 @@ SELECT pg_size_pretty(pg_database_size('starexec'));
 -- Table sizes
 SELECT 
   tablename,
-  pg_size_pretty(pg_total_relation_size('public.' || tablename)) as size
+  pg_size_pretty(pg_total_relation_size('starexec.' || tablename)) as size
 FROM pg_tables 
-WHERE schemaname = 'public'
-ORDER BY pg_total_relation_size('public.' || tablename) DESC;
+WHERE schemaname = 'starexec'
+ORDER BY pg_total_relation_size('starexec.' || tablename) DESC;
 
 -- Row counts
 SELECT 
@@ -411,7 +416,7 @@ log_min_duration_statement = 1000 # Log queries > 1 second
 
 Performance-critical indexes on `job_pairs`, `jobs`, `solvers`, `configurations`,
 `benchmarks`, `logins`, `job_spaces`, and `jobpair_stage_data` are created automatically
-by Flyway migration **V0026** using `CREATE INDEX CONCURRENTLY`. Do not create them
+by Flyway migration **V0026** using regular `CREATE INDEX` (not `CONCURRENTLY`). Do not create them
 manually — Flyway will detect duplicate index names and fail.
 
 To diagnose missing indexes on other columns:
@@ -465,7 +470,7 @@ SELECT
   pg_size_pretty(pg_relation_size(schemaname||'.'||tablename)) as table_size,
   pg_size_pretty(pg_indexes_size(schemaname||'.'||tablename::regclass)) as index_size
 FROM pg_tables
-WHERE schemaname = 'public'
+WHERE schemaname = 'starexec'
 ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
 ```
 
@@ -498,8 +503,8 @@ echo $STAREXEC_DB_PASSWORD
 # Check pg_hba.conf authentication
 podman exec starexec-postgres cat /var/lib/postgresql/data/pg_hba.conf
 
-# Reset password
-podman exec starexec-postgres psql -U postgres -c \
+# Reset password (the superuser is STAREXEC_DB_USER; there is no postgres role)
+podman exec starexec-postgres psql -U starexec -c \
   "ALTER USER starexec WITH PASSWORD 'new-password';"
 ```
 
@@ -545,16 +550,21 @@ WHERE NOT l.granted;
 SELECT pg_size_pretty(pg_database_size('starexec'));
 
 -- Find largest tables
-SELECT tablename, pg_size_pretty(pg_total_relation_size('public.' || tablename))
-FROM pg_tables WHERE schemaname = 'public'
-ORDER BY pg_total_relation_size('public.' || tablename) DESC
+SELECT tablename, pg_size_pretty(pg_total_relation_size('starexec.' || tablename))
+FROM pg_tables WHERE schemaname = 'starexec'
+ORDER BY pg_total_relation_size('starexec.' || tablename) DESC
 LIMIT 10;
 
--- Clean up old job data
-DELETE FROM job_pairs WHERE job_id IN (
-  SELECT id FROM jobs WHERE completed < NOW() - INTERVAL '180 days'
-);
-VACUUM FULL job_pairs;
+-- Jobs using the most disk; delete them from the job page, which also removes
+-- their files and gives the space back to the owner's quota
+SELECT id, name, user_id, pg_size_pretty(disk_size) AS size, completed
+FROM jobs
+WHERE NOT deleted
+ORDER BY disk_size DESC NULLS LAST
+LIMIT 20;
+
+-- Avoid VACUUM FULL on a full disk: it writes a new copy of the table before
+-- it releases the old one, and locks the table against every query meanwhile
 ```
 
 ### Slow Queries

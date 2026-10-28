@@ -1,23 +1,29 @@
 package org.starexec.test.junit.backend;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.PodConditionBuilder;
 import io.fabric8.kubernetes.api.model.PodList;
+import io.fabric8.kubernetes.api.model.PodSpecBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.JobConditionBuilder;
@@ -33,6 +39,7 @@ import io.fabric8.kubernetes.client.dsl.V1BatchAPIGroupDSL;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.Before;
 import org.junit.Test;
@@ -655,6 +662,233 @@ public class KubernetesJobMonitorTests {
 
         verify(callback, times(3)).onJobStuckPending(eq(execution()), anyString());
         assertTrue(getCompletedExecutions().contains(execution()));
+    }
+
+    // ---------------------------------------------------------------------
+    // The node a running pod is on
+    // ---------------------------------------------------------------------
+
+    /** {@link #podFor}, placed on {@code nodeName}. */
+    private Pod podOn(int execId, String phase, String nodeName) {
+        Pod pod = podFor(execId, phase);
+        pod.setSpec(new PodSpecBuilder().withNodeName(nodeName).build());
+        return pod;
+    }
+
+    /**
+     * The node is reported before the pair is made running, the Podman backend's order, so that
+     * the pair has its node by the time it shows as running.
+     */
+    @Test
+    public void aRunningPodsNodeIsReportedBeforeThePairRuns() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podOn(EXEC_ID, "Running", "node-a"));
+        when(callback.onJobPlaced(execution(), "node-a")).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
+
+        invokePollJobsOnce();
+
+        InOrder order = inOrder(callback);
+        order.verify(callback).onJobPlaced(execution(), "node-a");
+        order.verify(callback).onJobRunning(execution());
+    }
+
+    @Test
+    public void aRecordedNodeIsNotReportedAgain() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podOn(EXEC_ID, "Running", "node-a"));
+        when(callback.onJobPlaced(execution(), "node-a")).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
+
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobPlaced(execution(), "node-a");
+    }
+
+    /**
+     * A node the callback could not record yet is reported again on the next poll, also once
+     * the pair is running: the running transition neither waits for it nor ends it.
+     */
+    @Test
+    public void aNodeNotRecordedYetIsReportedAgainAfterThePairRuns() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podOn(EXEC_ID, "Running", "node-a"));
+        when(callback.onJobPlaced(execution(), "node-a")).thenReturn(false, false, true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
+
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+
+        verify(callback, times(3)).onJobPlaced(execution(), "node-a");
+        verify(callback, times(1)).onJobRunning(execution());
+    }
+
+    /** Bound to a node is not running on it, and the pair is not running either. */
+    @Test
+    public void aPendingPodOnANodeReportsNoNode() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podOn(EXEC_ID, "Pending", "node-a"));
+
+        invokePollJobsOnce();
+
+        verify(callback, never()).onJobPlaced(any(ExecutionRef.class), anyString());
+    }
+
+    @Test
+    public void aRunningPodThatReportsNoNodeReportsNone() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Running"));
+        when(callback.onJobRunning(execution())).thenReturn(true);
+
+        invokePollJobsOnce();
+
+        verify(callback, never()).onJobPlaced(any(ExecutionRef.class), anyString());
+        verify(callback, times(1)).onJobRunning(execution());
+    }
+
+    /**
+     * Without a pod listing the pair is still made running, from the Job's active count, and
+     * its node is reported on the first poll that lists the pod.
+     */
+    @Test
+    public void aNodeIsReportedOnceThePodsCanBeListedAgain() throws Exception {
+        givenJobs(activeJobFixture());
+        when(filteredPods.list()).thenThrow(new RuntimeException("pods is forbidden"));
+        when(callback.onJobRunning(execution())).thenReturn(true);
+        when(callback.onJobPlaced(execution(), "node-a")).thenReturn(true);
+
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobRunning(execution());
+        verify(callback, never()).onJobPlaced(any(ExecutionRef.class), anyString());
+
+        PodList listing = new PodList();
+        listing.setItems(List.of(podOn(EXEC_ID, "Running", "node-a")));
+        doReturn(listing).when(filteredPods).list();
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobPlaced(execution(), "node-a");
+        verify(callback, times(1)).onJobRunning(execution());
+    }
+
+    /** Nothing is kept for an execution that has finished. */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aFinishedExecutionKeepsNoNodeRecord() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podOn(EXEC_ID, "Running", "node-a"));
+        when(callback.onJobPlaced(execution(), "node-a")).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
+        when(callback.onJobComplete(execution())).thenReturn(true);
+        invokePollJobsOnce();
+
+        Field field = KubernetesJobMonitor.class.getDeclaredField("recordedNodes");
+        field.setAccessible(true);
+        Map<ExecutionRef, String> recorded = (Map<ExecutionRef, String>) field.get(monitor);
+        assertEquals("recorded while it runs", "node-a", recorded.get(execution()));
+
+        givenJobs(new JobBuilder()
+            .withNewMetadata()
+            .withName(JOB_NAME)
+            .withUid(JOB_UID)
+            .addToLabels(MANAGED_LABEL, "true")
+            .addToLabels(EXEC_ID_LABEL, String.valueOf(EXEC_ID))
+            .endMetadata()
+            .withNewStatus()
+            .withSucceeded(1)
+            .addNewCondition()
+            .withType("Complete")
+            .withStatus("True")
+            .endCondition()
+            .endStatus()
+            .build());
+        givenPods();
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobComplete(execution());
+        assertFalse("dropped once it has finished", recorded.containsKey(execution()));
+    }
+
+    /** A Job allowed to retry can run its next pod on another node, and the pair moves with it. */
+    @Test
+    public void aReplacementPodOnAnotherNodeIsReported() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podOn(EXEC_ID, "Running", "node-a"));
+        when(callback.onJobPlaced(eq(execution()), anyString())).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
+        invokePollJobsOnce();
+
+        Pod replacement = podOn(EXEC_ID, "Running", "node-b");
+        replacement.getMetadata().setName("pod-" + EXEC_ID + "-retry");
+        givenPods(replacement);
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+
+        InOrder order = inOrder(callback);
+        order.verify(callback).onJobPlaced(execution(), "node-a");
+        order.verify(callback).onJobPlaced(execution(), "node-b");
+        verify(callback, times(2)).onJobPlaced(eq(execution()), anyString());
+        verify(callback, times(1)).onJobRunning(execution());
+    }
+
+    /**
+     * A Job allowed to retry can lose its running pod and wait on a replacement no node takes.
+     * When that execution is given up as stuck, nothing is kept for it either.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void anExecutionGivenUpAsStuckKeepsNoNodeRecord() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podOn(EXEC_ID, "Running", "node-a"));
+        when(callback.onJobPlaced(execution(), "node-a")).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
+        invokePollJobsOnce();
+
+        Field field = KubernetesJobMonitor.class.getDeclaredField("recordedNodes");
+        field.setAccessible(true);
+        Map<ExecutionRef, String> recorded = (Map<ExecutionRef, String>) field.get(monitor);
+        assertEquals("recorded while it runs", "node-a", recorded.get(execution()));
+
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(61);
+        when(callback.onJobStuckPending(eq(execution()), anyString())).thenReturn(true);
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobStuckPending(eq(execution()), anyString());
+        assertTrue(getCompletedExecutions().contains(execution()));
+        assertFalse("dropped once it is given up", recorded.containsKey(execution()));
+    }
+
+    /**
+     * A kill deletes a running Job, which then leaves the listing without the monitor seeing
+     * it finish. An execution the listing no longer holds is never polled again, so nothing is
+     * kept for it either.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void anExecutionWhoseJobIsGoneKeepsNoNodeRecord() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podOn(EXEC_ID, "Running", "node-a"));
+        when(callback.onJobPlaced(execution(), "node-a")).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
+        invokePollJobsOnce();
+
+        Field field = KubernetesJobMonitor.class.getDeclaredField("recordedNodes");
+        field.setAccessible(true);
+        Map<ExecutionRef, String> recorded = (Map<ExecutionRef, String>) field.get(monitor);
+        assertEquals("recorded while it runs", "node-a", recorded.get(execution()));
+
+        givenJobs();
+        givenPods();
+        invokePollJobsOnce();
+
+        verify(callback, never()).onJobComplete(any(ExecutionRef.class));
+        verify(callback, never()).onJobFailed(any(ExecutionRef.class), anyString());
+        assertFalse("dropped once its Job is gone", recorded.containsKey(execution()));
     }
 
     @SuppressWarnings("unchecked")

@@ -9,6 +9,7 @@ import org.starexec.backend.Backend;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
+import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
 
@@ -259,6 +260,187 @@ public class JobsKillProtocolSqlTest extends Common {
         assertEquals(StatusCode.STATUS_ENQUEUED.getVal(), statusOf(enqueuedPairId));
     }
 
+    @Test
+    public void directJobDeletionPreservesRowsWhenExecutionStopIsUnproven() throws Exception {
+        R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
+
+        assertFalse("deletion must report that an active execution could not be retired",
+                Jobs.delete(jobId));
+
+        assertEquals("the job row must remain", 1,
+                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId));
+        assertEquals("the job must not be marked deleted", 0,
+                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId + " AND deleted"));
+        assertEquals("the running pair row must remain", 1,
+                selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = " + runningPairId));
+        assertEquals("the unproven running pair must retain its active status",
+                StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+        assertEquals("the enqueued pair row must remain", 1,
+                selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = " + enqueuedPairId));
+        assertEquals("the unproven enqueued pair must retain its active status",
+                StatusCode.STATUS_ENQUEUED.getVal(), statusOf(enqueuedPairId));
+    }
+
+    // ------------------------------------------------------------------
+    // refused deletions: retried, and never purged around the stop check
+    // ------------------------------------------------------------------
+
+    /**
+     * The endpoints mark a job deleted at once and finish the deletion on a thread, after
+     * telling the user it is done. A deletion refused because a pair was not confirmed
+     * stopped was never tried again: the job stayed hidden with its pairs RUNNING.
+     */
+    @Test
+    public void aRefusedDeletionIsCompletedOnceTheStopIsConfirmed() throws Exception {
+        assertTrue("what the endpoints do first", Jobs.setDeletedColumn(jobId));
+        R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
+        assertFalse("the first deletion is refused", Jobs.delete(jobId));
+        assertEquals(2, pairCount());
+
+        R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        assertTrue("the retry must complete this deletion", Jobs.retryRefusedDeletions() >= 1);
+
+        assertEquals("no pair of the deleted job may remain", 0, pairCount());
+    }
+
+    @Test
+    public void theRetryLeavesADeletedJobAloneWhileItsStopIsUnproven() throws Exception {
+        assertTrue(Jobs.setDeletedColumn(jobId));
+        R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
+
+        Jobs.retryRefusedDeletions();
+
+        assertEquals("rows stay while an execution may still run", 2, pairCount());
+        assertEquals(StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+    }
+
+    /** The retry is for deletions only: it must never kill a job nobody deleted. */
+    @Test
+    public void theRetryNeverTouchesAJobThatIsNotDeleted() throws Exception {
+        Backend backend = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        R.BACKEND = backend;
+
+        Jobs.retryRefusedDeletions();
+
+        org.mockito.Mockito.verify(backend, org.mockito.Mockito.never()).killPairConfirmed(771001);
+        org.mockito.Mockito.verify(backend, org.mockito.Mockito.never()).killPairConfirmed(771002);
+        assertEquals(2, pairCount());
+        assertEquals(StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+    }
+
+    /**
+     * CLEAN_DATABASE purged deleted jobs with no stop check at all: a job whose deletion had
+     * been refused lost its rows (and directory) while a pair might still be running.
+     */
+    @Test
+    public void cleaningDeletedJobsLeavesOneWithPairsInFlightToTheRetry() throws Exception {
+        assertTrue(Jobs.setDeletedColumn(jobId));
+
+        assertTrue(Jobs.cleanOrphanedDeletedJobs());
+
+        assertEquals("the job row must remain", 1,
+                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId));
+        assertEquals("its in-flight pairs must remain", 2, pairCount());
+    }
+
+    /**
+     * The restraint, pinned: a deleted job with nothing in flight is still purged. Deciding
+     * through isJobComplete would have kept every deleted job forever, because
+     * GetJobStatusDetail answers DELETED for all of them.
+     */
+    @Test
+    public void cleaningDeletedJobsStillPurgesOneWithNothingInFlight() throws Exception {
+        exec("UPDATE starexec.job_pairs SET status_code = " + StatusCode.STATUS_COMPLETE.getVal()
+                + " WHERE job_id = " + jobId);
+        assertTrue(Jobs.setDeletedColumn(jobId));
+
+        assertTrue(Jobs.cleanOrphanedDeletedJobs());
+
+        assertEquals("a deleted, orphaned job with nothing in flight is purged", 0,
+                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId));
+    }
+
+    private int pairCount() throws SQLException {
+        return selectInt("SELECT count(*) FROM starexec.job_pairs WHERE job_id = " + jobId);
+    }
+
+    @Test
+    public void directDeletionStopsWhenTheDeletedMarkerCannotBeStored() throws Exception {
+        R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        String suffix = java.util.UUID.randomUUID().toString().replace("-", "");
+        String functionName = "kill_protocol_reject_delete_" + suffix;
+        String triggerName = functionName + "_trigger";
+
+        try {
+            try (Connection con = Common.getConnection();
+                    java.sql.Statement statement = con.createStatement()) {
+                statement.execute("CREATE FUNCTION starexec." + functionName
+                        + "() RETURNS trigger AS $$ BEGIN"
+                        + " RAISE EXCEPTION 'injected deleted-marker failure';"
+                        + " END; $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER " + triggerName
+                        + " BEFORE UPDATE OF deleted ON starexec.jobs"
+                        + " FOR EACH ROW WHEN (NEW.deleted AND NOT OLD.deleted)"
+                        + " EXECUTE FUNCTION starexec." + functionName + "()");
+            }
+
+            assertFalse("deletion must stop if the database could not record the deleted marker",
+                    Jobs.delete(jobId));
+            assertEquals("the job remains available and undeleted", 0,
+                    selectInt("SELECT count(*) FROM starexec.jobs WHERE id = "
+                            + jobId + " AND deleted"));
+            assertEquals("the running pair row must remain", 1,
+                    selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = "
+                            + runningPairId));
+            assertEquals("the enqueued pair row must remain", 1,
+                    selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = "
+                            + enqueuedPairId));
+        } finally {
+            try (Connection con = Common.getConnection();
+                    java.sql.Statement statement = con.createStatement()) {
+                statement.execute("DROP TRIGGER IF EXISTS " + triggerName
+                        + " ON starexec.jobs");
+                statement.execute("DROP FUNCTION IF EXISTS starexec." + functionName + "()");
+            }
+        }
+    }
+
+    @Test
+    public void confirmedBackendStopIsNotReportedWhenStatusPersistenceFails() throws Exception {
+        R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        String suffix = java.util.UUID.randomUUID().toString().replace("-", "");
+        String functionName = "kill_protocol_reject_status_" + suffix;
+        String triggerName = functionName + "_trigger";
+
+        try {
+            try (Connection con = Common.getConnection();
+                    java.sql.Statement statement = con.createStatement()) {
+                statement.execute("CREATE FUNCTION starexec." + functionName
+                        + "() RETURNS trigger AS $$ BEGIN"
+                        + " RAISE EXCEPTION 'injected pair-status failure';"
+                        + " END; $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER " + triggerName
+                        + " BEFORE UPDATE OF status_code ON starexec.job_pairs"
+                        + " FOR EACH ROW WHEN (OLD.id = " + runningPairId
+                        + " AND NEW.status_code = "
+                        + StatusCode.STATUS_KILLED.getVal() + ")"
+                        + " EXECUTE FUNCTION starexec." + functionName + "()");
+            }
+
+            assertFalse("status persistence failure must not report a retired pair",
+                    JobPairs.killPairConfirmed(runningPairId, 771001));
+            assertEquals("the failed write leaves the pair visibly in flight",
+                    StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+        } finally {
+            try (Connection con = Common.getConnection();
+                    java.sql.Statement statement = con.createStatement()) {
+                statement.execute("DROP TRIGGER IF EXISTS " + triggerName
+                        + " ON starexec.job_pairs");
+                statement.execute("DROP FUNCTION IF EXISTS starexec." + functionName + "()");
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // Jobs.setPairsToPending
     // ------------------------------------------------------------------
@@ -327,6 +509,163 @@ public class JobsKillProtocolSqlTest extends Common {
         }
     }
 
+    /**
+     * Every stop of the batch is requested before any is confirmed, so the confirmations'
+     * waits overlap. Confirmed one at a time, a job whose pods hang in Terminating held its
+     * caller for the confirmation wait times the number of pairs.
+     */
+    @Test
+    public void aKillRequestsEveryStopBeforeConfirmingAny() throws Exception {
+        Backend backend = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        R.BACKEND = backend;
+
+        assertTrue("the kill must report success", invokeKill(jobId));
+
+        org.mockito.Mockito.verify(backend).requestStop(771001);
+        org.mockito.Mockito.verify(backend).requestStop(771002);
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(backend);
+        order.verify(backend, org.mockito.Mockito.times(2))
+            .requestStop(org.mockito.ArgumentMatchers.anyInt());
+        order.verify(backend, org.mockito.Mockito.times(2))
+            .killPairConfirmed(org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    /** Pausing resets pairs through the same confirmation, so it requests the stop first too. */
+    @Test
+    public void pausingRequestsTheStopBeforeConfirmingIt() throws Exception {
+        Backend backend = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        R.BACKEND = backend;
+
+        assertTrue(Jobs.setPairsToPending(jobId, StatusCode.STATUS_RUNNING.getVal()));
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(backend);
+        order.verify(backend).requestStop(771001);
+        order.verify(backend).killPairConfirmed(771001);
+    }
+
+    // ------------------------------------------------------------------
+    // Jobs.pause
+    // ------------------------------------------------------------------
+
+    /**
+     * KillJob's bug, in PauseJob: it RAISED when the job had no PENDING_SUBMIT pair. That
+     * rolled back the paused flag, and Jobs.pause returned false before it stopped anything.
+     * A job whose pairs were all dispatched, like this fixture's, could not be paused: the
+     * user got a database error and the pairs ran on.
+     */
+    @Test
+    public void pausingAJobWithNoPendingPairStopsAndPausesItsPairs() throws Exception {
+        Backend backend = org.mockito.Mockito.mock(Backend.class);
+        org.mockito.Mockito.when(backend.killPair(org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(true);
+        R.BACKEND = backend;
+
+        assertTrue("the pause must report success", Jobs.pause(jobId));
+
+        assertTrue("the job must be flagged paused", isPaused(jobId));
+        org.mockito.Mockito.verify(backend).killPair(771001);
+        org.mockito.Mockito.verify(backend).killPair(771002);
+        // Each stopped execution is retired from backend tracking. Otherwise LocalJobMonitor
+        // reads the RUNNING that the killed run left in status.json and writes it over PAUSED.
+        org.mockito.Mockito.verify(backend).clearPairTracking(runningPairId);
+        org.mockito.Mockito.verify(backend).clearPairTracking(enqueuedPairId);
+        int paused = StatusCode.STATUS_PAUSED.getVal();
+        assertEquals("the running pair must be paused", paused, statusOf(runningPairId));
+        assertEquals("and its stage", paused, stageStatusOf(runningPairId));
+        assertEquals("the enqueued pair must be paused", paused, statusOf(enqueuedPairId));
+        assertEquals("and its stage", paused, stageStatusOf(enqueuedPairId));
+    }
+
+    /** A pair whose stop was not confirmed may still be running, so it is not marked paused. */
+    @Test
+    public void anUnconfirmedStopLeavesTheRunningPairRunning() throws Exception {
+        // An unstubbed mock answers false: no stop is confirmed.
+        Backend backend = org.mockito.Mockito.mock(Backend.class);
+        R.BACKEND = backend;
+
+        Jobs.pause(jobId);
+
+        assertTrue("the job is flagged paused, so nothing new is dispatched", isPaused(jobId));
+        assertEquals("a pair that may still be running must keep its status",
+                StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+        assertEquals("an enqueued pair is paused even so",
+                StatusCode.STATUS_PAUSED.getVal(), statusOf(enqueuedPairId));
+        // Nothing was stopped, so nothing is retired: an execution that runs on must still
+        // have its result recorded.
+        org.mockito.Mockito.verify(backend, org.mockito.Mockito.never())
+                .clearPairTracking(org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    /** PauseJob itself pauses a pending pair, which has no execution to stop. */
+    @Test
+    public void aPendingPairIsPausedWithoutAStopRequest() throws Exception {
+        int pending = StatusCode.STATUS_PENDING_SUBMIT.getVal();
+        exec("UPDATE starexec.job_pairs SET sge_id = NULL, status_code = " + pending
+                + " WHERE id = " + enqueuedPairId);
+        exec("UPDATE starexec.jobpair_stage_data SET status_code = " + pending
+                + " WHERE jobpair_id = " + enqueuedPairId);
+        Backend backend = org.mockito.Mockito.mock(Backend.class);
+        org.mockito.Mockito.when(backend.killPair(org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(true);
+        R.BACKEND = backend;
+
+        assertTrue("the pause must report success", Jobs.pause(jobId));
+
+        assertEquals("the pending pair must be paused",
+                StatusCode.STATUS_PAUSED.getVal(), statusOf(enqueuedPairId));
+        org.mockito.Mockito.verify(backend).killPair(771001);
+        org.mockito.Mockito.verify(backend, org.mockito.Mockito.times(1))
+                .killPair(org.mockito.ArgumentMatchers.anyInt());
+        org.mockito.Mockito.verify(backend).clearPairTracking(runningPairId);
+        org.mockito.Mockito.verify(backend, org.mockito.Mockito.never())
+                .clearPairTracking(enqueuedPairId);
+    }
+
+    /**
+     * Tracking is retired before PAUSED is written. In the other order, a monitor poll that
+     * lands between the two writes RUNNING over PAUSED, and nothing writes PAUSED again.
+     */
+    @Test
+    public void trackingIsRetiredBeforeThePairIsMarkedPaused() throws Exception {
+        Backend backend = org.mockito.Mockito.mock(Backend.class);
+        org.mockito.Mockito.when(backend.killPair(org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(true);
+        java.util.Map<Integer, Integer> statusWhenRetired = new java.util.HashMap<>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            int pairId = invocation.getArgument(0);
+            statusWhenRetired.put(pairId, statusOf(pairId));
+            return null;
+        }).when(backend).clearPairTracking(org.mockito.ArgumentMatchers.anyInt());
+        R.BACKEND = backend;
+
+        assertTrue("the pause must report success", Jobs.pause(jobId));
+
+        assertEquals("tracking must be retired while the pair still reads RUNNING",
+                Integer.valueOf(StatusCode.STATUS_RUNNING.getVal()),
+                statusWhenRetired.get(runningPairId));
+        assertEquals(StatusCode.STATUS_PAUSED.getVal(), statusOf(runningPairId));
+    }
+
+    /**
+     * A stopped pair is paused even when its tracking cannot be retired. Left RUNNING, it
+     * would have no process behind it and nothing would ever complete it.
+     */
+    @Test
+    public void aStoppedPairIsPausedEvenWhenItsTrackingCannotBeRetired() throws Exception {
+        Backend backend = org.mockito.Mockito.mock(Backend.class);
+        org.mockito.Mockito.when(backend.killPair(org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(true);
+        org.mockito.Mockito.doThrow(new IllegalStateException("monitor unavailable"))
+                .when(backend).clearPairTracking(org.mockito.ArgumentMatchers.anyInt());
+        R.BACKEND = backend;
+
+        assertTrue("the pause must report success", Jobs.pause(jobId));
+
+        int paused = StatusCode.STATUS_PAUSED.getVal();
+        assertEquals("the running pair must be paused", paused, statusOf(runningPairId));
+        assertEquals("the enqueued pair must be paused", paused, statusOf(enqueuedPairId));
+    }
+
     // ------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------
@@ -372,8 +711,18 @@ public class JobsKillProtocolSqlTest extends Common {
                 + id) == 1;
     }
 
+    private boolean isPaused(int id) throws SQLException {
+        return selectInt("SELECT CASE WHEN paused THEN 1 ELSE 0 END FROM starexec.jobs WHERE id = "
+                + id) == 1;
+    }
+
     private int statusOf(int pairId) throws SQLException {
         return selectInt("SELECT status_code FROM starexec.job_pairs WHERE id = " + pairId);
+    }
+
+    private int stageStatusOf(int pairId) throws SQLException {
+        return selectInt("SELECT status_code FROM starexec.jobpair_stage_data WHERE jobpair_id = "
+                + pairId);
     }
 
     private int selectInt(String sql) throws SQLException {

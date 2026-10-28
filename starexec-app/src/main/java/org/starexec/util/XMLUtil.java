@@ -4,6 +4,7 @@ import org.starexec.constants.R;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.logger.StarLogger;
 import org.w3c.dom.Document;
+import org.w3c.dom.Element;
 import org.xml.sax.SAXException;
 
 import org.w3c.dom.ls.LSInput;
@@ -51,6 +52,78 @@ public class XMLUtil {
 	private static final String SCHEMA_CLASSPATH_DIR = "/schemas/";
 
 	/**
+	 * The namespace every exported document is written in, and the one the bundled schemas
+	 * declare as their {@code targetNamespace}.
+	 *
+	 * <p>A namespace is an identifier, not a location: nothing is fetched from it, and this
+	 * class resolves schemas from the bundled set by name. It therefore must not depend on
+	 * where an instance is deployed. It used to: the schemas carried the Ant-era token
+	 * {@code @Web.URL@public/...}, which no Maven property substitutes, while the producers
+	 * stamped the live deployment URL, so an export could never validate against the schema
+	 * it shipped with and no two instances could exchange documents.
+	 *
+	 * <p>This value is the one {@code docs/API_GUIDE.md} already documents, and the one the
+	 * Ant-era starexec.org instances substituted, so documents exported from there validate
+	 * against these schemas unchanged.
+	 */
+	public static final String SCHEMA_NAMESPACE_ROOT = "https://www.starexec.org/starexec/public/";
+
+	/** The namespace of a space-hierarchy document. */
+	public static final String SPACE_SCHEMA_NAMESPACE = SCHEMA_NAMESPACE_ROOT + "batchSpaceSchema.xsd";
+
+	/** The namespace of a job document. */
+	public static final String JOB_SCHEMA_NAMESPACE = SCHEMA_NAMESPACE_ROOT + "batchJobSchema.xsd";
+
+	/**
+	 * The {@code xsi:schemaLocation} hint for a document: its namespace, then the file name a
+	 * reader can fetch beside it. Built from the namespace so the two halves cannot disagree,
+	 * as they did when the job export concatenated a root ending in {@code /} with a location
+	 * beginning with {@code /} and produced {@code .../starexec//public/...}.
+	 *
+	 * @param namespace the document's namespace
+	 * @return the two-part schemaLocation hint
+	 */
+	public static String schemaLocationHint(String namespace) {
+		return namespace + " " + namespace.substring(namespace.lastIndexOf('/') + 1);
+	}
+
+	/**
+	 * The root element of an exported space-hierarchy document.
+	 *
+	 * @param doc the document being built
+	 * @return a {@code tns:Spaces} element in the namespace {@code batchSpaceSchema.xsd} declares
+	 */
+	public static Element createSpacesRoot(Document doc) {
+		return createSchemaRoot(doc, SPACE_SCHEMA_NAMESPACE, "tns:Spaces");
+	}
+
+	/**
+	 * The root element of an exported job document.
+	 *
+	 * @param doc the document being built
+	 * @return a {@code tns:Jobs} element in the namespace {@code batchJobSchema.xsd} declares
+	 */
+	public static Element createJobsRoot(Document doc) {
+		return createSchemaRoot(doc, JOB_SCHEMA_NAMESPACE, "tns:Jobs");
+	}
+
+	/**
+	 * Stamps an export's root element with the namespace and schema hint its readers need.
+	 *
+	 * <p>Both exporters build this element and then recurse straight into database lookups, so
+	 * the namespace decision is only reachable in a test if it lives apart from the traversal
+	 * that follows it. It lives here for that reason, and because two copies of it are two
+	 * chances to disagree -- which is how the job export came to emit a doubled slash that the
+	 * space export did not.
+	 */
+	private static Element createSchemaRoot(Document doc, String namespace, String qualifiedName) {
+		Element root = doc.createElementNS(namespace, qualifiedName);
+		root.setAttribute("xmlns:xsi", XMLConstants.W3C_XML_SCHEMA_INSTANCE_NS_URI);
+		root.setAttribute("xsi:schemaLocation", schemaLocationHint(namespace));
+		return root;
+	}
+
+	/**
 	 * The only schema documents this application will resolve, by file name.
 	 *
 	 * <p>An allowlist rather than a path derived from the reference. Both references this
@@ -74,11 +147,12 @@ public class XMLUtil {
 	/**
 	 * Resolves schema imports from the bundled copies and refuses everything else.
 	 *
-	 * <p>The shipped schemas declare their imports with an absolute {@code schemaLocation}
-	 * built from a deployment URL, which made validation fetch a schema over HTTP from the
-	 * running server -- and fail outright when that URL was never substituted. Resolving by
-	 * file name against the packaged copies removes both the network dependency and the
-	 * substitution requirement, and does not change any document's namespace.
+	 * <p>The shipped schemas used to declare their imports with an absolute
+	 * {@code schemaLocation} built from a deployment URL, which made validation fetch a schema
+	 * over HTTP from the running server -- and fail outright when that URL was never
+	 * substituted. Those locations are now relative file names, and this resolver satisfies
+	 * them from the packaged copies, so neither the network nor any substitution is involved.
+	 * Resolving by name does not change any document's namespace.
 	 *
 	 * <p>An unknown reference throws rather than returning null. JAXP defines a null result as
 	 * "resolve this the normal way", so returning null would hand the reference back to the

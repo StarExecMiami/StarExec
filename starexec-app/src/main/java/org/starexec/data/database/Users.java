@@ -318,6 +318,22 @@ public class Users {
 	}
 
 	/**
+	 * Whether a user with this id exists, that is, has not been deleted.
+	 *
+	 * <p>Unlike {@link #get(int)}, a failed lookup is not an answer: the error is thrown, so that a
+	 * caller deciding whether to delete a user's files cannot mistake a lost connection for a
+	 * deleted user. Nor does it require a role, as get does.
+	 *
+	 * @param userId the id of the user
+	 * @return true if the user's row exists
+	 * @throws SQLException if the database could not be asked
+	 */
+	public static boolean exists(int userId) throws SQLException {
+		return Common.query(
+				"SELECT 1 FROM starexec.users WHERE id = ?", procedure -> procedure.setInt(1, userId), ResultSet::next);
+	}
+
+	/**
 	 * Retrieves a user from the database given the user's id
 	 *
 	 * @param id the id of the user to get
@@ -846,7 +862,6 @@ public class Users {
 	 */
 
 	public static boolean getUserByEmail(String email) {
-		log.debug("email = " + email);
 		Connection con = null;
 		java.sql.PreparedStatement procedure = null;
 		ResultSet results = null;
@@ -858,7 +873,8 @@ public class Users {
 
 			return results.next();
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the bound address; omit exception details.
+			log.error("Failed to check whether an email address is registered");
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
@@ -1217,14 +1233,16 @@ public class Users {
 			procedure.setString(2, newValue);
 
 			procedure.execute();
-			log.info("User [" + userId + "] updated e-mail address to [" + newValue + "]");
+			log.info("User [" + userId + "] updated e-mail address");
 		} catch (PSQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
-				throw new StarExecDatabaseException("User not found: " + userId, e);
+				throw new StarExecDatabaseException("User not found: " + userId);
 			}
-			log.error(e.getMessage(), e);
+			// Database errors can echo the bound address; omit exception details.
+			log.error("Failed to update e-mail address for user [" + userId + "]");
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the bound address; omit exception details.
+			log.error("Failed to update e-mail address for user [" + userId + "]");
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
@@ -1386,8 +1404,20 @@ public class Users {
 		Connection con = null;
 		PreparedStatement procedure = null;
 		try {
+			// Serialize deletion against new jobs owned by this user. AddJob and this
+			// transaction acquire the same advisory lock; unlike a users-row lock, it
+			// does not conflict with foreign-key checks while stopping running jobs.
+			con = Common.getConnection();
+			Common.beginTransaction(con);
+			lockUserJobLifecycleForDeletion(con, userToDeleteId);
+
 			// First, get information needed for cleanup
 			Space personalSpace = Spaces.getPersonalSpace(userToDeleteId);
+
+			// Stop and retire active executions before their database rows can be
+			// cascaded. A backend that cannot establish this must leave the user and
+			// job rows in place so the administrator can retry after resolving it.
+			Jobs.killUsersJobs(userToDeleteId);
 
 			// Gather filesystem targets BEFORE the DB cascade so we can clean
 			// up job directories, solver pictures, and benchmark pictures that
@@ -1395,24 +1425,22 @@ public class Users {
 			List<Job> userJobs = Jobs.getByUserId(userToDeleteId);
 			List<Solver> userSolvers = Solvers.getByUser(userToDeleteId);
 			List<Benchmark> userBenchmarks = Benchmarks.getByUser(userToDeleteId);
+			if (userJobs == null || userSolvers == null || userBenchmarks == null) {
+				throw new StarExecDatabaseException(
+						"Could not collect all filesystem targets before deleting user " + userToDeleteId);
+			}
 
 			List<Integer> preGatheredJobIds = new ArrayList<>();
-			if (userJobs != null) {
-				for (Job j : userJobs) {
-					preGatheredJobIds.add(j.getId());
-				}
+			for (Job j : userJobs) {
+				preGatheredJobIds.add(j.getId());
 			}
 			List<Integer> preGatheredSolverIds = new ArrayList<>();
-			if (userSolvers != null) {
-				for (Solver s : userSolvers) {
-					preGatheredSolverIds.add(s.getId());
-				}
+			for (Solver s : userSolvers) {
+				preGatheredSolverIds.add(s.getId());
 			}
 			List<Integer> preGatheredBenchmarkIds = new ArrayList<>();
-			if (userBenchmarks != null) {
-				for (Benchmark b : userBenchmarks) {
-					preGatheredBenchmarkIds.add(b.getId());
-				}
+			for (Benchmark b : userBenchmarks) {
+				preGatheredBenchmarkIds.add(b.getId());
 			}
 
 			// Processor file paths must be collected before the cascade removes the
@@ -1428,14 +1456,13 @@ public class Users {
 				}
 			}
 
-			// One connection, one transaction. The personal-space removal and the
-			// user row deletion must succeed or fail together. Previously the space
+			// One connection, one transaction. It has held the lifecycle advisory lock
+			// since before the job sweep. The personal-space removal and user deletion
+			// must succeed or fail together. Previously the space
 			// removal ran through Spaces.removeSubspace, which opened its own
 			// connection and committed; when the user deletion then failed (any user
 			// with analytics_users rows failed with SQLSTATE 23503) the user survived
 			// with their entire space subtree already destroyed.
-			con = Common.getConnection();
-			Common.beginTransaction(con);
 
 			if (personalSpace != null) {
 				log.info("Deleting personal space for user " + userToDeleteId + " with space id "
@@ -1513,6 +1540,30 @@ public class Users {
 		}
 		log.debug("internal error trying to delete user with id = " + userToDeleteId);
 		return false;
+	}
+
+	/** Locks the user's job lifecycle and verifies the user exists before deletion. */
+	private static void lockUserJobLifecycleForDeletion(Connection con, int userId)
+			throws SQLException, StarExecDatabaseException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT starexec.LockUserJobLifecycle(?)")) {
+			ps.setInt(1, userId);
+			try (ResultSet ignored = ps.executeQuery()) {
+				// Exhaust and close the function result before running the existence query.
+				while (ignored.next()) {
+					// The function returns void; only its transaction-scoped lock matters.
+				}
+			}
+		}
+		try (PreparedStatement ps = con.prepareStatement(
+				"SELECT id FROM starexec.users WHERE id = ?")) {
+			ps.setInt(1, userId);
+			try (ResultSet rs = ps.executeQuery()) {
+				if (!rs.next()) {
+					throw new StarExecDatabaseException("User not found: " + userId,
+							new SQLException("User not found", "P0002"));
+				}
+			}
+		}
 	}
 
 	/**

@@ -16,8 +16,12 @@ import java.util.Map;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.starexec.backend.LocalJobMonitor;
 import org.starexec.backend.StageStatusSnapshots;
+import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.StageStatusBatchResult;
 import org.starexec.data.to.Status.StatusCode;
 
 /**
@@ -231,13 +235,35 @@ public class LocalJobMonitorTests {
         assertEquals(98.0, statDouble(stats, "cpuTime"), 0.0001);
     }
 
+    /**
+     * A time in exponent form is read whole. runsolver prints a time below 1e-4 s or from 1e6 s
+     * that way, and the job script writes it to stats.json as it is. There is no var.out here,
+     * so each value can only come from stats.json.
+     */
+    @Test
+    public void aTimeInExponentFormInStatsJsonIsReadWhole() throws Exception {
+        Object stats = parseRunSolverStats(outputDir(
+            null,
+            null,
+            "{\"wallclockTime\": 9.90467e-05, \"cpuTime\": 1.23457e+06,"
+                + " \"userTime\": 4.1e-05, \"systemTime\": 4.22E-05}"
+        ));
+
+        assertEquals(9.90467e-05, statDouble(stats, "wallclockTime"), 0.0);
+        assertEquals(1234570.0, statDouble(stats, "cpuTime"), 0.0);
+        assertEquals(4.1e-05, statDouble(stats, "userTime"), 0.0);
+        assertEquals("an upper-case E is an exponent in JSON too", 4.22e-05,
+            statDouble(stats, "systemTime"), 0.0);
+    }
+
     // ------------------------------------------------------------------
     // A malformed number in stats.json must not escape parseRunSolverStats
     //
-    // extractDoubleOr matches [0-9.]+ and extractLongOr/extractIntOr match
-    // [0-9]+, so "1.2.3", ".", "1..2" and digit strings past Integer/Long range
-    // all match the regex and then throw out of the parse. The enclosing catch
-    // took IOException only, so the NumberFormatException left the monitor.
+    // extractDoubleOr matches a digit or dot followed by digits, dots and exponent
+    // characters, and extractLongOr/extractIntOr match [0-9]+, so "1.2.3", ".",
+    // "1..2", "1e" and digit strings past Integer/Long range all match the regex and
+    // then throw out of the parse. The enclosing catch took IOException only, so the
+    // NumberFormatException left the monitor.
     //
     // Both tests below turn on one witness: hostname is applied last, at the very
     // end of the stats.json block. A malformed value that merely failed to match
@@ -314,6 +340,8 @@ public class LocalJobMonitorTests {
                 "{\"cpuTime\": ., \"hostname\": \"node7\"}"},
             {"a doubled dot reaches Double.parseDouble",
                 "{\"cpuTime\": 1..2, \"hostname\": \"node7\"}"},
+            {"a dangling exponent reaches Double.parseDouble",
+                "{\"cpuTime\": 1e, \"hostname\": \"node7\"}"},
             {"a value past Long range reaches Long.parseLong",
                 "{\"maxResidentSetSize\": 99999999999999999999,"
                     + " \"hostname\": \"node7\"}"},
@@ -389,6 +417,20 @@ public class LocalJobMonitorTests {
         Field stage = ss.getClass().getDeclaredField("stageNumber");
         stage.setAccessible(true);
         assertEquals(2, stage.getInt(ss));
+    }
+
+    @Test
+    public void aStatusFileThatDisappearsDoesNotBecomeStageOneRunscriptError() throws Exception {
+        Path empty = Files.createTempDirectory("ljm-absent-status");
+        empty.toFile().deleteOnExit();
+
+        try {
+            readStatusFile(empty, 5);
+            fail("an absent status file has no stage or solver result to record");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            assertTrue("expected an evidence refusal, got " + e.getCause(),
+                e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -537,10 +579,10 @@ public class LocalJobMonitorTests {
 
     private void updateDatabase(int pairId, StatusCode status, int stageNumber) throws Throwable {
         for (Method m : LocalJobMonitor.class.getDeclaredMethods()) {
-            if (m.getName().equals("updateDatabase")) {
+            if (m.getName().equals("updateDatabase") && m.getParameterCount() == 4) {
                 m.setAccessible(true);
                 try {
-                    m.invoke(monitor, pairId, status, stageNumber);
+                    m.invoke(monitor, pairId, status, stageNumber, (Integer) null);
                 } catch (java.lang.reflect.InvocationTargetException e) {
                     throw e.getCause();
                 }
@@ -680,21 +722,29 @@ public class LocalJobMonitorTests {
      * flight", which would skip the whole directory and let the caller record a result for a
      * pair whose history it had just declined to read.
      *
-     * <p>The pre-bound behaviour is the conservative one, so 0 keeps it: validate everything, and
-     * refuse a stage that is not holding a result.
+     * <p>What such a pair leaves behind, though, is a stage that never finished: its snapshot
+     * reads RUNNING and always will. Refusing the pair for that -- which this test used to
+     * require -- held every pair that died mid-stage for intervention, permanently. So an
+     * unfinished stage is skipped, while the directory is still read and every stage that DID
+     * finish is still ingested, which is the property this case exists to protect.
      */
     @Test
-    public void aStageNumberBelowOneIsNotTreatedAsABound() throws Exception {
-        Path dir = dirWithStageSnapshot(49, 1, 4);
+    public void aStageNumberBelowOneStillReadsTheStagesThatFinished() throws Exception {
+        Path dir = dirWithStageSnapshot(49, 1, StatusCode.STATUS_COMPLETE.getVal());
+        Files.writeString(
+            dir.resolve("stage-status").resolve("2.json"),
+            "{\"pairId\":49,\"status\":4,\"stageNumber\":2,\"timestamp\":1788988692}\n");
         monitor.registerJob(dir.toString(), 49);
 
-        try {
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.setEarlierStageStatuses(
+                    Mockito.eq(49), Mockito.anyMap()))
+                .thenReturn(StageStatusBatchResult.APPLIED);
+
             ingestEarlierStageStatuses(49, stateFor(49), dir, 0);
-            fail("stageNumber 0 must not silently skip every snapshot");
-        } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-            assertTrue(
-                "wrong refusal: " + expected.getMessage(),
-                expected.getMessage().contains("carries status 4"));
+
+            jobPairs.verify(() -> JobPairs.setEarlierStageStatuses(
+                49, java.util.Map.of(1, StatusCode.STATUS_COMPLETE.getVal())));
         }
     }
 

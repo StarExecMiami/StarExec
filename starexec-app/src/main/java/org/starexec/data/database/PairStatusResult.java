@@ -41,10 +41,24 @@ public enum PairStatusResult {
 	 * condition that cannot heal. Distinct from {@link #SUPERSEDED} because the pair is not
 	 * finished: nothing was recorded, and it still needs a result.
 	 */
-	REJECTED_INVALID_STAGE;
+	REJECTED_INVALID_STAGE,
 
-	/** True when the pair is in a terminal state and needs no further attempt. */
+	/**
+	 * Refused before anything was written: the write carried an attempt number other than
+	 * the pair's current one (#185), so it came from an execution that a rerun has since
+	 * replaced. The pair is not finished and needs no retry of this write -- the current
+	 * attempt reports its own result. Not {@link #FAILED}: nothing is wrong with the
+	 * database, and retrying can never succeed. Callers that own a container, pod or process
+	 * for the superseded execution should still release it.
+	 */
+	STALE_ATTEMPT;
+
+	/**
+	 * True when this write needs no further attempt and the resource tracking it may be
+	 * released. {@link #STALE_ATTEMPT} counts: the write can never succeed, and the
+	 * execution that made it has been replaced.
+	 */
 	public boolean isSettled() {
-		return this == APPLIED || this == SUPERSEDED;
+		return this == APPLIED || this == SUPERSEDED || this == STALE_ATTEMPT;
 	}
 }

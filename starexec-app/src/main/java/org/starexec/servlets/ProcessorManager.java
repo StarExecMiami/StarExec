@@ -22,9 +22,6 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URL;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.HashMap;
 
 /**
@@ -38,9 +35,6 @@ public class ProcessorManager extends HttpServlet {
 
 	/** Largest processor archive, whether sent through the form or fetched from a URL. */
 	static final long MAX_ARCHIVE_BYTES = 512L * 1024L * 1024L;
-
-	// The unique date stamped file name format (for saving processor files)
-	private static final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 
 	// Request attributes
 	private static final String PROCESSOR_NAME = "name";
@@ -122,7 +116,7 @@ public class ProcessorManager extends HttpServlet {
 
 			// Redirect based on the results of the addition
 			if (result != null) {
-				response.addCookie(new Cookie("New_ID", String.valueOf(result.getId())));
+				response.addCookie(Util.createIdCookie("New_ID", String.valueOf(result.getId())));
 				response.sendRedirect(Util.docRoot("secure/edit/community.jsp?cid=" + result.getCommunityId()));
 			} else {
 				response.sendError(
@@ -304,12 +298,20 @@ public class ProcessorManager extends HttpServlet {
 	 *         directories are created as needed)
 	 */
 	public static File getProcessorDirectory(int communityId, String procName) {
-		File uniqueDir = new File(R.getProcessorDir(), "" + communityId);
 		// use the date to make sure the directory is unique
-		uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
-		uniqueDir = new File(uniqueDir, procName);
+		File uniqueDir = processorDirectory(
+				new File(R.getProcessorDir()), communityId, Util.pathDate(), procName);
 		uniqueDir.mkdirs();
 		return uniqueDir;
+	}
+
+	/**
+	 * Where a processor's files go: processorRoot/communityId/date/procName, with procName
+	 * refused unless it stays directly inside the date directory. Creates nothing.
+	 */
+	public static File processorDirectory(File processorRoot, int communityId, String date, String procName) {
+		File dateDir = new File(new File(processorRoot, "" + communityId), date);
+		return Util.childWithin(dateDir, procName);
 	}
 
 	/**

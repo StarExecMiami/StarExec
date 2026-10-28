@@ -5,7 +5,7 @@ This directory contains the Helm chart used for both Podman and Kubernetes deplo
 1. `postgres.existingSecret` is configured (production mode), **or**
 2. Both `postgres.password` and `postgres.rootPassword` are populated (dev/CI/testing).
 
-Because of that, running `helm lint chart` _without_ extra values will fail with:
+Because of that, running `helm lint charts/starexec` _without_ extra values will fail with:
 
 ```text
 Error: execution error at (starexec/templates/secret.yaml:...): postgres.existingSecret is required unless postgres.allowInsecureDevCredentials=true is explicitly set for dev/CI profiles
@@ -16,7 +16,7 @@ Error: execution error at (starexec/templates/secret.yaml:...): postgres.existin
 1. For local Podman development, point `helm lint` at `values-local-dev.yaml` since it opts into dev credentials explicitly:
 
    ```bash
-   helm lint chart -f chart/values-local-dev.yaml
+   helm lint charts/starexec -f charts/starexec/values-local-dev.yaml
    ```
 
    This is what `make lint` does automatically when `values-local-dev.yaml` exists.
@@ -24,7 +24,7 @@ Error: execution error at (starexec/templates/secret.yaml:...): postgres.existin
 2. In CI or staging pipelines, lint against `values-ci.yaml` to use the ephemeral credentials it defines:
 
    ```bash
-   helm lint chart -f chart/values-ci.yaml
+   helm lint charts/starexec -f charts/starexec/values-ci.yaml
    ```
 
 3. If you must lint `charts/starexec/values.yaml` directly, set an external secret or temporarily define both `postgres.password`
