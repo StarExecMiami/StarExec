@@ -2,9 +2,8 @@ package org.starexec.test.junit.backend;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.ContainerJobMonitor;
@@ -17,6 +16,7 @@ import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.JobPairs.PairStatusLookupState;
 import org.starexec.data.to.Status.StatusCode;
 
+import java.io.File;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -24,10 +24,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * A final {@code status.json} must say which stage produced the result, and the monitors must
@@ -53,8 +54,8 @@ import static org.junit.Assert.fail;
  */
 public class FinalStatusStageTest {
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	private static final int PAIR = 4242;
 	private static final int COMPLETE = StatusCode.STATUS_COMPLETE.getVal();
@@ -92,8 +93,8 @@ public class FinalStatusStageTest {
 			int got = parsePairLevel(body);
 			fail(why + " -- but it parsed as stage " + got + ": " + body);
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertTrue("the refusal must name the field it refused: " + expected.getMessage(),
-					expected.getMessage().contains("stageNumber"));
+			assertTrue(expected.getMessage().contains("stageNumber"),
+					"the refusal must name the field it refused: " + expected.getMessage());
 		}
 	}
 
@@ -102,8 +103,8 @@ public class FinalStatusStageTest {
 			int got = parse(body);
 			fail(why + " -- but it parsed as stage " + got + ": " + body);
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertTrue("the refusal must name the field it refused: " + expected.getMessage(),
-					expected.getMessage().contains("stageNumber"));
+			assertTrue(expected.getMessage().contains("stageNumber"),
+					"the refusal must name the field it refused: " + expected.getMessage());
 		}
 	}
 
@@ -167,8 +168,8 @@ public class FinalStatusStageTest {
 	 */
 	@Test
 	public void thePairLevelParserAcceptsExactlyZero() throws Exception {
-		assertEquals("stage 0 names the pair, not a stage",
-				0, parsePairLevel("{\"status\":24,\"stageNumber\":0}"));
+		assertEquals(0,
+				parsePairLevel("{\"status\":24,\"stageNumber\":0}"), "stage 0 names the pair, not a stage");
 	}
 
 	@Test
@@ -202,15 +203,15 @@ public class FinalStatusStageTest {
 		assertEquals(99, parse("{\"status\":7,\"stageNumber\":99}"));
 		assertEquals(Integer.MAX_VALUE,
 				parse("{\"status\":7,\"stageNumber\":2147483647}"));
-		assertEquals("a value written with a decimal point but no fractional part is still an"
-						+ " integer, and refusing it would reject a legitimate producer",
-				3, parse("{\"status\":7,\"stageNumber\":3.0}"));
+		assertEquals(3,
+				parse("{\"status\":7,\"stageNumber\":3.0}"), "a value written with a decimal point but no fractional part is still an"
+						+ " integer, and refusing it would reject a legitimate producer");
 	}
 
 	// ------------------------------------------------------- B. LocalJobMonitor lifecycle
 
 	private Path statusDir(String body) throws Exception {
-		Path dir = folder.newFolder().toPath();
+		Path dir = newFolder(folder).toPath();
 		Files.writeString(dir.resolve("status.json"), body);
 		return dir;
 	}
@@ -243,8 +244,8 @@ public class FinalStatusStageTest {
 			readStatusFile(statusDir("{\"pairId\":4242,\"status\":7}"));
 			fail("a terminal status with no stage must not be accepted");
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertEquals("must be classified BLOCKED, not retried",
-					"BLOCKED", classify(expected));
+			assertEquals("BLOCKED",
+					classify(expected), "must be classified BLOCKED, not retried");
 		}
 	}
 
@@ -284,10 +285,10 @@ public class FinalStatusStageTest {
 				Object result = readStatusFile(statusDir(body));
 				fail("status " + status + " must be refused, not read as " + result);
 			} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-				assertTrue("the refusal must name the field it refused: " + expected.getMessage(),
-						expected.getMessage().contains("non-integer status"));
-				assertEquals("must be classified BLOCKED, not retried",
-						"BLOCKED", classify(expected));
+				assertTrue(expected.getMessage().contains("non-integer status"),
+						"the refusal must name the field it refused: " + expected.getMessage());
+				assertEquals("BLOCKED",
+						classify(expected), "must be classified BLOCKED, not retried");
 			}
 		}
 	}
@@ -360,15 +361,15 @@ public class FinalStatusStageTest {
 						m.invoke(monitor, info);
 						fail(shape + " must be refused");
 					} catch (java.lang.reflect.InvocationTargetException e) {
-						assertTrue(shape + ": expected the invalid-snapshot refusal, got "
-									+ e.getCause(),
-								e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
+						assertTrue(e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException,
+								shape + ": expected the invalid-snapshot refusal, got "
+									+ e.getCause());
 						String expectedReason = label > 0
 								? "non-integer pairId"
 								: "no authoritative pair identity";
-						assertTrue(shape + ": the refusal must explain its provenance boundary: "
-									+ e.getCause().getMessage(),
-								e.getCause().getMessage().contains(expectedReason));
+						assertTrue(e.getCause().getMessage().contains(expectedReason),
+								shape + ": the refusal must explain its provenance boundary: "
+									+ e.getCause().getMessage());
 					}
 					jobPairsMock.verify(
 							() -> JobPairs.setPairStatusPreciseResult(
@@ -388,7 +389,7 @@ public class FinalStatusStageTest {
 	/** Missing terminal evidence names neither a result nor the stage that produced one. */
 	@Test
 	public void containerRefusesToIngestWhenThereIsNoStatusFileAtAll() throws Throwable {
-		Path dir = folder.newFolder().toPath();
+		Path dir = newFolder(folder).toPath();
 		ContainerJobMonitor monitor = new ContainerJobMonitor(null);
 		PodmanBackend.CompletedContainerInfo info =
 				new PodmanBackend.CompletedContainerInfo("c2", PAIR, dir.toString(), 0);
@@ -401,8 +402,8 @@ public class FinalStatusStageTest {
 				m.invoke(monitor, info);
 				fail("a container with no status.json must not be ingested");
 			} catch (java.lang.reflect.InvocationTargetException e) {
-				assertTrue("expected an evidence refusal, got " + e.getCause(),
-						e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
+				assertTrue(e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException,
+						"expected an evidence refusal, got " + e.getCause());
 			}
 			jobPairsMock.verify(
 					() -> JobPairs.setPairStatusPreciseResult(
@@ -433,8 +434,8 @@ public class FinalStatusStageTest {
 				m.invoke(monitor, info);
 				fail("an unparsable status.json must not be ingested");
 			} catch (java.lang.reflect.InvocationTargetException e) {
-				assertTrue("expected the invalid-snapshot refusal, got " + e.getCause(),
-						e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
+				assertTrue(e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException,
+						"expected the invalid-snapshot refusal, got " + e.getCause());
 			}
 		}
 	}
@@ -511,8 +512,8 @@ public class FinalStatusStageTest {
 			onComplete.setAccessible(true);
 			boolean handled = (boolean) onComplete.invoke(callback, execution);
 
-			assertTrue("returning false would reprocess the same job on every poll, forever",
-					handled);
+			assertTrue(handled,
+					"returning false would reprocess the same job on every poll, forever");
 			jobPairsMock.verify(
 					() -> JobPairs.setPairStatusPreciseResult(
 							Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
@@ -529,7 +530,7 @@ public class FinalStatusStageTest {
 
 	@Test
 	public void kubernetesRefusesACompletedJobWithNoStatusFile() throws Exception {
-		Path empty = folder.newFolder().toPath();
+		Path empty = newFolder(folder).toPath();
 		KubernetesNativeBackend backend = new KubernetesNativeBackend();
 		Object callback = registerExecution(backend, 8, "job-8", PAIR, empty);
 		ExecutionRef execution = new ExecutionRef(8, "job-8", "uid-job-8");
@@ -548,12 +549,12 @@ public class FinalStatusStageTest {
 			java.lang.reflect.Field clock = KubernetesNativeBackend.class.getDeclaredField("clock");
 			clock.setAccessible(true);
 			clock.set(backend, (java.util.function.LongSupplier) now::get);
-			assertFalse("inside the visibility window: retried",
-					(boolean) onComplete.invoke(callback, execution));
+			assertFalse((boolean) onComplete.invoke(callback, execution),
+					"inside the visibility window: retried");
 			now.addAndGet(121_000L);
 			boolean handled = (boolean) onComplete.invoke(callback, execution);
 
-			assertTrue("the deterministic refusal must not be retried forever", handled);
+			assertTrue(handled, "the deterministic refusal must not be retried forever");
 			jobPairsMock.verify(
 					() -> JobPairs.setPairStatusPreciseResult(
 							Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
@@ -566,7 +567,7 @@ public class FinalStatusStageTest {
 	/** An absent file supplies no stage identity, even to a lifecycle-failure callback. */
 	@Test
 	public void kubernetesStageReaderRefusesAnAbsentStatusFile() throws Exception {
-		Path empty = folder.newFolder().toPath();
+		Path empty = newFolder(folder).toPath();
 		KubernetesNativeBackend backend = new KubernetesNativeBackend();
 		Object callback = registerExecution(backend, 8, "job-8", PAIR, empty);
 		ExecutionRef execution = new ExecutionRef(8, "job-8", "uid-job-8");
@@ -625,8 +626,8 @@ public class FinalStatusStageTest {
 			int got = parseStatus(body);
 			fail(why + " -- but it parsed as status " + got + ": " + body);
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertTrue("the refusal must name the field it refused: " + expected.getMessage(),
-					expected.getMessage().contains("status"));
+			assertTrue(expected.getMessage().contains("status"),
+					"the refusal must name the field it refused: " + expected.getMessage());
 		}
 	}
 
@@ -686,7 +687,7 @@ public class FinalStatusStageTest {
 			onComplete.setAccessible(true);
 			boolean handled = (boolean) onComplete.invoke(callback, execution);
 
-			assertTrue("must not be re-polled against bytes that will not change", handled);
+			assertTrue(handled, "must not be re-polled against bytes that will not change");
 			jobPairsMock.verify(
 					() -> JobPairs.setPairStatusPreciseResult(
 							Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
@@ -718,19 +719,19 @@ public class FinalStatusStageTest {
 		Path functions = Path.of("src/main/java/org/starexec/config/sge/functions.bash");
 		String body = Files.readString(functions);
 		int start = body.indexOf("function containerWriteStatus");
-		assertTrue("containerWriteStatus must exist to be checked", start >= 0);
+		assertTrue(start >= 0, "containerWriteStatus must exist to be checked");
 		String fn = body.substring(start, body.indexOf("\n}", start));
 
-		assertTrue("containerWriteStatus must always write stageNumber, or the strict parse"
-						+ " would reject its own producer for omitting it: " + fn,
-				fn.contains("\\\"stageNumber\\\":"));
+		assertTrue(fn.contains("\\\"stageNumber\\\":"),
+				"containerWriteStatus must always write stageNumber, or the strict parse"
+						+ " would reject its own producer for omitting it: " + fn);
 
 		// The real default, quoted exactly. The previous version of this test looked for a
 		// literal that has never existed in this file and so asserted nothing.
-		assertTrue("containerWriteStatus is expected to default its stage argument to 0 --"
+		assertTrue(fn.contains("local STAGE_NUMBER=${2:-0}"),
+				"containerWriteStatus is expected to default its stage argument to 0 --"
 						+ " if that changes, the pair-level trade-off below changes with it: "
-						+ fn,
-				fn.contains("local STAGE_NUMBER=${2:-0}"));
+						+ fn);
 		assertRejected("{\"status\":7,\"stageNumber\":0}",
 				"and 0, the pair-level channel, identifies no stage");
 	}

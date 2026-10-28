@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.PaginationQueries;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
@@ -19,8 +19,8 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * A job space's pair listing -- the table and its record counts -- finds the pairs in the space
@@ -48,14 +48,14 @@ public class PairListingClosureSqlTest extends Common {
 	private int rootPair;
 	private int subPair;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() throws Exception {
 		DatabaseTestSupport.assumeDatabaseAvailable("PairListingClosureSqlTest");
 		Common.initialize();
 		PaginationQueries.loadPaginationQueries();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			userId = selectInt(con, "SELECT min(id) FROM starexec.users");
@@ -97,11 +97,11 @@ public class PairListingClosureSqlTest extends Common {
 			update(con, "UPDATE starexec.jobpair_stage_data SET status_code = ?"
 					+ " WHERE jobpair_id = ? AND stage_number = 1", dependencyFailure, subPair);
 		}
-		assertEquals("precondition: nothing has filled the closure for the root", 0, closureRows(rootSpace));
-		assertEquals("precondition: nothing has filled the closure for the subspace", 0, closureRows(subSpace));
+		assertEquals(0, closureRows(rootSpace), "precondition: nothing has filled the closure for the root");
+		assertEquals(0, closureRows(subSpace), "precondition: nothing has filled the closure for the subspace");
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		if (jobId == 0) {
 			return;
@@ -120,14 +120,14 @@ public class PairListingClosureSqlTest extends Common {
 
 	@Test
 	public void theCountFindsTheHierarchysPairs() {
-		assertEquals("root: its own pair and the subspace's", 2, count(rootSpace));
-		assertEquals("subspace: its own pair", 1, count(subSpace));
+		assertEquals(2, count(rootSpace), "root: its own pair and the subspace's");
+		assertEquals(1, count(subSpace), "subspace: its own pair");
 	}
 
 	@Test
 	public void theTableListsTheHierarchysPairs() {
-		assertEquals("root: its own pair and the subspace's", List.of(rootPair, subPair), listedPairs(rootSpace));
-		assertEquals("subspace: its own pair", List.of(subPair), listedPairs(subSpace));
+		assertEquals(List.of(rootPair, subPair), listedPairs(rootSpace), "root: its own pair and the subspace's");
+		assertEquals(List.of(subPair), listedPairs(subSpace), "subspace: its own pair");
 	}
 
 	/** Filling the closure on every read does not add rows once they are there. */
@@ -140,8 +140,8 @@ public class PairListingClosureSqlTest extends Common {
 			}
 		}
 
-		assertEquals("root: itself and the subspace", 2, closureRows(rootSpace));
-		assertEquals("subspace: itself", 1, closureRows(subSpace));
+		assertEquals(2, closureRows(rootSpace), "root: itself and the subspace");
+		assertEquals(1, closureRows(subSpace), "subspace: itself");
 	}
 
 	@Test
@@ -166,11 +166,11 @@ public class PairListingClosureSqlTest extends Common {
 	@Test
 	public void aStageThePairNeverRanIsInNoType() {
 		for (String type : new String[] {"all", "resource", "complete", "failed", "incomplete"}) {
-			assertEquals(type + " count, stage 2 of the subspace pair", 0, count(subSpace, type, 2));
-			assertEquals(type + " listing, stage 2 of the subspace pair", List.of(),
-					listedPairs(subSpace, 2, type));
-			assertEquals(type + " count, stage 3", 0, count(rootSpace, type, 3));
-			assertEquals(type + " listing, stage 3", List.of(), listedPairs(rootSpace, 3, type));
+			assertEquals(0, count(subSpace, type, 2), type + " count, stage 2 of the subspace pair");
+			assertEquals(List.of(), listedPairs(subSpace, 2, type),
+					type + " listing, stage 2 of the subspace pair");
+			assertEquals(0, count(rootSpace, type, 3), type + " count, stage 3");
+			assertEquals(List.of(), listedPairs(rootSpace, 3, type), type + " listing, stage 3");
 		}
 	}
 
@@ -202,9 +202,9 @@ public class PairListingClosureSqlTest extends Common {
 
 	private void assertClassified(int code, String type, boolean expected) {
 		String message = "status " + code + " as " + type;
-		assertEquals(message + " (count)", expected ? 1 : 0, count(subSpace, type, 1));
-		assertEquals(message + " (listing)", expected ? List.of(subPair) : List.of(),
-				listedPairs(subSpace, 1, type));
+		assertEquals(expected ? 1 : 0, count(subSpace, type, 1), message + " (count)");
+		assertEquals(expected ? List.of(subPair) : List.of(), listedPairs(subSpace, 1, type),
+				message + " (listing)");
 	}
 
 	private int count(int jobSpaceId) {
@@ -223,7 +223,7 @@ public class PairListingClosureSqlTest extends Common {
 	private List<Integer> listedPairs(int jobSpaceId, int stageNumber, String type) {
 		List<JobPair> pairs = Jobs.getJobPairsForTableInJobSpaceHierarchy(
 				jobSpaceId, new DataTablesQuery(0, 10, 0, true, ""), configId, stageNumber, type);
-		assertNotNull("the listing loads", pairs);
+		assertNotNull(pairs, "the listing loads");
 		List<Integer> ids = new ArrayList<>();
 		for (JobPair pair : pairs) {
 			ids.add(pair.getId());

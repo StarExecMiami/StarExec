@@ -219,6 +219,11 @@
             <artifactId>junit-jupiter-engine</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- Vintage Engine for running JUnit 4 tests with JUnit 5 -->
         <dependency>
             <groupId>org.junit.vintage</groupId>

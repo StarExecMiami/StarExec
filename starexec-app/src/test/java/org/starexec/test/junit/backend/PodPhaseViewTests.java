@@ -1,9 +1,9 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.fabric8.kubernetes.api.model.ContainerStateBuilder;
 import io.fabric8.kubernetes.api.model.ContainerStatusBuilder;
@@ -11,9 +11,10 @@ import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.PodConditionBuilder;
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.List;
-import org.junit.Test;
 import org.starexec.backend.ExecutionRef;
 import org.starexec.backend.PodPhaseView;
 
@@ -287,13 +288,13 @@ public class PodPhaseViewTests {
             List.of(podWithRawExecId("orphan-a", null, "Running")), EXEC_ID_LABEL
         );
 
-        assertTrue("it has no execution identity", view.execIds().isEmpty());
-        assertEquals("but it must not vanish", 1, view.unidentifiedPods().size());
+        assertTrue(view.execIds().isEmpty(), "it has no execution identity");
+        assertEquals(1, view.unidentifiedPods().size(), "but it must not vanish");
         assertEquals(1, view.unsafeUnidentifiedPods().size());
         assertEquals("orphan-a", view.unsafeUnidentifiedPods().get(0).name());
         assertEquals(
-            "the operator needs the node to find it",
-            "node-a", view.unsafeUnidentifiedPods().get(0).nodeName()
+            "node-a",
+            view.unsafeUnidentifiedPods().get(0).nodeName(), "the operator needs the node to find it"
         );
     }
 
@@ -306,8 +307,8 @@ public class PodPhaseViewTests {
         assertTrue(view.execIds().isEmpty());
         assertEquals(1, view.unsafeUnidentifiedPods().size());
         assertEquals(
-            "the raw value is reported rather than guessed at",
-            "12a", view.unsafeUnidentifiedPods().get(0).rawExecIdLabel()
+            "12a",
+            view.unsafeUnidentifiedPods().get(0).rawExecIdLabel(), "the raw value is reported rather than guessed at"
         );
     }
 
@@ -329,8 +330,8 @@ public class PodPhaseViewTests {
 
         assertEquals(1, view.unidentifiedPods().size());
         assertTrue(
-            "a Succeeded pod has no running container, so it holds nothing",
-            view.unsafeUnidentifiedPods().isEmpty()
+            view.unsafeUnidentifiedPods().isEmpty(),
+            "a Succeeded pod has no running container, so it holds nothing"
         );
     }
 

@@ -1,16 +1,17 @@
 package org.starexec.data.database;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Deleting a space cleans up the processor files its cascade orphaned.
@@ -23,15 +24,15 @@ import static org.junit.Assert.assertTrue;
  */
 public class SpaceProcessorCleanupTests {
 
-	@Rule
-	public TemporaryFolder processorRoot = new TemporaryFolder();
+	@TempDir
+	public File processorRoot;
 
-	@Rule
-	public TemporaryFolder outsideRoot = new TemporaryFolder();
+	@TempDir
+	public File outsideRoot;
 
 	/** A processor directory with files in it, as ProcessorManager leaves one. */
 	private Path processorAt(String relative) throws Exception {
-		Path directory = processorRoot.getRoot().toPath().resolve(relative);
+		Path directory = processorRoot.toPath().resolve(relative);
 		Files.createDirectories(directory);
 		Files.writeString(directory.resolve("process"), "#!/bin/bash\n");
 		Files.writeString(directory.resolve("processor.zip"), "archive");
@@ -44,70 +45,70 @@ public class SpaceProcessorCleanupTests {
 
 		Spaces.cleanProcessorFiles(
 				Collections.singletonList(processor.toString()),
-				processorRoot.getRoot().toPath());
+				processorRoot.toPath());
 
-		assertFalse("the processor directory must be gone", Files.exists(processor));
+		assertFalse(Files.exists(processor), "the processor directory must be gone");
 	}
 
 	@Test
 	public void everyGatheredProcessorIsRemovedEvenWhenOneIsRefused() throws Exception {
 		Path first = processorAt("2/20260916-01.06.50.701/bench_v1");
 		Path second = processorAt("3/20260916-01.07.00.000/post_v1");
-		Path outside = outsideRoot.getRoot().toPath().resolve("keep");
+		Path outside = outsideRoot.toPath().resolve("keep");
 		Files.createDirectories(outside);
 		Files.writeString(outside.resolve("file"), "keep");
 
 		Spaces.cleanProcessorFiles(
 				Arrays.asList(first.toString(), outside.toString(), second.toString()),
-				processorRoot.getRoot().toPath());
+				processorRoot.toPath());
 
-		assertFalse("the first processor must be gone", Files.exists(first));
-		assertFalse("a refused path must not stop the rest", Files.exists(second));
-		assertTrue("a path outside the processor root must be untouched", Files.exists(outside));
+		assertFalse(Files.exists(first), "the first processor must be gone");
+		assertFalse(Files.exists(second), "a refused path must not stop the rest");
+		assertTrue(Files.exists(outside), "a path outside the processor root must be untouched");
 	}
 
 	@Test
 	public void aPathOutsideTheProcessorRootIsRefused() throws Exception {
-		Path outside = outsideRoot.getRoot().toPath().resolve("other");
+		Path outside = outsideRoot.toPath().resolve("other");
 		Files.createDirectories(outside);
 		Files.writeString(outside.resolve("file"), "keep");
 
 		Spaces.cleanProcessorFiles(
 				Collections.singletonList(outside.toString()),
-				processorRoot.getRoot().toPath());
+				processorRoot.toPath());
 
-		assertTrue("a path outside the processor root must survive", Files.exists(outside));
+		assertTrue(Files.exists(outside), "a path outside the processor root must survive");
 	}
 
 	@Test
 	public void anEmptyOrNullListIsHandled() {
-		Spaces.cleanProcessorFiles(null, processorRoot.getRoot().toPath());
-		Spaces.cleanProcessorFiles(Collections.emptyList(), processorRoot.getRoot().toPath());
+		Spaces.cleanProcessorFiles(null, processorRoot.toPath());
+		Spaces.cleanProcessorFiles(Collections.emptyList(), processorRoot.toPath());
 	}
 
 	@Test
 	public void aDanglingSymlinkAtTheProcessorPathIsRemoved() throws Exception {
-		Path gone = outsideRoot.getRoot().toPath().resolve("never-existed");
-		Path link = processorRoot.getRoot().toPath().resolve("2/20260916-01.06.50.701/bench_v1");
+		Path gone = outsideRoot.toPath().resolve("never-existed");
+		Path link = processorRoot.toPath().resolve("2/20260916-01.06.50.701/bench_v1");
 		Files.createDirectories(link.getParent());
 		try {
 			Files.createSymbolicLink(link, gone);
 		} catch (UnsupportedOperationException | java.io.IOException e) {
-			org.junit.Assume.assumeNoException("this file store cannot create symlinks", e);
+			Assumptions.abort("this file store cannot create symlinks: " + e);
 		}
 
 		Spaces.cleanProcessorFiles(
 				Collections.singletonList(link.toString()),
-				processorRoot.getRoot().toPath());
+				processorRoot.toPath());
 
-		assertFalse("a dangling symlink must not be left behind",
-				Files.exists(link, java.nio.file.LinkOption.NOFOLLOW_LINKS));
+		assertFalse(Files.exists(link, java.nio.file.LinkOption.NOFOLLOW_LINKS),
+				"a dangling symlink must not be left behind");
 	}
 
 	@Test
 	public void aSymlinkInsideTheProcessorIsRemovedWithoutItsTarget() throws Exception {
 		Path processor = processorAt("2/20260916-01.06.50.701/bench_v1");
-		Path outsideDir = outsideRoot.getRoot().toPath().resolve("target");
+		Path outsideDir = outsideRoot.toPath().resolve("target");
 		Files.createDirectories(outsideDir);
 		Path outsideFile = outsideDir.resolve("outside.txt");
 		Files.writeString(outsideFile, "outside");
@@ -115,15 +116,15 @@ public class SpaceProcessorCleanupTests {
 		try {
 			Files.createSymbolicLink(link, outsideDir);
 		} catch (UnsupportedOperationException | java.io.IOException e) {
-			org.junit.Assume.assumeNoException("this file store cannot create symlinks", e);
+			Assumptions.abort("this file store cannot create symlinks: " + e);
 		}
 
 		Spaces.cleanProcessorFiles(
 				Collections.singletonList(processor.toString()),
-				processorRoot.getRoot().toPath());
+				processorRoot.toPath());
 
-		assertFalse("the processor directory must be gone", Files.exists(processor));
-		assertTrue("the symlink's target directory must survive", Files.exists(outsideDir));
-		assertTrue("the symlink's target file must survive", Files.exists(outsideFile));
+		assertFalse(Files.exists(processor), "the processor directory must be gone");
+		assertTrue(Files.exists(outsideDir), "the symlink's target directory must survive");
+		assertTrue(Files.exists(outsideFile), "the symlink's target file must survive");
 	}
 }

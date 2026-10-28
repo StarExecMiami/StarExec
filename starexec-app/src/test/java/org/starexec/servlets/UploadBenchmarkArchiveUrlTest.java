@@ -1,10 +1,10 @@
 package org.starexec.servlets;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.util.Util;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * Archive URLs are checked when an upload is submitted (#139), so a bad address is refused with

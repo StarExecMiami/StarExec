@@ -1,6 +1,5 @@
 package org.starexec.test.junit.data.to.tuples;
-
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.to.tuples.PairIdJobId;
 import org.junit.jupiter.api.Assertions;
 

@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Common;
 import org.starexec.data.to.Benchmark;
@@ -17,10 +17,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Dependency resolution walks from the dependency root into subspaces named by an include. It
@@ -39,13 +39,13 @@ public class DependencyResolutionVisibilitySqlTest extends Common {
 	private static final int PRIVATE_SPACE = 90902;
 	private static final int AXIOM = 90901;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("DependencyResolutionVisibilitySqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws Exception {
 		cleanUp();
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
@@ -74,7 +74,7 @@ public class DependencyResolutionVisibilitySqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws Exception {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			String spaces = "(" + ROOT_SPACE + "," + PRIVATE_SPACE + ")";
@@ -122,8 +122,8 @@ public class DependencyResolutionVisibilitySqlTest extends Common {
 
 		String reason = resolve(b);
 
-		assertNotNull("resolved an include through a space the uploader does not belong to", reason);
-		assertTrue(reason, reason.startsWith("problem.p includes Private/secret.ax, which was not found"));
+		assertNotNull(reason, "resolved an include through a space the uploader does not belong to");
+		assertTrue(reason.startsWith("problem.p includes Private/secret.ax, which was not found"), reason);
 		assertTrue(b.getDependencies().isEmpty());
 	}
 }

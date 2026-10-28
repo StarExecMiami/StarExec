@@ -2,12 +2,12 @@ package org.starexec.test.junit.util;
 
 import javax.servlet.http.Cookie;
 import org.apache.tomcat.util.http.Rfc6265CookieProcessor;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.R;
 import org.starexec.util.Util;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The attributes every cookie this application sets must carry.
@@ -40,9 +40,9 @@ public class IdCookieAttributesTest {
 
 	@Test
 	public void anIdCookieIsHttpOnly() {
-		assertTrue("nothing in the web UI reads this cookie; only StarexecCommand, from the"
-						+ " response headers, which HttpOnly does not affect",
-				Util.createIdCookie("New_ID", "7").isHttpOnly());
+		assertTrue(Util.createIdCookie("New_ID", "7").isHttpOnly(),
+				"nothing in the web UI reads this cookie; only StarexecCommand, from the"
+						+ " response headers, which HttpOnly does not affect");
 	}
 
 	@Test
@@ -64,6 +64,6 @@ public class IdCookieAttributesTest {
 		assertTrue(encoded.isHttpOnly());
 		assertEquals("/" + R.STAREXEC_APPNAME, encoded.getPath());
 		assertEquals("https".equalsIgnoreCase(R.STAREXEC_URL_PREFIX), encoded.getSecure());
-		assertEquals("the encoding path is unchanged", "a+message", encoded.getValue());
+		assertEquals("a+message", encoded.getValue(), "the encoding path is unchanged");
 	}
 }

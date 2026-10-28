@@ -1,10 +1,10 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.PodmanBackend;
@@ -29,10 +29,10 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Does the real monitor, against the real status routines, record every stage of a
@@ -82,13 +82,13 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 	private PodmanBackend backend;
 	private Path work;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("ContainerMultiStageStatusSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws Exception {
 		cleanUp();
 		backend = Mockito.mock(PodmanBackend.class);
@@ -126,7 +126,7 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws SQLException {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			quietly(s, "DROP TRIGGER IF EXISTS probe_block_pair_status ON starexec.job_pairs");
@@ -147,14 +147,14 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		}
 	}
 
-	@AfterClass
+	@AfterAll
 	public static void noProbeTriggersSurvive() throws SQLException {
 		if (!DatabaseTestSupport.isDatabaseConfigured()) {
 			return;
 		}
 		try (Connection con = Common.getConnection()) {
-			assertEquals("a fault-injection trigger must never outlive its test", 0,
-					scalar(con, "SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'probe_%'"));
+			assertEquals(0, scalar(con, "SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'probe_%'"),
+					"a fault-injection trigger must never outlive its test");
 		}
 	}
 
@@ -165,8 +165,8 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		assertTrue(JobPairs.setPairStatusPrecise(PAIR_ID, 1, RUNNING, NOT_REACHED));
 		assertEquals(RUNNING, pairStatus());
 		assertEquals(RUNNING, stageStatus(1));
-		assertEquals("stage 2 is still eligible to run", ENQUEUED, stageStatus(2));
-		assertEquals("stage 3 is still eligible to run", ENQUEUED, stageStatus(3));
+		assertEquals(ENQUEUED, stageStatus(2), "stage 2 is still eligible to run");
+		assertEquals(ENQUEUED, stageStatus(3), "stage 3 is still eligible to run");
 		assertEquals(0, completions());
 	}
 
@@ -178,13 +178,13 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 
 		assertEquals(COMPLETE, stageStatus(1));
 		assertEquals(RUNNING, stageStatus(2));
-		assertEquals("a running predecessor cannot rule out stage 3", ENQUEUED, stageStatus(3));
+		assertEquals(ENQUEUED, stageStatus(3), "a running predecessor cannot rule out stage 3");
 		assertEquals(0, completions());
 
 		assertTrue(JobPairs.setPairStatusPrecise(PAIR_ID, 2, EXCEED_CPU, NOT_REACHED));
 		assertEquals(COMPLETE, stageStatus(1));
 		assertEquals(EXCEED_CPU, stageStatus(2));
-		assertEquals("a terminal failure prevents stage 3", NOT_REACHED, stageStatus(3));
+		assertEquals(NOT_REACHED, stageStatus(3), "a terminal failure prevents stage 3");
 		assertEquals(EXCEED_CPU, pairStatus());
 		assertEquals(1, completions());
 	}
@@ -203,11 +203,11 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 
 		process(out);
 
-		assertEquals("stage 1 ran to completion and must say so", COMPLETE, stageStatus(1));
-		assertEquals("stage 2 must carry the exact failure", EXCEED_CPU, stageStatus(2));
-		assertEquals("stage 3 was never reached", NOT_REACHED, stageStatus(3));
-		assertEquals("the pair carries the exact failure", EXCEED_CPU, pairStatus());
-		assertEquals("pair completion fires once, not once per stage", 1, completions());
+		assertEquals(COMPLETE, stageStatus(1), "stage 1 ran to completion and must say so");
+		assertEquals(EXCEED_CPU, stageStatus(2), "stage 2 must carry the exact failure");
+		assertEquals(NOT_REACHED, stageStatus(3), "stage 3 was never reached");
+		assertEquals(EXCEED_CPU, pairStatus(), "the pair carries the exact failure");
+		assertEquals(1, completions(), "pair completion fires once, not once per stage");
 	}
 
 	/** The two-stage success, which is what the local end-to-end run reproduces. */
@@ -252,11 +252,11 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		assertEquals(EXCEED_CPU, stageStatus(2));
 		assertEquals(NOT_REACHED, stageStatus(3));
 		assertEquals(EXCEED_CPU, pairStatus());
-		assertEquals("a replay must not complete the pair twice", 1, completions());
-		assertEquals("the completion row must be the same one",
-				completionIdBefore, completionId());
-		assertEquals("a replay must not move the pair's end_time",
-				endTimeBefore, pairEndTime());
+		assertEquals(1, completions(), "a replay must not complete the pair twice");
+		assertEquals(completionIdBefore,
+				completionId(), "the completion row must be the same one");
+		assertEquals(endTimeBefore,
+				pairEndTime(), "a replay must not move the pair's end_time");
 	}
 
 	/**
@@ -280,10 +280,10 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 			// The monitor throws so its caller keeps the container for the next poll.
 		}
 
-		assertEquals("the earlier stage committed on its own connection",
-				COMPLETE, stageStatus(1));
-		assertEquals("the pair itself did not move", ENQUEUED, pairStatus());
-		assertEquals("nothing completed the pair", 0, completions());
+		assertEquals(COMPLETE,
+				stageStatus(1), "the earlier stage committed on its own connection");
+		assertEquals(ENQUEUED, pairStatus(), "the pair itself did not move");
+		assertEquals(0, completions(), "nothing completed the pair");
 
 		removePairStatusBlock();
 		process(out);
@@ -309,8 +309,8 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 
 		process(out);
 
-		assertEquals("without a snapshot the monitor must not invent one",
-				ENQUEUED, stageStatus(1));
+		assertEquals(ENQUEUED,
+				stageStatus(1), "without a snapshot the monitor must not invent one");
 		assertEquals(COMPLETE, stageStatus(2));
 		assertEquals(NOT_REACHED, stageStatus(3));
 		assertEquals(COMPLETE, pairStatus());
@@ -327,8 +327,8 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		writeCleanRun(out);
 
 		assertRejectedWithoutWriting(out, "claims pair " + OTHER_PAIR_ID);
-		assertEquals("the pair it tried to reach must be untouched",
-				ENQUEUED, stageStatus(OTHER_PAIR_ID, 1));
+		assertEquals(ENQUEUED,
+				stageStatus(OTHER_PAIR_ID, 1), "the pair it tried to reach must be untouched");
 	}
 
 	/** status.json naming another pair must be refused too: identity comes from the label. */
@@ -382,11 +382,11 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		} catch (Exception expected) {
 			assertNotNull(expected.getMessage());
 		}
-		assertEquals("the stage that would have succeeded must have rolled back",
-				ENQUEUED, stageStatus(1));
-		assertEquals("stage 3 must be untouched", ENQUEUED, stageStatus(3));
-		assertEquals("the pair must be untouched", ENQUEUED, pairStatus());
-		assertEquals("nothing may have completed the pair", 0, completions());
+		assertEquals(ENQUEUED,
+				stageStatus(1), "the stage that would have succeeded must have rolled back");
+		assertEquals(ENQUEUED, stageStatus(3), "stage 3 must be untouched");
+		assertEquals(ENQUEUED, pairStatus(), "the pair must be untouched");
+		assertEquals(0, completions(), "nothing may have completed the pair");
 	}
 
 	/**
@@ -481,9 +481,9 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 
 		// The post-processing task selects on exactly this, so nothing may be left holding it.
 		try (Connection con = Common.getConnection()) {
-			assertEquals("no stage may be left at STATUS_PROCESSING", 0,
-					scalar(con, "SELECT count(*) FROM starexec.jobpair_stage_data"
-							+ " WHERE jobpair_id=" + PAIR_ID + " AND status_code=22"));
+			assertEquals(0, scalar(con, "SELECT count(*) FROM starexec.jobpair_stage_data"
+							+ " WHERE jobpair_id=" + PAIR_ID + " AND status_code=22"),
+					"no stage may be left at STATUS_PROCESSING");
 		}
 	}
 
@@ -523,17 +523,17 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		pollOnce();
 
 		// --- C: nothing about the result was altered ---
-		assertEquals("the earlier stage stands", COMPLETE, stageStatus(1));
-		assertEquals("the pair must NOT have been force-failed", ENQUEUED, pairStatus());
-		assertEquals("nothing completed the pair", 0, completions());
+		assertEquals(COMPLETE, stageStatus(1), "the earlier stage stands");
+		assertEquals(ENQUEUED, pairStatus(), "the pair must NOT have been force-failed");
+		assertEquals(0, completions(), "nothing completed the pair");
 
 		// --- D/F: evidence kept, capacity returned ---
 		Mockito.verify(backend, Mockito.never())
 				.removeCompletedContainer("lifecycle-container");
 		Mockito.verify(backend, Mockito.times(1))
 				.releaseSlotForCompletedContainer("lifecycle-container");
-		assertTrue("the output directory is the only copy and must survive",
-				Files.isDirectory(out.resolve("stage-status")));
+		assertTrue(Files.isDirectory(out.resolve("stage-status")),
+				"the output directory is the only copy and must survive");
 
 		// --- E: a later poll retries and converges ---
 		removePairStatusBlock();
@@ -587,13 +587,13 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 				.removeCompletedContainer("unusable-container");
 		Mockito.verify(backend, Mockito.times(1))
 				.releaseSlotForCompletedContainer("unusable-container");
-		assertEquals("the pair is left unresolved, not failed", ENQUEUED, pairStatus());
-		assertEquals("stage 1 must be untouched", ENQUEUED, stageStatus(1));
-		assertEquals("stage 2 must be untouched", ENQUEUED, stageStatus(2));
-		assertEquals("nothing completed the pair", 0, completions());
-		assertEquals("the pair it named must be untouched",
-				ENQUEUED, stageStatus(OTHER_PAIR_ID, 1));
-		assertTrue("the output survives", Files.exists(out.resolve("stage-status/1.json")));
+		assertEquals(ENQUEUED, pairStatus(), "the pair is left unresolved, not failed");
+		assertEquals(ENQUEUED, stageStatus(1), "stage 1 must be untouched");
+		assertEquals(ENQUEUED, stageStatus(2), "stage 2 must be untouched");
+		assertEquals(0, completions(), "nothing completed the pair");
+		assertEquals(ENQUEUED,
+				stageStatus(OTHER_PAIR_ID, 1), "the pair it named must be untouched");
+		assertTrue(Files.exists(out.resolve("stage-status/1.json")), "the output survives");
 	}
 
 	/**
@@ -626,13 +626,13 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		try {
 			pollOnce();
 
-			assertEquals("no stage may be written without the routine", ENQUEUED, stageStatus(1));
-			assertEquals("the pair must not be force-failed", ENQUEUED, pairStatus());
-			assertEquals("nothing may complete the pair", 0, completions());
+			assertEquals(ENQUEUED, stageStatus(1), "no stage may be written without the routine");
+			assertEquals(ENQUEUED, pairStatus(), "the pair must not be force-failed");
+			assertEquals(0, completions(), "nothing may complete the pair");
 			Mockito.verify(backend, Mockito.never())
 					.removeCompletedContainer("unmigrated-container");
-			assertTrue("the results must survive for the retry",
-					Files.isDirectory(out.resolve("stage-status")));
+			assertTrue(Files.isDirectory(out.resolve("stage-status")),
+					"the results must survive for the retry");
 		} finally {
 			renameRoutine("UpdatePairStageStatusIfUnresolved_hidden", "UpdatePairStageStatusIfUnresolved");
 		}
@@ -702,7 +702,7 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		assertEquals(StageStatusBatchResult.FAILED,
 				JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, RUNNING)));
 
-		assertEquals("the completed stage stands", COMPLETE, stageStatus(1));
+		assertEquals(COMPLETE, stageStatus(1), "the completed stage stands");
 	}
 
 	/** Nor may one terminal result be quietly replaced by a different one. */
@@ -722,11 +722,11 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		batch.put(1, COMPLETE);
 		batch.put(9, COMPLETE);
 
-		assertEquals("an unknown stage is bad data, not an outage",
-				StageStatusBatchResult.REJECTED_UNKNOWN_STAGE,
-				JobPairs.setEarlierStageStatuses(PAIR_ID, batch));
-		assertEquals("the stage that would have succeeded must have rolled back",
-				ENQUEUED, stageStatus(1));
+		assertEquals(StageStatusBatchResult.REJECTED_UNKNOWN_STAGE,
+				JobPairs.setEarlierStageStatuses(PAIR_ID, batch),
+				"an unknown stage is bad data, not an outage");
+		assertEquals(ENQUEUED,
+				stageStatus(1), "the stage that would have succeeded must have rolled back");
 	}
 
 	/**
@@ -751,14 +751,14 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 					JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, value));
 
 			if (code.isTerminalExecutionResult()) {
-				assertEquals(code + "(" + value + ") is a result and must be accepted",
-						StageStatusBatchResult.APPLIED, result);
-				assertEquals(code + " must have been written", value, stageStatus(1));
+				assertEquals(StageStatusBatchResult.APPLIED,
+						result, code + "(" + value + ") is a result and must be accepted");
+				assertEquals(value, stageStatus(1), code + " must have been written");
 			} else {
-				assertEquals(code + "(" + value + ") is not a result and must be refused",
-						StageStatusBatchResult.FAILED, result);
-				assertEquals(code + " must not have been written",
-						ENQUEUED, stageStatus(1));
+				assertEquals(StageStatusBatchResult.FAILED,
+						result, code + "(" + value + ") is not a result and must be refused");
+				assertEquals(ENQUEUED,
+						stageStatus(1), code + " must not have been written");
 			}
 		}
 	}
@@ -776,14 +776,14 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 			// for an unrelated reason -- a Gson failure, a refactor moving the throw --
 			// and the test would keep reporting success while proving nothing.
 			assertNotNull(expected.getMessage());
-			assertTrue("wrong refusal: " + expected.getMessage(),
-					expected.getMessage().contains(expectedReason));
+			assertTrue(expected.getMessage().contains(expectedReason),
+					"wrong refusal: " + expected.getMessage());
 		}
-		assertEquals("stage 1 must be untouched", ENQUEUED, stageStatus(1));
-		assertEquals("stage 2 must be untouched", ENQUEUED, stageStatus(2));
-		assertEquals("stage 3 must be untouched", ENQUEUED, stageStatus(3));
-		assertEquals("the pair must be untouched", ENQUEUED, pairStatus());
-		assertEquals("nothing may have completed the pair", 0, completions());
+		assertEquals(ENQUEUED, stageStatus(1), "stage 1 must be untouched");
+		assertEquals(ENQUEUED, stageStatus(2), "stage 2 must be untouched");
+		assertEquals(ENQUEUED, stageStatus(3), "stage 3 must be untouched");
+		assertEquals(ENQUEUED, pairStatus(), "the pair must be untouched");
+		assertEquals(0, completions(), "nothing may have completed the pair");
 	}
 
 	private void process(Path out) throws Exception {
@@ -921,7 +921,7 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 
 	private static int scalar(Connection con, String sql) throws SQLException {
 		try (Statement s = con.createStatement(); ResultSet rs = s.executeQuery(sql)) {
-			assertTrue("query returned no row: " + sql, rs.next());
+			assertTrue(rs.next(), "query returned no row: " + sql);
 			return rs.getInt(1);
 		}
 	}

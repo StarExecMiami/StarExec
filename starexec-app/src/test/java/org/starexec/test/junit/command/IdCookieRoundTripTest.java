@@ -3,15 +3,15 @@ package org.starexec.test.junit.command;
 import org.apache.http.Header;
 import org.apache.http.message.BasicHeader;
 import org.apache.tomcat.util.http.Rfc6265CookieProcessor;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.command.HTMLParser;
 import org.starexec.constants.R;
 import org.starexec.util.Util;
 
 import javax.servlet.http.Cookie;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * The cookies the server sets, as Tomcat writes them and as StarexecCommand reads them back.

@@ -20,9 +20,9 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.Backend;
@@ -56,7 +56,7 @@ public class LocalBackendTests {
     // Poll interval for checking conditions
     private static final int POLL_INTERVAL_MS = 100;
 
-    @Before
+    @BeforeEach
     public void initialize() throws IOException {
         tempDir = Files.createTempDirectory("localbackend_test");
         Path scriptPath = tempDir.resolve("fake_job.sh");
@@ -79,7 +79,7 @@ public class LocalBackendTests {
         );
     }
 
-    @After
+    @AfterEach
     public void cleanup() {
         // Ensure backend is properly shut down to release resources
         if (backend != null) {

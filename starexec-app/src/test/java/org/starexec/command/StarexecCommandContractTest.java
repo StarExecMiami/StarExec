@@ -1,9 +1,9 @@
 package org.starexec.command;
 
 import com.sun.net.httpserver.HttpServer;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -17,9 +17,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Four StarexecCommand calls, against a stub server that answers as this server does.
@@ -43,7 +43,7 @@ public class StarexecCommandContractTest {
 	private String xmlBody = "";
 	private String visibilityBody = "{\"success\": true, \"message\": \"Space successfully made public\"}";
 
-	@Before
+	@BeforeEach
 	public void start() throws IOException {
 		archive = Files.createTempFile("upload", ".zip");
 		Files.write(archive, new byte[] { 'P', 'K', 3, 4 });
@@ -81,7 +81,7 @@ public class StarexecCommandContractTest {
 		base = "http://127.0.0.1:" + server.getAddress().getPort() + "/starexec/";
 	}
 
-	@After
+	@AfterEach
 	public void stop() throws IOException {
 		server.stop(0);
 		Files.deleteIfExists(archive);
@@ -115,7 +115,7 @@ public class StarexecCommandContractTest {
 		xmlLocation = "/starexec/secure/index.jsp";
 		Connection con = new Connection("u", "p", base);
 		assertEquals(Collections.singletonList(Status.ERROR_SERVER), con.uploadXML(archive.toString(), 3, false));
-		assertTrue(con.getLastError(), con.getLastError().contains("did not accept the upload"));
+		assertTrue(con.getLastError().contains("did not accept the upload"), con.getLastError());
 	}
 
 	@Test

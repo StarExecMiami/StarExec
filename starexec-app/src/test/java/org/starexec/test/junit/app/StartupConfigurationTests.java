@@ -1,6 +1,6 @@
 package org.starexec.test.junit.app;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.app.Starexec;
 import org.starexec.servlets.EmailExecutorContextListener;
 import org.starexec.servlets.UploadJobWorker;
@@ -18,10 +18,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 public class StartupConfigurationTests {
     private static final List<String> EXPECTED_LISTENERS = Arrays.asList(
@@ -33,28 +33,28 @@ public class StartupConfigurationTests {
     @Test
     public void webXmlDeclaresStartupListenersInOrder() throws Exception {
         File webXml = resolveWebXml();
-        assertTrue("Expected web.xml to exist at " + webXml.getAbsolutePath(), webXml.exists());
+        assertTrue(webXml.exists(), "Expected web.xml to exist at " + webXml.getAbsolutePath());
 
         List<String> listenerClasses = readListenerClasses(webXml);
         assertTrue(
-            "web.xml must declare at least the startup listeners in order",
-            listenerClasses.size() >= EXPECTED_LISTENERS.size()
+            listenerClasses.size() >= EXPECTED_LISTENERS.size(),
+            "web.xml must declare at least the startup listeners in order"
         );
         assertEquals(
-            "web.xml startup listener order changed",
             EXPECTED_LISTENERS,
-            listenerClasses.subList(0, EXPECTED_LISTENERS.size())
+            listenerClasses.subList(0, EXPECTED_LISTENERS.size()),
+            "web.xml startup listener order changed"
         );
     }
 
     @Test
     public void startupListenersAreDeclaredOnlyInWebXml() {
-        assertNull("Starexec must not use @WebListener because web.xml controls ordering",
-            Starexec.class.getAnnotation(WebListener.class));
-        assertNull("EmailExecutorContextListener must not be auto-discovered by annotation scanning",
-            EmailExecutorContextListener.class.getAnnotation(WebListener.class));
-        assertNull("UploadJobWorker must not be auto-discovered by annotation scanning",
-            UploadJobWorker.class.getAnnotation(WebListener.class));
+        assertNull(Starexec.class.getAnnotation(WebListener.class),
+            "Starexec must not use @WebListener because web.xml controls ordering");
+        assertNull(EmailExecutorContextListener.class.getAnnotation(WebListener.class),
+            "EmailExecutorContextListener must not be auto-discovered by annotation scanning");
+        assertNull(UploadJobWorker.class.getAnnotation(WebListener.class),
+            "UploadJobWorker must not be auto-discovered by annotation scanning");
     }
 
     private static File resolveWebXml() {

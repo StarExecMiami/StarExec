@@ -1,11 +1,11 @@
 package org.starexec.test.junit.util;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.util.Util;
 
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * The empty list has a representation: the empty string.

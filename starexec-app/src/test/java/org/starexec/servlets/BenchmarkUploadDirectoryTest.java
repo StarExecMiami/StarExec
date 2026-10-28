@@ -1,9 +1,8 @@
 package org.starexec.servlets;
 
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
@@ -21,12 +20,13 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.concurrent.Callable;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.Mockito.mockStatic;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * The directories benchmarks are placed in: each upload, copy or add gets one of its own, and
@@ -38,16 +38,16 @@ public class BenchmarkUploadDirectoryTest {
 	private static final LocalDateTime START = LocalDateTime.of(2026, 10, 23, 14, 5, 9, 17_000_000);
 	private static final DateTimeFormatter NAME = DateTimeFormatter.ofPattern(R.PATH_DATE_FORMAT);
 
-	@Rule
-	public TemporaryFolder tmp = new TemporaryFolder();
+	@TempDir
+	public File tmp;
 
 	private File root;
 	private boolean ownerExists = true;
 	private boolean existsFails;
 
-	@Before
+	@BeforeEach
 	public void setUp() throws IOException {
-		root = tmp.newFolder("Benchmarks");
+		root = newFolder(tmp, "Benchmarks");
 	}
 
 	@Test
@@ -56,8 +56,8 @@ public class BenchmarkUploadDirectoryTest {
 
 		assertEquals(new File(root, OWNER + "/" + NAME.format(START)), dir);
 		assertTrue(dir.isDirectory());
-		assertTrue("the upload path guard accepts the name",
-				UploadArtifactPathGuard.isUploadDirectoryName(dir.getName()));
+		assertTrue(UploadArtifactPathGuard.isUploadDirectoryName(dir.getName()),
+				"the upload path guard accepts the name");
 	}
 
 	/** A second request in the same millisecond gets the next one, still a time the guard accepts. */
@@ -105,7 +105,7 @@ public class BenchmarkUploadDirectoryTest {
 			// refused
 		}
 
-		assertEquals("no directory is left", 0, new File(root, "" + OWNER).list().length);
+		assertEquals(0, new File(root, "" + OWNER).list().length, "no directory is left");
 		assertFalse(new File(root, OWNER + "/escape").exists());
 	}
 
@@ -132,9 +132,9 @@ public class BenchmarkUploadDirectoryTest {
 
 		delete(dir);
 
-		assertFalse("the time-named directory goes with the named one", dir.getParentFile().exists());
-		assertTrue("the user still exists, so their directory is kept", new File(root, "" + OWNER).isDirectory());
-		assertTrue("another claimed directory is untouched", other.isDirectory());
+		assertFalse(dir.getParentFile().exists(), "the time-named directory goes with the named one");
+		assertTrue(new File(root, "" + OWNER).isDirectory(), "the user still exists, so their directory is kept");
+		assertTrue(other.isDirectory(), "another claimed directory is untouched");
 	}
 
 	@Test
@@ -145,7 +145,7 @@ public class BenchmarkUploadDirectoryTest {
 		delete(dir);
 
 		assertFalse(new File(root, "" + OWNER).exists());
-		assertTrue("the benchmark root is kept", root.isDirectory());
+		assertTrue(root.isDirectory(), "the benchmark root is kept");
 	}
 
 	/** A failed lookup is not taken for a deleted user. */
@@ -169,7 +169,7 @@ public class BenchmarkUploadDirectoryTest {
 		Files.createDirectories(othersUpload.toPath());
 		File notTimeNamed = new File(root, OWNER + "/keep");
 		Files.createDirectories(notTimeNamed.toPath());
-		File outside = tmp.newFolder("outside");
+		File outside = newFolder(tmp, "outside");
 
 		delete(usersDir);
 		delete(othersUpload);
@@ -206,18 +206,18 @@ public class BenchmarkUploadDirectoryTest {
 		Util.deleteEmptyParents(r, deep.resolve("file-that-was-there"));
 
 		assertFalse(Files.exists(r.resolve("5/a")));
-		assertTrue("a directory with a file in it stays", Files.isDirectory(r.resolve("5")));
+		assertTrue(Files.isDirectory(r.resolve("5")), "a directory with a file in it stays");
 
 		Files.delete(r.resolve("5/keep.txt"));
 		Path empty = Files.createDirectories(r.resolve("5/d"));
 		Util.deleteEmptyParents(r, empty.resolve("x"));
 		assertFalse(Files.exists(r.resolve("5")));
-		assertTrue("the root is never deleted", Files.isDirectory(r));
+		assertTrue(Files.isDirectory(r), "the root is never deleted");
 	}
 
 	@Test
 	public void emptyParentsOutsideTheRootAreLeftAlone() throws Exception {
-		Path outside = Files.createDirectories(tmp.getRoot().toPath().resolve("outside/empty"));
+		Path outside = Files.createDirectories(tmp.toPath().resolve("outside/empty"));
 
 		Util.deleteEmptyParents(root.toPath(), outside.resolve("x"));
 

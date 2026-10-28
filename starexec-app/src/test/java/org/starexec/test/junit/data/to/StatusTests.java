@@ -1,16 +1,16 @@
 package org.starexec.test.junit.data.to;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.to.Status.StatusCode;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.EnumSet;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 public class StatusTests {
 
@@ -35,9 +35,9 @@ public class StatusTests {
 					|| status == StatusCode.ERROR_PRE_PROCESSOR
 					|| status == StatusCode.ERROR_POST_PROCESSOR
 					|| status == StatusCode.EXCEED_MEM) {
-				assertTrue("The "+status.toString()+" status should be complete.", status.statComplete());
+				assertTrue(status.statComplete(), "The "+status.toString()+" status should be complete.");
 			} else {
-				assertFalse("The " + status.toString() + " status should not be complete.", status.statComplete());
+				assertFalse(status.statComplete(), "The " + status.toString() + " status should not be complete.");
 			}
 		}
 	}
@@ -52,9 +52,9 @@ public class StatusTests {
 					|| status == StatusCode.ERROR_PRE_PROCESSOR
 					|| status == StatusCode.ERROR_POST_PROCESSOR
 					|| status == StatusCode.EXCEED_MEM) {
-				assertFalse("The "+status.toString()+" status should be complete.", status.statIncomplete());
+				assertFalse(status.statIncomplete(), "The "+status.toString()+" status should be complete.");
 			} else {
-				assertTrue("The " + status.toString() + " status should not be complete.", status.statIncomplete());
+				assertTrue(status.statIncomplete(), "The " + status.toString() + " status should not be complete.");
 			}
 		}
 	}
@@ -66,9 +66,9 @@ public class StatusTests {
 					|| status == StatusCode.EXCEED_CPU
 					|| status == StatusCode.EXCEED_FILE_WRITE
 					|| status == StatusCode.EXCEED_MEM) {
-				assertTrue("The "+status.toString()+" status should be a \"resource out\" status.", status.resource());
+				assertTrue(status.resource(), "The "+status.toString()+" status should be a \"resource out\" status.");
 			} else {
-				assertFalse("The " + status.toString() + " status should not be a \"resource out\" status.", status.resource());
+				assertFalse(status.resource(), "The " + status.toString() + " status should not be a \"resource out\" status.");
 			}
 		}
 	}
@@ -86,9 +86,9 @@ public class StatusTests {
 					|| status == StatusCode.ERROR_PRE_PROCESSOR
 					|| status == StatusCode.ERROR_POST_PROCESSOR
 					|| status == StatusCode.ERROR_DISK_QUOTA_EXCEEDED) {
-				assertTrue("The "+status.toString()+" status should be a \"failed\" status.", status.failed());
+				assertTrue(status.failed(), "The "+status.toString()+" status should be a \"failed\" status.");
 			} else {
-				assertFalse("The "+status.toString()+" status should not be a \"failed\" status.", status.failed());
+				assertFalse(status.failed(), "The "+status.toString()+" status should not be a \"failed\" status.");
 			}
 		}
 	}
@@ -108,9 +108,9 @@ public class StatusTests {
 					|| status == StatusCode.ERROR_PRE_PROCESSOR
 					|| status == StatusCode.ERROR_POST_PROCESSOR
 					|| status == StatusCode.ERROR_BENCH_DEPENDENCY_MISSING) {
-				assertTrue("The "+status.toString()+" status should be an \"incomplete\" status.", status.incomplete());
+				assertTrue(status.incomplete(), "The "+status.toString()+" status should be an \"incomplete\" status.");
 			} else {
-				assertFalse("The "+status.toString()+" status should not be a \"incomplete\" status.", status.incomplete());
+				assertFalse(status.incomplete(), "The "+status.toString()+" status should not be a \"incomplete\" status.");
 			}
 		}
 	}

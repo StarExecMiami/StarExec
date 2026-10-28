@@ -1,7 +1,7 @@
 package org.starexec.test.junit.util;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.to.Solver;
 import org.starexec.servlets.ProcessorManager;
@@ -13,10 +13,10 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.function.Predicate;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Primitive names become directory names on disk, where "." is the directory itself and ".."
@@ -43,7 +43,7 @@ public class DotOnlyNameTest {
 			Validator::isValidWebsiteName,
 			Validator::isValidSpaceName);
 
-	@BeforeClass
+	@BeforeAll
 	public static void initialize() {
 		Validator.initialize();
 	}
@@ -52,8 +52,8 @@ public class DotOnlyNameTest {
 	public void everyPrimitiveRejectsNamesMadeOnlyOfDots() {
 		for (int i = 0; i < PRIMITIVE_VALIDATORS.size(); i++) {
 			for (String name : DOT_ONLY) {
-				assertFalse("validator " + i + " must reject [" + name + "]",
-						PRIMITIVE_VALIDATORS.get(i).test(name));
+				assertFalse(PRIMITIVE_VALIDATORS.get(i).test(name),
+						"validator " + i + " must reject [" + name + "]");
 			}
 		}
 	}
@@ -62,8 +62,8 @@ public class DotOnlyNameTest {
 	public void everyPrimitiveStillAcceptsOrdinaryNamesContainingDots() {
 		for (int i = 0; i < PRIMITIVE_VALIDATORS.size(); i++) {
 			for (String name : ORDINARY) {
-				assertTrue("validator " + i + " must accept [" + name + "]",
-						PRIMITIVE_VALIDATORS.get(i).test(name));
+				assertTrue(PRIMITIVE_VALIDATORS.get(i).test(name),
+						"validator " + i + " must accept [" + name + "]");
 			}
 		}
 	}
@@ -72,8 +72,8 @@ public class DotOnlyNameTest {
 	public void aProcessorDirectoryCannotLeaveItsDateDirectory() {
 		File root = new File("/processors");
 		for (String name : List.of(".", "..")) {
-			assertThrows("processor [" + name + "] must be refused", IllegalArgumentException.class,
-					() -> ProcessorManager.processorDirectory(root, 7, "20260919", name));
+			assertThrows(IllegalArgumentException.class, () -> ProcessorManager.processorDirectory(root, 7, "20260919", name),
+					"processor [" + name + "] must be refused");
 		}
 		assertEquals(new File("/processors/7/20260919/a..b"),
 				ProcessorManager.processorDirectory(root, 7, "20260919", "a..b"));
@@ -96,8 +96,8 @@ public class DotOnlyNameTest {
 	public void aSolverDirectoryCannotLeaveItsUsersDirectory() {
 		File root = new File("/solvers");
 		for (String name : List.of(".", "..")) {
-			assertThrows("solver [" + name + "] must be refused", IllegalArgumentException.class,
-					() -> Solvers.solverDirectory(root, 5, name, "20260919"));
+			assertThrows(IllegalArgumentException.class, () -> Solvers.solverDirectory(root, 5, name, "20260919"),
+					"solver [" + name + "] must be refused");
 		}
 		File ordinary = Solvers.solverDirectory(root, 5, "z3.4", "20260919");
 		assertEquals(new File("/solvers/5/z3.4/20260919"), ordinary);

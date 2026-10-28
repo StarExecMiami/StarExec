@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -14,9 +13,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * What a stage failure writes, in container mode, to the files the Local monitor polls while
@@ -47,8 +47,8 @@ public class StageFailureWriteOrderTest {
 	private static final int EXCEED_CPU = 15;
 	private static final int EXCEED_MEM = 17;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	@Test
 	public void aWallclockTimeoutIsReportedAgainstItsStageOnly() throws Exception {
@@ -88,8 +88,8 @@ public class StageFailureWriteOrderTest {
 				+ "sendWallclockExceededStatus\n");
 
 		assertReportedAgainstTheStageOnly(run, EXCEED_RUNTIME, 2);
-		assertEquals("stage 1 keeps its own result:\n" + run.out, STATUS_COMPLETE,
-				field(run.lastState().get(1), "status"));
+		assertEquals(STATUS_COMPLETE, field(run.lastState().get(1), "status"),
+				"stage 1 keeps its own result:\n" + run.out);
 	}
 
 	/** Outside container mode both database calls are still made, in the same order. */
@@ -101,17 +101,17 @@ public class StageFailureWriteOrderTest {
 
 		int pair = run.out.indexOf("T-SQL|CALL UpdatePairStatus(41, " + EXCEED_RUNTIME + ")");
 		int stage = run.out.indexOf("T-SQL|CALL UpdatePairStageStatus(41, 1, " + EXCEED_RUNTIME + ")");
-		assertTrue("the pair status is recorded:\n" + run.out, pair >= 0);
-		assertTrue("and then the stage status:\n" + run.out, stage > pair);
+		assertTrue(pair >= 0, "the pair status is recorded:\n" + run.out);
+		assertTrue(stage > pair, "and then the stage status:\n" + run.out);
 	}
 
 	// ------------------------------------------------------------------------- assertions
 
 	private static void assertReportedAgainstTheStageOnly(Run run, int status, int stage) {
-		assertFalse("the failure must write something:\n" + run.out, run.writes.isEmpty());
+		assertFalse(run.writes.isEmpty(), "the failure must write something:\n" + run.out);
 		for (String[] write : run.writes) {
-			assertFalse("a terminal status was written on the pair-level channel (stage 0):\n" + run.out,
-					"0".equals(write[1]) && !String.valueOf(STATUS_RUNNING).equals(write[0]));
+			assertFalse("0".equals(write[1]) && !String.valueOf(STATUS_RUNNING).equals(write[0]),
+					"a terminal status was written on the pair-level channel (stage 0):\n" + run.out);
 		}
 		// The monitor's view after every write: a pair-level terminal status with any
 		// snapshot still RUNNING is the state it holds for intervention.
@@ -120,15 +120,15 @@ public class StageFailureWriteOrderTest {
 					&& field(state.get(0), "status") != STATUS_RUNNING;
 			boolean aStageStillRunning = state.subList(1, state.size()).stream()
 					.anyMatch(snapshot -> field(snapshot, "status") == STATUS_RUNNING);
-			assertFalse("status.json was a terminal pair-level result while a stage read RUNNING:\n"
-					+ run.out, pairLevelTerminal && aStageStillRunning);
+			assertFalse(pairLevelTerminal && aStageStillRunning, "status.json was a terminal pair-level result while a stage read RUNNING:\n"
+					+ run.out);
 		}
 
 		List<String> last = run.lastState();
-		assertEquals("status.json ends with the failure:\n" + run.out, status, field(last.get(0), "status"));
-		assertEquals("naming the stage that failed:\n" + run.out, stage, field(last.get(0), "stageNumber"));
-		assertEquals("and that stage's snapshot carries it:\n" + run.out, status,
-				field(last.get(stage), "status"));
+		assertEquals(status, field(last.get(0), "status"), "status.json ends with the failure:\n" + run.out);
+		assertEquals(stage, field(last.get(0), "stageNumber"), "naming the stage that failed:\n" + run.out);
+		assertEquals(status, field(last.get(stage), "status"),
+				"and that stage's snapshot carries it:\n" + run.out);
 	}
 
 	// ---------------------------------------------------------------------------- harness
@@ -160,7 +160,7 @@ public class StageFailureWriteOrderTest {
 	}
 
 	private Run run(boolean containerMode, String body) throws Exception {
-		Path dir = folder.newFolder("order-" + System.nanoTime()).toPath();
+		Path dir = newFolder(folder, "order-" + System.nanoTime()).toPath();
 		// The shipped files, copied rather than re-implemented.
 		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
 		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
@@ -180,10 +180,10 @@ public class StageFailureWriteOrderTest {
 				+ body;
 		File file = new File(dir.toFile(), "generated.sh");
 		Files.writeString(file.toPath(), script);
-		assertEquals("generated script must parse", 0, exec(dir, Bash.PATH, "-n", file.getAbsolutePath()).exit);
+		assertEquals(0, exec(dir, Bash.PATH, "-n", file.getAbsolutePath()).exit, "generated script must parse");
 
 		Result result = exec(dir, Bash.PATH, file.getAbsolutePath());
-		assertEquals("the helper must not abort:\n" + result.out, 0, result.exit);
+		assertEquals(0, result.exit, "the helper must not abort:\n" + result.out);
 		return new Run(result.out);
 	}
 
@@ -208,7 +208,7 @@ public class StageFailureWriteOrderTest {
 	/** Reads one integer field, so the assertions do not depend on field order. */
 	private static int field(String json, String name) {
 		Matcher m = Pattern.compile("\"" + name + "\"\\s*:\\s*(-?\\d+)").matcher(json);
-		assertTrue("json must carry " + name + ": " + json, m.find());
+		assertTrue(m.find(), "json must carry " + name + ": " + json);
 		return Integer.parseInt(m.group(1));
 	}
 
@@ -228,7 +228,7 @@ public class StageFailureWriteOrderTest {
 			p.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
 		}
 		String out = Files.readString(log.toPath(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang:\n" + out, finished);
+		assertTrue(finished, "command must not hang:\n" + out);
 		return new Result(p.exitValue(), out);
 	}
 
@@ -252,10 +252,10 @@ public class StageFailureWriteOrderTest {
 
 		/** status.json at index 0, then stage n's snapshot at index n. */
 		List<String> lastState() {
-			assertFalse("no write was recorded:\n" + out, states.isEmpty());
+			assertFalse(states.isEmpty(), "no write was recorded:\n" + out);
 			List<String> last = states.get(states.size() - 1);
 			for (int n = 1; n < last.size(); n++) {
-				assertEquals("snapshots are listed in stage order:\n" + out, n, field(last.get(n), "stageNumber"));
+				assertEquals(n, field(last.get(n), "stageNumber"), "snapshots are listed in stage order:\n" + out);
 			}
 			return last;
 		}

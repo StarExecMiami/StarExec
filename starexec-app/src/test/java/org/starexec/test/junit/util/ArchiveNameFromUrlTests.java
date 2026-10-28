@@ -1,13 +1,13 @@
 package org.starexec.test.junit.util;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.util.Util;
 
 import java.net.URI;
 import java.net.URL;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * An archive fetched by URL is saved under the last segment of the URL's path, and only a plain

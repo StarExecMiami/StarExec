@@ -2,10 +2,10 @@ package org.starexec.test.junit.app;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import org.junit.After;
-import org.junit.Assert;
-import org.junit.Assume;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
 import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
@@ -49,7 +49,7 @@ import javax.ws.rs.sse.SseEventSink;
 
 public class PairLogStreamTests {
 
-    @After
+    @AfterEach
     public void resetStreamState() throws Exception {
         // Closes every session a test left open, such as a running pair's, which would otherwise stay
         // registered with its slot, and then puts a fresh production executor back.
@@ -72,7 +72,7 @@ public class PairLogStreamTests {
         resolveMethod.setAccessible(true);
 
         long offset = (Long) resolveMethod.invoke(null, tempFile, "3");
-        Assert.assertEquals(3L, offset);
+        Assertions.assertEquals(3L, offset);
 
         tempFile.delete();
     }
@@ -86,7 +86,7 @@ public class PairLogStreamTests {
         resolveMethod.setAccessible(true);
 
         long offset = (Long) resolveMethod.invoke(null, tempFile, "bad-offset");
-        Assert.assertEquals(tempFile.length(), offset);
+        Assertions.assertEquals(tempFile.length(), offset);
 
         tempFile.delete();
     }
@@ -100,7 +100,7 @@ public class PairLogStreamTests {
         resolveMethod.setAccessible(true);
 
         long offset = (Long) resolveMethod.invoke(null, tempFile, "-10");
-        Assert.assertEquals(tempFile.length(), offset);
+        Assertions.assertEquals(tempFile.length(), offset);
 
         tempFile.delete();
     }
@@ -125,9 +125,9 @@ public class PairLogStreamTests {
         long returnedOffset = (Long) streamMethod.invoke(null, 42, output, tempFile, 10L, 1024, false);
         String events = output.toString(StandardCharsets.UTF_8.name());
 
-        Assert.assertTrue(events.contains("event: reset"));
-        Assert.assertTrue(events.contains("event: chunk"));
-        Assert.assertEquals(3L, returnedOffset);
+        Assertions.assertTrue(events.contains("event: reset"));
+        Assertions.assertTrue(events.contains("event: chunk"));
+        Assertions.assertEquals(3L, returnedOffset);
 
         tempFile.delete();
     }
@@ -154,10 +154,10 @@ public class PairLogStreamTests {
         long returnedOffset = (Long) streamMethod.invoke(null, 42, output, tempFile, 0L, 4, false);
         String events = output.toString(StandardCharsets.UTF_8.name());
 
-        Assert.assertTrue(events.contains("event: chunk"));
-        Assert.assertTrue(events.contains("\"offsetStart\":0"));
-        Assert.assertTrue(events.contains("\"offsetEnd\":4"));
-        Assert.assertEquals(4L, returnedOffset);
+        Assertions.assertTrue(events.contains("event: chunk"));
+        Assertions.assertTrue(events.contains("\"offsetStart\":0"));
+        Assertions.assertTrue(events.contains("\"offsetEnd\":4"));
+        Assertions.assertEquals(4L, returnedOffset);
 
         tempFile.delete();
     }
@@ -172,12 +172,12 @@ public class PairLogStreamTests {
         boolean first = (Boolean) acquireMethod.invoke(null, 1);
         boolean second = (Boolean) acquireMethod.invoke(null, 1);
 
-        Assert.assertTrue(first);
-        Assert.assertFalse(second);
+        Assertions.assertTrue(first);
+        Assertions.assertFalse(second);
 
         releaseMethod.invoke(null);
         boolean third = (Boolean) acquireMethod.invoke(null, 1);
-        Assert.assertTrue(third);
+        Assertions.assertTrue(third);
 
         releaseMethod.invoke(null);
     }
@@ -202,8 +202,8 @@ public class PairLogStreamTests {
         long returnedOffset = (Long) streamMethod.invoke(null, 42, output, tempFile, tempFile.length(), 1024, false);
         String events = output.toString(StandardCharsets.UTF_8.name());
 
-        Assert.assertEquals(tempFile.length(), returnedOffset);
-        Assert.assertTrue(events.isEmpty());
+        Assertions.assertEquals(tempFile.length(), returnedOffset);
+        Assertions.assertTrue(events.isEmpty());
 
         tempFile.delete();
     }
@@ -229,10 +229,10 @@ public class PairLogStreamTests {
         );
 
         String frame = output.toString(StandardCharsets.UTF_8.name());
-        Assert.assertTrue(success);
-        Assert.assertTrue(frame.contains("id: 99\n"));
-        Assert.assertTrue(frame.contains("event: chunk\n"));
-        Assert.assertTrue(frame.contains("data: {\"k\":\"v\"}\n\n"));
+        Assertions.assertTrue(success);
+        Assertions.assertTrue(frame.contains("id: 99\n"));
+        Assertions.assertTrue(frame.contains("event: chunk\n"));
+        Assertions.assertTrue(frame.contains("data: {\"k\":\"v\"}\n\n"));
     }
 
     @Test
@@ -254,8 +254,8 @@ public class PairLogStreamTests {
         }
 
         String payload = output.toString(StandardCharsets.UTF_8.name());
-        Assert.assertTrue(payload.contains("event: error"));
-        Assert.assertTrue(payload.contains("\"code\":\"NOT_AVAILABLE\""));
+        Assertions.assertTrue(payload.contains("event: error"));
+        Assertions.assertTrue(payload.contains("\"code\":\"NOT_AVAILABLE\""));
     }
 
     @Test
@@ -286,7 +286,7 @@ public class PairLogStreamTests {
         }
 
         String payload = output.toString(StandardCharsets.UTF_8.name());
-        Assert.assertTrue(payload.contains("event: complete"));
+        Assertions.assertTrue(payload.contains("event: complete"));
 
         tempFile.delete();
     }
@@ -335,12 +335,12 @@ public class PairLogStreamTests {
             services.streamJobPairLog(123, TestUtil.getMockHttpRequest(7), eventSink, sse);
 
             Runnable task = queueExecutor.pollTask();
-            Assert.assertNotNull("Expected the stream task to be queued", task);
+            Assertions.assertNotNull(task, "Expected the stream task to be queued");
             task.run();
 
             Mockito.verify(eventSink, Mockito.atLeast(1)).send(Mockito.any());
             Mockito.verify(eventSink).close();
-            Assert.assertTrue("Expected no follow-up task for terminal pair", queueExecutor.isEmpty());
+            Assertions.assertTrue(queueExecutor.isEmpty(), "Expected no follow-up task for terminal pair");
         } finally {
             queueExecutor.shutdownNow();
             resetExecutorMethod.invoke(null);
@@ -385,11 +385,11 @@ public class PairLogStreamTests {
             services.streamJobPairLog(123, TestUtil.getMockHttpRequest(7), eventSink, sse);
 
             Runnable task = queueExecutor.pollTask();
-            Assert.assertNotNull("Expected the stream task to be queued", task);
+            Assertions.assertNotNull(task, "Expected the stream task to be queued");
             task.run();
 
             Mockito.verify(eventSink).close();
-            Assert.assertTrue("Expected no follow-up task for missing log path", queueExecutor.isEmpty());
+            Assertions.assertTrue(queueExecutor.isEmpty(), "Expected no follow-up task for missing log path");
         } finally {
             queueExecutor.shutdownNow();
             resetExecutorMethod.invoke(null);
@@ -456,12 +456,12 @@ public class PairLogStreamTests {
                 events.add(frame.substring(frame.indexOf("event: ") + "event: ".length()).split("\n")[0]);
             }
         }
-        Assert.assertEquals(log, streamed.toString());
-        Assert.assertTrue("Expected several chunks, got " + events, events.indexOf("chunk") != events.lastIndexOf("chunk"));
-        Assert.assertTrue("Expected a heartbeat after the first poll, got " + events, events.contains("heartbeat"));
-        Assert.assertTrue("Every chunk must come before the first poll's heartbeat: " + events,
-                events.lastIndexOf("chunk") < events.indexOf("heartbeat"));
-        Assert.assertEquals("complete", events.get(events.size() - 1));
+        Assertions.assertEquals(log, streamed.toString());
+        Assertions.assertTrue(events.indexOf("chunk") != events.lastIndexOf("chunk"), "Expected several chunks, got " + events);
+        Assertions.assertTrue(events.contains("heartbeat"), "Expected a heartbeat after the first poll, got " + events);
+        Assertions.assertTrue(events.lastIndexOf("chunk") < events.indexOf("heartbeat"),
+                "Every chunk must come before the first poll's heartbeat: " + events);
+        Assertions.assertEquals("complete", events.get(events.size() - 1));
     }
 
     /** The live endpoint's session must also send the whole log of a finished pair before {@code complete}. */
@@ -472,7 +472,7 @@ public class PairLogStreamTests {
 
         assertStreamedWholeLog(log, tick.names, tick.data, true);
         Mockito.verify(tick.eventSink).close();
-        Assert.assertFalse("Expected no follow-up task for a terminal pair", tick.followUpQueued);
+        Assertions.assertFalse(tick.followUpQueued, "Expected no follow-up task for a terminal pair");
     }
 
     /**
@@ -487,7 +487,7 @@ public class PairLogStreamTests {
 
         assertStreamedWholeLog(log, tick.names, tick.data, false);
         Mockito.verify(tick.eventSink, Mockito.never()).close();
-        Assert.assertTrue("Expected the next poll to be scheduled for a running pair", tick.followUpQueued);
+        Assertions.assertTrue(tick.followUpQueued, "Expected the next poll to be scheduled for a running pair");
     }
 
     /**
@@ -521,13 +521,13 @@ public class PairLogStreamTests {
         byte[] log = {'a', 'b', 'c', (byte) 0xC3};
         AsyncTick tick = runOneAsyncTick(log, Status.StatusCode.STATUS_COMPLETE);
 
-        Assert.assertEquals(List.of("chunk", "chunk", "complete"), tick.names);
+        Assertions.assertEquals(List.of("chunk", "chunk", "complete"), tick.names);
         JsonObject whole = JsonParser.parseString(tick.data.get(0)).getAsJsonObject();
         JsonObject rest = JsonParser.parseString(tick.data.get(1)).getAsJsonObject();
-        Assert.assertEquals("abc", whole.get("text").getAsString());
-        Assert.assertEquals(3L, whole.get("offsetEnd").getAsLong());
-        Assert.assertEquals("\uFFFD", rest.get("text").getAsString());
-        Assert.assertEquals(4L, rest.get("offsetEnd").getAsLong());
+        Assertions.assertEquals("abc", whole.get("text").getAsString());
+        Assertions.assertEquals(3L, whole.get("offsetEnd").getAsLong());
+        Assertions.assertEquals("\uFFFD", rest.get("text").getAsString());
+        Assertions.assertEquals(4L, rest.get("offsetEnd").getAsLong());
     }
 
     /**
@@ -548,21 +548,21 @@ public class PairLogStreamTests {
                         }
                     });
 
-            Assert.assertEquals(List.of("chunk", "chunk"), ticks.names);
-            Assert.assertEquals("events sent by the end of each tick", Arrays.asList(1L, 1L, 2L),
-                    ticks.eventsAfterTick);
+            Assertions.assertEquals(List.of("chunk", "chunk"), ticks.names);
+            Assertions.assertEquals(Arrays.asList(1L, 1L, 2L), ticks.eventsAfterTick,
+                    "events sent by the end of each tick");
             JsonObject first = JsonParser.parseString(ticks.data.get(0)).getAsJsonObject();
             JsonObject second = JsonParser.parseString(ticks.data.get(1)).getAsJsonObject();
-            Assert.assertEquals("ab", first.get("text").getAsString());
-            Assert.assertEquals(2L, first.get("offsetEnd").getAsLong());
-            Assert.assertEquals("\u20ACc", second.get("text").getAsString());
-            Assert.assertEquals(2L, second.get("offsetStart").getAsLong());
-            Assert.assertEquals(6L, second.get("offsetEnd").getAsLong());
+            Assertions.assertEquals("ab", first.get("text").getAsString());
+            Assertions.assertEquals(2L, first.get("offsetEnd").getAsLong());
+            Assertions.assertEquals("\u20ACc", second.get("text").getAsString());
+            Assertions.assertEquals(2L, second.get("offsetStart").getAsLong());
+            Assertions.assertEquals(6L, second.get("offsetEnd").getAsLong());
             // The first tick; the catch-up tick its progress earns, which sends nothing and so waits the poll
             // interval's floor of 100 ms, since the test leaves the interval unset; and the tick after the one
             // that sent the rest.
-            Assert.assertEquals(Arrays.asList(0L, 0L, 100L, 100L), ticks.scheduleDelays);
-            Assert.assertTrue("Expected the stream of a running pair to go on", ticks.followUpQueued);
+            Assertions.assertEquals(Arrays.asList(0L, 0L, 100L, 100L), ticks.scheduleDelays);
+            Assertions.assertTrue(ticks.followUpQueued, "Expected the stream of a running pair to go on");
         } finally {
             logFile.delete();
         }
@@ -579,15 +579,15 @@ public class PairLogStreamTests {
         LegacyEvents events = runLegacyStream(new byte[] {'a', 'b', (byte) 0xE2, (byte) 0x82},
                 pairWithStatus(Status.StatusCode.STATUS_RUNNING), pairWithStatus(Status.StatusCode.STATUS_COMPLETE));
 
-        Assert.assertEquals(List.of("chunk", "chunk", "complete"), events.names);
-        Assert.assertEquals("the first poll must send \"ab\" and then its heartbeat: " + events.order, 1,
-                events.order.indexOf("heartbeat"));
+        Assertions.assertEquals(List.of("chunk", "chunk", "complete"), events.names);
+        Assertions.assertEquals(1, events.order.indexOf("heartbeat"),
+                "the first poll must send \"ab\" and then its heartbeat: " + events.order);
         JsonObject first = JsonParser.parseString(events.data.get(0)).getAsJsonObject();
         JsonObject rest = JsonParser.parseString(events.data.get(1)).getAsJsonObject();
-        Assert.assertEquals("ab", first.get("text").getAsString());
-        Assert.assertEquals(2L, first.get("offsetEnd").getAsLong());
-        Assert.assertEquals(2L, rest.get("offsetStart").getAsLong());
-        Assert.assertEquals(4L, rest.get("offsetEnd").getAsLong());
+        Assertions.assertEquals("ab", first.get("text").getAsString());
+        Assertions.assertEquals(2L, first.get("offsetEnd").getAsLong());
+        Assertions.assertEquals(2L, rest.get("offsetStart").getAsLong());
+        Assertions.assertEquals(4L, rest.get("offsetEnd").getAsLong());
     }
 
     /**
@@ -603,17 +603,17 @@ public class PairLogStreamTests {
         AsyncTick ticks = runAsyncTicks(log.getBytes(StandardCharsets.UTF_8), Status.StatusCode.STATUS_COMPLETE, 5,
                 1100L);
 
-        Assert.assertEquals("the first tick sends the cap's chunks and no complete", Long.valueOf(cap),
-                ticks.eventsAfterTick.get(0));
-        Assert.assertEquals("a stream behind its log ticks again at once", Long.valueOf(0L),
-                ticks.scheduleDelays.get(1));
-        Assert.assertTrue("Expected several ticks, got " + ticks.eventsAfterTick, ticks.eventsAfterTick.size() > 1);
-        Assert.assertEquals("a finished pair's status is not read again after the first tick",
-                ticks.statusReadsAfterTick.get(0),
-                ticks.statusReadsAfterTick.get(ticks.statusReadsAfterTick.size() - 1));
+        Assertions.assertEquals(Long.valueOf(cap), ticks.eventsAfterTick.get(0),
+                "the first tick sends the cap's chunks and no complete");
+        Assertions.assertEquals(Long.valueOf(0L), ticks.scheduleDelays.get(1),
+                "a stream behind its log ticks again at once");
+        Assertions.assertTrue(ticks.eventsAfterTick.size() > 1, "Expected several ticks, got " + ticks.eventsAfterTick);
+        Assertions.assertEquals(ticks.statusReadsAfterTick.get(0),
+                ticks.statusReadsAfterTick.get(ticks.statusReadsAfterTick.size() - 1),
+                "a finished pair's status is not read again after the first tick");
         assertStreamedWholeLog(log, ticks.names, ticks.data, true);
         Mockito.verify(ticks.eventSink).close();
-        Assert.assertFalse("Expected no tick after complete", ticks.followUpQueued);
+        Assertions.assertFalse(ticks.followUpQueued, "Expected no tick after complete");
     }
 
     /** The legacy wrapper sends a long finished log one capped poll at a time too, and then complete. */
@@ -624,8 +624,8 @@ public class PairLogStreamTests {
         LegacyEvents events = runLegacyStreamOfTerminalPair(log.getBytes(StandardCharsets.UTF_8));
 
         assertStreamedWholeLog(log, events.names, events.data, true);
-        Assert.assertEquals("the first poll's heartbeat must follow exactly the cap's chunks: " + events.order,
-                cap, events.order.indexOf("heartbeat"));
+        Assertions.assertEquals(cap,
+                events.order.indexOf("heartbeat"), "the first poll's heartbeat must follow exactly the cap's chunks: " + events.order);
     }
 
     /**
@@ -639,8 +639,8 @@ public class PairLogStreamTests {
         AsyncTick ticks = runAsyncTicks(log.getBytes(StandardCharsets.UTF_8), Status.StatusCode.STATUS_COMPLETE, 1,
                 0L, new QueuingScheduledExecutorService(true));
 
-        Assert.assertFalse("Expected no tick put off by a poll interval; delays were " + ticks.scheduleDelays,
-                ticks.followUpQueued);
+        Assertions.assertFalse(ticks.followUpQueued,
+                "Expected no tick put off by a poll interval; delays were " + ticks.scheduleDelays);
         assertStreamedWholeLog(log, ticks.names, ticks.data, true);
         Mockito.verify(ticks.eventSink).close();
     }
@@ -653,14 +653,14 @@ public class PairLogStreamTests {
     @Test
     public void streamJobPairLogAsyncDoesNotTickAtOnceAfterSendingNothing() throws Exception {
         File attribute = new File("/sys/devices/system/cpu/online");
-        Assume.assumeTrue("needs a Linux sysfs attribute",
-                attribute.isFile() && Files.readAllBytes(attribute.toPath()).length < attribute.length());
+        Assumptions.assumeTrue(attribute.isFile() && Files.readAllBytes(attribute.toPath()).length < attribute.length(),
+                "needs a Linux sysfs attribute");
         AsyncTick ticks = runAsyncTicks(attribute, Status.StatusCode.STATUS_RUNNING, 2, 0L,
                 new QueuingScheduledExecutorService());
 
         // The first tick, the catch-up tick its chunk earns, and then the poll interval's floor of 100 ms,
         // since the test leaves the interval unset.
-        Assert.assertEquals(Arrays.asList(0L, 0L, 100L), ticks.scheduleDelays);
+        Assertions.assertEquals(Arrays.asList(0L, 0L, 100L), ticks.scheduleDelays);
     }
 
     private static int maxChunksPerPoll() throws Exception {
@@ -716,26 +716,26 @@ public class PairLogStreamTests {
     private static void assertStreamedWholeLog(String log, List<String> names, List<String> data,
                                                boolean expectComplete) {
         int chunks = expectComplete ? names.size() - 1 : names.size();
-        Assert.assertTrue("Expected the log to need several chunks, got events " + names, chunks > 1);
+        Assertions.assertTrue(chunks > 1, "Expected the log to need several chunks, got events " + names);
         if (expectComplete) {
-            Assert.assertEquals("complete must follow the last chunk: " + names, "complete",
-                    names.get(names.size() - 1));
+            Assertions.assertEquals("complete", names.get(names.size() - 1),
+                    "complete must follow the last chunk: " + names);
         }
         StringBuilder streamed = new StringBuilder();
         long expectedStart = 0L;
         for (int i = 0; i < chunks; i++) {
-            Assert.assertEquals("event " + i + " of " + names, "chunk", names.get(i));
+            Assertions.assertEquals("chunk", names.get(i), "event " + i + " of " + names);
             JsonObject chunk = JsonParser.parseString(data.get(i)).getAsJsonObject();
             long start = chunk.get("offsetStart").getAsLong();
             long end = chunk.get("offsetEnd").getAsLong();
-            Assert.assertEquals("chunk " + i + " must start where the previous one ended", expectedStart, start);
-            Assert.assertTrue("chunk " + i + " must be at most one chunk long", end - start <= CHUNK);
+            Assertions.assertEquals(expectedStart, start, "chunk " + i + " must start where the previous one ended");
+            Assertions.assertTrue(end - start <= CHUNK, "chunk " + i + " must be at most one chunk long");
             streamed.append(chunk.get("text").getAsString());
             expectedStart = end;
         }
-        Assert.assertEquals("the chunks must cover the whole log", log.getBytes(StandardCharsets.UTF_8).length,
-                expectedStart);
-        Assert.assertEquals(log, streamed.toString());
+        Assertions.assertEquals(log.getBytes(StandardCharsets.UTF_8).length, expectedStart,
+                "the chunks must cover the whole log");
+        Assertions.assertEquals(log, streamed.toString());
     }
 
     /** What the ticks of the live endpoint's stream session sent. */
@@ -853,7 +853,7 @@ public class PairLogStreamTests {
                     Thread.sleep(pauseMillis);
                 }
                 Runnable task = queueExecutor.pollTask();
-                Assert.assertNotNull("Expected tick " + tick + " of the stream to be queued", task);
+                Assertions.assertNotNull(task, "Expected tick " + tick + " of the stream to be queued");
                 beforeTick.run(tick);
                 task.run();
                 eventsAfterTick.add(Mockito.mockingDetails(builder).getInvocations().stream()

@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.database.Pipelines;
@@ -25,8 +25,8 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * What the single owned transaction costs in lock time.
@@ -59,13 +59,13 @@ public class JobCreationLockFootprintSqlTest extends Common {
 	 */
 	private static final long BUDGET_MS = 2000;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobCreationLockFootprintSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		cleanUp();
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
@@ -87,7 +87,7 @@ public class JobCreationLockFootprintSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws SQLException {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			s.execute("DELETE FROM starexec.jobs WHERE name LIKE '" + TAG + "%'");
@@ -163,15 +163,15 @@ public class JobCreationLockFootprintSqlTest extends Common {
 				+ "|blocking_relation_locks=" + (blockingLocks.length() == 0 ? "none" : blockingLocks)
 				+ "|starexec_relations=" + relationNames);
 
-		assertTrue("the transaction must actually have been measured", ageMs[0] >= 0);
-		assertTrue("the owned transaction took " + ageMs[0] + " ms, over the " + BUDGET_MS
-				+ " ms budget -- something slow is running inside it", ageMs[0] < BUDGET_MS);
+		assertTrue(ageMs[0] >= 0, "the transaction must actually have been measured");
+		assertTrue(ageMs[0] < BUDGET_MS, "the owned transaction took " + ageMs[0] + " ms, over the " + BUDGET_MS
+				+ " ms budget -- something slow is running inside it");
 		// The mode that would matter is one taken on a *relation*. RowExclusiveLock is the
 		// ordinary INSERT/UPDATE mode and conflicts only with DDL-grade locks, so concurrent
 		// writers are unaffected; ExclusiveLock appears on every transaction's own
 		// transactionid and says nothing about tables.
-		assertEquals("job creation must not take a blocking lock on any table: " + blockingLocks,
-				"", blockingLocks.toString());
+		assertEquals("",
+				blockingLocks.toString(), "job creation must not take a blocking lock on any table: " + blockingLocks);
 
 		// And the work really happened, so the numbers describe a real creation.
 		try (Connection con = Common.getConnection();
@@ -179,7 +179,7 @@ public class JobCreationLockFootprintSqlTest extends Common {
 		     ResultSet rs = s.executeQuery("SELECT count(*) FROM starexec.job_pairs jp"
 				     + " JOIN starexec.jobs j ON j.id = jp.job_id WHERE j.name LIKE '" + TAG + "%'")) {
 			assertTrue(rs.next());
-			assertEquals("the measured transaction must have created every pair", PAIRS, rs.getInt(1));
+			assertEquals(PAIRS, rs.getInt(1), "the measured transaction must have created every pair");
 		}
 	}
 

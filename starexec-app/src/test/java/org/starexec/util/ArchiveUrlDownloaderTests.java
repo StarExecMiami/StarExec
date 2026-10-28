@@ -1,10 +1,10 @@
 package org.starexec.util;
 
 import com.sun.net.httpserver.HttpServer;
-import org.junit.After;
-import org.junit.Assume;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.util.ArchiveUrlDownloader.Policy;
@@ -28,10 +28,10 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Archive URL downloads connect only to public destinations, follow a bounded number of
@@ -49,13 +49,13 @@ public class ArchiveUrlDownloaderTests {
 	private Path dir;
 	private File destination;
 
-	@Before
+	@BeforeEach
 	public void createDestination() throws Exception {
 		dir = Files.createTempDirectory("archive-download-");
 		destination = dir.resolve("downloaded.zip").toFile();
 	}
 
-	@After
+	@AfterEach
 	public void stopServers() {
 		for (HttpServer server : servers) {
 			server.stop(0);
@@ -65,7 +65,7 @@ public class ArchiveUrlDownloaderTests {
 	@Test
 	public void publicAddressesArePermitted() throws Exception {
 		for (String address : List.of("93.184.216.34", "172.32.0.1", "100.128.0.1", "2001:4860:4860::8888")) {
-			assertTrue(address, ArchiveUrlDownloader.isPermittedAddress(InetAddress.getByName(address), standard()));
+			assertTrue(ArchiveUrlDownloader.isPermittedAddress(InetAddress.getByName(address), standard()), address);
 		}
 	}
 
@@ -134,7 +134,7 @@ public class ArchiveUrlDownloaderTests {
 	 */
 	@Test
 	public void aDownloadedArchiveIsReadableByItsGroup() throws Exception {
-		Assume.assumeTrue("POSIX file permissions", Files.getFileStore(dir).supportsFileAttributeView("posix"));
+		Assumptions.assumeTrue(Files.getFileStore(dir).supportsFileAttributeView("posix"), "POSIX file permissions");
 		HttpServer server = serveArchive(LOOPBACK, "/solver.zip");
 
 		assertTrue(ArchiveUrlDownloader.download(urlOf(server, "/solver.zip"), destination, permitting(LOOPBACK)));
@@ -155,7 +155,7 @@ public class ArchiveUrlDownloaderTests {
 		URL url = url("http://:" + server.getAddress().getPort() + "/solver.zip");
 
 		assertFalse(ArchiveUrlDownloader.download(url, destination, permitting(LOOPBACK)));
-		assertEquals("the server is never contacted", 0, requests.get());
+		assertEquals(0, requests.get(), "the server is never contacted");
 		assertNothingLeft();
 	}
 
@@ -167,9 +167,9 @@ public class ArchiveUrlDownloaderTests {
 
 		for (String name : List.of("..", ".")) {
 			File outside = new File(dir.toFile(), name);
-			assertFalse(name, ArchiveUrlDownloader.download(urlOf(server, "/solver.zip"), outside, permitting(LOOPBACK)));
+			assertFalse(ArchiveUrlDownloader.download(urlOf(server, "/solver.zip"), outside, permitting(LOOPBACK)), name);
 		}
-		assertEquals("the server is never contacted", 0, requests.get());
+		assertEquals(0, requests.get(), "the server is never contacted");
 		assertNothingLeft();
 	}
 
@@ -180,7 +180,7 @@ public class ArchiveUrlDownloaderTests {
 		HttpServer server = redirect(LOOPBACK, "/moved.zip", local.toUri().toString());
 
 		assertFalse(ArchiveUrlDownloader.download(urlOf(server, "/moved.zip"), destination, permitting(LOOPBACK)));
-		assertFalse("nothing is written", destination.exists());
+		assertFalse(destination.exists(), "nothing is written");
 	}
 
 	/** The destination policy applies to every hop, not only to the URL the user named. */
@@ -191,8 +191,8 @@ public class ArchiveUrlDownloaderTests {
 		HttpServer server = redirect(LOOPBACK, "/moved.zip", urlOf(refused, "/internal.zip").toString());
 
 		assertFalse(ArchiveUrlDownloader.download(urlOf(server, "/moved.zip"), destination, permitting(LOOPBACK)));
-		assertEquals("the refused address is never contacted", 0, requests.get());
-		assertFalse("nothing is written", destination.exists());
+		assertEquals(0, requests.get(), "the refused address is never contacted");
+		assertFalse(destination.exists(), "nothing is written");
 	}
 
 	@Test
@@ -220,12 +220,12 @@ public class ArchiveUrlDownloaderTests {
 			});
 		}
 
-		assertTrue("five redirects are followed",
-				ArchiveUrlDownloader.download(urlOf(server, "/hop5"), destination, permitting(LOOPBACK)));
+		assertTrue(ArchiveUrlDownloader.download(urlOf(server, "/hop5"), destination, permitting(LOOPBACK)),
+				"five redirects are followed");
 		assertTrue(destination.delete());
-		assertFalse("a sixth is not",
-				ArchiveUrlDownloader.download(urlOf(server, "/hop6"), destination, permitting(LOOPBACK)));
-		assertFalse("nothing is written", destination.exists());
+		assertFalse(ArchiveUrlDownloader.download(urlOf(server, "/hop6"), destination, permitting(LOOPBACK)),
+				"a sixth is not");
+		assertFalse(destination.exists(), "nothing is written");
 	}
 
 	/** The size cap matches the benchmark upload form's; the deadline bounds a slow server. */
@@ -327,7 +327,7 @@ public class ArchiveUrlDownloaderTests {
 			long started = System.nanoTime();
 			assertFalse(ArchiveUrlDownloader.download(url, destination, limited(Long.MAX_VALUE, 500)));
 			long elapsedMillis = (System.nanoTime() - started) / 1_000_000;
-			assertTrue("abandoned near the deadline, after " + elapsedMillis + " ms", elapsedMillis < 3000);
+			assertTrue(elapsedMillis < 3000, "abandoned near the deadline, after " + elapsedMillis + " ms");
 			assertNothingLeft();
 		}
 	}
@@ -369,7 +369,7 @@ public class ArchiveUrlDownloaderTests {
 		long started = System.nanoTime();
 		assertFalse(ArchiveUrlDownloader.download(urlOf(server, "/slow.zip"), destination, limited(Long.MAX_VALUE, 500)));
 		long elapsedMillis = (System.nanoTime() - started) / 1_000_000;
-		assertTrue("abandoned near the deadline, after " + elapsedMillis + " ms", elapsedMillis < 3000);
+		assertTrue(elapsedMillis < 3000, "abandoned near the deadline, after " + elapsedMillis + " ms");
 		assertNothingLeft();
 	}
 

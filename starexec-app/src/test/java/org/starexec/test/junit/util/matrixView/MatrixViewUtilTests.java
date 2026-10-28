@@ -1,6 +1,6 @@
 package org.starexec.test.junit.util.matrixView;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.Jobs;
@@ -12,7 +12,7 @@ import org.starexec.util.matrixView.MatrixViewUtil;
 
 import javax.servlet.http.HttpServletResponse;
 
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.fail;
 
 public class MatrixViewUtilTests {
 

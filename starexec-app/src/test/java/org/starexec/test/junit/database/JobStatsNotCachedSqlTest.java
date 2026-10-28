@@ -4,10 +4,10 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.starexec.constants.R;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
@@ -26,7 +26,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * A job's solver summary is compiled from its pairs every time it is asked for, and nothing is
@@ -56,13 +56,13 @@ public class JobStatsNotCachedSqlTest extends Common {
 
 	private ListAppender<ILoggingEvent> jobsLog;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobStatsNotCachedSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			userId = selectInt(con, "SELECT min(id) FROM starexec.users");
@@ -115,15 +115,15 @@ public class JobStatsNotCachedSqlTest extends Common {
 					pairId);
 		}
 		Benchmarks.addBenchAttr(benchId, R.EXPECTED_RESULT, "Theorem");
-		assertEquals("precondition: the job is complete, so the old path would try to cache it",
-				true, Jobs.isJobComplete(jobId));
+		assertEquals(true,
+				Jobs.isJobComplete(jobId), "precondition: the job is complete, so the old path would try to cache it");
 
 		jobsLog = new ListAppender<>();
 		jobsLog.start();
 		((Logger) LoggerFactory.getLogger(Jobs.class)).addAppender(jobsLog);
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		if (jobsLog != null) {
 			((Logger) LoggerFactory.getLogger(Jobs.class)).detachAppender(jobsLog);
@@ -151,8 +151,8 @@ public class JobStatsNotCachedSqlTest extends Common {
 	public void viewingACompletedJobsStatsSavesNothingAndLogsNoError() throws SQLException {
 		assertEquals(List.of(row(1, 0)), summary());
 
-		assertEquals("nothing is cached", 0, cachedRows());
-		assertEquals("no save was attempted, so none failed", List.of(), errors());
+		assertEquals(0, cachedRows(), "nothing is cached");
+		assertEquals(List.of(), errors(), "no save was attempted, so none failed");
 	}
 
 	/**
@@ -172,7 +172,7 @@ public class JobStatsNotCachedSqlTest extends Common {
 			assertEquals(1, ps.executeUpdate());
 		}
 
-		assertEquals("the pairs, not the stale row", List.of(row(1, 0)), summary());
+		assertEquals(List.of(row(1, 0)), summary(), "the pairs, not the stale row");
 	}
 
 	/**
@@ -185,7 +185,7 @@ public class JobStatsNotCachedSqlTest extends Common {
 
 		Benchmarks.addBenchAttr(benchId, R.EXPECTED_RESULT, "CounterSatisfiable");
 
-		assertEquals("now wrong against the new expected result", List.of(row(0, 1)), summary());
+		assertEquals(List.of(row(0, 1)), summary(), "now wrong against the new expected result");
 	}
 
 	private String row(int solved, int wrong) {

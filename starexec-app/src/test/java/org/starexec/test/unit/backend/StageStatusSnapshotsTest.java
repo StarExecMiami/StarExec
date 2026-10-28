@@ -1,18 +1,19 @@
 package org.starexec.test.unit.backend;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.to.Status.StatusCode;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * The backend-independent half of the stage-status protocol, on its own terms.
@@ -27,14 +28,14 @@ public class StageStatusSnapshotsTest {
 
 	private static final int PAIR = 4242;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	// ------------------------------------------------------------------ the happy path
 
 	@Test
 	public void everyStageIsReturnedInStageOrder() throws Exception {
-		Path out = folder.newFolder("ok").toPath();
+		Path out = newFolder(folder, "ok").toPath();
 		write(out, 2, PAIR, 2, StatusCode.EXCEED_CPU.getVal());
 		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
 
@@ -49,12 +50,12 @@ public class StageStatusSnapshotsTest {
 	/** Output from a job script that predates the protocol reads as "nothing to add". */
 	@Test
 	public void anAbsentDirectoryIsEmptyRatherThanAnError() throws Exception {
-		assertTrue(StageStatusSnapshots.read(folder.newFolder("legacy").toPath(), PAIR).isEmpty());
+		assertTrue(StageStatusSnapshots.read(newFolder(folder, "legacy").toPath(), PAIR).isEmpty());
 	}
 
 	@Test
 	public void anEmptyDirectoryIsEmpty() throws Exception {
-		Path out = folder.newFolder("empty").toPath();
+		Path out = newFolder(folder, "empty").toPath();
 		Files.createDirectories(out.resolve("stage-status"));
 		assertTrue(StageStatusSnapshots.read(out, PAIR).isEmpty());
 	}
@@ -67,7 +68,7 @@ public class StageStatusSnapshotsTest {
 	/** The producer's own temporary file must not be mistaken for a record. */
 	@Test
 	public void namesThatAreNotSnapshotsAreIgnored() throws Exception {
-		Path out = folder.newFolder("names").toPath();
+		Path out = newFolder(folder, "names").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
 		Path dir = out.resolve("stage-status");
 		for (String junk : new String[]{"1.json.tmp", "0.json", "01.json", "-1.json",
@@ -77,14 +78,14 @@ public class StageStatusSnapshotsTest {
 
 		Map<Integer, Integer> read = StageStatusSnapshots.read(out, PAIR);
 
-		assertEquals("only the one real snapshot", 1, read.size());
+		assertEquals(1, read.size(), "only the one real snapshot");
 		assertTrue(read.containsKey(1));
 	}
 
 	/** The widest name the producer can emit must still be accepted. */
 	@Test
 	public void theLargestNameTheProducerCanWriteIsAccepted() throws Exception {
-		Path out = folder.newFolder("wide").toPath();
+		Path out = newFolder(folder, "wide").toPath();
 		write(out, 999999999, PAIR, 999999999, StatusCode.STATUS_COMPLETE.getVal());
 		assertTrue(StageStatusSnapshots.read(out, PAIR).containsKey(999999999));
 	}
@@ -93,21 +94,21 @@ public class StageStatusSnapshotsTest {
 
 	@Test
 	public void aRecordNamingAnotherPairIsRefused() throws Exception {
-		Path out = folder.newFolder("foreign").toPath();
+		Path out = newFolder(folder, "foreign").toPath();
 		write(out, 1, PAIR + 1, 1, StatusCode.STATUS_COMPLETE.getVal());
 		assertRefused(out, "claims pair");
 	}
 
 	@Test
 	public void aFileNameDisagreeingWithItsRecordIsRefused() throws Exception {
-		Path out = folder.newFolder("mismatch").toPath();
+		Path out = newFolder(folder, "mismatch").toPath();
 		write(out, 1, PAIR, 2, StatusCode.STATUS_COMPLETE.getVal());
 		assertRefused(out, "is named for stage");
 	}
 
 	@Test
 	public void malformedJsonIsRefused() throws Exception {
-		Path out = folder.newFolder("malformed").toPath();
+		Path out = newFolder(folder, "malformed").toPath();
 		Files.createDirectories(out.resolve("stage-status"));
 		Files.writeString(out.resolve("stage-status/1.json"), "{not json");
 		assertRefused(out, "malformed stage snapshot");
@@ -115,7 +116,7 @@ public class StageStatusSnapshotsTest {
 
 	@Test
 	public void aMissingFieldIsRefused() throws Exception {
-		Path out = folder.newFolder("missing").toPath();
+		Path out = newFolder(folder, "missing").toPath();
 		Files.createDirectories(out.resolve("stage-status"));
 		Files.writeString(out.resolve("stage-status/1.json"),
 				"{\"pairId\":" + PAIR + ",\"stageNumber\":1}\n");
@@ -124,7 +125,7 @@ public class StageStatusSnapshotsTest {
 
 	@Test
 	public void aNonIntegerFieldIsRefused() throws Exception {
-		Path out = folder.newFolder("nonint").toPath();
+		Path out = newFolder(folder, "nonint").toPath();
 		Files.createDirectories(out.resolve("stage-status"));
 		Files.writeString(out.resolve("stage-status/1.json"),
 				"{\"pairId\":" + PAIR + ",\"stageNumber\":1,\"status\":{}}\n");
@@ -171,7 +172,7 @@ public class StageStatusSnapshotsTest {
 	/** An integral value is what the field means, however the number is spelled. */
 	@Test
 	public void anIntegralValueWrittenWithAZeroFractionIsAccepted() throws Exception {
-		Path out = folder.newFolder("integral").toPath();
+		Path out = newFolder(folder, "integral").toPath();
 		writeRaw(out, PAIR + ".0", "1.0", StatusCode.STATUS_COMPLETE.getVal() + ".0");
 		assertEquals(Map.of(1, StatusCode.STATUS_COMPLETE.getVal()),
 				StageStatusSnapshots.read(out, PAIR));
@@ -179,7 +180,7 @@ public class StageStatusSnapshotsTest {
 
 	@Test
 	public void anOversizedRecordIsRefusedWithoutBeingRead() throws Exception {
-		Path out = folder.newFolder("huge").toPath();
+		Path out = newFolder(folder, "huge").toPath();
 		Files.createDirectories(out.resolve("stage-status"));
 		Files.writeString(out.resolve("stage-status/1.json"), "x".repeat(9 * 1024));
 		assertRefused(out, "bytes");
@@ -196,13 +197,13 @@ public class StageStatusSnapshotsTest {
 	@Test
 	public void exactlyTheTerminalExecutionResultsAreAccepted() throws Exception {
 		for (StatusCode code : StatusCode.values()) {
-			Path out = folder.newFolder("st-" + code.name()).toPath();
+			Path out = newFolder(folder, "st-" + code.name()).toPath();
 			write(out, 1, PAIR, 1, code.getVal());
 
 			if (code.isTerminalExecutionResult()) {
 				Map<Integer, Integer> read = StageStatusSnapshots.read(out, PAIR);
-				assertEquals(code + " is a result and must be accepted",
-						Integer.valueOf(code.getVal()), read.get(1));
+				assertEquals(Integer.valueOf(code.getVal()),
+						read.get(1), code + " is a result and must be accepted");
 			} else {
 				assertRefused(out, "not a terminal execution result");
 			}
@@ -214,7 +215,7 @@ public class StageStatusSnapshotsTest {
 	public void theThreeStatesThatMeanWorkIsStillOwedAreRefused() throws Exception {
 		for (StatusCode code : new StatusCode[]{StatusCode.STATUS_PROCESSING_RESULTS,
 				StatusCode.STATUS_PAUSED, StatusCode.STATUS_PROCESSING}) {
-			Path out = folder.newFolder("owed-" + code.getVal()).toPath();
+			Path out = newFolder(folder, "owed-" + code.getVal()).toPath();
 			write(out, 1, PAIR, 1, code.getVal());
 			assertRefused(out, "not a terminal execution result");
 		}
@@ -227,7 +228,7 @@ public class StageStatusSnapshotsTest {
 	@Test
 	public void statusProcessingCannotBeIngested() throws Exception {
 		assertEquals(22, StatusCode.STATUS_PROCESSING.getVal());
-		Path out = folder.newFolder("launder").toPath();
+		Path out = newFolder(folder, "launder").toPath();
 		write(out, 1, PAIR, 1, 22);
 		assertRefused(out, "carries status 22");
 	}
@@ -235,7 +236,7 @@ public class StageStatusSnapshotsTest {
 	/** One bad record poisons the read; a partially believed history is worse than none. */
 	@Test
 	public void oneBadRecordRefusesTheWholeRead() throws Exception {
-		Path out = folder.newFolder("partial").toPath();
+		Path out = newFolder(folder, "partial").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
 		write(out, 2, PAIR + 99, 2, StatusCode.STATUS_COMPLETE.getVal());
 		assertRefused(out, "claims pair");
@@ -252,12 +253,12 @@ public class StageStatusSnapshotsTest {
 
 	@Test
 	public void theStageStillRunningIsNeitherReturnedNorRefused() throws Exception {
-		Path out = folder.newFolder("in-flight").toPath();
+		Path out = newFolder(folder, "in-flight").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
 
 		Map<Integer, Integer> read = StageStatusSnapshots.read(out, PAIR, 1);
 
-		assertTrue("the running stage must not be returned", read.isEmpty());
+		assertTrue(read.isEmpty(), "the running stage must not be returned");
 	}
 
 	/**
@@ -268,7 +269,7 @@ public class StageStatusSnapshotsTest {
 	 */
 	@Test
 	public void theRunningStagesRecordIsStillCheckedAgainstItsPair() throws Exception {
-		Path out = folder.newFolder("in-flight-wrong-pair").toPath();
+		Path out = newFolder(folder, "in-flight-wrong-pair").toPath();
 		write(out, 1, PAIR + 99, 1, StatusCode.STATUS_RUNNING.getVal());
 
 		assertRefused(out, 1, "claims pair");
@@ -277,7 +278,7 @@ public class StageStatusSnapshotsTest {
 	/** Same reasoning for a name that disagrees with the record it holds. */
 	@Test
 	public void theRunningStagesRecordIsStillCheckedAgainstItsName() throws Exception {
-		Path out = folder.newFolder("in-flight-wrong-name").toPath();
+		Path out = newFolder(folder, "in-flight-wrong-name").toPath();
 		write(out, 1, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
 
 		assertRefused(out, 1, "is named for stage");
@@ -289,12 +290,12 @@ public class StageStatusSnapshotsTest {
 	 */
 	@Test
 	public void theRunningStageCannotLaunderItsOwnStatus() throws Exception {
-		Path out = folder.newFolder("in-flight-launder").toPath();
+		Path out = newFolder(folder, "in-flight-launder").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_PROCESSING.getVal());
 
 		Map<Integer, Integer> read = StageStatusSnapshots.read(out, PAIR, 1);
 
-		assertTrue("STATUS_PROCESSING must never reach a caller", read.isEmpty());
+		assertTrue(read.isEmpty(), "STATUS_PROCESSING must never reach a caller");
 	}
 
 	// --------------------------------------- and the protection that must NOT be weakened
@@ -302,7 +303,7 @@ public class StageStatusSnapshotsTest {
 	/** An earlier stage is one the pair has moved past, so its status is final and is checked. */
 	@Test
 	public void anEarlierStagesNonTerminalStatusIsStillRefused() throws Exception {
-		Path out = folder.newFolder("earlier-owed").toPath();
+		Path out = newFolder(folder, "earlier-owed").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_PROCESSING.getVal());
 		write(out, 2, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
 
@@ -313,7 +314,7 @@ public class StageStatusSnapshotsTest {
 	/** Structural defects in an earlier stage are still deterministic, and still refused. */
 	@Test
 	public void anEarlierStagesMalformedRecordIsStillRefused() throws Exception {
-		Path out = folder.newFolder("earlier-malformed").toPath();
+		Path out = newFolder(folder, "earlier-malformed").toPath();
 		Path dir = out.resolve("stage-status");
 		Files.createDirectories(dir);
 		Files.writeString(dir.resolve("1.json"), "{ this is not json");
@@ -323,7 +324,7 @@ public class StageStatusSnapshotsTest {
 
 	@Test
 	public void everyStageBeforeTheBoundIsStillReturned() throws Exception {
-		Path out = folder.newFolder("bounded-happy").toPath();
+		Path out = newFolder(folder, "bounded-happy").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
 		write(out, 2, PAIR, 2, StatusCode.EXCEED_CPU.getVal());
 		write(out, 3, PAIR, 3, StatusCode.STATUS_RUNNING.getVal());
@@ -338,7 +339,7 @@ public class StageStatusSnapshotsTest {
 	/** The two-argument overload is the bounded read with no stage in flight. */
 	@Test
 	public void theUnboundedOverloadValidatesEveryStage() throws Exception {
-		Path out = folder.newFolder("equivalence").toPath();
+		Path out = newFolder(folder, "equivalence").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_PROCESSING.getVal());
 
 		assertRefused(out, Integer.MAX_VALUE, "carries status 22");
@@ -357,7 +358,7 @@ public class StageStatusSnapshotsTest {
 
 	@Test
 	public void aStageNumberBelowOneIsNotABound() throws Exception {
-		Path out = folder.newFolder("no-stage-named").toPath();
+		Path out = newFolder(folder, "no-stage-named").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
 
 		// Skipping everything would return empty and let the caller record a result for a pair
@@ -374,12 +375,12 @@ public class StageStatusSnapshotsTest {
 	 */
 	@Test
 	public void aStageNumberBelowOneValidatesEveryStageAndReturnsNone() throws Exception {
-		Path out = folder.newFolder("no-stage-named-ok").toPath();
+		Path out = newFolder(folder, "no-stage-named-ok").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
 		write(out, 2, PAIR, 2, StatusCode.EXCEED_CPU.getVal());
 
-		assertTrue("no stage is 'earlier' when none is named",
-				StageStatusSnapshots.read(out, PAIR, 0).isEmpty());
+		assertTrue(StageStatusSnapshots.read(out, PAIR, 0).isEmpty(),
+				"no stage is 'earlier' when none is named");
 
 		// ...and validation still happened: a bad record in the same directory is still refused.
 		write(out, 3, PAIR, 3, StatusCode.STATUS_PROCESSING.getVal());
@@ -407,15 +408,15 @@ public class StageStatusSnapshotsTest {
 		String stage = "1";
 		String code = String.valueOf(status);
 
-		Path pairOut = folder.newFolder(label + "-pairId").toPath();
+		Path pairOut = newFolder(folder, label + "-pairId").toPath();
 		writeRaw(pairOut, String.format(shape, PAIR), stage, code);
 		assertRefused(pairOut, "non-integer pairId");
 
-		Path stageOut = folder.newFolder(label + "-stageNumber").toPath();
+		Path stageOut = newFolder(folder, label + "-stageNumber").toPath();
 		writeRaw(stageOut, pair, String.format(shape, 1), code);
 		assertRefused(stageOut, "non-integer stageNumber");
 
-		Path statusOut = folder.newFolder(label + "-status").toPath();
+		Path statusOut = newFolder(folder, label + "-status").toPath();
 		writeRaw(statusOut, pair, stage, String.format(shape, status));
 		assertRefused(statusOut, "non-integer status");
 	}
@@ -435,8 +436,8 @@ public class StageStatusSnapshotsTest {
 			StageStatusSnapshots.read(outputDir, PAIR);
 			fail("expected refusal mentioning: " + expectedReason);
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertTrue("wrong refusal: " + expected.getMessage(),
-					expected.getMessage().contains(expectedReason));
+			assertTrue(expected.getMessage().contains(expectedReason),
+					"wrong refusal: " + expected.getMessage());
 		}
 	}
 
@@ -446,8 +447,8 @@ public class StageStatusSnapshotsTest {
 			StageStatusSnapshots.read(outputDir, PAIR, terminalStage);
 			fail("expected refusal mentioning: " + expectedReason);
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertTrue("wrong refusal: " + expected.getMessage(),
-					expected.getMessage().contains(expectedReason));
+			assertTrue(expected.getMessage().contains(expectedReason),
+					"wrong refusal: " + expected.getMessage());
 		}
 	}
 }

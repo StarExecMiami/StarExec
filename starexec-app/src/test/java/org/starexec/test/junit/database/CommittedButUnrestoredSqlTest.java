@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.test.util.DatabaseTestSupport;
 
@@ -15,11 +15,11 @@ import java.sql.Statement;
 import java.util.HashSet;
 import java.util.Set;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * What happens when the commit succeeds and the cleanup after it does not.
@@ -47,13 +47,13 @@ public class CommittedButUnrestoredSqlTest extends Common {
 
 	private static final String TAG = "committed-unrestored-probe";
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("CommittedButUnrestoredSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void createProbeTable() throws SQLException {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			s.execute("CREATE TABLE IF NOT EXISTS starexec.probe_committed_unrestored ("
@@ -62,7 +62,7 @@ public class CommittedButUnrestoredSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropProbeTable() throws SQLException {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			s.execute("DROP TABLE IF EXISTS starexec.probe_committed_unrestored");
@@ -95,27 +95,27 @@ public class CommittedButUnrestoredSqlTest extends Common {
 				}
 				return "created";
 			});
-			assertEquals("a committed write must be reported as the success it is",
-					"created", outcome);
+			assertEquals("created",
+					outcome, "a committed write must be reported as the success it is");
 		}
 
-		assertEquals("the committed row must be present exactly once", 1, probeRows());
+		assertEquals(1, probeRows(), "the committed row must be present exactly once");
 
 		// The poisoned physical connection must not be handed out again. Borrowing several
 		// times makes an accidental reuse visible rather than relying on one draw.
 		Set<Integer> backendsSeen = new HashSet<>();
 		for (int i = 0; i < 5; i++) {
 			try (Connection con = Common.getConnection()) {
-				assertTrue("the next borrower must get an autoCommit connection",
-						con.getAutoCommit());
-				assertFalse("the next borrower must get a live connection", con.isClosed());
+				assertTrue(con.getAutoCommit(),
+						"the next borrower must get an autoCommit connection");
+				assertFalse(con.isClosed(), "the next borrower must get a live connection");
 				int pid = backendPid(con);
-				assertNotEquals("the unrestorable backend was recycled", doomedBackend, pid);
+				assertNotEquals(doomedBackend, pid, "the unrestorable backend was recycled");
 				backendsSeen.add(pid);
-				assertEquals("the connection must be usable", 1, selectOne(con));
+				assertEquals(1, selectOne(con), "the connection must be usable");
 			}
 		}
-		assertFalse("a healthy backend must have served the retries", backendsSeen.isEmpty());
+		assertFalse(backendsSeen.isEmpty(), "a healthy backend must have served the retries");
 	}
 
 	/**
@@ -139,7 +139,7 @@ public class CommittedButUnrestoredSqlTest extends Common {
 			assertEquals("induced application failure", expected.getMessage());
 		}
 
-		assertEquals("nothing may be durable after a rollback", before, probeRows());
+		assertEquals(before, probeRows(), "nothing may be durable after a rollback");
 		try (Connection con = Common.getConnection()) {
 			assertTrue(con.getAutoCommit());
 			assertEquals(1, selectOne(con));

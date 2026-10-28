@@ -1,8 +1,10 @@
 package org.starexec.test.junit.database;
 
-import org.junit.*;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.starexec.constants.R;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
@@ -10,22 +12,21 @@ import org.starexec.test.util.DatabaseTestSupport;
 import java.sql.*;
 import java.util.*;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /** A duplicate terminal report preserves a known completion time, but repairs NULL. */
-@RunWith(Parameterized.class)
 public class JobCompletionIdempotenceSqlTest {
-    @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> cases() {
         return Arrays.asList(new Object[]{"precise"}, new Object[]{"pairLevel"}, new Object[]{"legacy"});
     }
 
-    private final String kind;
+    private String kind;
     private int user, job, pair;
 
-    public JobCompletionIdempotenceSqlTest(String kind) { this.kind = kind; }
+    public void initJobCompletionIdempotenceSqlTest(String kind) { this.kind = kind; }
 
-    @BeforeClass public static void database() {
+    @BeforeAll public static void database() {
         DatabaseTestSupport.assumeDatabaseAvailable("JobCompletionIdempotenceSqlTest");
     }
 
@@ -45,7 +46,7 @@ public class JobCompletionIdempotenceSqlTest {
         try (Statement s = c.createStatement()) { s.execute(sql); }
     }
 
-    @Before public void seed() throws Exception {
+    @BeforeEach public void seed() throws Exception {
         try (Connection c = connection()) {
             user = (int) scalar(c, "INSERT INTO users(email,first_name,last_name,institution,created,password,disk_quota,job_pair_quota,disk_size) VALUES ('completion-" + UUID.randomUUID() + "@example.invalid','Test','Completion','test',now(),'x',10000,100,0) RETURNING id");
             job = (int) scalar(c, "INSERT INTO jobs(user_id,name,total_pairs,disk_size) VALUES (" + user + ",'completion-idempotence',1,0) RETURNING id");
@@ -54,7 +55,7 @@ public class JobCompletionIdempotenceSqlTest {
         }
     }
 
-    @After public void cleanup() throws Exception {
+    @AfterEach public void cleanup() throws Exception {
         try (Connection c = connection()) {
             execute(c, "DELETE FROM job_pairs WHERE job_id=" + job);
             execute(c, "DELETE FROM jobs WHERE id=" + job);
@@ -73,8 +74,8 @@ public class JobCompletionIdempotenceSqlTest {
             + StatusCode.STATUS_COMPLETE.getVal() + "," + StatusCode.STATUS_NOT_REACHED.getVal()
             + (kind.equals("precise") ? ",false" : "");
         String routine = kind.equals("precise") ? "UpdatePairStatusPrecise" : "UpdatePairStatusPairLevel";
-        assertEquals("Both first and duplicate terminal reports must be accepted", 1,
-            scalar(c, "SELECT " + routine + "(" + arguments + ")::int"));
+        assertEquals(1, scalar(c, "SELECT " + routine + "(" + arguments + ")::int"),
+            "Both first and duplicate terminal reports must be accepted");
     }
 
     private String scientificState(Connection c) throws SQLException {
@@ -86,19 +87,25 @@ public class JobCompletionIdempotenceSqlTest {
         }
     }
 
-    @Test public void duplicatePreservesKnownJobCompletionTimestamp() throws Exception {
+    @MethodSource("cases")
+    @ParameterizedTest(name = "{0}")
+    public void duplicatePreservesKnownJobCompletionTimestamp(String kind) throws Exception {
+        initJobCompletionIdempotenceSqlTest(kind);
         try (Connection c = connection()) {
             apply(c);
             execute(c, "UPDATE jobs SET completed=TIMESTAMP '2001-02-03 04:05:06' WHERE id=" + job);
             String before = scientificState(c);
             apply(c);
-            assertEquals("Duplicate must preserve the known completion timestamp", 1,
-                scalar(c, "SELECT (completed=TIMESTAMP '2001-02-03 04:05:06')::int FROM jobs WHERE id=" + job));
+            assertEquals(1, scalar(c, "SELECT (completed=TIMESTAMP '2001-02-03 04:05:06')::int FROM jobs WHERE id=" + job),
+                "Duplicate must preserve the known completion timestamp");
             assertEquals(before, scientificState(c));
         }
     }
 
-    @Test public void duplicateRepairsMissingJobCompletionTimestamp() throws Exception {
+    @MethodSource("cases")
+    @ParameterizedTest(name = "{0}")
+    public void duplicateRepairsMissingJobCompletionTimestamp(String kind) throws Exception {
+        initJobCompletionIdempotenceSqlTest(kind);
         try (Connection c = connection()) {
             apply(c);
             execute(c, "UPDATE jobs SET completed=NULL WHERE id=" + job);

@@ -1,12 +1,12 @@
 package org.starexec.test.unit.backend;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.LocalJobMonitor;
 
 import java.lang.reflect.Method;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The timing layer on its own, with no database in the way.
@@ -35,8 +35,8 @@ public class IngestionBackoffTest {
 	@Test
 	public void theFirstFailureWaitsTheBaseInterval() throws Exception {
 		long first = delayFor(1);
-		assertTrue("first delay must be positive, was " + first, first > 0);
-		assertTrue("and must be well below the cap, was " + first, first < cap());
+		assertTrue(first > 0, "first delay must be positive, was " + first);
+		assertTrue(first < cap(), "and must be well below the cap, was " + first);
 	}
 
 	/** Growth is monotonic until it caps, and never decreases. */
@@ -48,17 +48,17 @@ public class IngestionBackoffTest {
 
 		for (int failures = 1; failures <= 25; failures++) {
 			long delay = delayFor(failures);
-			assertTrue("delay must never decrease at " + failures
-					+ ": " + previous + " -> " + delay, delay >= previous);
-			assertTrue("delay must never exceed the cap at " + failures + ": " + delay,
-					delay <= cap);
+			assertTrue(delay >= previous, "delay must never decrease at " + failures
+					+ ": " + previous + " -> " + delay);
+			assertTrue(delay <= cap,
+					"delay must never exceed the cap at " + failures + ": " + delay);
 			if (delay == cap) {
 				reachedCap = true;
 			}
 			previous = delay;
 		}
 
-		assertTrue("the cap must actually be reachable, not theoretical", reachedCap);
+		assertTrue(reachedCap, "the cap must actually be reachable, not theoretical");
 	}
 
 	/**
@@ -69,8 +69,8 @@ public class IngestionBackoffTest {
 	public void anAbsurdFailureCountCannotOverflowOrWrap() throws Exception {
 		for (int failures : new int[]{63, 64, 65, 1000, 100000, Integer.MAX_VALUE}) {
 			long delay = delayFor(failures);
-			assertTrue("delay must stay positive at " + failures + ", was " + delay, delay > 0);
-			assertEquals("and must sit exactly at the cap at " + failures, cap(), delay);
+			assertTrue(delay > 0, "delay must stay positive at " + failures + ", was " + delay);
+			assertEquals(cap(), delay, "and must sit exactly at the cap at " + failures);
 		}
 	}
 

@@ -1,10 +1,11 @@
 package org.starexec.test.junit.database;
 
 import io.fabric8.kubernetes.client.KubernetesClient;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.starexec.backend.ExecutionRef;
 import org.starexec.backend.KubernetesJobMonitor;
@@ -28,10 +29,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Does the real Kubernetes completion callback record every stage, against a real database?
@@ -74,13 +75,13 @@ public class KubernetesStageStatusSqlTest extends Common {
 
 	private Path outputDir;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("KubernetesStageStatusSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws Exception {
 		cleanUp();
 		outputDir = Files.createTempDirectory("k8s-stage-probe");
@@ -115,7 +116,7 @@ public class KubernetesStageStatusSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws SQLException {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			quietly(s, "DROP TRIGGER IF EXISTS probe_block_stage ON starexec.jobpair_stage_data");
@@ -148,12 +149,12 @@ public class KubernetesStageStatusSqlTest extends Common {
 		writeSnapshot(2, PAIR_ID, 2, COMPLETE);
 		writeCleanRun();
 
-		assertTrue("completion must be acknowledged", complete());
+		assertTrue(complete(), "completion must be acknowledged");
 
 		assertEquals(COMPLETE, stageStatus(1));
 		assertEquals(COMPLETE, stageStatus(2));
 		assertEquals(COMPLETE, pairStatus());
-		assertEquals("pair completion fires once", 1, completions());
+		assertEquals(1, completions(), "pair completion fires once");
 	}
 
 	/** Three stages, failing at the second. */
@@ -185,15 +186,15 @@ public class KubernetesStageStatusSqlTest extends Common {
 		int completionBefore = completionId();
 		String endTimeBefore = pairEndTime();
 
-		assertTrue("a replay must still be acknowledged", complete());
+		assertTrue(complete(), "a replay must still be acknowledged");
 
 		assertEquals(COMPLETE, stageStatus(1));
 		assertEquals(EXCEED_CPU, stageStatus(2));
 		assertEquals(NOT_REACHED, stageStatus(3));
 		assertEquals(EXCEED_CPU, pairStatus());
 		assertEquals(1, completions());
-		assertEquals("the same completion row", completionBefore, completionId());
-		assertEquals("end_time must not drift on a replay", endTimeBefore, pairEndTime());
+		assertEquals(completionBefore, completionId(), "the same completion row");
+		assertEquals(endTimeBefore, pairEndTime(), "end_time must not drift on a replay");
 	}
 
 	// ------------------------------------------------------------------ retry contract
@@ -213,12 +214,12 @@ public class KubernetesStageStatusSqlTest extends Common {
 		writeCpuLimitBreach();
 
 		blockStageWrites();
-		assertFalse("a blocked stage write must report retry", complete());
+		assertFalse(complete(), "a blocked stage write must report retry");
 
-		assertEquals("nothing may be recorded", ENQUEUED, stageStatus(1));
-		assertEquals("the pair must not be force-failed", ENQUEUED, pairStatus());
-		assertEquals("nothing may complete the pair", 0, completions());
-		assertTrue("the evidence must survive", Files.isDirectory(outputDir.resolve("stage-status")));
+		assertEquals(ENQUEUED, stageStatus(1), "nothing may be recorded");
+		assertEquals(ENQUEUED, pairStatus(), "the pair must not be force-failed");
+		assertEquals(0, completions(), "nothing may complete the pair");
+		assertTrue(Files.isDirectory(outputDir.resolve("stage-status")), "the evidence must survive");
 
 		unblockStageWrites();
 		assertTrue(complete());
@@ -238,8 +239,8 @@ public class KubernetesStageStatusSqlTest extends Common {
 		writeCleanRun();
 
 		assertRefused();
-		assertEquals("the pair it named must be untouched", ENQUEUED,
-				stageStatus(OTHER_PAIR_ID, 1));
+		assertEquals(ENQUEUED, stageStatus(OTHER_PAIR_ID, 1),
+				"the pair it named must be untouched");
 	}
 
 	@Test
@@ -276,9 +277,9 @@ public class KubernetesStageStatusSqlTest extends Common {
 
 		assertRefused();
 		try (Connection con = Common.getConnection()) {
-			assertEquals("no stage may be left at STATUS_PROCESSING", 0,
-					scalar(con, "SELECT count(*) FROM starexec.jobpair_stage_data"
-							+ " WHERE jobpair_id=" + PAIR_ID + " AND status_code=22"));
+			assertEquals(0, scalar(con, "SELECT count(*) FROM starexec.jobpair_stage_data"
+							+ " WHERE jobpair_id=" + PAIR_ID + " AND status_code=22"),
+					"no stage may be left at STATUS_PROCESSING");
 		}
 	}
 
@@ -301,7 +302,7 @@ public class KubernetesStageStatusSqlTest extends Common {
 
 		assertTrue(complete());
 
-		assertEquals("no earlier stage may be invented", ENQUEUED, stageStatus(1));
+		assertEquals(ENQUEUED, stageStatus(1), "no earlier stage may be invented");
 		assertEquals(COMPLETE, stageStatus(2));
 		assertEquals(NOT_REACHED, stageStatus(3));
 		assertEquals(COMPLETE, pairStatus());
@@ -357,7 +358,7 @@ public class KubernetesStageStatusSqlTest extends Common {
 
 		callbackFor(backend).onJobComplete(stale);
 
-		assertEquals("a stale execution must not record stages", ENQUEUED, stageStatus(1));
+		assertEquals(ENQUEUED, stageStatus(1), "a stale execution must not record stages");
 	}
 
 	// ------------------------------------------- the real monitor retry mechanism
@@ -391,13 +392,13 @@ public class KubernetesStageStatusSqlTest extends Common {
 		blockStageWrites();
 		poll(monitor);
 
-		assertEquals("nothing recorded", ENQUEUED, stageStatus(1));
-		assertEquals("the pair must not be force-failed", ENQUEUED, pairStatus());
+		assertEquals(ENQUEUED, stageStatus(1), "nothing recorded");
+		assertEquals(ENQUEUED, pairStatus(), "the pair must not be force-failed");
 		assertEquals(0, completions());
-		assertTrue("the evidence must survive for the retry",
-				Files.isDirectory(outputDir.resolve("stage-status")));
-		assertFalse("the execution must NOT be marked completed",
-				completedExecutions(monitor).contains(execution()));
+		assertTrue(Files.isDirectory(outputDir.resolve("stage-status")),
+				"the evidence must survive for the retry");
+		assertFalse(completedExecutions(monitor).contains(execution()),
+				"the execution must NOT be marked completed");
 
 		// Second poll: the same Job, same UID, database healthy.
 		unblockStageWrites();
@@ -407,9 +408,9 @@ public class KubernetesStageStatusSqlTest extends Common {
 		assertEquals(EXCEED_CPU, stageStatus(2));
 		assertEquals(NOT_REACHED, stageStatus(3));
 		assertEquals(EXCEED_CPU, pairStatus());
-		assertEquals("completion effects exactly once", 1, completions());
-		assertTrue("the execution is now completed and will not be polled again",
-				completedExecutions(monitor).contains(execution()));
+		assertEquals(1, completions(), "completion effects exactly once");
+		assertTrue(completedExecutions(monitor).contains(execution()),
+				"the execution is now completed and will not be polled again");
 	}
 
 	/** Untrusted content is held for retry too, and never becomes a fabricated solver failure. */
@@ -425,7 +426,7 @@ public class KubernetesStageStatusSqlTest extends Common {
 		poll(monitor);
 
 		assertEquals(ENQUEUED, stageStatus(1));
-		assertEquals("no ERROR_RUNSCRIPT may be fabricated", ENQUEUED, pairStatus());
+		assertEquals(ENQUEUED, pairStatus(), "no ERROR_RUNSCRIPT may be fabricated");
 		assertEquals(ENQUEUED, stageStatus(OTHER_PAIR_ID, 1));
 		assertEquals(0, completions());
 		assertFalse(completedExecutions(monitor).contains(execution()));
@@ -535,8 +536,8 @@ public class KubernetesStageStatusSqlTest extends Common {
 
 		assertEquals(RUNNING + "/" + nodeId, pairStatusAndNode(PAIR_ID));
 		assertEquals(List.of(PAIR_ID), pairsListedUnder(nodeId));
-		assertEquals("the other pair is not this pod's", ENQUEUED + "/null",
-				pairStatusAndNode(OTHER_PAIR_ID));
+		assertEquals(ENQUEUED + "/null", pairStatusAndNode(OTHER_PAIR_ID),
+				"the other pair is not this pod's");
 	}
 
 	/**
@@ -550,8 +551,8 @@ public class KubernetesStageStatusSqlTest extends Common {
 				monitorOver(activeJob(), callbackFor(backend), runningPodOn(NODE));
 
 		poll(monitor);
-		assertEquals("running, on a node not registered yet", RUNNING + "/null",
-				pairStatusAndNode(PAIR_ID));
+		assertEquals(RUNNING + "/null", pairStatusAndNode(PAIR_ID),
+				"running, on a node not registered yet");
 
 		int nodeId = registerNode();
 		poll(monitor);
@@ -665,7 +666,7 @@ public class KubernetesStageStatusSqlTest extends Common {
 						+ " coalesce(node_id::text, 'null') FROM starexec.job_pairs WHERE id = ?")) {
 			ps.setInt(1, pairId);
 			try (ResultSet rs = ps.executeQuery()) {
-				assertTrue("no pair " + pairId, rs.next());
+				assertTrue(rs.next(), "no pair " + pairId);
 				return rs.getInt(1) + "/" + rs.getString(2);
 			}
 		}
@@ -674,7 +675,7 @@ public class KubernetesStageStatusSqlTest extends Common {
 	/** The pairs the node view lists under the node, through the view's own query. */
 	private static List<Integer> pairsListedUnder(int nodeId) {
 		List<JobPair> pairs = Queues.getPairsRunningOnNode(nodeId);
-		assertNotNull("the node view's query failed", pairs);
+		assertNotNull(pairs, "the node view's query failed");
 		return pairs.stream().map(JobPair::getId).collect(Collectors.toList());
 	}
 
@@ -700,9 +701,9 @@ public class KubernetesStageStatusSqlTest extends Common {
 		Files.writeString(outputDir.resolve("stage-status/2.json.tmp"), "partial");
 
 		// The submission boundary for attempt B.
-		assertTrue("clearing must succeed", clearStaleArtifacts());
-		assertFalse("the whole tree must be gone",
-				Files.exists(outputDir.resolve("stage-status")));
+		assertTrue(clearStaleArtifacts(), "clearing must succeed");
+		assertFalse(Files.exists(outputDir.resolve("stage-status")),
+				"the whole tree must be gone");
 
 		// Attempt B: one stage only.
 		writeStatus(PAIR_ID, COMPLETE, 1);
@@ -712,22 +713,22 @@ public class KubernetesStageStatusSqlTest extends Common {
 		assertTrue(complete());
 
 		assertEquals(COMPLETE, stageStatus(1));
-		assertEquals("attempt A's stage 2 must not be observed", NOT_REACHED, stageStatus(2));
+		assertEquals(NOT_REACHED, stageStatus(2), "attempt A's stage 2 must not be observed");
 		assertEquals(COMPLETE, pairStatus());
 	}
 
 	/** An empty directory, a missing one, and stray temp files are all fine to clear. */
 	@Test
 	public void clearingToleratesEmptyMissingAndPartialTrees() throws Exception {
-		assertTrue("missing directory", clearStaleArtifacts());
+		assertTrue(clearStaleArtifacts(), "missing directory");
 
 		Files.createDirectories(outputDir.resolve("stage-status"));
-		assertTrue("empty directory", clearStaleArtifacts());
+		assertTrue(clearStaleArtifacts(), "empty directory");
 		assertFalse(Files.exists(outputDir.resolve("stage-status")));
 
 		Files.createDirectories(outputDir.resolve("stage-status"));
 		Files.writeString(outputDir.resolve("stage-status/1.json.tmp"), "partial");
-		assertTrue("leftover temp file", clearStaleArtifacts());
+		assertTrue(clearStaleArtifacts(), "leftover temp file");
 		assertFalse(Files.exists(outputDir.resolve("stage-status")));
 	}
 
@@ -741,15 +742,15 @@ public class KubernetesStageStatusSqlTest extends Common {
 		Files.createDirectories(dir);
 		Files.writeString(dir.resolve("1.json"), record(PAIR_ID, COMPLETE, 1));
 		java.io.File readOnly = dir.toFile();
-		org.junit.Assume.assumeTrue("needs a filesystem where chmod bites",
-				readOnly.setWritable(false, false));
+		Assumptions.assumeTrue(readOnly.setWritable(false, false),
+				"needs a filesystem where chmod bites");
 		try {
-			assertFalse("an unclearable tree must be reported, not ignored", clearStaleArtifacts());
+			assertFalse(clearStaleArtifacts(), "an unclearable tree must be reported, not ignored");
 		} finally {
 			// Checked: leaving the directory unwritable would strand an undeletable temp tree
 			// on the build machine, and a silently failed restore is exactly how that happens.
-			assertTrue("could not restore write permission on " + readOnly,
-					readOnly.setWritable(true, false));
+			assertTrue(readOnly.setWritable(true, false),
+					"could not restore write permission on " + readOnly);
 		}
 	}
 
@@ -770,13 +771,13 @@ public class KubernetesStageStatusSqlTest extends Common {
 	}
 
 	private void assertRefused() throws Exception {
-		assertFalse("untrusted output must report retry, not success", complete());
-		assertEquals("stage 1 untouched", ENQUEUED, stageStatus(1));
-		assertEquals("stage 2 untouched", ENQUEUED, stageStatus(2));
-		assertEquals("stage 3 untouched", ENQUEUED, stageStatus(3));
-		assertEquals("the pair must not be force-failed", ENQUEUED, pairStatus());
-		assertEquals("nothing may complete the pair", 0, completions());
-		assertTrue("evidence must be preserved", Files.exists(outputDir.resolve("status.json")));
+		assertFalse(complete(), "untrusted output must report retry, not success");
+		assertEquals(ENQUEUED, stageStatus(1), "stage 1 untouched");
+		assertEquals(ENQUEUED, stageStatus(2), "stage 2 untouched");
+		assertEquals(ENQUEUED, stageStatus(3), "stage 3 untouched");
+		assertEquals(ENQUEUED, pairStatus(), "the pair must not be force-failed");
+		assertEquals(0, completions(), "nothing may complete the pair");
+		assertTrue(Files.exists(outputDir.resolve("status.json")), "evidence must be preserved");
 	}
 
 	private static ExecutionRef execution() {
@@ -919,7 +920,7 @@ public class KubernetesStageStatusSqlTest extends Common {
 
 	private static int scalar(Connection con, String sql) throws SQLException {
 		try (Statement s = con.createStatement(); ResultSet rs = s.executeQuery(sql)) {
-			assertTrue("query returned no row: " + sql, rs.next());
+			assertTrue(rs.next(), "query returned no row: " + sql);
 			return rs.getInt(1);
 		}
 	}

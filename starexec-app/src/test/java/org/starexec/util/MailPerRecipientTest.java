@@ -7,7 +7,7 @@ import ch.qos.logback.core.read.ListAppender;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.mail.EmailException;
 import org.apache.commons.mail.SimpleEmail;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 import org.mockito.invocation.Invocation;
@@ -29,10 +29,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -106,8 +106,8 @@ public class MailPerRecipientTest {
 		     LogCapture logs = new LogCapture();
 		     MockedConstruction<SimpleEmail> emails = transport(Set.of(), Set.of(), accepted)) {
 			Mail.sendCommunityRequest(requester(), request());
-			assertEquals("one accepted message per leader, each addressed to one leader",
-					List.of(List.of(ALICE), List.of(BOB)), accepted);
+			assertEquals(List.of(List.of(ALICE), List.of(BOB)),
+					accepted, "one accepted message per leader, each addressed to one leader");
 		}
 	}
 
@@ -153,7 +153,7 @@ public class MailPerRecipientTest {
 		     MockedConstruction<SimpleEmail> emails = transport(Set.of(), Set.of(), new ArrayList<>())) {
 			Mail.sendCommunityRequest(requester(), request());
 			logs.assertOne(Level.INFO, "community [" + COMMUNITY + "]", "emailed to 2 of its 2 leader(s)");
-			assertTrue("nothing failed, so nothing may warn", logs.at(Level.WARN).isEmpty());
+			assertTrue(logs.at(Level.WARN).isEmpty(), "nothing failed, so nothing may warn");
 		}
 	}
 
@@ -163,7 +163,7 @@ public class MailPerRecipientTest {
 		     LogCapture logs = new LogCapture();
 		     MockedConstruction<SimpleEmail> emails = transport(Set.of(), Set.of(), new ArrayList<>())) {
 			Mail.sendCommunityRequest(requester(), request());
-			assertTrue("no leader, so no message may be built", emails.constructed().isEmpty());
+			assertTrue(emails.constructed().isEmpty(), "no leader, so no message may be built");
 			logs.assertOne(Level.WARN, "community [" + COMMUNITY + "]", "no leader");
 		}
 	}
@@ -310,9 +310,9 @@ public class MailPerRecipientTest {
 			List<String> matching = at(level).stream()
 					.filter(message -> Arrays.stream(fragments).allMatch(message::contains))
 					.collect(Collectors.toList());
-			assertEquals("one " + level + " event containing " + Arrays.toString(fragments) + " among "
+			assertEquals(1, matching.size(), "one " + level + " event containing " + Arrays.toString(fragments) + " among "
 					+ appender.list.stream().map(e -> e.getLevel() + " " + e.getFormattedMessage())
-					.collect(Collectors.toList()), 1, matching.size());
+					.collect(Collectors.toList()));
 		}
 
 		private void assertNoneAtOrAbove(Level level, String fragment) {
@@ -323,8 +323,8 @@ public class MailPerRecipientTest {
 		private void assertNoSyntheticAddress() {
 			for (ILoggingEvent event : appender.list) {
 				for (String address : SYNTHETIC) {
-					assertFalse("an address leaked into the log: " + event.getFormattedMessage(),
-							event.getFormattedMessage().contains(address));
+					assertFalse(event.getFormattedMessage().contains(address),
+							"an address leaked into the log: " + event.getFormattedMessage());
 				}
 			}
 		}

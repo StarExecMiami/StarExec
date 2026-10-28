@@ -1,7 +1,7 @@
 package org.starexec.servlets;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
@@ -32,7 +32,7 @@ public class UploadUrlSchemeTests {
 	private static final String NOT_AUTHORIZED = "You are not authorized to add solvers to this space";
 
 	/** The request validator's patterns are compiled at application startup. */
-	@BeforeClass
+	@BeforeAll
 	public static void compileValidatorPatterns() {
 		Validator.initialize();
 	}

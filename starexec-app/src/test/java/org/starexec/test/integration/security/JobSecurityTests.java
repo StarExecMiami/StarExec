@@ -1,6 +1,6 @@
 package org.starexec.test.integration.security;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Jobs;
@@ -26,30 +26,30 @@ public class JobSecurityTests extends TestSequence {
 
 	@StarexecTest
 	private void CanDeleteJob() {
-		Assert.assertTrue(JobSecurity.canUserDeleteJob(job.getId(), admin.getId()).isSuccess());
-		Assert.assertTrue(JobSecurity.canUserDeleteJob(job.getId(), user.getId()).isSuccess());
-		Assert.assertFalse(JobSecurity.canUserDeleteJob(job.getId(), nonOwner.getId()).isSuccess());
+		Assertions.assertTrue(JobSecurity.canUserDeleteJob(job.getId(), admin.getId()).isSuccess());
+		Assertions.assertTrue(JobSecurity.canUserDeleteJob(job.getId(), user.getId()).isSuccess());
+		Assertions.assertFalse(JobSecurity.canUserDeleteJob(job.getId(), nonOwner.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void CanRerunJobTest() {
-		Assert.assertTrue(JobSecurity.canUserRerunPairs(job.getId(), user.getId()).isSuccess());
-		Assert.assertTrue(JobSecurity.canUserRerunPairs(job.getId(), admin.getId()).isSuccess());
-		Assert.assertFalse(JobSecurity.canUserRerunPairs(job.getId(), nonOwner.getId()).isSuccess());
+		Assertions.assertTrue(JobSecurity.canUserRerunPairs(job.getId(), user.getId()).isSuccess());
+		Assertions.assertTrue(JobSecurity.canUserRerunPairs(job.getId(), admin.getId()).isSuccess());
+		Assertions.assertFalse(JobSecurity.canUserRerunPairs(job.getId(), nonOwner.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void CanPauseJob() {
-		Assert.assertTrue(JobSecurity.canUserPauseJob(job.getId(), admin.getId()).isSuccess());
-		Assert.assertTrue(JobSecurity.canUserPauseJob(job.getId(), user.getId()).isSuccess());
-		Assert.assertFalse(JobSecurity.canUserPauseJob(job.getId(), nonOwner.getId()).isSuccess());
+		Assertions.assertTrue(JobSecurity.canUserPauseJob(job.getId(), admin.getId()).isSuccess());
+		Assertions.assertTrue(JobSecurity.canUserPauseJob(job.getId(), user.getId()).isSuccess());
+		Assertions.assertFalse(JobSecurity.canUserPauseJob(job.getId(), nonOwner.getId()).isSuccess());
 	}
 
 	@StarexecTest
 	private void CanResumeJob() {
-		Assert.assertTrue(JobSecurity.canUserResumeJob(job.getId(), admin.getId()).isSuccess());
-		Assert.assertTrue(JobSecurity.canUserResumeJob(job.getId(), user.getId()).isSuccess());
-		Assert.assertFalse(JobSecurity.canUserResumeJob(job.getId(), nonOwner.getId()).isSuccess());
+		Assertions.assertTrue(JobSecurity.canUserResumeJob(job.getId(), admin.getId()).isSuccess());
+		Assertions.assertTrue(JobSecurity.canUserResumeJob(job.getId(), user.getId()).isSuccess());
+		Assertions.assertFalse(JobSecurity.canUserResumeJob(job.getId(), nonOwner.getId()).isSuccess());
 	}
 
 	@StarexecTest
@@ -75,7 +75,7 @@ public class JobSecurityTests extends TestSequence {
 		List<Integer> solverIds= new ArrayList<>();
 		solverIds.add(solver.getId());
 		job=loader.loadJobIntoDatabase(space.getId(), user.getId(), -1, postProc.getId(), solverIds, benchmarkIds,100,100,1);
-		Assert.assertNotNull(Jobs.get(job.getId()));
+		Assertions.assertNotNull(Jobs.get(job.getId()));
 	}
 
 	@Override

@@ -3,9 +3,9 @@ package org.starexec.servlets;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.UploadJobQueue;
@@ -28,10 +28,10 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * An upload by URL arrives without its archive: the request only records where to fetch it, and
@@ -48,14 +48,14 @@ public class UploadJobWorkerUrlFetchTests {
     private final List<Long> caps = new ArrayList<>();
     private long remainingQuota = 1L << 30;
 
-    @Before
+    @BeforeEach
     public void setUp() throws IOException {
         root = Files.createTempDirectory("url-fetch");
         archive = root.resolve("7/20261015-17.00.00.000/probe.tar.gz");
         Files.createDirectories(archive.getParent());
     }
 
-    @After
+    @AfterEach
     public void tearDown() throws IOException {
         try (Stream<Path> paths = Files.walk(root)) {
             paths.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
@@ -141,9 +141,9 @@ public class UploadJobWorkerUrlFetchTests {
             prepare(workerThatFetches(false), job(URL), new AtomicInteger());
             fail("a failed download must fail the job");
         } catch (IOException e) {
-            assertTrue(e.getMessage(), e.getMessage().startsWith("Could not download the archive from its URL"));
-            assertFalse("the error repeats the uploader's address: " + e.getMessage(),
-                e.getMessage().contains("example.org"));
+            assertTrue(e.getMessage().startsWith("Could not download the archive from its URL"), e.getMessage());
+            assertFalse(e.getMessage().contains("example.org"),
+                "the error repeats the uploader's address: " + e.getMessage());
         }
         assertFalse(Files.exists(archive));
     }
@@ -177,8 +177,8 @@ public class UploadJobWorkerUrlFetchTests {
                 "https://files.example/archive;token=Zx81-secret-token.tgz",
                 "https://files.example/Zx81%2Dsecret%2Dtoken/bench.zip"}) {
             String logged = UploadJobWorker.redacted(new URL(address));
-            assertEquals(address, "https://files.example", logged);
-            assertFalse(address, logged.contains("Zx81"));
+            assertEquals("https://files.example", logged, address);
+            assertFalse(logged.contains("Zx81"), address);
         }
     }
 
@@ -208,7 +208,7 @@ public class UploadJobWorkerUrlFetchTests {
             prepare(workerThatFetches(true), job(URL), new AtomicInteger());
             fail("a user with no quota left must not download");
         } catch (IOException e) {
-            assertTrue(e.getMessage(), e.getMessage().startsWith("Not enough disk quota to download this archive"));
+            assertTrue(e.getMessage().startsWith("Not enough disk quota to download this archive"), e.getMessage());
         }
         assertTrue(fetched.isEmpty());
     }
@@ -219,7 +219,7 @@ public class UploadJobWorkerUrlFetchTests {
             prepare(workerThatFetches(true), job(null), new AtomicInteger());
             fail("an upload with neither an archive nor a URL cannot be extracted");
         } catch (IOException e) {
-            assertTrue(e.getMessage(), e.getMessage().startsWith("Archive file not found"));
+            assertTrue(e.getMessage().startsWith("Archive file not found"), e.getMessage());
         }
         assertTrue(fetched.isEmpty());
     }

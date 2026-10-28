@@ -1,6 +1,6 @@
 package org.starexec.test.junit.backend;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.ContainerJobMonitor;
@@ -15,8 +15,8 @@ import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.TreeMap;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * A pair that fails outside any stage is recorded against the pair, not against a stage (#165).
@@ -88,8 +88,8 @@ public class PairLevelStatusIngestionTest {
 				updateDatabase(StatusCode.STATUS_PROCESSING, PAIR_LEVEL);
 				fail("a pair-level status that is neither RUNNING nor terminal must be refused");
 			} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-				assertEquals("must be classified BLOCKED, not retried",
-						"BLOCKED", classify(expected));
+				assertEquals("BLOCKED",
+						classify(expected), "must be classified BLOCKED, not retried");
 			}
 			pairs.verify(() -> JobPairs.setPairLevelStatusResult(
 					Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()), Mockito.never());
@@ -126,8 +126,8 @@ public class PairLevelStatusIngestionTest {
 				updateDatabase(DEPENDENCY_MISSING, PAIR_LEVEL);
 				fail("a failed write must not be treated as recorded");
 			} catch (Throwable expected) {
-				assertEquals("must be classified RETRYABLE, not blocked",
-						"RETRYABLE", classify(expected));
+				assertEquals("RETRYABLE",
+						classify(expected), "must be classified RETRYABLE, not blocked");
 			}
 		}
 	}

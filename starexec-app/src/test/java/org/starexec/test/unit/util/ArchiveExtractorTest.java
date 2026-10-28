@@ -4,9 +4,9 @@ import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.apache.commons.io.FileUtils;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.util.ArchiveExtractor;
 
 import java.io.IOException;
@@ -18,20 +18,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class ArchiveExtractorTest {
 
     private Path tempDir;
 
-    @Before
+    @BeforeEach
     public void setUp() throws IOException {
         tempDir = Files.createTempDirectory("archive-test-");
     }
 
-    @After
+    @AfterEach
     public void tearDown() {
         FileUtils.deleteQuietly(tempDir.toFile());
     }
@@ -142,8 +142,8 @@ public class ArchiveExtractorTest {
         } catch (IOException e) {
             assertTrue(e.getMessage().contains("cancelled"));
             // This message reaches the uploader, so it must name the archive, not its location.
-            assertFalse("cancellation must not disclose the server path, was: " + e.getMessage(),
-                e.getMessage().contains(tempDir.toAbsolutePath().toString()));
+            assertFalse(e.getMessage().contains(tempDir.toAbsolutePath().toString()),
+                "cancellation must not disclose the server path, was: " + e.getMessage());
             return;
         }
 
@@ -195,13 +195,13 @@ public class ArchiveExtractorTest {
         } catch (IOException e) {
             String message = e.getMessage();
             // Issue #98: a user out of quota was being told their archive broke a safety limit.
-            assertTrue("should name the limit as a disk quota, was: " + message,
-                message.contains("disk quota"));
-            assertTrue("should name the remedy, was: " + message, message.contains("recycle bin"));
-            assertFalse("must not be reported as a security rejection, was: " + message,
-                message.contains("safety limits"));
-            assertFalse("must not reuse the zip-bomb wording, was: " + message,
-                message.contains("Total uncompressed size exceeds"));
+            assertTrue(message.contains("disk quota"),
+                "should name the limit as a disk quota, was: " + message);
+            assertTrue(message.contains("recycle bin"), "should name the remedy, was: " + message);
+            assertFalse(message.contains("safety limits"),
+                "must not be reported as a security rejection, was: " + message);
+            assertFalse(message.contains("Total uncompressed size exceeds"),
+                "must not reuse the zip-bomb wording, was: " + message);
             assertFalse(Files.exists(extractDir));
             return;
         }
@@ -227,10 +227,10 @@ public class ArchiveExtractorTest {
             );
         } catch (IOException e) {
             String message = e.getMessage();
-            assertTrue("the security cap keeps its own wording, was: " + message,
-                message.contains("Archive exceeds safety limits"));
-            assertFalse("the security cap is not a quota problem, was: " + message,
-                message.contains("disk quota"));
+            assertTrue(message.contains("Archive exceeds safety limits"),
+                "the security cap keeps its own wording, was: " + message);
+            assertFalse(message.contains("disk quota"),
+                "the security cap is not a quota problem, was: " + message);
             return;
         }
 

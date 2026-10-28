@@ -1,6 +1,6 @@
 package org.starexec.test.junit.data.security;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.*;
@@ -12,8 +12,8 @@ import org.starexec.data.to.*;
 import org.starexec.data.to.enums.ProcessorType;
 import org.starexec.util.Validator;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.mock;
@@ -67,8 +67,8 @@ public class BenchmarkSecurityTests {
             generalSecurityMock.when(() -> GeneralSecurity.hasAdminReadPrivileges(userId)).thenReturn(true);
 
             // when / then
-            assertTrue("The user is an admin so should be able to download the benchmark.",
-                    BenchmarkSecurity.canUserDownloadBenchmark(benchId, userId).isSuccess());
+            assertTrue(BenchmarkSecurity.canUserDownloadBenchmark(benchId, userId).isSuccess(),
+                    "The user is an admin so should be able to download the benchmark.");
         }
     }
 
@@ -90,8 +90,8 @@ public class BenchmarkSecurityTests {
             generalSecurityMock.when(() -> GeneralSecurity.hasAdminReadPrivileges(userId)).thenReturn(false);
 
             // when / then
-            assertTrue("The user is owner so should be able to download the benchmark.",
-                    BenchmarkSecurity.canUserDownloadBenchmark(benchId, userId).isSuccess());
+            assertTrue(BenchmarkSecurity.canUserDownloadBenchmark(benchId, userId).isSuccess(),
+                    "The user is owner so should be able to download the benchmark.");
         }
     }
 
@@ -114,8 +114,8 @@ public class BenchmarkSecurityTests {
             generalSecurityMock.when(() -> GeneralSecurity.hasAdminReadPrivileges(userId)).thenReturn(false);
 
             // when / then
-            assertTrue("The benchmark is downloadable so user should be able to download.",
-                    BenchmarkSecurity.canUserDownloadBenchmark(benchId, userId).isSuccess());
+            assertTrue(BenchmarkSecurity.canUserDownloadBenchmark(benchId, userId).isSuccess(),
+                    "The benchmark is downloadable so user should be able to download.");
         }
     }
     @Test
@@ -137,8 +137,8 @@ public class BenchmarkSecurityTests {
             generalSecurityMock.when(() -> GeneralSecurity.hasAdminReadPrivileges(userId)).thenReturn(false);
 
             // when / then
-            assertFalse("The user should not be able to download the benchmark.",
-                    BenchmarkSecurity.canUserDownloadBenchmark(benchId, userId).isSuccess());
+            assertFalse(BenchmarkSecurity.canUserDownloadBenchmark(benchId, userId).isSuccess(),
+                    "The user should not be able to download the benchmark.");
         }
     }
 
@@ -155,8 +155,8 @@ public class BenchmarkSecurityTests {
             benchmarkSecurityMock.when(() -> BenchmarkSecurity.canUserGetAnonymousLink(benchId, userId)).thenCallRealMethod();
 
             // when / then
-            assertTrue("Admins and owners should be able to get the anon link.",
-                    BenchmarkSecurity.canUserGetAnonymousLink(benchId, userId).isSuccess());
+            assertTrue(BenchmarkSecurity.canUserGetAnonymousLink(benchId, userId).isSuccess(),
+                    "Admins and owners should be able to get the anon link.");
         }
     }
 
@@ -173,8 +173,8 @@ public class BenchmarkSecurityTests {
             benchmarkSecurityMock.when(() -> BenchmarkSecurity.canUserGetAnonymousLink(benchId, userId)).thenCallRealMethod();
 
             // when / then
-            assertFalse("Only admins and owners should be able to get the anon link.",
-                    BenchmarkSecurity.canUserGetAnonymousLink(benchId, userId).isSuccess());
+            assertFalse(BenchmarkSecurity.canUserGetAnonymousLink(benchId, userId).isSuccess(),
+                    "Only admins and owners should be able to get the anon link.");
         }
     }
 
@@ -186,7 +186,7 @@ public class BenchmarkSecurityTests {
             int userId = 2;
             benchmarksMock.when(() -> Benchmarks.get(benchId)).thenReturn(null);
             // when / then
-            assertFalse("Should be false for null benchmark.", BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess());
+            assertFalse(BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess(), "Should be false for null benchmark.");
         }
     }
 
@@ -205,8 +205,8 @@ public class BenchmarkSecurityTests {
             benchmarksMock.when(() -> Benchmarks.get(benchId)).thenReturn(bench);
 
             // when / then
-            assertTrue("Should be true since user owns the benchmark",
-                    BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess());
+            assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess(),
+                    "Should be true since user owns the benchmark");
         }
     }
 
@@ -226,7 +226,7 @@ public class BenchmarkSecurityTests {
             benchmarksMock.when(() -> Benchmarks.get(benchId)).thenReturn(bench);
 
             // when / then
-            assertTrue("Should be true since user is admin", BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess());
+            assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess(), "Should be true since user is admin");
         }
     }
 
@@ -251,8 +251,8 @@ public class BenchmarkSecurityTests {
             benchmarksMock.when(() -> Benchmarks.get(benchId)).thenReturn(bench);
 
             // when / then
-            assertTrue("Should be true since bench is downloadable and user can see the benchmark.",
-                    BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess());
+            assertTrue(BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess(),
+                    "Should be true since bench is downloadable and user can see the benchmark.");
         }
     }
 
@@ -276,8 +276,8 @@ public class BenchmarkSecurityTests {
             benchmarksMock.when(() -> Benchmarks.get(benchId)).thenReturn(bench);
 
             // when / then
-            assertFalse("Should be false since bench is not downloadable.",
-                    BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess());
+            assertFalse(BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess(),
+                    "Should be false since bench is not downloadable.");
         }
     }
 
@@ -301,8 +301,8 @@ public class BenchmarkSecurityTests {
             benchmarksMock.when(() -> Benchmarks.get(benchId)).thenReturn(bench);
 
             // when / then
-            assertFalse("Should be true false since user cant see bench.",
-                    BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess());
+            assertFalse(BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId).isSuccess(),
+                    "Should be true false since user cant see bench.");
         }
     }
 
@@ -315,10 +315,10 @@ public class BenchmarkSecurityTests {
             benchmarksMock.when(() -> Benchmarks.getIncludeDeletedAndRecycled(benchId, false)).thenReturn(null);
 
             // when / then
-            assertFalse("Benchmark cannot be found so should not be deletable.",
-                    BenchmarkSecurity.canUserDeleteBench(benchId, userId).isSuccess());
-            assertFalse("Benchmark cannot be found so should not be recyclable.",
-                    BenchmarkSecurity.canUserRecycleBench(benchId, userId).isSuccess());
+            assertFalse(BenchmarkSecurity.canUserDeleteBench(benchId, userId).isSuccess(),
+                    "Benchmark cannot be found so should not be deletable.");
+            assertFalse(BenchmarkSecurity.canUserRecycleBench(benchId, userId).isSuccess(),
+                    "Benchmark cannot be found so should not be recyclable.");
         }
     }
 
@@ -336,10 +336,10 @@ public class BenchmarkSecurityTests {
             benchmarkSecurityMock.when(() -> BenchmarkSecurity.canUserRecycleBench(benchId, userId)).thenCallRealMethod();
 
             // when / then
-            assertFalse("User does not own bench and is not admin so should not be deletable.",
-                    BenchmarkSecurity.canUserDeleteBench(benchId, userId).isSuccess());
-            assertFalse("User does not own bench and is not admin so should not be recyclable.",
-                    BenchmarkSecurity.canUserRecycleBench(benchId, userId).isSuccess());
+            assertFalse(BenchmarkSecurity.canUserDeleteBench(benchId, userId).isSuccess(),
+                    "User does not own bench and is not admin so should not be deletable.");
+            assertFalse(BenchmarkSecurity.canUserRecycleBench(benchId, userId).isSuccess(),
+                    "User does not own bench and is not admin so should not be recyclable.");
         }
     }
 
@@ -358,10 +358,10 @@ public class BenchmarkSecurityTests {
             benchmarkSecurityMock.when(() -> BenchmarkSecurity.canUserRecycleBench(benchId, userId)).thenCallRealMethod();
 
             // when / then
-            assertTrue("User owns bench or is admin so should be deletable.",
-                    BenchmarkSecurity.canUserDeleteBench(benchId, userId).isSuccess());
-            assertTrue("User owns bench or is admin so should be recyclable.",
-                    BenchmarkSecurity.canUserRecycleBench(benchId, userId).isSuccess());
+            assertTrue(BenchmarkSecurity.canUserDeleteBench(benchId, userId).isSuccess(),
+                    "User owns bench or is admin so should be deletable.");
+            assertTrue(BenchmarkSecurity.canUserRecycleBench(benchId, userId).isSuccess(),
+                    "User owns bench or is admin so should be recyclable.");
         }
     }
 
@@ -375,7 +375,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserRestoreBenchmark(1, 2);
 
             // then
-            assertFalse("User cant restore benchmark if benchmark was not found.", status.isSuccess());
+            assertFalse(status.isSuccess(), "User cant restore benchmark if benchmark was not found.");
         }
     }
 
@@ -390,7 +390,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserRestoreBenchmark(1, 2);
 
             // then
-            assertFalse("User cant restore benchmark if benchmark has not been recycled.", status.isSuccess());
+            assertFalse(status.isSuccess(), "User cant restore benchmark if benchmark has not been recycled.");
         }
     }
 
@@ -410,7 +410,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserRestoreBenchmark(1, userId);
 
             // then
-            assertFalse("User cant restore benchmark if user does not own benchmark and is not admin.", status.isSuccess());
+            assertFalse(status.isSuccess(), "User cant restore benchmark if user does not own benchmark and is not admin.");
         }
     }
 
@@ -430,7 +430,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserRestoreBenchmark(1, userId);
 
             // then
-            assertTrue("User can restore benchmark if user owns benchmark or is admin.", status.isSuccess());
+            assertTrue(status.isSuccess(), "User can restore benchmark if user owns benchmark or is admin.");
         }
     }
 
@@ -444,7 +444,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserEditBenchmark(1, "name", "description", 2, 3);
 
             // then
-            assertFalse("Should not be able to edit benchmark if new name is invalid.", status.isSuccess());
+            assertFalse(status.isSuccess(), "Should not be able to edit benchmark if new name is invalid.");
         }
     }
 
@@ -459,7 +459,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserEditBenchmark(1, "name", "description", 2, 3);
 
             // then
-            assertFalse("Should not be able to edit benchmark if description is invalid.", status.isSuccess());
+            assertFalse(status.isSuccess(), "Should not be able to edit benchmark if description is invalid.");
         }
     }
 
@@ -476,7 +476,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserEditBenchmark(1, "name", "description", 2, 3);
 
             // then
-            assertFalse("Should not be able to edit benchmark if benchmark cannot be found.", status.isSuccess());
+            assertFalse(status.isSuccess(), "Should not be able to edit benchmark if benchmark cannot be found.");
         }
     }
 
@@ -498,7 +498,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserEditBenchmark(1, "name", "description", 2, userId);
 
             // then
-            assertFalse("Should not be able to edit benchmark if user is not owner or admin.", status.isSuccess());
+            assertFalse(status.isSuccess(), "Should not be able to edit benchmark if user is not owner or admin.");
         }
     }
 
@@ -521,7 +521,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserEditBenchmark(1, "name", "description", 2, userId);
 
             // then
-            assertFalse("Should not be able to edit benchmark if it is deleted.", status.isSuccess());
+            assertFalse(status.isSuccess(), "Should not be able to edit benchmark if it is deleted.");
         }
     }
 
@@ -546,7 +546,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserEditBenchmark(1, "name", "description", 2, userId);
 
             // then
-            assertFalse("Should not be able to edit benchmark if processor cannot be found.", status.isSuccess());
+            assertFalse(status.isSuccess(), "Should not be able to edit benchmark if processor cannot be found.");
         }
     }
 
@@ -574,7 +574,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserEditBenchmark(1, "name", "description", 2, userId);
 
             // then
-            assertFalse("Should not be able to edit benchmark if processor is not bench type.", status.isSuccess());
+            assertFalse(status.isSuccess(), "Should not be able to edit benchmark if processor is not bench type.");
         }
     }
 
@@ -603,7 +603,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserEditBenchmark(1, "name", "description", 2, userId);
 
             // then
-            assertFalse("Should not be able to edit benchmark if processor is not bench type.", status.isSuccess());
+            assertFalse(status.isSuccess(), "Should not be able to edit benchmark if processor is not bench type.");
         }
     }
 
@@ -632,7 +632,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserEditBenchmark(1, "name", "description", 2, userId);
 
             // then
-            assertTrue("Should not be able to edit benchmark if processor is not bench type.", status.isSuccess());
+            assertTrue(status.isSuccess(), "Should not be able to edit benchmark if processor is not bench type.");
         }
     }
 
@@ -645,7 +645,7 @@ public class BenchmarkSecurityTests {
         boolean success = BenchmarkSecurity.userOwnsBenchOrIsAdmin(bench, 1);
 
         // then
-        assertFalse("Bench is null so nobody should own it.", success);
+        assertFalse(success, "Bench is null so nobody should own it.");
     }
 
     @Test
@@ -662,7 +662,7 @@ public class BenchmarkSecurityTests {
             boolean success = BenchmarkSecurity.userOwnsBenchOrIsAdmin(bench, userId);
 
             // then
-            assertFalse("User does not own benchmark and is not admin so should be false.", success);
+            assertFalse(success, "User does not own benchmark and is not admin so should be false.");
         }
     }
 
@@ -679,7 +679,7 @@ public class BenchmarkSecurityTests {
             boolean success = BenchmarkSecurity.userOwnsBenchOrIsAdmin(bench, userId);
 
             // then
-            assertTrue("User owns benchmark so should be true.", success);
+            assertTrue(success, "User owns benchmark so should be true.");
         }
     }
 
@@ -697,7 +697,7 @@ public class BenchmarkSecurityTests {
             boolean success = BenchmarkSecurity.userOwnsBenchOrIsAdmin(bench, userId);
 
             // then
-            assertTrue("User has admin privileges so should be true.", success);
+            assertTrue(success, "User has admin privileges so should be true.");
         }
     }
 
@@ -711,7 +711,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserRecycleOrphanedBenchmarks(1, 2);
 
             // then
-            assertFalse("User can't recycle orphaned benchmarks if owner cant be found.", status.isSuccess());
+            assertFalse(status.isSuccess(), "User can't recycle orphaned benchmarks if owner cant be found.");
         }
     }
 
@@ -729,7 +729,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserRecycleOrphanedBenchmarks(owner, userId);
 
             // then
-            assertFalse("User is neither owner or admin so cannot recycle orphaned benchmarks.", status.isSuccess());
+            assertFalse(status.isSuccess(), "User is neither owner or admin so cannot recycle orphaned benchmarks.");
         }
     }
 
@@ -749,7 +749,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserRecycleOrphanedBenchmarks(owner, userId);
 
             // then
-            assertTrue("User is admin so should be able to recycle orphaned benchmarks.", status.isSuccess());
+            assertTrue(status.isSuccess(), "User is admin so should be able to recycle orphaned benchmarks.");
         }
     }
 
@@ -769,7 +769,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canUserRecycleOrphanedBenchmarks(owner, owner);
 
             // then
-            assertTrue("User is owner so should be able to recycle orphaned benchmarks.", status.isSuccess());
+            assertTrue(status.isSuccess(), "User is owner so should be able to recycle orphaned benchmarks.");
         }
     }
 
@@ -783,7 +783,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canGetJsonBenchmark(1, 2);
 
             // then
-            assertFalse("User cannot see benchmark so they cannot get the JSON.", status.isSuccess());
+            assertFalse(status.isSuccess(), "User cannot see benchmark so they cannot get the JSON.");
         }
     }
 
@@ -799,7 +799,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canGetJsonBenchmark(1, 2);
 
             // then
-            assertFalse("Benchmark cant be found so user cannot get the JSON.", status.isSuccess());
+            assertFalse(status.isSuccess(), "Benchmark cant be found so user cannot get the JSON.");
         }
     }
 
@@ -815,7 +815,7 @@ public class BenchmarkSecurityTests {
             ValidatorStatusCode status = BenchmarkSecurity.canGetJsonBenchmark(1, 2);
 
             // then
-            assertTrue("User should be able to get Benchmark JSON since they can see it.", status.isSuccess());
+            assertTrue(status.isSuccess(), "User should be able to get Benchmark JSON since they can see it.");
         }
     }
 
@@ -829,7 +829,7 @@ public class BenchmarkSecurityTests {
             boolean success = BenchmarkSecurity.canUserSeeBenchmarkStatus(1, 2);
 
             // then
-            assertFalse("User should not be able to see benchmark upload status if it cannot be found.", success);
+            assertFalse(success, "User should not be able to see benchmark upload status if it cannot be found.");
         }
     }
 
@@ -845,7 +845,7 @@ public class BenchmarkSecurityTests {
             boolean success = BenchmarkSecurity.canUserSeeBenchmarkStatus(1, 2);
 
             // then
-            assertTrue("User is admin so should be able to see bench upload status.", success);
+            assertTrue(success, "User is admin so should be able to see bench upload status.");
         }
     }
 
@@ -866,7 +866,7 @@ public class BenchmarkSecurityTests {
             boolean success = BenchmarkSecurity.canUserSeeBenchmarkStatus(1, userId);
 
             // then
-            assertFalse("User is not owner so should not be able to see upload status.", success);
+            assertFalse(success, "User is not owner so should not be able to see upload status.");
         }
     }
 
@@ -886,7 +886,7 @@ public class BenchmarkSecurityTests {
             boolean success = BenchmarkSecurity.canUserSeeBenchmarkStatus(1, userId);
 
             // then
-            assertTrue("User is owner so should be able to see upload status.", success);
+            assertTrue(success, "User is owner so should be able to see upload status.");
         }
     }
 }

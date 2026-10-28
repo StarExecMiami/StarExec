@@ -3,7 +3,7 @@ package org.starexec.app;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.apache.taglibs.standard.functions.Functions;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.to.Space;
 import org.starexec.util.DataTablesQuery;
 
@@ -11,9 +11,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class DescriptionOutputEncodingTest {
 	private static final Path PUBLIC_JOB_JSP = Path.of("src/main/webapp/public/jobs/job.jsp");

@@ -1,6 +1,6 @@
 package org.starexec.test.integration.util;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
 import org.starexec.data.database.Communities;
@@ -40,28 +40,28 @@ public class JobUtilTests extends TestSequence {
 				new ConfigAttrMapPair(ConfigXmlAttribute.ID));
 
 		if (jobIds == null) {
-			Assert.fail("Error: " +util.getErrorMessage() + "\nSecondary Error: "+util.getSecondaryErrorMessage());
+			Assertions.fail("Error: " +util.getErrorMessage() + "\nSecondary Error: "+util.getSecondaryErrorMessage());
 		}
-		Assert.assertEquals(1, jobIds.size());
+		Assertions.assertEquals(1, jobIds.size());
 		Job j = Jobs.get(jobIds.get(0));
 		j.setJobPairs(Jobs.getJobPairsInJobSpaceHierarchy(j.getPrimarySpace(), PrimitivesToAnonymize.NONE));
-		Assert.assertEquals("test xml job", j.getName());
-		Assert.assertEquals("test job", j.getDescription());
-		Assert.assertEquals(1, j.getQueue().getId());
+		Assertions.assertEquals("test xml job", j.getName());
+		Assertions.assertEquals("test job", j.getDescription());
+		Assertions.assertEquals(1, j.getQueue().getId());
 		
 		StageAttributes attrs1 = j.getStageAttributesByStageNumber(1);
-		Assert.assertEquals(2000, attrs1.getCpuTimeout());
-		Assert.assertEquals(5, attrs1.getWallclockTimeout());
-		Assert.assertEquals(Util.gigabytesToBytes(3.0), attrs1.getMaxMemory());
+		Assertions.assertEquals(2000, attrs1.getCpuTimeout());
+		Assertions.assertEquals(5, attrs1.getWallclockTimeout());
+		Assertions.assertEquals(Util.gigabytesToBytes(3.0), attrs1.getMaxMemory());
 		
 		StageAttributes attrs2 = j.getStageAttributesByStageNumber(2);
-		Assert.assertEquals(12, attrs2.getCpuTimeout());
-		Assert.assertEquals(11, attrs2.getWallclockTimeout());
-		Assert.assertEquals(Util.gigabytesToBytes(2.0), attrs2.getMaxMemory());
+		Assertions.assertEquals(12, attrs2.getCpuTimeout());
+		Assertions.assertEquals(11, attrs2.getWallclockTimeout());
+		Assertions.assertEquals(Util.gigabytesToBytes(2.0), attrs2.getMaxMemory());
 		
-		Assert.assertEquals(1, j.getJobPairs().size());
+		Assertions.assertEquals(1, j.getJobPairs().size());
 		JobPair jp = j.getJobPairs().get(0);
-		Assert.assertEquals(3, jp.getStages().size());
+		Assertions.assertEquals(3, jp.getStages().size());
 		
 		Jobs.deleteAndRemove(j.getId());
 	}

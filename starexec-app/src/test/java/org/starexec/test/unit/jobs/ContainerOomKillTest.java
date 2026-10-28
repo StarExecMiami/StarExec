@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -13,11 +12,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.starexec.test.unit.jobs.JobscriptBlocks.indexOfLineStartingWith;
 import static org.starexec.test.unit.jobs.JobscriptBlocks.stageLoop;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * A solver the kernel stops at its container's memory limit.
@@ -73,8 +73,8 @@ public class ContainerOomKillTest {
 			"The end",
 			"");
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	// ------------------------------------------------------------ the checks after the solver
 
@@ -86,11 +86,11 @@ public class ContainerOomKillTest {
 
 		String out = probe.runChecks(WATCHER_KILLED_BY_SIGNAL, VAR_NO_BREACH, "0", "1");
 
-		assertEquals("a memory breach, not a completed pair:\n" + out, EXCEED_MEM, probe.status());
-		assertEquals("the stage that was running", 2, probe.stage());
-		assertTrue(out, out.contains("ERROR_DETECTED=true"));
-		assertTrue("the pair log must give the container's limit and the stage's:\n" + out,
-				out.contains("256 MiB") && out.contains("1024 MiB"));
+		assertEquals(EXCEED_MEM, probe.status(), "a memory breach, not a completed pair:\n" + out);
+		assertEquals(2, probe.stage(), "the stage that was running");
+		assertTrue(out.contains("ERROR_DETECTED=true"), out);
+		assertTrue(out.contains("256 MiB") && out.contains("1024 MiB"),
+				"the pair log must give the container's limit and the stage's:\n" + out);
 	}
 
 	/** A kill counted before this solver started belongs to something else. */
@@ -101,8 +101,8 @@ public class ContainerOomKillTest {
 
 		String out = probe.runChecks(WATCHER_KILLED_BY_SIGNAL, VAR_NO_BREACH, "1", "1");
 
-		assertEquals("the pair must still be running, with no result recorded:\n" + out, STATUS_RUNNING, probe.status());
-		assertTrue(out, out.contains("ERROR_DETECTED=false"));
+		assertEquals(STATUS_RUNNING, probe.status(), "the pair must still be running, with no result recorded:\n" + out);
+		assertTrue(out.contains("ERROR_DETECTED=false"), out);
 	}
 
 	/** No count (no cgroup of its own, or none readable) is no evidence, so nothing is claimed. */
@@ -112,8 +112,8 @@ public class ContainerOomKillTest {
 
 		String out = probe.runChecks(WATCHER_KILLED_BY_SIGNAL, VAR_NO_BREACH, "", "");
 
-		assertEquals("the pair must still be running, with no result recorded:\n" + out, STATUS_RUNNING, probe.status());
-		assertTrue(out, out.contains("ERROR_DETECTED=false"));
+		assertEquals(STATUS_RUNNING, probe.status(), "the pair must still be running, with no result recorded:\n" + out);
+		assertTrue(out.contains("ERROR_DETECTED=false"), out);
 	}
 
 	/** runsolver's own verdict names the limit it enforced, so it is checked first. */
@@ -124,7 +124,7 @@ public class ContainerOomKillTest {
 
 		String out = probe.runChecks(WATCHER_CPU_EXCEEDED, VAR_NO_BREACH, "0", "1");
 
-		assertEquals(out, EXCEED_CPU, probe.status());
+		assertEquals(EXCEED_CPU, probe.status(), out);
 	}
 
 	/**
@@ -144,8 +144,8 @@ public class ContainerOomKillTest {
 				WATCHER_KILLED_BY_SIGNAL, VAR_NO_BREACH, "0", "1");
 
 		JobscriptBlocks.assertEndedBeforeItFired(out);
-		assertEquals("a memory breach, not a wall-clock timeout:\n" + out, EXCEED_MEM, probe.status());
-		assertEquals("the stage that was running", 2, probe.stage());
+		assertEquals(EXCEED_MEM, probe.status(), "a memory breach, not a wall-clock timeout:\n" + out);
+		assertEquals(2, probe.stage(), "the stage that was running");
 	}
 
 	// ------------------------------------------------------------ where the count comes from
@@ -217,7 +217,7 @@ public class ContainerOomKillTest {
 		assertEquals("", probe.print("pairCgroupOomKills"));
 
 		Files.writeString(probe.cgroup.resolve("memory.events"), "low 0\nhigh 0\nmax 3\noom 1\n");
-		assertEquals("a kernel that does not count OOM kills", "", probe.print("pairCgroupOomKills"));
+		assertEquals("", probe.print("pairCgroupOomKills"), "a kernel that does not count OOM kills");
 
 		Files.writeString(probe.cgroup.resolve("memory.events"), "");
 		assertEquals("", probe.print("pairCgroupOomKills"));
@@ -235,7 +235,7 @@ public class ContainerOomKillTest {
 
 		String out = probe.runChecks(WATCHER_KILLED_BY_SIGNAL, VAR_NO_BREACH, "0", "1");
 
-		assertEquals(out, EXCEED_MEM, probe.status());
+		assertEquals(EXCEED_MEM, probe.status(), out);
 	}
 
 	// ------------------------------------------------------------ the jobscript's wiring
@@ -255,11 +255,11 @@ public class ContainerOomKillTest {
 		int after = indexOfLineStartingWith(loop, "OOM_KILLS_AFTER_SOLVER=$(pairCgroupOomKills)");
 		int postProcessing = indexOfLineStartingWith(loop, "copyOutput \"$CURRENT_STAGE_NUMBER\"");
 
-		assertTrue("the solver must be run in the loop", run >= 0 && solver > run);
-		assertTrue("the count must be taken before the solver starts", before >= 0 && before < run);
-		assertTrue("and after this stage's pre-processor has run", preProcessing >= 0 && preProcessing < before);
-		assertTrue("and again after it returns", after > solver);
-		assertTrue("and before the post-processor runs", postProcessing > after);
+		assertTrue(run >= 0 && solver > run, "the solver must be run in the loop");
+		assertTrue(before >= 0 && before < run, "the count must be taken before the solver starts");
+		assertTrue(preProcessing >= 0 && preProcessing < before, "and after this stage's pre-processor has run");
+		assertTrue(after > solver, "and again after it returns");
+		assertTrue(postProcessing > after, "and before the post-processor runs");
 	}
 
 	// ----------------------------------------------------------------------- helpers
@@ -281,9 +281,9 @@ public class ContainerOomKillTest {
 				break;
 			}
 		}
-		assertTrue("the limit checks must exist", start >= 0 && end > start);
+		assertTrue(start >= 0 && end > start, "the limit checks must exist");
 		String block = String.join("\n", loop.subList(start, end));
-		assertFalse("the checks must run as shipped, with no template placeholder", block.contains("$$"));
+		assertFalse(block.contains("$$"), "the checks must run as shipped, with no template placeholder");
 		return block;
 	}
 
@@ -297,8 +297,8 @@ public class ContainerOomKillTest {
 		private final Path cgroup;
 		private final boolean ownCgroup;
 
-		Probe(TemporaryFolder folder, boolean ownCgroup) throws Exception {
-			this.root = folder.newFolder("oom-" + System.nanoTime()).toPath();
+		Probe(File folder, boolean ownCgroup) throws Exception {
+			this.root = newFolder(folder, "oom-" + System.nanoTime()).toPath();
 			this.sge = Files.createDirectories(root.resolve("sge"));
 			this.cgroup = Files.createDirectories(root.resolve("cgroup"));
 			this.ownCgroup = ownCgroup;
@@ -360,7 +360,7 @@ public class ContainerOomKillTest {
 					+ "PRINTED=$(" + function + ")\n"
 					+ "echo \"PRINTED=[$PRINTED]\"\n");
 			Matcher m = Pattern.compile("PRINTED=\\[(.*)\\]").matcher(out);
-			assertTrue(out, m.find());
+			assertTrue(m.find(), out);
 			return m.group(1);
 		}
 
@@ -396,9 +396,9 @@ public class ContainerOomKillTest {
 			File file = new File(root.toFile(), "run-" + System.nanoTime() + ".sh");
 			Files.writeString(file.toPath(), script);
 			Result parse = exec(Bash.PATH, "-n", file.getAbsolutePath());
-			assertEquals("generated script must parse:\n" + parse.out, 0, parse.exit);
+			assertEquals(0, parse.exit, "generated script must parse:\n" + parse.out);
 			Result result = exec(Bash.PATH, file.getAbsolutePath());
-			assertEquals("the script must end normally:\n" + result.out, 0, result.exit);
+			assertEquals(0, result.exit, "the script must end normally:\n" + result.out);
 			return result.out;
 		}
 
@@ -415,10 +415,10 @@ public class ContainerOomKillTest {
 		}
 
 		private int field(String name) throws Exception {
-			assertTrue("the pair must report a status", Files.exists(statusFile()));
+			assertTrue(Files.exists(statusFile()), "the pair must report a status");
 			String json = Files.readString(statusFile());
 			Matcher m = Pattern.compile("\"" + name + "\"\\s*:\\s*(-?\\d+)").matcher(json);
-			assertTrue(name + " must be recorded:\n" + json, m.find());
+			assertTrue(m.find(), name + " must be recorded:\n" + json);
 			return Integer.parseInt(m.group(1));
 		}
 	}
@@ -428,7 +428,7 @@ public class ContainerOomKillTest {
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "command must not hang");
 		return new Result(p.exitValue(), out);
 	}
 

@@ -1,21 +1,22 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /** Drives the shipped retry loop under its real strict-mode shell settings. */
 public class DatabaseRetryTest {
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	@Test
 	public void successfulFirstAttemptDoesNotSleep() throws Exception {
@@ -44,7 +45,7 @@ public class DatabaseRetryTest {
 
 	private void assertAttempt(boolean container, int successAt, boolean conditional,
 			int exit, int attempts, int sleeps, boolean continued) throws Exception {
-		Path dir = folder.newFolder().toPath();
+		Path dir = newFolder(folder).toPath();
 		Path sge = Path.of("src/main/java/org/starexec/config/sge").toAbsolutePath();
 		Path script = dir.resolve("probe.sh");
 		String body = """
@@ -80,15 +81,15 @@ public class DatabaseRetryTest {
 		if (!finished) {
 			process.destroyForcibly();
 		}
-		assertTrue("retry loop must terminate", finished);
-		assertEquals(Files.readString(output), exit, process.exitValue());
+		assertTrue(finished, "retry loop must terminate");
+		assertEquals(exit, process.exitValue(), Files.readString(output));
 		Path counter = dir.resolve("attempts");
-		assertEquals("exact number of database attempts", attempts,
-				Files.exists(counter) ? Integer.parseInt(Files.readString(counter).trim()) : 0);
+		assertEquals(attempts, Files.exists(counter) ? Integer.parseInt(Files.readString(counter).trim()) : 0,
+				"exact number of database attempts");
 		Path waits = dir.resolve("sleeps");
-		assertEquals("preserve retry delay behavior", sleeps,
-				Files.exists(waits) ? Files.readAllLines(waits).size() : 0);
-		assertEquals("only successful calls may continue execution", continued,
-				Files.exists(dir.resolve("continued")));
+		assertEquals(sleeps, Files.exists(waits) ? Files.readAllLines(waits).size() : 0,
+				"preserve retry delay behavior");
+		assertEquals(continued, Files.exists(dir.resolve("continued")),
+				"only successful calls may continue execution");
 	}
 }

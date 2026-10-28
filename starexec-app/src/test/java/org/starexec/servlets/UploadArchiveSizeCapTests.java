@@ -1,10 +1,10 @@
 package org.starexec.servlets;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import javax.servlet.annotation.MultipartConfig;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Solver and processor archives fetched by URL are capped at the same size as the archive the
