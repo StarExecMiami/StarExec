@@ -58,10 +58,10 @@ public class StageZeroIngestionTest {
 
 	private void updateDatabase(int pairId, StatusCode status, int stageNumber) throws Throwable {
 		for (Method m : LocalJobMonitor.class.getDeclaredMethods()) {
-			if (m.getName().equals("updateDatabase")) {
+			if (m.getName().equals("updateDatabase") && m.getParameterCount() == 4) {
 				m.setAccessible(true);
 				try {
-					m.invoke(monitor, pairId, status, stageNumber);
+					m.invoke(monitor, pairId, status, stageNumber, (Integer) null);
 				} catch (java.lang.reflect.InvocationTargetException e) {
 					throw e.getCause();
 				}
@@ -173,18 +173,18 @@ public class StageZeroIngestionTest {
 			throws Throwable {
 		ContainerJobMonitor container = new ContainerJobMonitor(null);
 		for (Method m : ContainerJobMonitor.class.getDeclaredMethods()) {
-			if (m.getName().equals("updateDatabase") && m.getParameterCount() == 4) {
+			if (m.getName().equals("updateDatabase") && m.getParameterCount() == 5) {
 				m.setAccessible(true);
 				try {
 					m.invoke(container, pairId, stageNumber, status,
-							new java.util.HashMap<Integer, Integer>());
+							new java.util.HashMap<Integer, Integer>(), (Integer) null);
 				} catch (java.lang.reflect.InvocationTargetException e) {
 					throw e.getCause();
 				}
 				return;
 			}
 		}
-		throw new AssertionError("no such method: ContainerJobMonitor.updateDatabase/4");
+		throw new AssertionError("no such method: ContainerJobMonitor.updateDatabase/5");
 	}
 
 	/**

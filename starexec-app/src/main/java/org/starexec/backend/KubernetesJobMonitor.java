@@ -122,7 +122,8 @@ public class KubernetesJobMonitor {
     public static final int DEFAULT_PENDING_WARN_MINUTES = 5;
 
     /**
-     * How long a pod may stay Pending before its pair is failed for rerun.
+     * How long a pod may stay Pending before its Job is deleted and its pair settled:
+     * queued again once, or filed ERROR_SUBMIT_FAIL when that retry is spent.
      *
      * <p>An hour rides out a short drain but surfaces a mislabelled queue the same working
      * day. Zero disables the transition and leaves only the warning.
@@ -160,6 +161,9 @@ public class KubernetesJobMonitor {
     /** Tracks jobs already transitioned to STATUS_RUNNING */
     private final Set<ExecutionRef> runningExecutions = ConcurrentHashMap.newKeySet();
 
+    /** The node the callback has recorded for each execution, see {@link #recordPlacement} */
+    private final Map<ExecutionRef, String> recordedNodes = new ConcurrentHashMap<>();
+
     /** When each stuck-pending execution was last warned about, for throttling */
     private final Map<ExecutionRef, Long> pendingWarnedAt = new ConcurrentHashMap<>();
 
@@ -179,7 +183,8 @@ public class KubernetesJobMonitor {
     private final long pendingWarnMillis;
 
     /**
-     * How long a pod may be Pending before its pair is failed for rerun, in milliseconds.
+     * How long a pod may be Pending before its Job is deleted and its pair settled, in
+     * milliseconds.
      * Zero means never.
      */
     private final long pendingTimeoutMillis;
@@ -223,8 +228,8 @@ public class KubernetesJobMonitor {
      *
      * @param pendingWarnMinutes    minutes a pod may be Pending before it is logged;
      *                              zero or less disables the warning
-     * @param pendingTimeoutMinutes minutes a pod may be Pending before its pair is failed
-     *                              for rerun; zero or less disables the transition, which
+     * @param pendingTimeoutMinutes minutes a pod may be Pending before its Job is deleted
+     *                              and its pair settled; zero or less disables the transition, which
      *                              leaves the monitor reporting only
      */
     public KubernetesJobMonitor(
@@ -323,6 +328,11 @@ public class KubernetesJobMonitor {
 
     /**
      * Polling loop until informer integration is enabled.
+     *
+     * <p>Every poll is followed by the interval, the polls that throw included. The client
+     * retries only a 429, a 5xx or an I/O failure, so a refusal such as RBAC's 403 or a revoked
+     * token's 401 fails at once and keeps failing until its cause is fixed. Without the wait
+     * the loop would poll again immediately, and each turn's ERROR is also an error_logs insert.
      */
     private void pollLoop() {
         log.info("Starting Kubernetes job monitor polling loop");
@@ -330,16 +340,18 @@ public class KubernetesJobMonitor {
         while (running.get()) {
             try {
                 pollJobsOnce();
+            } catch (Exception e) {
+                log.error("Error in polling loop", e);
+            }
+            try {
                 Thread.sleep(POLL_INTERVAL_MS);
             } catch (InterruptedException e) {
                 log.info("Polling loop interrupted");
                 Thread.currentThread().interrupt();
                 break;
-            } catch (Exception e) {
-                log.error("Error in polling loop", e);
             }
         }
-        
+
         log.info("Kubernetes job monitor polling loop exited");
     }
 
@@ -393,9 +405,14 @@ public class KubernetesJobMonitor {
             }
 
             runningExecutions.remove(execution);
+            recordedNodes.remove(execution);
             pendingWarnedAt.remove(execution);
             cleanupPending.remove(execution);
         }
+
+        // An execution the listing no longer holds is never polled again. A kill deletes a
+        // running Job without the monitor seeing it finish, so its node is dropped here.
+        recordedNodes.keySet().retainAll(executionsInListing);
 
         drainCleanupPending(executionsInListing);
     }
@@ -444,6 +461,7 @@ public class KubernetesJobMonitor {
         }
 
         if (isRunningOnANode(job, execution, pods)) {
+            recordPlacement(execution, pods);
             if (!runningExecutions.contains(execution) && callback.onJobRunning(execution)) {
                 runningExecutions.add(execution);
             }
@@ -491,11 +509,32 @@ public class KubernetesJobMonitor {
         if (callback.onJobStuckPending(execution, reason)) {
             completedExecutions.add(execution);
             runningExecutions.remove(execution);
+            recordedNodes.remove(execution);
             pendingWarnedAt.remove(execution);
             cleanupPending.remove(execution);
             return;
         }
         cleanupPending.put(execution, reason);
+    }
+
+    /**
+     * Passes the callback the node this execution's pod runs on, until it has recorded it.
+     *
+     * <p>Called before the running transition, in the Podman backend's order, so that the
+     * pair has its node by the time it shows as running. Called on every poll that finds the
+     * pod running, not only on the first: the node is known only from a pod listing, which
+     * can fail on the poll that makes the pair running; the callback can report that it
+     * could not record the node yet; and a Job allowed to retry can run its next pod on
+     * another node.
+     */
+    private void recordPlacement(ExecutionRef execution, PodPhaseView pods) {
+        String nodeName = pods.nodeNameFor(execution);
+        if (nodeName == null || nodeName.equals(recordedNodes.get(execution))) {
+            return;
+        }
+        if (callback.onJobPlaced(execution, nodeName)) {
+            recordedNodes.put(execution, nodeName);
+        }
     }
 
     private void warnAboutStuckPod(
@@ -706,6 +745,21 @@ public class KubernetesJobMonitor {
          * @return true when the running transition was handled and should not be retried
          */
         boolean onJobRunning(ExecutionRef execution);
+
+        /**
+         * Called when a job's pod is found running on a node, before {@link #onJobRunning},
+         * and again on later polls until it returns true.
+         *
+         * <p>Deliberately not a default method, for the reason given at
+         * {@link #onJobStuckPending}: a default would let a future implementor inherit
+         * silence, and the node view would again list no running pair.
+         *
+         * @param execution the Kubernetes execution this event belongs to
+         * @param nodeName  the pod's {@code spec.nodeName}, the Node's {@code metadata.name}
+         * @return true when the node was recorded or there is nothing to record; false to be
+         *         called again on the next poll
+         */
+        boolean onJobPlaced(ExecutionRef execution, String nodeName);
 
         /**
          * Called when a job completes successfully.

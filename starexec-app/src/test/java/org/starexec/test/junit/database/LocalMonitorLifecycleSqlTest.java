@@ -256,7 +256,7 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		FakeClock clock = installClock(monitor);
 
 		renameRoutine("UpdatePairStatusPrecise", "UpdatePairStatusPrecise_hidden",
-				"INT, INT, INT, INT, BOOLEAN");
+				"INT, INT, INT, INT, BOOLEAN, INT");
 		try {
 			poll(monitor);
 			assertEquals("no solver status may be invented", ENQUEUED, pairStatus());
@@ -275,7 +275,7 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 					ENQUEUED, pairStatus());
 		} finally {
 			renameRoutine("UpdatePairStatusPrecise_hidden", "UpdatePairStatusPrecise",
-					"INT, INT, INT, INT, BOOLEAN");
+					"INT, INT, INT, INT, BOOLEAN, INT");
 		}
 	}
 

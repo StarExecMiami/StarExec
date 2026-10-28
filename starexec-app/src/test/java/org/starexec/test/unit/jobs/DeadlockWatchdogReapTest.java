@@ -12,6 +12,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -219,6 +221,42 @@ public class DeadlockWatchdogReapTest {
 	}
 
 	/**
+	 * The watchdog sleeps out the pair's budget in a child process. Stopping the watchdog left
+	 * that child running: reparented and idle until its own timer ended, one per stage. In a
+	 * container it dies with the container, but on Local the jobscript has no such boundary.
+	 */
+	@Test
+	public void stoppingTheWatchdogTakesItsSleepWithIt() throws Exception {
+		Result r = runWithHelper(
+				"killDeadlockedJobPair 3600 0 starexec1 &\n"
+				+ "KILL_DEADLOCKED_JOB_PAIR_PID=$!\n"
+				// The watchdog's OWN sleep, by name: while it logs it briefly has other children,
+				// and taking whatever is there would leave this asserting about a pid that never
+				// existed, which passes whether the sleep survives or not.
+				+ "SLEEP=\n"
+				+ "for _ in $(seq 200); do\n"
+				+ "  for c in $(cat \"/proc/$KILL_DEADLOCKED_JOB_PAIR_PID/task/$KILL_DEADLOCKED_JOB_PAIR_PID/children\" 2>/dev/null); do\n"
+				+ "    comm=$(cat \"/proc/$c/comm\" 2>/dev/null) || comm=\n"
+				+ "    if [ \"$comm\" = sleep ]; then SLEEP=$c; fi\n"
+				+ "  done\n"
+				+ "  [ -n \"$SLEEP\" ] && break\n"
+				+ "  sleep 0.05\n"
+				+ "done\n"
+				+ "echo \"$SLEEP\" >> \"$SCRIPT_DIR/pids\"\n"
+				+ "if [ -z \"$SLEEP\" ]; then echo T-NO-SLEEP-FOUND; fi\n"
+				+ "if kill -0 \"$SLEEP\" 2>/dev/null; then echo T-SLEEP-RUNNING-BEFORE-STOP; fi\n"
+				+ "stopDeadlockWatchdog\n"
+				+ "sleep 0.3\n"
+				+ "if kill -0 \"$SLEEP\" 2>/dev/null; then echo T-SLEEP-SURVIVED; else echo T-SLEEP-GONE; fi\n");
+
+		assertEquals(r.out, 0, r.exit);
+		assertFalse("the watchdog's sleep child must be found:\n" + r.out, r.out.contains("T-NO-SLEEP-FOUND"));
+		assertTrue("the sleep must be running before the stop, or this proves nothing:\n" + r.out,
+				r.out.contains("T-SLEEP-RUNNING-BEFORE-STOP"));
+		assertTrue("the watchdog's sleep must not outlive it:\n" + r.out, r.out.contains("T-SLEEP-GONE"));
+	}
+
+	/**
 	 * A watchdog that ignores the TERM and never exits (wedged, e.g. on a hung log append) must
 	 * not hold the pair: stop gives up at the cap, SIGKILLs it, and returns.
 	 */
@@ -262,19 +300,90 @@ public class DeadlockWatchdogReapTest {
 	}
 
 	/**
-	 * Under set -e, bash 5.2 -- the job image's, and CI's -- exits the whole shell when
-	 * {@code $(<file)} names a missing file, even inside {@code || return}. bash 5.3 does not, so a
-	 * local run cannot catch it. The watchdog reads /proc entries that vanish as processes are
-	 * reaped, so a guarded read must use the {@code read} builtin instead.
+	 * Under set -e, bash 5.2 -- the job image's (alpine 3.21) and CI's -- exits the whole shell
+	 * when {@code $(<file)} names a missing file. bash 5.3 returns non-zero instead, so a local run
+	 * cannot catch it.
+	 *
+	 * <p>No handling at the call site prevents it, which is why this bans the construct outright
+	 * rather than only where it is guarded. {@code || return}, {@code || continue},
+	 * {@code if ! x=$(<f)} and an {@code ||} continued on the next line all die the same way: the
+	 * shell is gone before the status is ever tested. Only {@code set +e} on the same line changes
+	 * the outcome, because errexit is what turns the failure into an exit, so that is the single
+	 * exemption. The {@code read} builtin reports the failure as a status on every version and is
+	 * what these files use.
+	 *
+	 * <p>Comment lines are skipped: the fix's own comments name the construct they warn about.
+	 * {@code $( <file)} with a space is the same construct to bash and is matched too. The
+	 * exemption must come before the read on the line, so a trailing {@code # set +e} comment
+	 * cannot excuse a fatal one.
 	 */
 	@Test
-	public void noGuardedReadUsesCommandSubstitution() throws Exception {
-		List<String> lines = Files.readAllLines(SGE.resolve("functions.bash"));
-		for (int i = 0; i < lines.size(); i++) {
-			String line = lines.get(i);
-			assertFalse("functions.bash:" + (i + 1) + " guards a $(<file) read with ||: " + line.trim(),
-					line.contains("$(<") && line.contains("||"));
+	public void noCommandSubstitutionReadsAFile() throws Exception {
+		Pattern read = Pattern.compile("\\$\\(\\s*<");
+		for (String script : new String[] {"functions.bash", "jobscript"}) {
+			List<String> lines = Files.readAllLines(SGE.resolve(script));
+			for (int i = 0; i < lines.size(); i++) {
+				String line = lines.get(i);
+				if (line.trim().startsWith("#")) {
+					continue;
+				}
+				Matcher matcher = read.matcher(line);
+				if (!matcher.find()) {
+					continue;
+				}
+				int exemption = line.indexOf("set +e");
+				assertTrue(script + ":" + (i + 1) + " reads a file with $(<...), which ends the shell"
+								+ " on bash 5.2 when the file is missing: " + line.trim(),
+						exemption >= 0 && exemption < matcher.start());
+			}
 		}
+	}
+
+	/**
+	 * The TERM trap must be installed before the sleep is backgrounded. Between the two, a TERM
+	 * from the end of the stage orphans the sleep exactly as it did before the fix. That window
+	 * is unobservable from outside, so no behavioural test can catch a reorder; this asserts the
+	 * order in the source instead, which is the failure mode worth guarding.
+	 *
+	 * <p>Anchored to killDeadlockedJobPair so an unrelated backgrounded sleep cannot satisfy or
+	 * break it, and both lines must exist, so deleting the trap fails here rather than passing
+	 * vacuously.
+	 */
+	@Test
+	public void theSleepsTrapIsInstalledBeforeTheSleepStarts() throws Exception {
+		List<String> lines = Files.readAllLines(SGE.resolve("functions.bash"));
+		int start = -1;
+		int end = lines.size();
+		for (int i = 0; i < lines.size(); i++) {
+			if (lines.get(i).startsWith("function killDeadlockedJobPair")) {
+				start = i;
+			} else if (start >= 0 && lines.get(i).equals("}")) {
+				end = i;
+				break;
+			}
+		}
+		assertTrue("killDeadlockedJobPair must exist in functions.bash", start >= 0);
+
+		int trapLine = -1;
+		int sleepLine = -1;
+		for (int i = start; i < end; i++) {
+			String line = lines.get(i);
+			if (line.trim().startsWith("#")) {
+				continue;
+			}
+			if (trapLine < 0 && line.contains("trap ") && line.contains("WATCHDOG_SLEEP_PID")) {
+				trapLine = i;
+			}
+			if (sleepLine < 0 && line.matches(".*\\bsleep\\b.*&\\s*$")) {
+				sleepLine = i;
+			}
+		}
+
+		assertTrue("the watchdog must install a TERM trap naming its sleep", trapLine >= 0);
+		assertTrue("the watchdog must background its sleep", sleepLine >= 0);
+		assertTrue("the trap (line " + (trapLine + 1) + ") must be installed before the sleep is"
+						+ " backgrounded (line " + (sleepLine + 1) + "), or a TERM in between orphans it",
+				trapLine < sleepLine);
 	}
 
 	/** The jobscript's own arming line, so this test cannot drift from what production runs. */

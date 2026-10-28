@@ -36,9 +36,6 @@ import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
@@ -73,7 +70,6 @@ public class UploadSolver extends HttpServlet {
 	private static final String RUN_TEST_JOB = "runTestJob";
 	private static final String SETTING_ID = "settingId";
 	private static final String SOLVER_TYPE = "execType";
-	private final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
 			throws ServletException, IOException {
@@ -147,7 +143,7 @@ public class UploadSolver extends HttpServlet {
 						}
 					}
 
-					response.addCookie(new Cookie("New_ID", String.valueOf(result.solverId)));
+					response.addCookie(Util.createIdCookie("New_ID", String.valueOf(result.solverId)));
 					if (result.isBuildJob && !runTestJob) {
 						response.sendRedirect(Util.docRoot("secure/details/solver.jsp?id=" + result.solverId +
 																   "&buildmsg=Building Solver On Starexec"));
@@ -227,6 +223,11 @@ public class UploadSolver extends HttpServlet {
 		log.info("handleSolver begins");
 
 		File sandboxDir = null;
+		// The directories this upload creates for the solver. Unless the solver is added, they are
+		// deleted however the upload ends, so that a failed upload leaves no files behind (#275).
+		File solverDir = null;
+		File srcDir = null;
+		boolean added = false;
 
 		try {
 			sandboxDir = Util.getRandomSandboxDirectory();
@@ -260,12 +261,11 @@ public class UploadSolver extends HttpServlet {
 			log.info("Handling upload of solver " + newSolver.getName());
 
 			//Set up the unique directory to store the solver
-			File uniqueDir = Solvers.solverDirectory(
-					new File(R.getSolverPath()), userId, newSolver.getName(), shortDate.format(new Date()));
+			solverDir = Util.claimNewDirectory(Solvers.solverDirectory(
+					new File(R.getSolverPath()), userId, newSolver.getName(), Util.pathDate()));
+			File uniqueDir = solverDir;
 
 			newSolver.setPath(uniqueDir.getAbsolutePath());
-
-			uniqueDir.mkdirs();
 
 			//Process the archive file and extract
 			File archiveFile = null;
@@ -288,6 +288,10 @@ public class UploadSolver extends HttpServlet {
 			long fileSize = ArchiveUtil.getArchiveSize(archiveFile.getAbsolutePath());
 
 			User currentUser = Users.get(userId);
+			if (currentUser == null) {
+				// Deleted while the archive was on its way, or unreadable.
+				throw new IllegalStateException("Could not find the user uploading this solver");
+			}
 			long allowedBytes = currentUser.getDiskQuota();
 			long usedBytes = currentUser.getDiskUsage();
 
@@ -312,7 +316,6 @@ public class UploadSolver extends HttpServlet {
 			if (!extracted) {
 				log.warn("Error extracting the new solver archive");
 				FileUtils.deleteDirectory(sandboxDir);
-				FileUtils.deleteDirectory(uniqueDir);
 				FileUtils.deleteQuietly(archiveFile);
 				return new UploadSolverResult(UploadSolverStatus.EXTRACTING_ERROR, -1, false, false);
 			}
@@ -323,9 +326,9 @@ public class UploadSolver extends HttpServlet {
 				newSolver.setBuildStatus(status);
 
 				isBuildJob = true;
-				uniqueDir = new File(newSolver.getPath() + "_src");
+				srcDir = Solvers.claimSourceDirectory(solverDir);
+				uniqueDir = srcDir;
 				newSolver.setPath(uniqueDir.getAbsolutePath());
-				uniqueDir.mkdirs();
 			} else {
 				SolverBuildStatus status = new SolverBuildStatus();
 				status.setCode(1);
@@ -338,7 +341,6 @@ public class UploadSolver extends HttpServlet {
 			if (files == null) {
 				log.error("Unable to list files in sandbox directory: " + sandboxDir.getAbsolutePath());
 				FileUtils.deleteDirectory(sandboxDir);
-				FileUtils.deleteDirectory(uniqueDir);
 				return new UploadSolverResult(UploadSolverStatus.EXTRACTING_ERROR, -1, false, isBuildJob);
 			}
 
@@ -390,6 +392,7 @@ public class UploadSolver extends HttpServlet {
 
 			newSolver.setType(ExecutableType.valueOf(Integer.parseInt((String) form.get(SOLVER_TYPE))));
 			int solverId = Solvers.add(newSolver, spaceId);
+			added = true;
 
 			UploadSolverStatus status = UploadSolverStatus.SUCCESS;
 			UploadSolverResult result = new UploadSolverResult(status, solverId, hadConfigs, isBuildJob);
@@ -406,6 +409,9 @@ public class UploadSolver extends HttpServlet {
 
 			return result;
 		} finally {
+			if (!added) {
+				Solvers.deleteDirectoriesOfUnaddedSolver(userId, solverDir, srcDir);
+			}
 			try {
 				if (sandboxDir != null) {
 					FileUtils.deleteDirectory(sandboxDir);

@@ -6,9 +6,12 @@ metadata:
 {{ include "chart.labels" . | nindent 4 }}
 rules:
 {{- if eq (include "starexec.isKubernetesBackend" .) "true" }}
+  # deletecollection: killAll(), behind the admin "pause all", asks for every
+  # managed Job to be deleted in one label-selector request, which Kubernetes
+  # authorizes as deletecollection rather than delete.
   - apiGroups: ["batch"]
     resources: ["jobs"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
   # Read-only, and needed to tell a pod that is running from one that has never
   # started. JobStatus.active counts pending and running pods alike, so without
   # this the monitor reports an unschedulable pair as RUNNING and it waits
@@ -17,6 +20,14 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
+  # The backend reads its namespace at startup and stays uninitialized if it
+  # cannot, so no pair is ever submitted. A Role can grant this because a request
+  # for a Namespace object is authorized within that namespace; resourceNames
+  # keeps it to this one.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: [{{ .Release.Namespace | quote }}]
+    verbs: ["get"]
 {{- else }}
   []
 {{- end }}
@@ -34,6 +45,39 @@ roleRef:
   kind: Role
   name: {{ include "chart.fullname" . }}
   apiGroup: rbac.authorization.k8s.io
+{{- if eq (include "starexec.isKubernetesBackend" .) "true" }}
+---
+# Nodes are cluster-scoped, so only a ClusterRole can grant reading them. The
+# backend lists the worker nodes to learn which queues have a schedulable node
+# and how much CPU it offers, and holds every queue's pairs until that listing
+# has succeeded once. The name carries the namespace because a ClusterRole is
+# shared by every release in the cluster. Writing to nodes stays opt-in below.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-%s-node-reader" (include "chart.fullname" .) .Release.Namespace }}
+  labels:
+{{ include "chart.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-%s-node-reader" (include "chart.fullname" .) .Release.Namespace }}
+  labels:
+{{ include "chart.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "chart.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ printf "%s-%s-node-reader" (include "chart.fullname" .) .Release.Namespace }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
 {{- if and (eq (include "starexec.isKubernetesBackend" .) "true") .Values.kubernetes.nodeManagement.enabled }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

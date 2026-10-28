@@ -636,10 +636,9 @@ public class Benchmarks {
 		if (!benchmarks.isEmpty()) {
 			log.info("Adding (with deps) " + benchmarks.size() + " to Space " + spaceId);
 
-			if (!Benchmarks.validateForUpload(benchmarks, depRootSpaceId, linked, usesDeps, statusId)) {
-				Uploads.setBenchmarkErrorMessage(
-						statusId,
-						"Benchmark dependencies failed to validate. Please check your processor output");
+			String unresolved = Benchmarks.validateForUpload(benchmarks, depRootSpaceId, linked, usesDeps, statusId);
+			if (unresolved != null) {
+				Uploads.setBenchmarkErrorMessage(statusId, "Benchmark dependencies failed to validate: " + unresolved);
 				return null;
 			}
 
@@ -697,13 +696,13 @@ public class Benchmarks {
 	 *                       the include statement
 	 * @param usesDeps       if true, resolve dependencies; ignored when null or false
 	 * @param statusId       the id of an upload status if one exists, null otherwise
-	 * @return true if validation succeeded, false if dependency resolution failed
+	 * @return null if validation succeeded, otherwise why dependency resolution failed
 	 */
-	public static boolean validateForUpload(
+	public static String validateForUpload(
 			List<Benchmark> benchmarks, Integer depRootSpaceId, Boolean linked, Boolean usesDeps, Integer statusId)
 			throws IOException, StarExecException {
 		if (benchmarks.isEmpty()) {
-			return true;
+			return null;
 		}
 
 		// The processor of the first benchmark stands for the batch -- they all come
@@ -721,7 +720,7 @@ public class Benchmarks {
 		if (Boolean.TRUE.equals(usesDeps)) {
 			return Benchmarks.validateDependencies(benchmarks, depRootSpaceId, linked, statusId);
 		}
-		return true;
+		return null;
 	}
 
 	/**
@@ -1081,6 +1080,8 @@ public class Benchmarks {
 	 * @author Eric Burns
 	 */
 	public static int copyBenchmark(Benchmark b, int userId, int spaceId) {
+		File uniqueDir = null;
+		int benchId = -1;
 		try {
 			log.debug("Copying benchmark " + b.getName() + " (id=" + b.getId()
 					+ ") to new user id=" + userId + ", spaceId=" + spaceId);
@@ -1110,12 +1111,11 @@ public class Benchmarks {
 			// an old benchmark that already passed validation
 			newBenchmark.getAttributes().put(R.VALID_BENCHMARK_ATTRIBUTE, "true");
 
-			File uniqueDir = UploadBenchmark.getDirectoryForBenchmarkUpload(userId, String.valueOf(b.getId()));
-			uniqueDir.mkdirs();
+			uniqueDir = UploadBenchmark.getDirectoryForBenchmarkUpload(userId, String.valueOf(b.getId()));
 			newBenchmark.setPath(uniqueDir.getAbsolutePath() + File.separator + benchmarkFile.getName());
 
 			FileUtils.copyFileToDirectory(benchmarkFile, uniqueDir);
-			int benchId = Benchmarks.addAndAssociate(newBenchmark, spaceId, null);
+			benchId = Benchmarks.addAndAssociate(newBenchmark, spaceId, null);
 			if (benchId < 0) {
 				log.error("copyBenchmark: addAndAssociate failed for benchmark '"
 						+ b.getName() + "' (source id=" + b.getId() + ") into spaceId=" + spaceId);
@@ -1134,6 +1134,12 @@ public class Benchmarks {
 			log.error("copyBenchmark: failed to copy benchmark '" + b.getName()
 					+ "' (id=" + b.getId() + ", path=" + b.getPath() + ")", e);
 			return -1;
+		} finally {
+			// No live benchmark row refers to the file of a copy that was not added (#275):
+			// addAndAssociate either inserted nothing or marked its row deleted again.
+			if (benchId < 0) {
+				UploadBenchmark.deleteDirectoryForBenchmarkUpload(userId, uniqueDir);
+			}
 		}
 	}
 
@@ -2714,10 +2720,11 @@ public class Benchmarks {
 	 * @param linked          true if the depRootSpace is the same as the first directory
 	 *                        in the include statement
 	 * @param statusID        upload status tracker (may be null)
-	 * @return true if all dependencies were resolved successfully
+	 * @return null if every dependency was resolved, otherwise which benchmark's include
+	 *         failed and where it was looked for, worded for the uploader
 	 * @author Eric Burns (original), fixed by refactoring
 	 */
-	private static boolean validateDependencies(List<Benchmark> benchmarks, Integer depRootSpaceId, Boolean linked,
+	private static String validateDependencies(List<Benchmark> benchmarks, Integer depRootSpaceId, Boolean linked,
 			Integer statusID) {
 		for (Benchmark benchmark : benchmarks) {
 			String out = validateIndBenchDependencies(benchmark, depRootSpaceId, linked);
@@ -2725,10 +2732,27 @@ public class Benchmarks {
 				log.warn("validateDependencies", "Dependent benchmarks not found for " + benchmark.getName());
 				Uploads.addFailedBenchmark(statusID, benchmark.getName(),
 						"Dependency check failed for this benchmark. Failed search for " + out + ".");
-				return false;
+				return unresolvedDependency(benchmark.getName(), out, depRootSpaceId);
 			}
 		}
-		return true;
+		return null;
+	}
+
+	/**
+	 * Says which include failed and where it was looked for.
+	 *
+	 * <p>The upload error used to say only that dependencies "could not be resolved",
+	 * although this is the one place that knows which file, which include and which space.
+	 * Without them an uploader cannot tell a missing axiom from a wrong dependency root
+	 * space (Quokka, 2026-10-15: a 34-file upload was refused twice over one axiom).
+	 *
+	 * <p>The space is given by id, which the uploader supplied, and not by name: nothing here
+	 * establishes that the uploader may see that space. The file name and include path come
+	 * from the upload itself, so the pages showing this message escape it.
+	 */
+	private static String unresolvedDependency(String benchName, String includePath, Integer depRootSpaceId) {
+		return benchName + " includes " + includePath + ", which was not found under the dependency root space"
+				+ " (id " + depRootSpaceId + ")";
 	}
 
 	/**
@@ -2752,7 +2776,9 @@ public class Benchmarks {
 				includePath = path;
 				log.debug("validateIndBenchDependencies", "Dependency Path is " + includePath);
 
-				int axiomId = findDependentBench(depRootSpaceId, includePath, linked, 0);
+				// As the uploader, so that a subspace is entered only if they belong to it. This passed
+				// 0 from ba5a5b38a (2026-03) on, which takes GetSubSpaceByName's unfiltered branch.
+				int axiomId = findDependentBench(depRootSpaceId, includePath, linked, bench.getUserId());
 				if (axiomId < 0) {
 					log.warn("validateIndBenchDependencies", "Dependent Bench not found for " + bench.getName());
 					return includePath;

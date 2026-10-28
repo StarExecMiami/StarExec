@@ -24,8 +24,9 @@ This guide covers:
 | `STAREXEC_LOCAL_CORE_LIST` | unset | One online, allowed logical CPU per physical core; its validated length sets LocalBackend concurrency |
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` | 5 | Keep queue 50-100 deep |
 | `STAREXEC_CONTAINER_POLL_INTERVAL_MS` | 5000 | Lower for latency, higher for scale |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 4096 | Match solver requirements |
-| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | 1 | 1 for single-threaded, more for parallel |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048 | Podman cgroup memory ceiling; above the largest job memory limit, which it caps |
+| `STAREXEC_CPU_PARTITION_COUNT` | `auto` | `N > 1` creates topology-aware partitions; `auto` leaves a single-NUMA host unpinned |
+| `STAREXEC_CONTAINER_CPU_QUOTA_CORES` | 0 | Optional CFS cap for unpartitioned containers; not a substitute for affinity |
 
 ### Live Log Streaming Parameters (SSE)
 
@@ -59,10 +60,14 @@ When live log streaming is enabled, protect benchmark throughput with these goal
 | Non-stream API p95 latency | < +20% vs baseline | > +50% vs baseline |
 | Benchmark pair throughput | >= 95% of baseline | < 90% of baseline |
 
-**Overhead model (rough):**
+**Overhead model (rough), for streams that have caught up with their logs:**
 - File polls/sec ≈ `activeStreams / (POLL_INTERVAL_MS / 1000)`
-- Status DB QPS ≈ `activeStreams / (STATUS_POLL_INTERVAL_MS / 1000)`
-- Max stream egress ≈ `activeStreams × READ_CHUNK_BYTES / (POLL_INTERVAL_MS / 1000)`
+- Status DB QPS ≈ `runningPairStreams / (STATUS_POLL_INTERVAL_MS / 1000)`; a finished pair's status is read once
+- Stream egress ≈ the rate at which the streamed logs grow
+
+A stream more than 32 chunks behind its log, such as one that starts at byte 0 of a long log, sends 32
+chunks of `READ_CHUNK_BYTES` per poll and polls again at once, so it sends as fast as its client reads
+until it has caught up. Each stream worker thread (4 to 16, by CPU count) sends one chunk at a time.
 
 ---
 
@@ -212,49 +217,69 @@ export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096
 # MEMORY_NEEDED = NUM_JOB_PAIRS_AT_A_TIME × CONTAINER_DEFAULT_MEMORY_MB
 # Example: 5 × 4096 = 20GB
 
-# CPU per container
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
+# Example: a 16-physical-core host running one single-threaded solver per partition
+export STAREXEC_CPU_PARTITION_COUNT=16
 
-# For parallel solvers
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=4
+# Example: the same host running four-core parallel solvers
+export STAREXEC_CPU_PARTITION_COUNT=4
 ```
 
+An explicit `STAREXEC_CPU_PARTITION_COUNT` greater than one creates cpusets and
+controls solver placement. It uses every online CPU, so publication runs that
+reserve operating-system or application cores should use explicit cpusets.
+Verify the host topology as described in
+[CPU partition scheduling](cpu-partition-scheduling.md). If the host remains
+unpartitioned, `STAREXEC_CONTAINER_CPU_QUOTA_CORES` can bound CFS bandwidth, but
+it provides no affinity and cannot make timing measurements reproducible.
+
+CPU-time and wallclock budgets are queue/job properties. The removed
+`STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` and
+`STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` variables were overwritten by the
+generated job script and never changed the effective budgets.
+
 ### Resource Limit Profiles
+
+These profiles set the container memory limit, the batch size and the CPU partition count,
+which is what decides a pair's cores (the width of its partition). They do not set CPU
+time or wallclock time: those budgets come from the queue and the job. Earlier versions of
+these profiles set `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` (described as a core count) and
+`STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT`; those lines never changed the solver's
+limits. The partition counts below assume a 16-physical-core host.
 
 #### Lightweight Solvers (SMT QF_BV)
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=2048
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=300
+export STAREXEC_CPU_PARTITION_COUNT=16 # Example: 16 physical cores, one per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=8
+# Configure 300s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 #### Standard Solvers (SAT)
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=600
+export STAREXEC_CPU_PARTITION_COUNT=16 # Example: 16 physical cores, one per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5
+# Configure 600s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 #### Heavy Solvers (QF_NIA, LIA)
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=2
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=1200
+export STAREXEC_CPU_PARTITION_COUNT=8 # Example: 16 physical cores, two per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=4
+# Configure 1200s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 #### Parallel Solvers (CaDiCaL, Lingeling)
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=16384
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=8
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=3600
+export STAREXEC_CPU_PARTITION_COUNT=2 # Example: 16 physical cores, eight per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=2
+# Configure 3600s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 ---

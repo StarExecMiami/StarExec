@@ -705,25 +705,18 @@ public class EnvironmentConfig {
     }
 
     /**
-     * Default memory limit for job containers (in MB).
+     * Podman cgroup memory ceiling for each job container (in MiB).
+     *
+     * <p>runsolver enforces the job's own memory limit inside the container, but this
+     * ceiling bounds the whole container, so a pair whose job allows more is held to
+     * it. The job script records a solver the kernel stops at the ceiling as a memory
+     * breach ({@code EXCEED_MEM}). The ceiling is also exposed as
+     * {@code STAREXEC_MEM_LIMIT} for {@code GetComputerInfo} metadata.</p>
      */
     public static long getContainerDefaultMemoryMb() {
         return Long.parseLong(
             getEnv("STAREXEC_CONTAINER_DEFAULT_MEMORY_MB", "2048")
         );
-    }
-
-    /**
-     * Default CPU limit for job containers (in seconds).
-     *
-     * <p><b>This is a time limit, not a core count.</b> It becomes the
-     * {@code STAREXEC_CPU_LIMIT} environment variable seen by the job script.
-     * {@code docs/CONFIGURATION.md} describes it as "CPU cores per container", which is
-     * wrong; wiring this into a CFS quota would request a 600-core allocation. For the
-     * CPU quota see {@link #getContainerCpuQuotaCores()}.
-     */
-    public static int getContainerDefaultCpuLimit() {
-        return getEnvInt("STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT", 600);
     }
 
     /**
@@ -742,13 +735,6 @@ public class EnvironmentConfig {
      */
     public static int getContainerCpuQuotaCores() {
         return getEnvInt("STAREXEC_CONTAINER_CPU_QUOTA_CORES", 0);
-    }
-
-    /**
-     * Default wallclock limit for job containers (in seconds).
-     */
-    public static int getContainerDefaultWallclockLimit() {
-        return getEnvInt("STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT", 600);
     }
 
     /**

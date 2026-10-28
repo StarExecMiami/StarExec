@@ -651,7 +651,7 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 
 	private void renameRoutine(String from, String to) throws SQLException {
 		try (Connection con = Common.getConnection(); Statement st = con.createStatement()) {
-			st.execute("ALTER FUNCTION starexec." + from + "(INT, INT, INT) RENAME TO " + to);
+			st.execute("ALTER FUNCTION starexec." + from + "(INT, INT, INT, INT) RENAME TO " + to);
 		}
 	}
 

@@ -61,13 +61,14 @@ make volumes-health ENV=prod
 # Backup all volumes
 make volumes-backup ENV=prod
 
-# Restore from backup
-make volumes-restore ENV=prod BACKUP=backups/starexec-prod-20250101.tar.gz
+# Restore a backup set, named by its timestamp
+make volumes-restore ENV=prod RESTORE_TIMESTAMP=20250101-020000
 
 # Export volume for sharing
 make volumes-export ENV=prod VOLUME=data
 
-# Delete volumes (⚠️ destructive)
+# Delete volumes (⚠️ destructive: all five volumes of ENV, and the legacy
+# starexec-data and starexec-postgres volumes whatever ENV is)
 make volumes-delete ENV=prod
 
 # Show detailed help
@@ -116,14 +117,20 @@ persistence:
   backendSize: 10Gi
   sandboxSize: 10Gi
   workSize: 10Gi
-  postgresDataSize: 50Gi
+
+# The embedded PostgreSQL's own claim (postgres.host: localhost)
+postgres:
+  persistence:
+    enabled: true          # false = emptyDir: the database is lost when the pod is recreated
+    storageClass: "fast-ssd"
+    size: 50Gi
 ```
 
 ---
 
 ## Backup Procedures
 
-### Automated Backup (Recommended)
+### Automated Backup
 
 Create a cron job for regular backups:
 
@@ -131,6 +138,15 @@ Create a cron job for regular backups:
 # /etc/cron.d/starexec-backup
 0 2 * * * starexec cd /opt/starexec && make volumes-backup ENV=prod >> /var/log/starexec-backup.log 2>&1
 ```
+
+`make volumes-backup` copies the volumes with `tar` and does not stop the
+stack. Run from cron as above, it copies the running database: with the stack
+running it warns, and asks whether to continue only when it has a terminal.
+PostgreSQL's files make a usable backup only when the server is stopped
+([File System Level Backup](https://www.postgresql.org/docs/current/backup-file.html)),
+so a copy of a running database may not restore. Stop the stack for the copy
+(see [Manual Backup](#manual-backup)), or check regularly that these copies
+restore (see [Testing Disaster Recovery](#testing-disaster-recovery)).
 
 ### Manual Backup
 
@@ -141,20 +157,33 @@ make stop
 # Create backup
 make volumes-backup ENV=prod
 
-# Restart application
-make start
+# Restart production
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 
-# Backup location
+# Backup location: one archive per volume, plus metadata
 ls -la backups/
-# starexec-prod-20250115-020000.tar.gz
+# starexec-prod-full-20250115-020000-data.tar.gz (and -sandbox, -backend,
+# -work, -postgres, -metadata.json, -manifest.json)
 ```
+
+Every `make start` for production in this guide passes the settings
+production was deployed with. `ENV=prod` selects the `starexec-prod-*`
+volumes. `VALS=` names the Podman production values file: with `ENV=prod`
+alone, make selects the Kubernetes profile `values-prod.yaml`, whose pod mounts
+other volumes. `LOCAL=1` keeps the image already on the host; without it,
+`make start` replaces that image with the registry's `latest` whenever the
+registry is reachable, and a newer image runs its migrations on your data.
+Run it in a shell where `STAREXEC_DB_PASSWORD` is set, as for the first
+deployment ([Production Checklist](DEPLOYMENT.md#production-checklist)): with
+`ENV=prod`, `make start` stops without it.
 
 ### Backup Without Downtime
 
 For production systems that can't stop:
 
 ```bash
-# Backup with live database (may have minor inconsistencies)
+# Backup with live database: its archive may not restore, because
+# PostgreSQL's files are only a consistent backup when the server is stopped
 make volumes-backup ENV=prod
 
 # Or use PostgreSQL's built-in backup
@@ -164,20 +193,22 @@ make db-dump
 
 ### What's Included in Backups
 
-Each backup archive contains:
+Each backup set is one archive per volume, named by environment and timestamp:
 
 ```
-starexec-prod-20250115-020000.tar.gz
-├── data/           # Application data
-│   ├── solvers/    # Uploaded solvers
-│   ├── benchmarks/ # Uploaded benchmarks
-│   ├── outputs/    # Job outputs
-│   └── uploads/    # Pending uploads
-├── postgres/       # Database files
-│   ├── base/       # PostgreSQL data
-│   └── pg_wal/     # Write-ahead logs
-└── metadata.json   # Backup metadata
+backups/
+├── starexec-prod-full-20250115-020000-data.tar.gz      # solvers, benchmarks, job output
+├── starexec-prod-full-20250115-020000-postgres.tar.gz  # database files
+├── starexec-prod-full-20250115-020000-sandbox.tar.gz
+├── starexec-prod-full-20250115-020000-backend.tar.gz
+├── starexec-prod-full-20250115-020000-work.tar.gz
+├── starexec-prod-full-20250115-020000-metadata.json
+├── starexec-prod-full-20250115-020000-manifest.json
+└── starexec-prod-full-20250115-020000-emptyvols.txt    # only when a volume was empty
 ```
+
+`make volumes-restore` imports the data and postgres archives of a set; it does
+not restore the sandbox, backend and work archives.
 
 ### Backup Encryption
 
@@ -186,11 +217,12 @@ For sensitive data, encrypt backups:
 ```bash
 # Create encrypted backup
 make volumes-backup ENV=prod
-gpg --encrypt --recipient admin@example.com \
-  backups/starexec-prod-20250115-020000.tar.gz
 
-# Remove unencrypted backup
-rm backups/starexec-prod-20250115-020000.tar.gz
+# Encrypt each archive of the set; remove a plain archive only once its
+# encrypted copy was written. Decrypt them into backups/ before a restore.
+for f in backups/starexec-prod-full-20250115-020000-*.tar.gz; do
+  gpg --encrypt --recipient admin@example.com "$f" && rm "$f"
+done
 ```
 
 ### Offsite Backup
@@ -202,8 +234,9 @@ Transfer backups to remote storage:
 aws s3 cp backups/starexec-prod-*.tar.gz s3://my-backups/starexec/ \
   --sse AES256
 
-# Rsync to backup server
-rsync -avz --delete backups/ backup-server:/backups/starexec/
+# Rsync to backup server (no --delete: pruning the local backups must not
+# delete the offsite copies)
+rsync -avz backups/ backup-server:/backups/starexec/
 
 # Google Cloud Storage
 gsutil cp backups/starexec-prod-*.tar.gz gs://my-backups/starexec/
@@ -219,12 +252,15 @@ gsutil cp backups/starexec-prod-*.tar.gz gs://my-backups/starexec/
 # ⚠️ STOP APPLICATION FIRST
 make stop
 
-# Restore all volumes from backup
-make volumes-restore ENV=prod \
-  BACKUP=backups/starexec-prod-20250115-020000.tar.gz
+# Restore the data and database volumes of one backup set, named by the
+# timestamp in its file names (backups/starexec-prod-full-<timestamp>-*).
+# Without RESTORE_TIMESTAMP, make lists the sets and asks, or takes the newest
+# when it has no terminal. It asks before overwriting each existing volume, so
+# run it from a terminal; it does not remove files added after the backup.
+make volumes-restore ENV=prod RESTORE_TIMESTAMP=20250115-020000
 
-# Start application
-make start
+# Start production (settings explained under Manual Backup)
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 
 # Verify restore
 make status
@@ -234,42 +270,19 @@ make db-shell
 
 ### Partial Restore (Database Only)
 
-```bash
-# Stop application
-make stop
-
-# Restore only PostgreSQL data
-make volumes-restore ENV=prod \
-  BACKUP=backups/starexec-prod-20250115-020000.tar.gz \
-  VOLUMES=postgres
-
-# Start application
-make start
-```
+`make volumes-restore` has no `BACKUP=` or `VOLUMES=` option: it always
+restores both the data and the database volume of the chosen set. Restoring
+the database alone would leave it out of step with the files on the data
+volume, so restore the whole set as above.
 
 ### Restore from SQL Dump
 
-```bash
-# Stop application
-make stop
-
-# Recreate database volume
-make volumes-delete ENV=prod VOLUMES=postgres
-make volumes-create ENV=prod
-
-# Start only PostgreSQL
-podman start starexec-postgres
-
-# Wait for PostgreSQL to be ready
-sleep 10
-
-# Restore from SQL dump
-cat backups/starexec-db-20250115.sql | \
-  podman exec -i starexec-postgres psql -U starexec
-
-# Start application
-make start
-```
+No make target restores a SQL dump, and a dump holds only the database: the
+solvers, benchmarks and job output on the data volume are not in it. To recover
+a deployment, restore a `make volumes-backup` set (see [Full Restore](#full-restore)).
+Load a dump only into a new, empty database, and do not delete the
+environment's volumes to make room for it: `make volumes-delete` removes all
+five, the data volume included.
 
 ### Kubernetes Restore
 
@@ -356,11 +369,13 @@ find backups/ -name "starexec-prod-*.tar.gz" -mtime +30 -delete
 ### Reclaim Disk Space
 
 ```bash
-# Clean up unused volumes
-podman volume prune
+# Delete one environment's volumes (here CI). This also removes the legacy
+# starexec-data and starexec-postgres volumes if they exist.
+make volumes-delete ENV=ci
 
-# Clean up specific environment
-make volumes-delete ENV=ci  # Delete CI volumes
+# Avoid `podman volume prune`: on Podman 4 and 5 it removes every volume that
+# no container uses, named ones included, so after `make stop` it deletes all
+# StarExec volumes, and other projects' too.
 
 # Clean up orphaned containers
 podman container prune
@@ -483,27 +498,34 @@ fi
    make volumes-health ENV=prod
    ```
 
-2. **Stop affected services**
+2. **Stop affected services and copy their volumes**
    ```bash
    make stop
+   # File-level copy of the damaged volumes, if they are still readable;
+   # the restore writes over them
+   make volumes-backup ENV=prod
    ```
 
-3. **Identify latest valid backup**
+3. **Identify the last valid backup**
    ```bash
    ls -la backups/
-   # Verify backup integrity
-   tar -tzf backups/starexec-prod-20250115.tar.gz > /dev/null && echo "OK"
+   # A set is backups/starexec-prod-full-<timestamp>-<volume>.tar.gz. The copy
+   # from step 2 is now the newest set; check the archives of the set you
+   # will restore
+   for f in backups/starexec-prod-full-20250115-020000-*.tar.gz; do
+     tar -tzf "$f" > /dev/null && echo "OK $f"
+   done
    ```
 
 4. **Restore from backup**
    ```bash
-   make volumes-restore ENV=prod \
-     BACKUP=backups/starexec-prod-20250115.tar.gz
+   make volumes-restore ENV=prod RESTORE_TIMESTAMP=20250115-020000
    ```
 
 5. **Verify restoration**
    ```bash
-   make start
+   # On a new host, first build the version production ran (make build)
+   make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
    make db-shell
    # SELECT COUNT(*) FROM users;
    # SELECT MAX(created) FROM jobs;
@@ -517,23 +539,30 @@ fi
 
 ### Testing Disaster Recovery
 
-Schedule quarterly DR tests:
+Schedule quarterly DR tests on a separate host, never on the production host:
+`make start` and `make stop` act on every pod of the release
+(`app.kubernetes.io/instance=starexec`) whatever `ENV` is, so starting a test
+environment there stops production. A backup set restores only into the
+environment named in its files, so the test host uses `ENV=prod` as well, with
+a copy of production's values file:
 
 ```bash
-# 1. Create test environment
-make volumes-create ENV=dr-test
+# 1. Copy one set (backups/starexec-prod-full-<timestamp>-*) into backups/ on
+#    the test host, then create the volumes
+make volumes-create ENV=prod
 
-# 2. Restore backup
-make volumes-restore ENV=dr-test \
-  BACKUP=backups/starexec-prod-latest.tar.gz
+# 2. Restore it
+make volumes-restore ENV=prod RESTORE_TIMESTAMP=20250115-020000
 
-# 3. Start and verify
-make deploy-podman ENV=dr-test
+# 3. Build the version production runs, start it and verify
+git checkout <production commit>
+make build
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 # Test application functionality
 
-# 4. Cleanup
-make stop ENV=dr-test
-make volumes-delete ENV=dr-test
+# 4. Cleanup, on the test host only
+make stop
+make volumes-delete ENV=prod
 ```
 
 ---
@@ -591,15 +620,23 @@ tar -xzf backup.tar.gz -C /tmp/restore-test
 
 ### Database Corruption
 
+Copy the damaged volumes before anything else, then restore a backup.
+`pg_resetwal` is a last resort for when no usable backup exists: the database
+can come back with inconsistent data, and PostgreSQL says to dump, re-initialise
+and restore right after using it (see
+[pg_resetwal](https://www.postgresql.org/docs/current/app-pgresetwal.html)).
+
 ```bash
 # Check PostgreSQL logs
 make logs-postgres
 
-# Try to recover
-podman exec starexec-postgres pg_resetwal -f /var/lib/postgresql/data
+# Keep a file-level copy of the damaged volumes (stack stopped)
+make stop
+make volumes-backup ENV=prod
 
-# If that fails, restore from backup
-make volumes-restore ENV=prod VOLUMES=postgres BACKUP=last-good-backup.tar.gz
+# That copy is now the newest set, so name the last good one explicitly
+make volumes-restore ENV=prod RESTORE_TIMESTAMP=<timestamp of the last good set>
+make start ENV=prod VALS=charts/starexec/values-podman-prod.yaml LOCAL=1
 ```
 
 ---

@@ -241,35 +241,38 @@ podman exec starexec-postgres \
 
 ### Restoring Backups
 
-#### From SQL Dump
+The app and PostgreSQL run in one pod, and `make stop` removes the whole pod, PostgreSQL
+included. Stop only the app container. There is no `postgres` role: the database superuser is
+`STAREXEC_DB_USER` (default `starexec`).
 
 ```bash
-# Stop application
-make stop
+# starexec-app and starexec-postgres, or starexec-pod-app and starexec-pod-postgres with Helm
+APP=$(podman ps --format '{{.Names}}' | grep -E '^starexec(-pod)?-app$')
+PG=$(podman ps --format '{{.Names}}' | grep -E '^starexec(-pod)?-postgres$')
+```
 
-# Restore
-cat backup.sql | podman exec -i starexec-postgres psql -U starexec
+#### From SQL Dump
 
-# Start application
-make start
+A plain SQL dump restores into an empty database. Restored over the live one, it fails on every
+object that already exists and leaves a mix of old and new rows. These commands delete the
+current database, so dump it first (`make db-dump`).
+
+```bash
+podman stop "$APP"
+
+podman exec "$PG" psql -U starexec -d postgres -c "DROP DATABASE starexec;"
+podman exec "$PG" psql -U starexec -d postgres -c "CREATE DATABASE starexec OWNER starexec;"
+podman exec -i "$PG" psql -U starexec -d starexec -v ON_ERROR_STOP=1 < backup.sql
+
+podman start "$APP"
 ```
 
 #### From Custom Format
 
 ```bash
-podman exec -i starexec-postgres \
-  pg_restore -U starexec -d starexec < backup.dump
-```
-
-#### To Fresh Database
-
-```bash
-# Drop and recreate database
-podman exec starexec-postgres psql -U postgres -c "DROP DATABASE starexec;"
-podman exec starexec-postgres psql -U postgres -c "CREATE DATABASE starexec OWNER starexec;"
-
-# Restore
-cat backup.sql | podman exec -i starexec-postgres psql -U starexec
+podman stop "$APP"
+podman exec -i "$PG" pg_restore -U starexec -d starexec --clean --if-exists < backup.dump
+podman start "$APP"
 ```
 
 ### Automated Backups
@@ -312,32 +315,32 @@ WHERE ur.role = 'admin';
 ### Job Management
 
 ```sql
--- Count jobs by status
-SELECT status_code, COUNT(*) 
-FROM jobs 
-GROUP BY status_code;
+-- Count pairs by status (a job's status comes from its pairs;
+-- jobs.status_code is never updated and stays 0)
+SELECT status_code, COUNT(*)
+FROM job_pairs
+GROUP BY status_code
+ORDER BY status_code;
 
--- Find stuck jobs (running > 24 hours)
-SELECT id, name, created 
-FROM jobs 
-WHERE status_code = 'RUNNING' 
-AND created < NOW() - INTERVAL '24 hours';
-
--- Cancel stuck job
-UPDATE jobs SET status_code = 'KILLED' WHERE id = ?;
-UPDATE job_pairs SET status_code = 16 WHERE job_id = ?;
-
--- Clean old completed jobs (> 90 days)
-DELETE FROM job_pairs 
-WHERE job_id IN (
-  SELECT id FROM jobs 
-  WHERE status_code = 'COMPLETE' 
-  AND completed < NOW() - INTERVAL '90 days'
-);
-DELETE FROM jobs 
-WHERE status_code = 'COMPLETE' 
-AND completed < NOW() - INTERVAL '90 days';
+-- Jobs with pairs enqueued (2) or running (4) that were submitted more than
+-- 24 hours ago
+SELECT jp.job_id, j.name, jp.status_code, COUNT(*) AS pairs,
+       MIN(jp.queuesub_time) AS oldest_submission
+FROM job_pairs jp
+JOIN jobs j ON j.id = jp.job_id
+WHERE NOT j.deleted
+  AND jp.status_code IN (2, 4)
+  AND jp.queuesub_time < NOW() - INTERVAL '24 hours'
+GROUP BY jp.job_id, j.name, jp.status_code
+ORDER BY oldest_submission;
 ```
+
+Stop or remove jobs from the job page (Pause, Delete), not with `UPDATE` or
+`DELETE`. Delete stops the job's running pairs, removes its pairs and its
+output directory, and gives its disk usage back to the owner's quota. Setting
+`status_code` in SQL stops nothing and overwrites results that were already
+recorded. Deleting `job_pairs` rows cascades into eight tables of results,
+while the output files and the quota charge stay behind.
 
 ### Space Management
 
@@ -500,8 +503,8 @@ echo $STAREXEC_DB_PASSWORD
 # Check pg_hba.conf authentication
 podman exec starexec-postgres cat /var/lib/postgresql/data/pg_hba.conf
 
-# Reset password
-podman exec starexec-postgres psql -U postgres -c \
+# Reset password (the superuser is STAREXEC_DB_USER; there is no postgres role)
+podman exec starexec-postgres psql -U starexec -c \
   "ALTER USER starexec WITH PASSWORD 'new-password';"
 ```
 
@@ -552,11 +555,16 @@ FROM pg_tables WHERE schemaname = 'starexec'
 ORDER BY pg_total_relation_size('starexec.' || tablename) DESC
 LIMIT 10;
 
--- Clean up old job data
-DELETE FROM job_pairs WHERE job_id IN (
-  SELECT id FROM jobs WHERE completed < NOW() - INTERVAL '180 days'
-);
-VACUUM FULL job_pairs;
+-- Jobs using the most disk; delete them from the job page, which also removes
+-- their files and gives the space back to the owner's quota
+SELECT id, name, user_id, pg_size_pretty(disk_size) AS size, completed
+FROM jobs
+WHERE NOT deleted
+ORDER BY disk_size DESC NULLS LAST
+LIMIT 20;
+
+-- Avoid VACUUM FULL on a full disk: it writes a new copy of the table before
+-- it releases the old one, and locks the table against every query meanwhile
 ```
 
 ### Slow Queries

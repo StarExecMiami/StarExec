@@ -437,6 +437,50 @@ public class RESTServicesUploadSessionTests {
 		org.apache.commons.io.FileUtils.deleteQuietly(tempDir.toFile());
 	}
 
+	/**
+	 * A user deletion removes the session's directory along with the session's row. A chunk request
+	 * that read the session just before must not create the directory again, and leave its chunk in
+	 * it (#275).
+	 */
+	@Test
+	public void uploadSessionChunkDoesNotRecreateADeletedSessionDirectory() throws Exception {
+		RESTServices services = new RESTServices();
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Path userDir = benchmarkRoot().resolve("4343");
+		Path sessionDir = userDir.resolve("20261023-10.00.00.000/upload-session-deleted");
+		org.apache.commons.io.FileUtils.deleteQuietly(userDir.toFile());
+		UploadSession session = new UploadSession();
+		session.setId(4343L);
+		session.setUserId(4343);
+		session.setFileName("AllProblems.tgz");
+		session.setStagingPath(sessionDir.resolve("AllProblems.tgz.part").toString());
+		session.setTotalBytes(4L);
+		session.setChunkSize(4);
+		session.setTotalChunks(1);
+		session.setStatus("UPLOADING");
+
+		Mockito.when(request.getContentLengthLong()).thenReturn(4L);
+		Mockito.when(request.getInputStream()).thenReturn(servletInputStream("data".getBytes(StandardCharsets.UTF_8)));
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<UploadSessionSecurity> security = Mockito.mockStatic(UploadSessionSecurity.class);
+			 MockedStatic<UploadSessions> uploadSessions = Mockito.mockStatic(UploadSessions.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(4343);
+			security.when(() -> UploadSessionSecurity.canUserManageUploadSession(4343L, 4343)).thenReturn(true);
+			uploadSessions.when(() -> UploadSessions.getSession(4343L)).thenReturn(Optional.of(session));
+			uploadSessions.when(() -> UploadSessions.isChunkRecorded(4343L, 0)).thenReturn(false);
+			// The session's row went with its user.
+			uploadSessions.when(() -> UploadSessions.recordChunkIfAbsent(4343L, 0, 4)).thenReturn(false);
+
+			String response = services.uploadSessionChunk(4343L, 0, request);
+
+			assertFalse("the deleted user's directory is created again", Files.exists(userDir));
+			assertTrue(response, response.contains("\"success\":false"));
+		} finally {
+			org.apache.commons.io.FileUtils.deleteQuietly(userDir.toFile());
+		}
+	}
+
 	private Path benchmarkRoot() throws Exception {
 		Path root = Path.of(R.getBenchmarkPath()).toAbsolutePath().normalize();
 		Files.createDirectories(root);

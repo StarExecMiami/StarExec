@@ -57,6 +57,12 @@ public class Statistics {
 	 * pairs to render a graph.
 	 */
 	public static final String OVERSIZED_GRAPH_ERROR = "big";
+	/**
+	 * This string is returned by makeSolverComparisonChart in place of a file path
+	 * when one of the two configurations has no pair that the graph plots. That is
+	 * not a failure: there is nothing to draw.
+	 */
+	public static final String NO_COMPARABLE_PAIRS_ERROR = "none";
 	private static ConcurrentHashMap<Integer, QueueGraphData> queueGraphDataHashMap = new ConcurrentHashMap<>();
 
 	/**
@@ -286,7 +292,9 @@ public class Statistics {
 	 * @return A list of strings of size 2, where the first string is the path to
 	 *         the new graph and the second
 	 *         string is
-	 *         an HTML image map. Returns null on failure.
+	 *         an HTML image map. When there is no chart to draw, returns a list
+	 *         holding only OVERSIZED_GRAPH_ERROR or NO_COMPARABLE_PAIRS_ERROR.
+	 *         Returns null on failure.
 	 * @author Eric Burns
 	 */
 
@@ -309,6 +317,13 @@ public class Statistics {
 			if ((pairs1.size()) > R.MAXIMUM_DATA_POINTS || pairs2.size() > R.MAXIMUM_DATA_POINTS) {
 				List<String> answer = new ArrayList<>();
 				answer.add(Statistics.OVERSIZED_GRAPH_ERROR);
+				return answer;
+			}
+			// Both lists hold only the pairs this graph plots. The chart below returns null
+			// when one is empty, which callers cannot tell apart from a failure.
+			if (pairs1.isEmpty() || pairs2.isEmpty()) {
+				List<String> answer = new ArrayList<>();
+				answer.add(Statistics.NO_COMPARABLE_PAIRS_ERROR);
 				return answer;
 			}
 			return makeSolverComparisonChart(pairs1, pairs2, jobSpaceId, edgeLengthInPixels, axisColor, stageNumber,

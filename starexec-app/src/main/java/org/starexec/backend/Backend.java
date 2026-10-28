@@ -124,28 +124,41 @@ public interface Backend {
     }
 
     /**
-     * Kills an execution and reports whether its absence was <em>established</em>.
+     * Requests termination of an execution and reports whether its absence was
+     * <em>established</em>.
      *
-     * <p>Distinct from {@link #killPair(int)} because that method's boolean cannot carry
-     * this meaning. Audited across the implementations: {@code LocalBackend} returns false
-     * when the job is not in its map, {@code PodmanBackend} returns false when the
-     * container is absent or has already exited (releasing the slot as it does so), and
-     * the SGE and OAR backends return false when {@code qdel}/{@code oardel} throws,
-     * including for a job that no longer exists. In every one of those cases false means
-     * <em>already gone</em> — the safe case. Reinterpreting it as "unproven" would strand
-     * pairs on all four.
+     * <p>The boolean from {@link #killPair(int)} only reports the result of a backend's
+     * termination operation; it does not establish that the execution can no longer run
+     * or write results. Backends that can prove this stronger condition must override this
+     * method. The default still sends the best-effort termination request, but fails closed
+     * because the interface provides no evidence that the execution has stopped.
      *
-     * <p>So the strict contract is opt-in. The default keeps each backend's existing
-     * behaviour exactly, and a backend adopts the contract by overriding this method.
-     * Kubernetes does, because deleting a {@code batch/v1} Job does not synchronously stop
-     * its pod. Podman is the next candidate: it has the same asynchronous-teardown shape.
+     * <p>{@link GridEngineBackend} and {@link OARBackend} currently inherit this default.
+     * Their kill request is still sent, but operations that require proof before replacing
+     * or deleting execution state (including reruns and job/user deletion) remain withheld
+     * when the result is {@link KillOutcome#UNPROVEN}. This is intentional until those
+     * backends can provide evidence that the exact execution has stopped.</p>
      *
      * @return {@link KillOutcome#CONFIRMED_SAFE} only when nothing for this execution can
      *         still run or write
      */
     default KillOutcome killPairConfirmed(int execId) {
         killPair(execId);
-        return KillOutcome.CONFIRMED_SAFE;
+        return KillOutcome.UNPROVEN;
+    }
+
+    /**
+     * Asks the backend to start stopping an execution, without waiting to learn whether it
+     * stopped.
+     *
+     * <p>A caller stopping several executions requests every stop first and then confirms
+     * each with {@link #killPairConfirmed(int)}. Where confirmation has to wait for an
+     * execution to wind down (a Kubernetes pod's termination grace period), the waits then
+     * overlap instead of queueing one per execution. This is never evidence that anything
+     * stopped; only {@link #killPairConfirmed(int)} is. The default does nothing, so every
+     * stop starts at its confirmation, as before.
+     */
+    default void requestStop(int execId) {
     }
 
     /**
@@ -206,8 +219,10 @@ public interface Backend {
      * the new results, leaving the pair stuck in ENQUEUED status. This method ensures that
      * state is cleared so the rerun results are processed correctly.</p>
      *
-     * @param pairId The pair ID being rerun. For most backends (SGE, Kubernetes, etc.),
-     *               this is a no-op. For LocalBackend, this clears monitor tracking.
+     * @param pairId The pair ID being retired. For most backends (SGE, Kubernetes, etc.),
+     *               this is a no-op. LocalBackend clears monitor state; Podman drains and
+     *               removes any retained exited container so it cannot ingest against a
+     *               pair that is being removed.
      */
     void clearPairTracking(int pairId);
 

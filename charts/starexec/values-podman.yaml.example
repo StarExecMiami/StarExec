@@ -4,8 +4,12 @@
 #
 #   cp charts/starexec/values-podman.yaml.example charts/starexec/values-podman.yaml
 #
-# values-podman.yaml is gitignored because it may contain real credentials.
-# Never commit that file; commit changes here instead.
+# For production, copy it to values-podman-prod.yaml instead and deploy with
+#   make deploy-podman ENV=prod VALS=charts/starexec/values-podman-prod.yaml
+# (docs/DEPLOYMENT.md, Method 2).
+#
+# Both copies are gitignored because they may contain real credentials.
+# Never commit them; commit changes here instead.
 #
 # Usage: make deploy-podman ENV=podman
 
@@ -39,7 +43,9 @@ postgres:
   # Replace with a strong random password. For local dev the default seeded
   # credentials (admin:admin, public:public) are already baked into the
   # migrations, so any value you choose here only protects the DB socket.
-  # For any non-local deployment use STAREXEC_DB_PASSWORD_FILE instead.
+  # A deployment rendered with Helm uses this value as the database password;
+  # `make deploy-podman ENV=prod` also needs STAREXEC_DB_PASSWORD set, so
+  # export the same value.
   password: <your-dev-password>
   database: starexec
   rootPassword: <your-dev-root-password>

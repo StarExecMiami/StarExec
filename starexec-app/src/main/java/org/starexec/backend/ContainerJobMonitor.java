@@ -148,6 +148,44 @@ public class ContainerJobMonitor {
     }
 
     /**
+     * Retires completed-container ingestion for a pair whose execution was confirmed
+     * stopped. Synchronizing with {@link #checkCompletedJobs()} makes this a drain: a
+     * poll already processing the pair finishes before the caller can delete its rows,
+     * and a later poll cannot rediscover the retained exited container.
+     *
+     * @throws IllegalStateException if the exited container could not be listed or removed
+     */
+    public synchronized void clearPairTracking(int pairId) {
+        final List<PodmanBackend.CompletedContainerInfo> completed;
+        try {
+            completed = backend.getCompletedContainers();
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                "Could not inspect completed containers while retiring pair " + pairId,
+                e
+            );
+        }
+
+        boolean allRetired = true;
+        for (PodmanBackend.CompletedContainerInfo info : completed) {
+            if (info.pairId != pairId) {
+                continue;
+            }
+            if (backend.discardCompletedContainer(info.containerId)) {
+                ingestionAttempts.remove(info.containerId);
+                ingestionQuarantine.remove(info.containerId);
+            } else {
+                allRetired = false;
+            }
+        }
+        if (!allRetired) {
+            throw new IllegalStateException(
+                "Could not retire every completed container for pair " + pairId
+            );
+        }
+    }
+
+    /**
      * Cancels the currently scheduled poll (if any) and immediately schedules
      * a new poll at the current interval.
      *
@@ -411,6 +449,19 @@ public class ContainerJobMonitor {
     }
 
     /**
+     * Whether this monitor has stopped trying to ingest the container's result.
+     *
+     * <p>A quarantined container keeps its output for an operator, but nothing will record
+     * its pair, so the backend stops reporting it as active and the broken-pair sweep may act.
+     *
+     * @param containerId the exited container
+     * @return true once the container is quarantined
+     */
+    public boolean isQuarantined(String containerId) {
+        return ingestionQuarantine.contains(containerId);
+    }
+
+    /**
      * Counts an infrastructure failure against a container and decides whether to come back.
      *
      * <p>After {@link #MAX_INGESTION_ATTEMPTS} the container is quarantined rather than
@@ -485,6 +536,21 @@ public class ContainerJobMonitor {
         long nextAttemptMillis;
     }
 
+    /** Diagnose missing evidence without changing its existing refusal/retry policy. */
+    private String missingOutputDiagnostic(Path outputPath) {
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(outputPath)) {
+            // Opening alone may defer a filesystem error until iteration starts.
+            entries.iterator().hasNext();
+            return "output directory is readable but status.json is missing";
+        } catch (NoSuchFileException e) {
+            return "output directory is missing";
+        } catch (NotDirectoryException e) {
+            return "output path is not a directory";
+        } catch (IOException | DirectoryIteratorException | SecurityException e) {
+            return "output directory cannot be read: " + e.getClass().getSimpleName();
+        }
+    }
+
     /**
      * Processes a completed job by reading output files and updating the database.
      */
@@ -526,7 +592,8 @@ public class ContainerJobMonitor {
         if (!Files.exists(statusJson)) {
             throw new StageStatusSnapshots.InvalidSnapshotException(
                 "completed container " + info.containerId + " for pair " + info.pairId
-                    + " has no status.json, so neither its result nor stage is known"
+                    + " has no status.json, so neither its result nor stage is known; "
+                    + missingOutputDiagnostic(outputPath)
             );
         }
         JsonObject obj;
@@ -593,6 +660,9 @@ public class ContainerJobMonitor {
             stageSnapshots = stageNumber == FinalStatusStage.PAIR_LEVEL
                 ? StageStatusSnapshots.readForPairLevelResult(outputPath, pairId)
                 : StageStatusSnapshots.read(outputPath, pairId, stageNumber);
+            // See LocalJobMonitor: the reader reports the contradiction, the monitor logs it,
+            // because a WARN here is a database write and that class must not make one.
+            StageStatusSnapshots.lastContradiction().ifPresent(log::warn);
         } catch (IOException e) {
             // The filesystem, not the contents: retried, as the other monitors classify it.
             throw new RetryableIngestionException(
@@ -627,13 +697,23 @@ public class ContainerJobMonitor {
         //    decided with the per-stage files in step 5.
         Properties attributes = parseAttributes(outputPath);
 
-        // 4. Update database
-        updateDatabase(
+        // 4. Update database. info.attemptNo fences every result write on the attempt the
+        //    container was created for (#185); null, from a container that predates the
+        //    label, leaves them unfenced as before. A stale refusal means a rerun replaced
+        //    this execution: nothing later would be accepted either, so the remaining writes
+        //    are skipped and the caller releases the container. It is not a failure, is not
+        //    retried and is not quarantined.
+        if (updateDatabase(
             pairId,
             stageNumber,
             status,
-            stageSnapshots
-        );
+            stageSnapshots,
+            info.attemptNo
+        )) {
+            log.info("Completed job " + pairId + " belongs to a superseded attempt ("
+                + info.attemptNo + "); its results were discarded and the container is released");
+            return;
+        }
 
         // 5. Measurements and attributes, each against the stage that produced it. Only after
         //    updateDatabase returned: a refused status throws out of it, and nothing may be
@@ -649,8 +729,10 @@ public class ContainerJobMonitor {
                 finishedEarlier.add(stage);
             }
         }
-        recordMeasurements(pairId, outputPath, stageNumber, finishedEarlier, info.partitionIndex);
-        recordAttributes(pairId, outputPath, stageNumber, finishedEarlier, attributes);
+        recordMeasurements(pairId, outputPath, stageNumber, finishedEarlier, info.partitionIndex,
+            info.attemptNo);
+        recordAttributes(pairId, outputPath, stageNumber, finishedEarlier, attributes,
+            info.attemptNo);
 
         log.info("Completed job " + pairId + " processed: status=" + status + " stageNumber=" + stageNumber);
     }
@@ -993,11 +1075,12 @@ public class ContainerJobMonitor {
      * call (it is a no-op there), so without this step the completion timestamp
      * remains NULL for container-executed pairs.</p>
      */
-    private void updateDatabase(
+    private boolean updateDatabase(
         int pairId,
         int stageNumber,
         StatusCode status,
-        Map<Integer, Integer> stageSnapshots
+        Map<Integer, Integer> stageSnapshots,
+        Integer attemptNo
     ) throws Exception {
         // Earlier stages first. UpdatePairStatusPrecise below rewrites the terminal stage
         // and everything after it, so these survive it; writing them afterwards would
@@ -1019,7 +1102,12 @@ public class ContainerJobMonitor {
             }
         }
         StageStatusBatchResult batch =
-            JobPairs.setEarlierStageStatuses(pairId, earlierStages);
+            FencedResultWrites.setEarlierStageStatuses(pairId, earlierStages, attemptNo);
+        if (batch == StageStatusBatchResult.STALE_ATTEMPT) {
+            log.info("Pair " + pairId + ": stage statuses refused as stale (attempt "
+                + attemptNo + "); the pair was rerun");
+            return true;
+        }
         if (batch == StageStatusBatchResult.REJECTED_UNKNOWN_STAGE) {
             // The output names a stage this pair does not have. No retry changes that.
             throw new Exception(
@@ -1049,18 +1137,29 @@ public class ContainerJobMonitor {
 
         // Stage 0 is the pair-level channel: the pair failed outside any stage, so there is no
         // stage to carry the result and it is recorded against the pair itself (#165).
+        // A pair-level failure gives its own status to the stages it prevented, not
+        // NOT_REACHED: no earlier stage failed, and listings and statistics read the stage.
         PairStatusResult statusResult = stageNumber == FinalStatusStage.PAIR_LEVEL
-            ? JobPairs.setPairLevelStatusResult(
+            ? FencedResultWrites.setPairLevelStatusResult(
                 pairId,
                 status.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal())
-            : JobPairs.setPairStatusPreciseResult(
+                status.getVal(),
+                attemptNo)
+            : FencedResultWrites.setPairStatusPreciseResult(
                 pairId,
                 stageNumber,
                 status.getVal(),
                 StatusCode.STATUS_NOT_REACHED.getVal(),
-                false
+                false,
+                attemptNo
             );
+        if (statusResult == PairStatusResult.STALE_ATTEMPT) {
+            // Refused before anything was written: the pair was rerun after this container
+            // was created (#185). Not FAILED -- no retry can succeed -- and not APPLIED.
+            log.info("Pair " + pairId + ": status " + status + " refused as stale (attempt "
+                + attemptNo + "); the pair was rerun");
+            return true;
+        }
         if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
             // The stage named is not a stage this pair has, so no retry changes it.
             //
@@ -1106,6 +1205,7 @@ public class ContainerJobMonitor {
         // recorded finish time must not drift each time one happens.
 
         log.debug("Updated database for pair " + pairId + ": status=" + status);
+        return false;
     }
 
     /**
@@ -1122,7 +1222,8 @@ public class ContainerJobMonitor {
         Path outputPath,
         int stageNumber,
         Set<Integer> finishedEarlier,
-        int partitionIndex
+        int partitionIndex,
+        Integer attemptNo
     ) throws Exception {
         Map<Integer, StageStatsFiles.Stats> byStage = StageStatsFiles.select(
             outputPath,
@@ -1138,7 +1239,7 @@ public class ContainerJobMonitor {
                 String nodeName = stats.hostname != null
                     ? stats.hostname
                     : backend.getWorkerNodeNameForPartition(partitionIndex);
-                boolean ok = JobPairs.updateRunSolverStats(
+                boolean ok = FencedResultWrites.updateRunSolverStats(
                     pairId,
                     nodeName,
                     stats.wallclockTime,
@@ -1148,7 +1249,8 @@ public class ContainerJobMonitor {
                     stats.maxVirtualMemory,
                     stats.maxResidentSetSize,
                     entry.getKey(),
-                    stats.diskSize
+                    stats.diskSize,
+                    attemptNo
                 );
                 if (ok) {
                     log.debug("Persisted run stats for pair " + pairId + " stage "
@@ -1173,7 +1275,8 @@ public class ContainerJobMonitor {
         Path outputPath,
         int stageNumber,
         Set<Integer> finishedEarlier,
-        Properties legacy
+        Properties legacy,
+        Integer attemptNo
     ) throws Exception {
         Map<Integer, Properties> byStage = StageAttributeFiles.select(
             outputPath,
@@ -1186,7 +1289,8 @@ public class ContainerJobMonitor {
 
         for (Map.Entry<Integer, Properties> entry : byStage.entrySet()) {
             if (!entry.getValue().isEmpty()) {
-                JobPairs.addJobPairAttributes(pairId, entry.getKey(), entry.getValue());
+                FencedResultWrites.addJobPairAttributes(
+                    pairId, entry.getKey(), entry.getValue(), attemptNo);
             }
         }
     }

@@ -28,8 +28,9 @@ public class UploadSessions {
     private static final String INSERT_SESSION_SQL =
         "INSERT INTO upload_sessions (" +
             "user_id, space_id, file_name, staging_path, total_bytes, bytes_received, chunk_size, total_chunks, " +
-            "upload_method, benchmark_type_id, downloadable, has_dependencies, dep_root_space_id, linked" +
-        ") VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)";
+            "upload_method, benchmark_type_id, downloadable, has_dependencies, dep_root_space_id, linked, " +
+            "space_permissions" +
+        ") VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
     private static final String GET_SESSION_SQL =
         "SELECT * FROM upload_sessions WHERE id = ?";
@@ -120,8 +121,10 @@ public class UploadSessions {
         int chunkSize = Math.max(1, EnvironmentConfig.getUploadSessionChunkSizeBytes());
         int totalChunks = (int)Math.ceil(totalBytes / (double)chunkSize);
 
+        File sessionDir = null;
+        boolean created = false;
         try {
-            File sessionDir = UploadBenchmark.getDirectoryForBenchmarkUpload(
+            sessionDir = UploadBenchmark.getDirectoryForBenchmarkUpload(
                 userId, "upload-session-" + UUID.randomUUID()
             );
             File stagingFile = new File(sessionDir, cleanFileName + ".part");
@@ -141,13 +144,16 @@ public class UploadSessions {
             ps.setBoolean(11, request.isHasDependencies());
             ps.setObject(12, request.getDepRootSpaceId(), Types.INTEGER);
             ps.setBoolean(13, request.isLinked());
+            ps.setString(14, UploadJob.encodeSpacePermissionNames(request.getSpacePermissions()));
             ps.executeUpdate();
 
             keys = ps.getGeneratedKeys();
             if (!keys.next()) {
                 return Optional.empty();
             }
-            return getSession(keys.getLong(1));
+            Optional<UploadSession> session = getSession(keys.getLong(1));
+            created = session.isPresent();
+            return session;
         } catch (Exception e) {
             log.error("createSession", "Failed to create upload session for user " + userId, e);
             return Optional.empty();
@@ -155,6 +161,10 @@ public class UploadSessions {
             Common.safeClose(keys);
             Common.safeClose(ps);
             Common.safeClose(con);
+            // The caller was told there is no session, so nothing will use its directory (#275).
+            if (!created) {
+                UploadBenchmark.deleteDirectoryForBenchmarkUpload(userId, sessionDir);
+            }
         }
     }
 
@@ -517,6 +527,7 @@ public class UploadSessions {
         int depRootSpaceId = rs.getInt("dep_root_space_id");
         session.setDepRootSpaceId(rs.wasNull() ? null : depRootSpaceId);
         session.setLinked(rs.getBoolean("linked"));
+        session.setSpacePermissions(UploadJobQueue.columnAddedByMigration(rs, "space_permissions"));
         session.setStatus(rs.getString("status"));
         long jobId = rs.getLong("job_id");
         session.setJobId(rs.wasNull() ? null : jobId);

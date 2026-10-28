@@ -308,7 +308,7 @@ public interface Backend {
 │   │   │ Core pool: min(4, CPU_cores)                │   │   │
 │   │   │ Max pool: configurable                      │   │   │
 │   │   │ Queue: bounded (10,000)                     │   │   │
-│   │   │ Policy: CallerRunsPolicy (backpressure)     │   │   │
+│   │   │ Policy: AbortPolicy (submission deferred)   │   │   │
 │   │   └─────────────────────────────────────────────┘   │   │
 │   └─────────────────────────────────────────────────────┘   │
 │                              │                              │
@@ -332,6 +332,18 @@ public interface Backend {
 │   └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+**Queue-saturation contract.** `LocalBackend.submitScript` registers the job
+(future and tracking entry) before handing it to the executor and never runs a
+solver on the submitting thread, so it never holds the backend monitor for the
+duration of a solver. If the bounded queue is full or the executor is shutting
+down, the entry is removed and:
+
+- a job-pair submission (`pairId > 0`) throws `SubmissionDeferredException`;
+  `JobManager.submitJobs` returns the pair to `PENDING_SUBMIT` and ends the pass;
+- a maintenance submission (`pairId <= 0`, e.g. solver cache clearing) returns `-1`.
+
+No terminal execution ID is left in `getActiveExecutionIds()` on either path.
 
 ### PodmanBackend Architecture
 
