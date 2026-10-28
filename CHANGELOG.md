@@ -120,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Servlet authorization**: Corrected authorization checks that reported a failure without returning, so the privileged work ran anyway. The most serious allowed any authenticated user to rewrite the queue-to-community access list.
 - **StarDev transfer**: A failed StarDev login now stops the transfer instead of continuing on a connection that never authenticated.
 - **Build provenance**: The runsolver binary is now compiled from the source vendored in this repository. It was previously downloaded from an external host at image build time with no checksum or pinned digest, so the instrument every recorded measurement comes from is now reproducible from the tree it was audited against.
+- **Guava deserialization**: Updated Guava from 33.6.0 to 33.7.2 for CVE-2026-102554 (high severity). Up to 33.7.1, Java deserialization of Guava's `CompactHashMap`, `CompactHashSet` and `MapMaker` maps allocates as much memory as the serialized data declares, so crafted data can exhaust the heap. StarExec's own code makes no Java-deserialization calls, so no StarExec path is known to reach the flaw.
 
 
 ## [2.5.1] - 2026-08-03
