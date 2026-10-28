@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -195,32 +196,48 @@ public class LegacyTestSequenceEngineTest {
 		assertEquals(0, discoveries.get());
 	}
 
+	/**
+	 * Discovery only. Executing the live suite would run every sequence as soon as the inventory
+	 * accepts it; once it does, this test fails instead.
+	 */
 	@Test
 	public void theLiveSuiteStopsAtTheInventoryPreflight() {
-		Run run = run(new LegacyTestSequenceEngine());
+		IllegalStateException refusal = assertThrows(IllegalStateException.class,
+				() -> LegacyTestLayerInventory.load().validateReady(TestSequenceDiscovery.discover()));
+		assertTrue(refusal.getMessage().contains("725 UNVERIFIED"), refusal.getMessage());
 
-		assertEquals(Set.of(ENGINE_NAME, SUITE), run.results.keySet());
-		assertEquals(List.of(SUITE), run.failed());
-		assertTrue(run.failureOf(SUITE).getMessage().contains("725 UNVERIFIED"));
+		// The default engine applies the same preflight: the suite stays one test, with no sequence below it.
+		TestPlan plan = launcher(new LegacyTestSequenceEngine()).discover(suiteRequest());
+		assertEquals(Set.of(ENGINE_NAME, SUITE), displayNames(plan));
+		assertEquals(1, plan.countTestIdentifiers(TestIdentifier::isTest));
+	}
+
+	private static Supplier<List<TestSequenceDiscovery.DiscoveredSequence>> sequenceOf(Class<? extends TestSequence> sequenceClass) {
+		return () -> TestSequenceDiscovery.inspectClasses(List.of(sequenceClass));
 	}
 
 	private static LegacyTestSequenceEngine engineFor(Class<? extends TestSequence> sequenceClass) {
-		return new LegacyTestSequenceEngine(() -> TestSequenceDiscovery.inspectClasses(List.of(sequenceClass)));
+		return new LegacyTestSequenceEngine(sequenceOf(sequenceClass));
 	}
 
 	private static Run run(Class<? extends TestSequence> sequenceClass) {
-		return run(engineFor(sequenceClass));
+		return run(sequenceOf(sequenceClass));
 	}
 
+	/** Executes synthetic sequences only. The default engine would run the live suite, so it is only discovered. */
 	private static Run run(Supplier<List<TestSequenceDiscovery.DiscoveredSequence>> sequences) {
-		return run(new LegacyTestSequenceEngine(sequences));
-	}
-
-	private static Run run(LegacyTestSequenceEngine engine) {
 		Run run = new Run();
-		launcher(engine).execute(suiteRequest(), run);
+		launcher(new LegacyTestSequenceEngine(sequences)).execute(suiteRequest(), run);
 		assertEquals(SUCCESSFUL, run.result(ENGINE_NAME).getStatus(), "the engine itself must not fail");
 		return run;
+	}
+
+	/** Display names of everything in the plan, which is not executed. */
+	private static Set<String> displayNames(TestPlan plan) {
+		return plan.getRoots().stream()
+				.flatMap(root -> Stream.concat(Stream.of(root), plan.getDescendants(root).stream()))
+				.map(TestIdentifier::getDisplayName)
+				.collect(Collectors.toSet());
 	}
 
 	/** A launcher that sees only the given engine, not the ones registered on the classpath. */

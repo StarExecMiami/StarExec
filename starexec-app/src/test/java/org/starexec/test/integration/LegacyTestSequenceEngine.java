@@ -23,8 +23,8 @@ import org.opentest4j.MultipleFailuresError;
 
 /**
  * Runs the legacy {@link TestSequence} classes on the JUnit Platform. It contributes tests only
- * when {@link LegacyTestSequenceSuite} is selected, which only the opt-in
- * {@code legacy-test-sequences} Maven profile does.
+ * when a request selects {@link LegacyTestSequenceSuite}: the opt-in
+ * {@code legacy-test-sequences} Maven profile does, Surefire's default includes do not.
  *
  * <p>Each sequence runs as one unit (setup, every method, teardown) through
  * {@link TestSequence#execute(TestSequence.ExecutionListener)}, and each method is reported as a
