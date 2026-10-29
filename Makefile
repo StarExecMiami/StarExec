@@ -25,6 +25,7 @@ MAKEFLAGS += --no-print-directory
 # ENV             - Deployment environment: dev, ci, prod (default: dev)
 # FORCE           - Skip confirmation prompts: 0 or 1 (default: 0)
 # DRY_RUN         - Preview volumes-delete, clean-hard, reset and nuke without executing: 0 or 1 (default: 0)
+# VERBOSE         - Show technical mutation output and details: 0 or 1 (default: 0)
 #
 # Database Configuration:
 # STAREXEC_DB_PASSWORD      - Database password (⚠️ set for non-dev environments)
@@ -112,6 +113,9 @@ endif
 FORCE?=0
 DRY_RUN?=0
 LOCAL?=0
+VERBOSE?=0
+export VERBOSE
+CLI_OUTPUT = . "$(CURDIR)/scripts/lib/cli-output.sh";
 
 # Container naming (derived from RELEASE_NAME for consistency)
 APP_CONTAINER=$(RELEASE_NAME)-app
@@ -195,13 +199,13 @@ CURRENT_UID := $(shell id -u)
 PODMAN_SOCKET_PATH ?= $(if $(filter yes,$(PODMAN_REQUIRES_SUDO)),/run/podman/podman.sock,$(if $(XDG_RUNTIME_DIR),$(XDG_RUNTIME_DIR)/podman/podman.sock,/run/user/$(CURRENT_UID)/podman/podman.sock))
 export PODMAN_SOCKET_PATH
 
-# ANSI Colors for UI
-GREEN  := $(shell tput -Txterm setaf 2)
-YELLOW := $(shell tput -Txterm setaf 3)
-RED    := $(shell tput -Txterm setaf 1)
-BLUE   := $(shell tput -Txterm setaf 4)
-RESET  := $(shell tput -Txterm sgr0)
-BOLD   := $(shell tput -Txterm bold)
+# Legacy targets remain uncolored; migrated emitters use CLI_OUTPUT at runtime.
+GREEN  :=
+YELLOW :=
+RED    :=
+BLUE   :=
+RESET  :=
+BOLD   :=
 
 
 .PHONY: help build build-fresh build-prod build-offline cache-images image \
@@ -306,6 +310,7 @@ help:
 	@echo "Flags:"
 	@echo "  DRY_RUN=1             Preview volumes-delete, clean-hard, reset and nuke without executing"
 	@echo "  FORCE=1               Skip confirmation prompts (use with caution)"
+	@echo "  VERBOSE=1             Show technical output and details (default: 0)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make deploy-podman ENV=dev"
@@ -361,30 +366,29 @@ build-offline:
 	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
 image:
-	@echo "Checking for image: $(RELEASE_NAME):$(IMAGE_TAG)"
+	@$(CLI_OUTPUT) ui_info "Checking for image: $(RELEASE_NAME):$(IMAGE_TAG)"
 	@# For 'latest' or 'dev' tags, we should at least attempt to check for updates from the registry
 	@# Set LOCAL=1 to skip the registry pull and always use the locally-built image.
-	@if [ "$(LOCAL)" = "1" ]; then \
-		echo "${YELLOW}LOCAL=1: Skipping registry pull, using local image only${RESET}"; \
+	@$(CLI_OUTPUT) if [ "$(LOCAL)" = "1" ]; then \
+		ui_info "LOCAL=1: Skipping registry pull, using local image only"; \
 	elif [ "$(IMAGE_TAG)" = "latest" ] || [ "$(IMAGE_TAG)" = "dev" ]; then \
-		echo "Rolling tag detected ($(IMAGE_TAG)). Checking registry for updates..."; \
-		if $(PODMAN_CMD) pull $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
-			echo "${GREEN}✓ Successfully checked/pulled $(IMAGE_NAME):$(IMAGE_TAG)${RESET}"; \
+		ui_info "Checking registry for $(IMAGE_NAME):$(IMAGE_TAG)..."; \
+		if ui_run $(PODMAN_CMD) pull $(IMAGE_NAME):$(IMAGE_TAG); then \
+			ui_success "Pulled $(IMAGE_NAME):$(IMAGE_TAG)"; \
 			$(PODMAN_CMD) tag $(IMAGE_NAME):$(IMAGE_TAG) $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true; \
 		else \
-			echo "${YELLOW}⚠️  Could not reach registry. Proceeding with local image if available...${RESET}"; \
+			ui_warn "Image pull failed. Proceeding with local image if available..."; \
 		fi; \
 	fi
-	@if $(PODMAN_CMD) image inspect $(RELEASE_NAME):$(IMAGE_TAG) >/dev/null 2>&1; then \
-		echo "${GREEN}✓ Image $(RELEASE_NAME):$(IMAGE_TAG) found locally${RESET}"; \
+	@$(CLI_OUTPUT) if $(PODMAN_CMD) image inspect $(RELEASE_NAME):$(IMAGE_TAG) >/dev/null 2>&1; then \
+		ui_info "Image $(RELEASE_NAME):$(IMAGE_TAG) found locally"; \
 	else \
-		echo "Image not found locally at $(RELEASE_NAME):$(IMAGE_TAG)"; \
-		echo "Attempting to pull from registry..."; \
-		if $(PODMAN_CMD) pull $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
+		ui_info "Image not found locally at $(RELEASE_NAME):$(IMAGE_TAG). Pulling from registry..."; \
+		if ui_run $(PODMAN_CMD) pull $(IMAGE_NAME):$(IMAGE_TAG); then \
 			$(PODMAN_CMD) tag $(IMAGE_NAME):$(IMAGE_TAG) $(RELEASE_NAME):$(IMAGE_TAG); \
-			echo "${GREEN}✓ Successfully pulled and tagged $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"; \
+			ui_success "Pulled and tagged $(RELEASE_NAME):$(IMAGE_TAG)"; \
 		else \
-			echo "⚠️  Image not available in registry. Building locally..."; \
+			ui_warn "Image pull failed. Building locally..."; \
 			$(MAKE) build; \
 		fi; \
 	fi
@@ -425,8 +429,7 @@ build-job-runner:
 # ============================================================================
 
 volumes-create:
-	@echo "Creating volumes for environment: $(ENV)"
-	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) create $(ENV)
+	@PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) create $(ENV)
 
 volumes-fix-permissions:
 	@echo "Fixing PostgreSQL volume permissions for environment: $(ENV)"
@@ -446,7 +449,7 @@ volumes-fix-permissions:
 	fi
 
 volumes-list:
-	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) list
+	@PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) list
 
 volumes-backup: verify-deps
 	@echo "Backing up volumes for environment: $(ENV)"
@@ -467,7 +470,7 @@ volumes-backup: verify-deps
 			fi; \
 		fi; \
 	fi
-	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) backup-all $(ENV)
+	@PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) backup-all $(ENV)
 
 volumes-restore: verify-deps
 	@# =========================================================================
@@ -556,33 +559,31 @@ volumes-export:
 	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) export $$vol
 
 volumes-cleanup:
-	@echo "Cleaning up old backups (keeping last 10)"
-	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) cleanup-backups $(ENV) 10
+	@PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) cleanup-backups $(ENV) 10
 
 volumes-health:
-	@echo "Running volume health checks for environment: $(ENV)"
-	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) health-check $(ENV)
+	@PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) health-check $(ENV)
 
 # Each recipe line runs in its own shell, so `exit` in one line cannot stop the next. A guard therefore either
 # fails (`exit 1` stops make) or, for DRY_RUN, leaves the destructive lines out of the recipe altogether.
 volumes-delete:
 ifeq ($(DRY_RUN),1)
-	@echo "[DRY RUN] Would delete volumes for environment: $(ENV)"
-	@echo "  - $(VOLUME_PREFIX)-$(ENV)-data"
-	@echo "  - $(VOLUME_PREFIX)-$(ENV)-sandbox"
-	@echo "  - $(VOLUME_PREFIX)-$(ENV)-backend"
-	@echo "  - $(VOLUME_PREFIX)-$(ENV)-work"
-	@echo "  - $(VOLUME_PREFIX)-$(ENV)-postgres"
-	@echo "  - $(VOLUME_PREFIX)-data and $(VOLUME_PREFIX)-postgres, if they exist (older layouts)"
-	@if [ "$${CLEAN_HOSTPATH:-0}" = "1" ]; then \
-		echo "  - host directories $${HOSTPATH_DATA:-/tmp/starexec-data} and $${HOSTPATH_POSTGRES:-/tmp/postgres-data} (CLEAN_HOSTPATH=1)"; \
+	@$(CLI_OUTPUT) ui_info "[DRY RUN] Would delete volumes for environment: $(ENV)"
+	@$(CLI_OUTPUT) ui_info "  - $(VOLUME_PREFIX)-$(ENV)-data"
+	@$(CLI_OUTPUT) ui_info "  - $(VOLUME_PREFIX)-$(ENV)-sandbox"
+	@$(CLI_OUTPUT) ui_info "  - $(VOLUME_PREFIX)-$(ENV)-backend"
+	@$(CLI_OUTPUT) ui_info "  - $(VOLUME_PREFIX)-$(ENV)-work"
+	@$(CLI_OUTPUT) ui_info "  - $(VOLUME_PREFIX)-$(ENV)-postgres"
+	@$(CLI_OUTPUT) ui_info "  - $(VOLUME_PREFIX)-data and $(VOLUME_PREFIX)-postgres, if they exist (older layouts)"
+	@$(CLI_OUTPUT) if [ "$${CLEAN_HOSTPATH:-0}" = "1" ]; then \
+		ui_info "  - host directories $${HOSTPATH_DATA:-/tmp/starexec-data} and $${HOSTPATH_POSTGRES:-/tmp/postgres-data} (CLEAN_HOSTPATH=1)"; \
 	fi
 else
-	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) delete $(ENV)
+	@PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) delete $(ENV)
 endif
 
 volumes-help:
-	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) help
+	@PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) help
 
 # ============================================================================
 # REUSABLE GUARDS
@@ -591,25 +592,18 @@ volumes-help:
 # require_values_file — abort if the expected values-$(ENV).yaml is missing.
 # Usage: @$(call require_values_file)
 define require_values_file
-	if [ ! -f "$(ENV_VALUES)" ]; then \
-		echo ""; \
-		echo "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"; \
-		echo "${RED}  ✗  Missing required values file: $(ENV_VALUES)${RESET}"; \
-		echo "${RED}     ENV=$(ENV) requires an environment-specific values file.${RESET}"; \
-		echo "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"; \
-		echo ""; \
+	$(CLI_OUTPUT) if [ ! -f "$(ENV_VALUES)" ]; then \
+		ui_error "Missing required values file: $(ENV_VALUES)"; \
+		ui_info "  ENV=$(ENV) requires an environment-specific values file."; \
 		if [ -f "$(ENV_VALUES).example" ]; then \
-			echo "An example file exists. Create your values file with:"; \
-			echo ""; \
-			echo "  cp $(ENV_VALUES).example $(ENV_VALUES)"; \
-			echo ""; \
-			echo "Then edit it to set your credentials and socket path."; \
+			ui_info "  An example file exists. Create your values file with:"; \
+			ui_info "  cp $(ENV_VALUES).example $(ENV_VALUES)"; \
+			ui_info "  Then edit it to set your credentials and socket path."; \
 		else \
-			echo "Create $(ENV_VALUES) with the required configuration."; \
-			echo "Available values files:"; \
-			ls -1 $(CHART_DIR)/values*.yaml $(CHART_DIR)/values*.yaml.example 2>/dev/null | sed 's/^/  /'; \
+			ui_info "  Create $(ENV_VALUES) with the required configuration."; \
+			ui_info "  Available values files:"; \
+			ls -1 $(CHART_DIR)/values*.yaml $(CHART_DIR)/values*.yaml.example 2>/dev/null | sed 's/^/  /' >&2; \
 		fi; \
-		echo ""; \
 		exit 1; \
 	fi
 endef
@@ -624,17 +618,14 @@ endef
 # deploy-podman-direct renders no values file, so the check does not apply.
 # Usage: @$(call require_podman_values)
 define require_podman_values
-	if [ "$(abspath $(PODMAN_VALS))" = "$(abspath $(CHART_DIR)/values-prod.yaml)" ] && command -v helm >/dev/null 2>&1; then \
-		echo ""; \
-		echo "${RED}  ✗  values-prod.yaml is the Kubernetes profile; Podman cannot deploy it${RESET}"; \
-		echo "     Its pod needs a database Secret this deployment does not create, and"; \
-		echo "     it mounts other volumes than the starexec-$(ENV)-* volumes."; \
-		echo "     ENV=prod selects it unless VALS= names the Podman values file:"; \
-		echo ""; \
-		echo "  cp $(CHART_DIR)/values-podman.yaml.example $(CHART_DIR)/values-podman-prod.yaml"; \
-		echo "  # set postgres.password and postgres.rootPassword in it, then:"; \
-		echo "  make deploy-podman ENV=prod VALS=$(CHART_DIR)/values-podman-prod.yaml"; \
-		echo ""; \
+	$(CLI_OUTPUT) if [ "$(abspath $(PODMAN_VALS))" = "$(abspath $(CHART_DIR)/values-prod.yaml)" ] && command -v helm >/dev/null 2>&1; then \
+		ui_error "values-prod.yaml is the Kubernetes profile; Podman cannot deploy it"; \
+		ui_info "  Its pod needs a database Secret this deployment does not create, and"; \
+		ui_info "  it mounts other volumes than the starexec-$(ENV)-* volumes."; \
+		ui_info "  ENV=prod selects it unless VALS= names the Podman values file:"; \
+		ui_info "  cp $(CHART_DIR)/values-podman.yaml.example $(CHART_DIR)/values-podman-prod.yaml"; \
+		ui_info "  # set postgres.password and postgres.rootPassword in it, then:"; \
+		ui_info "  make deploy-podman ENV=prod VALS=$(CHART_DIR)/values-podman-prod.yaml"; \
 		exit 1; \
 	fi
 endef
@@ -643,20 +634,18 @@ endef
 # In prod, block rootful mode unless FORCE=1 is explicitly set.
 # Usage: @$(call require_podman_engine_ready)
 define require_podman_engine_ready
-	if ! $(PODMAN_CMD) info >/dev/null 2>&1; then \
-		echo ""; \
-		echo "${RED}✗ Podman engine is not reachable.${RESET}"; \
-		echo "  Command: $(PODMAN_CMD) info"; \
-		echo "  Try: podman system service --time=0 (or ensure rootless session is active)"; \
-		echo ""; \
+	$(CLI_OUTPUT) if ! $(PODMAN_CMD) info >/dev/null 2>&1; then \
+		ui_error "Podman engine is not reachable."; \
+		ui_info "  Command: $(PODMAN_CMD) info"; \
+		ui_info "  Try: podman system service --time=0 (or ensure rootless session is active)"; \
 		exit 1; \
 	fi; \
 	if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
-		echo "${YELLOW}⚠ Podman appears to require sudo (rootful mode).${RESET}"; \
-		echo "  Rootless mode is recommended for safer default operation."; \
+		ui_warn "Podman appears to require sudo (rootful mode)."; \
+		ui_info "  Rootless mode is recommended for safer default operation."; \
 		if [ "$(ENV)" = "prod" ] && [ "$(FORCE)" != "1" ]; then \
-			echo "${RED}✗ Refusing ENV=prod deployment in rootful mode without FORCE=1.${RESET}"; \
-			echo "  Use rootless Podman, or override explicitly with FORCE=1."; \
+			ui_error "Refusing ENV=prod deployment in rootful mode without FORCE=1."; \
+			ui_info "  Use rootless Podman, or override explicitly with FORCE=1."; \
 			exit 1; \
 		fi; \
 	fi
@@ -668,29 +657,17 @@ endef
 # Falls back to slirp4netns guidance if available.
 # Usage: @$(call require_rootless_network_healthy)
 define require_rootless_network_healthy
-	if [ "$(PODMAN_REQUIRES_SUDO)" != "yes" ]; then \
+	$(CLI_OUTPUT) if [ "$(PODMAN_REQUIRES_SUDO)" != "yes" ]; then \
 		NET_CMD=$$($(PODMAN_CMD) info --format '{{.Host.RootlessNetworkCmd}}' 2>/dev/null || echo "unknown"); \
 		if [ "$$NET_CMD" = "pasta" ]; then \
 			if ! timeout 3 pasta --version >/dev/null 2>&1; then \
-				echo ""; \
-				echo "${RED}╔══════════════════════════════════════════════════════════════╗${RESET}"; \
-				echo "${RED}║  ✗ Rootless networking helper 'pasta' is broken (segfault).  ║${RESET}"; \
-				echo "${RED}║    All rootless Podman networking will fail.                 ║${RESET}"; \
-				echo "${RED}╚══════════════════════════════════════════════════════════════╝${RESET}"; \
-				echo ""; \
+				ui_error "Rootless networking helper 'pasta --version' failed or timed out."; \
 				if command -v slirp4netns >/dev/null 2>&1; then \
-					echo "${GREEN}slirp4netns is available as a drop-in replacement.${RESET}"; \
-					echo ""; \
-					echo "Apply the fix (single command):"; \
-					echo "  ${BLUE}mkdir -p ~/.config/containers && printf '[network]\\ndefault_rootless_network_cmd = \"slirp4netns\"\\n' > ~/.config/containers/containers.conf${RESET}"; \
-					echo ""; \
+					ui_info "  slirp4netns is available as an alternative."; \
+					ui_info "  Configure default_rootless_network_cmd = \"slirp4netns\" in ~/.config/containers/containers.conf under [network]."; \
 				else \
-					echo "Install slirp4netns first:"; \
-					echo "  ${BLUE}sudo apt-get install -y slirp4netns${RESET}"; \
-					echo ""; \
-					echo "Then apply the fix:"; \
-					echo "  ${BLUE}mkdir -p ~/.config/containers && printf '[network]\\ndefault_rootless_network_cmd = \"slirp4netns\"\\n' > ~/.config/containers/containers.conf${RESET}"; \
-					echo ""; \
+					ui_info "  Install slirp4netns first: sudo apt-get install -y slirp4netns"; \
+					ui_info "  Then configure default_rootless_network_cmd = \"slirp4netns\" in ~/.config/containers/containers.conf under [network]."; \
 				fi; \
 				exit 1; \
 			fi; \
@@ -703,13 +680,11 @@ endef
 # the values file contains a different hostPath.
 # Usage: @$(call verify_podman_socket_from_values)
 define verify_podman_socket_from_values
-	SOCKET_PATH="$(PODMAN_SOCKET_PATH)"; \
+	$(CLI_OUTPUT) SOCKET_PATH="$(PODMAN_SOCKET_PATH)"; \
 	CURRENT_UID=$$(id -u); \
 	if [ -z "$$SOCKET_PATH" ]; then \
-		echo ""; \
-		echo "${RED}✗ Podman socket path is empty.${RESET}"; \
-		echo "  Set PODMAN_SOCKET_PATH or export XDG_RUNTIME_DIR before running make."; \
-		echo ""; \
+		ui_error "Podman socket path is empty."; \
+		ui_info "  Set PODMAN_SOCKET_PATH or export XDG_RUNTIME_DIR before running make."; \
 		exit 1; \
 	fi; \
 	if [ ! -S "$$SOCKET_PATH" ]; then \
@@ -717,7 +692,7 @@ define verify_podman_socket_from_values
 			if [ "$(PODMAN_REQUIRES_SUDO)" != "yes" ]; then \
 				SOCKET_STATUS=$$(systemctl --user is-active podman.socket 2>&1 || echo "error"); \
 				if ! echo "$$SOCKET_STATUS" | grep -q masked; then \
-					echo "${YELLOW}⚠  Podman socket not running. Attempting auto-start via systemctl --user...${RESET}"; \
+					ui_warn "Podman socket not running. Attempting auto-start via systemctl --user..."; \
 					systemctl --user start podman.socket 2>/dev/null || true; \
 					_retries=0; \
 					while [ $$_retries -lt 5 ] && [ ! -S "$$SOCKET_PATH" ]; do \
@@ -725,79 +700,62 @@ define verify_podman_socket_from_values
 						_retries=$$(( $$_retries + 1 )); \
 					done; \
 					if [ -S "$$SOCKET_PATH" ]; then \
-						echo "${GREEN}✓ Podman socket started automatically.${RESET}"; \
+						ui_success "Podman socket started automatically."; \
 					fi; \
 				fi; \
 			fi; \
 		fi; \
 		if [ ! -S "$$SOCKET_PATH" ]; then \
-			echo ""; \
-			echo "${RED}✗ Podman socket not found: $$SOCKET_PATH${RESET}"; \
+			ui_error "Podman socket not found: $$SOCKET_PATH"; \
 			if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
-				echo "  Expected rootful default: /run/podman/podman.sock"; \
-				echo "  Start the system service or provide PODMAN_SOCKET_PATH explicitly."; \
+				ui_info "  Expected rootful default: /run/podman/podman.sock"; \
+				ui_info "  Start the system service or provide PODMAN_SOCKET_PATH explicitly."; \
 			else \
-				echo "  Resolved from PODMAN_SOCKET_PATH or the active runtime directory."; \
-				echo "  Expected rootless default: /run/user/$$CURRENT_UID/podman/podman.sock"; \
+				ui_info "  Resolved from PODMAN_SOCKET_PATH or the active runtime directory."; \
+				ui_info "  Expected rootless default: /run/user/$$CURRENT_UID/podman/podman.sock"; \
 			fi; \
-			echo ""; \
 			if command -v systemctl >/dev/null 2>&1; then \
 				if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
 					SOCKET_STATUS=$$(systemctl is-active podman.socket 2>&1 || echo "error"); \
 					if echo "$$SOCKET_STATUS" | grep -q masked; then \
-						echo "${YELLOW}⚠️  Rootful Podman socket is masked by system${RESET}"; \
-						echo ""; \
-						echo "To enable it:"; \
-						echo "  ${BLUE}sudo systemctl daemon-reload${RESET}"; \
-						echo "  ${BLUE}sudo systemctl enable --now podman.socket${RESET}"; \
-						echo ""; \
+						ui_warn "Rootful Podman socket is masked by system"; \
+						ui_info "  To enable it:"; \
+						ui_info "  sudo systemctl daemon-reload"; \
+						ui_info "  sudo systemctl enable --now podman.socket"; \
 					else \
-						echo "Start the rootful Podman socket service:"; \
-						echo "  ${BLUE}sudo systemctl start podman.socket${RESET}"; \
-						echo ""; \
+						ui_info "  Start the rootful Podman socket service:"; \
+						ui_info "  sudo systemctl start podman.socket"; \
 					fi; \
 				else \
 					SOCKET_STATUS=$$(systemctl --user is-active podman.socket 2>&1 || echo "error"); \
 					if echo "$$SOCKET_STATUS" | grep -q masked; then \
-						echo "${YELLOW}⚠️  Podman socket is masked by system (common on school-managed networks)${RESET}"; \
-						echo ""; \
-						echo "To enable it, copy systemd units to your user:"; \
-						echo "  ${BLUE}mkdir -p ~/.config/systemd/user/${RESET}"; \
-						echo "  ${BLUE}cp /usr/lib/systemd/user/podman.* ~/.config/systemd/user/${RESET}"; \
-						echo "  ${BLUE}systemctl --user daemon-reload${RESET}"; \
-						echo "  ${BLUE}systemctl --user enable --now podman.socket${RESET}"; \
-						echo ""; \
+						ui_warn "Podman socket is masked by system"; \
+						ui_info "  To enable it, copy systemd units to your user:"; \
+						ui_info "  mkdir -p ~/.config/systemd/user/"; \
+						ui_info "  cp /usr/lib/systemd/user/podman.* ~/.config/systemd/user/"; \
+						ui_info "  systemctl --user daemon-reload"; \
+						ui_info "  systemctl --user enable --now podman.socket"; \
 					else \
-						echo "Start the Podman socket service:"; \
-						echo "  ${BLUE}systemctl --user start podman.socket${RESET}"; \
-						echo ""; \
+						ui_info "  Start the Podman socket service:"; \
+						ui_info "  systemctl --user start podman.socket"; \
 					fi; \
 				fi; \
 			else \
-				echo "${YELLOW}⚠️  systemd not found on this system (e.g., macOS, Windows WSL without systemd)${RESET}"; \
-				echo ""; \
-				echo "Ensure Podman daemon is running. On macOS/Windows, this typically means:"; \
-				echo "  ${BLUE}podman machine start${RESET}"; \
-				echo ""; \
-				echo "Or on rootless Linux without systemd:"; \
-				echo "  ${BLUE}podman system service --time=0 unix:///run/user/$$CURRENT_UID/podman/podman.sock &${RESET}"; \
-				echo ""; \
+				ui_warn "systemd not found on this system"; \
+				ui_info "  Ensure Podman daemon is running. On macOS/Windows: podman machine start"; \
+				ui_info "  On rootless Linux without systemd:"; \
+				ui_info "  podman system service --time=0 unix:///run/user/$$CURRENT_UID/podman/podman.sock &"; \
 			fi; \
-			echo "Verify the socket exists:"; \
-			echo "  ${BLUE}ls -l $$SOCKET_PATH${RESET}"; \
-			echo ""; \
-			echo "See docs/TROUBLESHOOTING.md#podman-issues for detailed help."; \
-			echo ""; \
+			ui_info "  Verify the socket exists: ls -l $$SOCKET_PATH"; \
+			ui_info "  See docs/TROUBLESHOOTING.md#podman-issues for detailed help."; \
 			exit 1; \
 		fi; \
 	fi; \
 	if command -v curl >/dev/null 2>&1; then \
 		if ! curl -s --unix-socket "$$SOCKET_PATH" http://localhost/_ping >/dev/null 2>&1; then \
-			echo ""; \
-			echo "${RED}✗ Podman socket exists but is not responding: $$SOCKET_PATH${RESET}"; \
-			echo "  The Podman service may not be running or socket activation is not configured."; \
-			echo "  Check: systemctl --user is-active podman.socket"; \
-			echo ""; \
+			ui_error "Podman socket exists but is not responding: $$SOCKET_PATH"; \
+			ui_info "  The Podman service may not be running or socket activation is not configured."; \
+			ui_info "  Check: systemctl --user is-active podman.socket"; \
 			exit 1; \
 		fi; \
 	fi; \
@@ -807,8 +765,8 @@ define verify_podman_socket_from_values
 			true|TRUE|True) \
 				VALUES_SOCKET_PATH=$$(yq -r '.podman.containerSocket.hostPath // ""' "$(PODMAN_VALS)"); \
 				if [ -n "$$VALUES_SOCKET_PATH" ] && [ "$$VALUES_SOCKET_PATH" != "$$SOCKET_PATH" ]; then \
-					echo "${YELLOW}⚠️  values file hostPath ($$VALUES_SOCKET_PATH) differs from resolved socket ($$SOCKET_PATH).${RESET}"; \
-					echo "    make start will render with $$SOCKET_PATH without rewriting the values file."; \
+					ui_warn "values file hostPath ($$VALUES_SOCKET_PATH) differs from resolved socket ($$SOCKET_PATH)."; \
+					ui_info "  make start will render with $$SOCKET_PATH without rewriting the values file."; \
 				fi; \
 				;; \
 			esac; \
@@ -820,7 +778,7 @@ preflight-podman: verify-deps
 	@$(call require_podman_engine_ready)
 	@$(call require_rootless_network_healthy)
 	@$(call verify_podman_socket_from_values)
-	@echo "Using values file: $(PODMAN_VALS)"
+	@$(CLI_OUTPUT) ui_detail "Using values file: $(PODMAN_VALS)"
 
 define resolve_app_container
 	APP_CTR=""; \
@@ -838,8 +796,8 @@ define resolve_app_container
 		done; \
 	fi; \
 	if [ -z "$$APP_CTR" ]; then \
-		echo "${RED}✗ Application container not found for release $(RELEASE_NAME).${RESET}"; \
-		echo "  Use '$(PODMAN_CMD) ps -a' to inspect containers."; \
+		$(CLI_OUTPUT) ui_error "Application container not found for release $(RELEASE_NAME)."; \
+		ui_info "  Use '$(PODMAN_CMD) ps -a' to inspect containers."; \
 		exit 1; \
 	fi
 endef
@@ -849,8 +807,8 @@ endef
 # curl from inside the container against the socket path exposed via
 # STAREXEC_CONTAINER_SOCKET.
 test-podman-socket:
-	@echo "Waiting for app container to be ready..."
-	@$(call resolve_app_container); \
+	@$(CLI_OUTPUT) ui_info "Waiting for application container to reach running state..."
+	@$(CLI_OUTPUT) $(call resolve_app_container); \
 	MAX_RETRIES=$${PODMAN_SOCKET_TEST_RETRIES:-60}; \
 	WAIT_SECONDS=$${PODMAN_SOCKET_TEST_INTERVAL_SECONDS:-2}; \
 	i=1; \
@@ -867,15 +825,15 @@ test-podman-socket:
 			ready=1; \
 			break; \
 		fi; \
-		echo "  App container not ready yet ($$i/$$MAX_RETRIES), status: $${STATUS:-not found}, exit: $${EXIT_CODE:-unknown}, retrying in $${WAIT_SECONDS}s..."; \
+		ui_detail "App container not running yet ($$i/$$MAX_RETRIES), status: $${STATUS:-not found}, exit: $${EXIT_CODE:-unknown}, retrying in $${WAIT_SECONDS}s..."; \
 		i=$$((i + 1)); \
 		sleep $$WAIT_SECONDS; \
 	done; \
 	if [ $$ready -ne 1 ]; then \
-		echo "${RED}[✗] Integration Test: App container failed to reach running state after $$MAX_RETRIES attempts (last status: $${LAST_STATUS:-unknown}, exit: $${LAST_EXIT_CODE:-unknown}).${RESET}"; \
-		$(PODMAN_CMD) ps -a --format 'table {{.Names}}\t{{.Status}}'; \
-		echo "  Recent logs from $$APP_CTR:"; \
-		$(PODMAN_CMD) logs --tail=80 $$APP_CTR 2>/dev/null || true; \
+		ui_error "App container failed to reach running state after $$MAX_RETRIES attempts (last status: $${LAST_STATUS:-unknown}, exit: $${LAST_EXIT_CODE:-unknown})."; \
+		$(PODMAN_CMD) ps -a --format 'table {{.Names}}\t{{.Status}}' >&2; \
+		ui_info "  Recent logs from $$APP_CTR:"; \
+		$(PODMAN_CMD) logs --tail=80 $$APP_CTR >&2 2>/dev/null || true; \
 		exit 1; \
 	fi; \
 	set +e; \
@@ -883,15 +841,15 @@ test-podman-socket:
 	EXEC_STATUS=$$?; \
 	set -e; \
 	if [ $$EXEC_STATUS -ne 0 ]; then \
-		echo "${RED}[✗] Integration Test: Could not exec into app container $$APP_CTR.${RESET}"; \
-		$(PODMAN_CMD) inspect $$APP_CTR --format '  state={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}}' 2>/dev/null || true; \
-		echo "  Recent logs from $$APP_CTR:"; \
-		$(PODMAN_CMD) logs --tail=80 $$APP_CTR 2>/dev/null || true; \
-		printf '%s\n' "$$SOCKET_PATH"; \
+		ui_error "Could not exec into app container $$APP_CTR."; \
+		$(PODMAN_CMD) inspect $$APP_CTR --format '  state={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}}' >&2 2>/dev/null || true; \
+		ui_info "  Recent logs from $$APP_CTR:"; \
+		$(PODMAN_CMD) logs --tail=80 $$APP_CTR >&2 2>/dev/null || true; \
+		printf '%s\n' "$$SOCKET_PATH" >&2; \
 		exit 1; \
 	fi; \
 	if [ -z "$$SOCKET_PATH" ]; then \
-		echo "${RED}[✗] Integration Test: STAREXEC_CONTAINER_SOCKET is not set inside the app container.${RESET}"; \
+		ui_error "STAREXEC_CONTAINER_SOCKET is not set inside the app container."; \
 		exit 1; \
 	fi; \
 	set +e; \
@@ -899,18 +857,15 @@ test-podman-socket:
 	CURL_STATUS=$$?; \
 		set -e; \
 	if [ $$CURL_STATUS -ne 0 ]; then \
-		echo "${RED}[✗] Integration Test: Application container could not reach the host Podman API via $$SOCKET_PATH.${RESET}"; \
-		printf '%s\n' "$$CURL_OUTPUT"; \
+		ui_error "Application container could not reach the host Podman API via $$SOCKET_PATH."; \
+		printf '%s\n' "$$CURL_OUTPUT" >&2; \
 		exit 1; \
 	fi; \
-	echo "${GREEN}[✓] Integration Test: Application container successfully reached host Podman API.${RESET}"
+	ui_success "Podman API is reachable from the application container."
 
 # Quick socket validation (standalone, no values file required)
 preflight-socket:
-	@echo "Running Podman socket validation..."
 	@bash ./scripts/preflight-podman.sh || exit 1
-	@echo ""
-	@echo "${GREEN}✓ Podman socket is accessible and ready for container operations${RESET}"
 
 # ============================================================================
 # DATABASE MANAGEMENT (PostgreSQL)
@@ -932,8 +887,8 @@ define resolve_postgres_container
 		done; \
 	fi; \
 	if [ -z "$$PG_CONTAINER" ]; then \
-		echo "${RED}✗ PostgreSQL container not found for release $(RELEASE_NAME).${RESET}"; \
-		echo "  Use '$(PODMAN_CMD) ps -a' to inspect containers."; \
+		$(CLI_OUTPUT) ui_error "PostgreSQL container not found for release $(RELEASE_NAME)."; \
+		ui_info "  Use '$(PODMAN_CMD) ps -a' to inspect containers."; \
 		exit 1; \
 	fi
 endef
@@ -1091,159 +1046,147 @@ migrate-podman:
 # PODMAN DEPLOYMENT
 # ============================================================================
 network-setup:
-	@echo "Configuring Podman network (rootless mode)"
-	@if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
-		echo "⚠️  Running in rootful mode. Consider running rootless for better security."; \
-		echo "See: https://github.com/containers/podman/blob/main/docs/tutorials/rootless_tutorial.md"; \
+	@$(CLI_OUTPUT) ui_info "Configuring Podman network..."
+	@$(CLI_OUTPUT) if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
+		ui_warn "Running in rootful mode. Consider running rootless for better security."; \
+		ui_info "  See: https://github.com/containers/podman/blob/main/docs/tutorials/rootless_tutorial.md"; \
 	fi
 	@# Detect and repair stale/broken network state, not just existence.
-	@if $(PODMAN_CMD) network exists starexec-net 2>/dev/null; then \
-		echo "Network starexec-net exists. Validating integrity..."; \
+	@$(CLI_OUTPUT) if $(PODMAN_CMD) network exists starexec-net 2>/dev/null; then \
+		ui_detail "Network starexec-net exists. Validating configuration..."; \
 		if ! $(PODMAN_CMD) network inspect starexec-net >/dev/null 2>&1; then \
-			echo "${YELLOW}⚠️  Existing network appears broken. Recreating...${RESET}"; \
-			$(PODMAN_CMD) network rm starexec-net >/dev/null 2>&1 || true; \
-			$(PODMAN_CMD) network create starexec-net >/dev/null; \
-			echo "${GREEN}✓ Recreated network starexec-net${RESET}"; \
+			ui_warn "Network inspection failed. Recreating starexec-net..."; \
+			ui_run $(PODMAN_CMD) network rm starexec-net || true; \
+			ui_run $(PODMAN_CMD) network create starexec-net; \
+			ui_success "Recreated network starexec-net"; \
 		else \
-			echo "${GREEN}✓ Network starexec-net is healthy${RESET}"; \
+			ui_detail "Network starexec-net can be inspected."; \
 		fi; \
 	else \
-		echo "Creating network starexec-net (pasta/slirp4netns handled automatically)"; \
-		$(PODMAN_CMD) network create starexec-net >/dev/null; \
-		echo "${GREEN}✓ Network starexec-net created${RESET}"; \
+		ui_info "Creating network starexec-net..."; \
+		ui_run $(PODMAN_CMD) network create starexec-net; \
+		ui_success "Network starexec-net created"; \
 	fi
 
 network-reset:
-	@echo "Resetting Podman network: starexec-net"
-	@$(PODMAN_CMD) network rm starexec-net >/dev/null 2>&1 || true
+	@$(CLI_OUTPUT) ui_info "Resetting Podman network: starexec-net"
+	@$(CLI_OUTPUT) ui_run $(PODMAN_CMD) network rm starexec-net || true
 	@$(MAKE) network-setup
 
 define cleanup_deployment
-	@echo "Cleaning up existing StarExec pods, containers, and secrets..."
+	@$(CLI_OUTPUT) ui_info "Cleaning up existing StarExec pods, containers, and secrets..."
 	@# Remove resources by label for robustness. This targets everything created by 'podman play kube'.
 	@# The label 'app.kubernetes.io/instance' is standard for Helm.
-	@POD_IDS=$$($(PODMAN_CMD) pod ls --filter "label=app.kubernetes.io/instance=$(RELEASE_NAME)" --format "{{.Id}}"); \
+	@$(CLI_OUTPUT) POD_IDS=$$($(PODMAN_CMD) pod ls --filter "label=app.kubernetes.io/instance=$(RELEASE_NAME)" --format "{{.Id}}"); \
 	if [ -n "$$POD_IDS" ]; then \
-		echo "  Initiating graceful shutdown (10s timeout) for pods with label app.kubernetes.io/instance=$(RELEASE_NAME)..."; \
+		ui_info "Stopping pods for release $(RELEASE_NAME) (10s timeout)..."; \
 		for pod in $$POD_IDS; do \
-			$(PODMAN_CMD) pod stop -t 10 $$pod || true; \
-			echo "  Attempting forceful removal of pod $$pod..."; \
-			if ! $(PODMAN_CMD) pod rm -f $$pod 2>/dev/null; then \
-				echo "  ⚠️  Initial removal failed. Verifying pod state..."; \
+			ui_run $(PODMAN_CMD) pod stop -t 10 $$pod || true; \
+			ui_detail "Removing pod $$pod..."; \
+			if ! ui_run $(PODMAN_CMD) pod rm -f $$pod; then \
+				ui_warn "Initial pod removal failed. Verifying pod state..."; \
 				if $(PODMAN_CMD) pod exists $$pod; then \
-					echo "  ⏳ Pod hanging. Allowing network namespaces to settle (3s)..."; \
+					ui_warn "Pod $$pod still exists. Waiting 3s before retrying..."; \
 					sleep 3; \
-					echo "  🔄 Retrying removal with extended timeout..."; \
-					$(PODMAN_CMD) pod rm -f -t 30 $$pod || { \
-						echo "${RED}❌ CRITICAL: Podman deadlock on pod $$pod${RESET}"; \
+					ui_info "Retrying pod removal with extended timeout..."; \
+					ui_run $(PODMAN_CMD) pod rm -f -t 30 $$pod || { \
+						ui_error "Pod $$pod could not be removed after retry."; \
 						exit 1; \
 					}; \
 				else \
-					echo "  ${GREEN}✓ Phantom failure: Pod $$pod was removed successfully.${RESET}"; \
+					ui_info "Pod $$pod is now absent."; \
 				fi; \
 			else \
-				echo "  ${GREEN}✓ Pod $$pod removed cleanly.${RESET}"; \
+				ui_success "Pod $$pod removed."; \
 			fi; \
 		done; \
 	fi
 	@# Fallback for older naming scheme to ensure full cleanup during transition
-	@for pod in starexec starexec-pod $(POD_NAME); do \
+	@$(CLI_OUTPUT) for pod in starexec starexec-pod $(POD_NAME); do \
 		if $(PODMAN_CMD) pod exists $$pod 2>/dev/null; then \
-			echo "  Removing existing pod by legacy name: $$pod"; \
-			$(PODMAN_CMD) pod stop -t 10 $$pod || true; \
-			if ! $(PODMAN_CMD) pod rm -f $$pod 2>/dev/null; then \
+			ui_info "Removing existing pod by legacy name: $$pod"; \
+			ui_run $(PODMAN_CMD) pod stop -t 10 $$pod || true; \
+			if ! ui_run $(PODMAN_CMD) pod rm -f $$pod; then \
 				if $(PODMAN_CMD) pod exists $$pod; then \
 					sleep 3; \
-					$(PODMAN_CMD) pod rm -f -t 30 $$pod || exit 1; \
+					ui_run $(PODMAN_CMD) pod rm -f -t 30 $$pod || exit 1; \
 				fi; \
 			fi; \
 		fi; \
 	done
 	@# Clean up secrets associated with the release. Note: 'label' filter not supported for secrets in some Podman versions.
-	@SECRET_NAMES=$$($(PODMAN_CMD) secret ls --filter "name=$(RELEASE_NAME)" --format "{{.Name}}") ; \
+	@$(CLI_OUTPUT) SECRET_NAMES=$$($(PODMAN_CMD) secret ls --filter "name=$(RELEASE_NAME)" --format "{{.Name}}") ; \
 	if [ -n "$$SECRET_NAMES" ]; then \
-		echo "  Removing secrets matching name $(RELEASE_NAME)"; \
-		echo "$$SECRET_NAMES" | xargs $(PODMAN_CMD) secret rm; \
+		ui_detail "Removing secrets matching name $(RELEASE_NAME)"; \
+		echo "$$SECRET_NAMES" | ui_run xargs $(PODMAN_CMD) secret rm; \
 	fi
 	@# Safely cleanup only the StarExec network (do NOT global-prune networks).
 	@# Deterministic approach: disconnect any remaining endpoints before removal,
 	@# rather than blindly retrying and hoping the kernel GCs the veth pair.
-	@if $(PODMAN_CMD) network exists starexec-net 2>/dev/null; then \
-		echo "  Cleaning network starexec-net..."; \
+	@$(CLI_OUTPUT) if $(PODMAN_CMD) network exists starexec-net 2>/dev/null; then \
+		ui_info "Removing network starexec-net..."; \
 		CONNECTED=$$($(PODMAN_CMD) network inspect starexec-net --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || true); \
 		if [ -n "$$CONNECTED" ]; then \
-			echo "  Disconnecting remaining endpoints: $$CONNECTED"; \
+			ui_detail "Disconnecting remaining endpoints: $$CONNECTED"; \
 			for ctr in $$CONNECTED; do \
-				$(PODMAN_CMD) network disconnect -f starexec-net "$$ctr" 2>/dev/null || true; \
+				ui_run $(PODMAN_CMD) network disconnect -f starexec-net "$$ctr" || true; \
 			done; \
 		fi; \
-		if ! $(PODMAN_CMD) network rm starexec-net >/dev/null 2>&1; then \
-			echo "  ${YELLOW}⚠️  Network still busy after disconnect. Waiting for namespace GC (3s)...${RESET}"; \
+		if ! ui_run $(PODMAN_CMD) network rm starexec-net; then \
+			ui_warn "Network starexec-net could not be removed. Retrying in 3s..."; \
 			sleep 3; \
-			if ! $(PODMAN_CMD) network rm starexec-net >/dev/null 2>&1; then \
-				echo "  ${YELLOW}⚠️  Could not remove starexec-net automatically.${RESET}"; \
-				echo "  ${YELLOW}   Likely cause: zombie container or dangling CNI interface.${RESET}"; \
-				echo "  ${YELLOW}   Debug with: $(PODMAN_CMD) network inspect starexec-net${RESET}"; \
-				echo "  ${YELLOW}   Force with: make network-reset${RESET}"; \
+			if ! ui_run $(PODMAN_CMD) network rm starexec-net; then \
+				ui_warn "Network starexec-net could not be removed after retry."; \
+				ui_info "  Inspect: $(PODMAN_CMD) network inspect starexec-net"; \
 			else \
-				echo "  ${GREEN}✓ Network starexec-net removed (after namespace GC)${RESET}"; \
+				ui_success "Network starexec-net removed after retry."; \
 			fi; \
 		else \
-			echo "  ${GREEN}✓ Network starexec-net removed${RESET}"; \
+			ui_success "Network starexec-net removed."; \
 		fi; \
 	fi
 endef
 
 deploy-podman: preflight-podman preflight-cgroup
 	@$(call require_podman_values)
-	@echo "${BOLD}${BLUE}Deploying to Podman with environment: $(ENV)${RESET}"
+	@$(CLI_OUTPUT) ui_info "Preparing deployment for ENV=$(ENV)..."
 	@$(MAKE) image
 	@$(MAKE) volumes-create
-	@if [ "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}" = "$(DB_PASSWORD_DEFAULT)" ]; then \
-		echo ""; \
-		echo "${RED}╔═══════════════════════════════════════════════════╗${RESET}"; \
-		echo "${RED}║  INSECURE: Using default development DB password  ║${RESET}"; \
-		echo "${RED}╚═══════════════════════════════════════════════════╝${RESET}"; \
-		echo ""; \
+	@$(CLI_OUTPUT) if [ "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}" = "$(DB_PASSWORD_DEFAULT)" ]; then \
 		if [ "$(ENV)" = "prod" ]; then \
-			echo "${RED}ERROR: Cannot deploy to production with default password!${RESET}"; \
-			echo ""; \
-			echo "Set STAREXEC_DB_PASSWORD or use STAREXEC_DB_PASSWORD_FILE to provide a secure password."; \
-			echo "To override this check (NOT RECOMMENDED), use: FORCE=1 make deploy-podman ENV=prod"; \
-			echo ""; \
+			ui_error "Cannot deploy to production with default password."; \
+			ui_info "  Set STAREXEC_DB_PASSWORD or use STAREXEC_DB_PASSWORD_FILE to provide a secure password."; \
+			ui_info "  To override this check (not recommended): FORCE=1 make deploy-podman ENV=prod"; \
 			if [ "$(FORCE)" != "1" ]; then \
 				exit 1; \
 			else \
-				echo "${YELLOW}WARNING: FORCE=1 specified, proceeding with insecure password...${RESET}"; \
+				ui_warn "FORCE=1 specified, proceeding with insecure password..."; \
 			fi; \
 		fi; \
 	fi
-	@if command -v helm >/dev/null 2>&1; then \
+	@$(CLI_OUTPUT) if command -v helm >/dev/null 2>&1; then \
+		if [ "$(ENV)" != "prod" ] && [ "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}" = "$(DB_PASSWORD_DEFAULT)" ]; then \
+			ui_warn "Using default development database credentials."; \
+		fi; \
 		$(MAKE) deploy-podman-helm; \
 	else \
-		echo "${YELLOW}Helm not found, using direct deployment...${RESET}"; \
+		ui_info "Helm not found, using direct deployment..."; \
 		$(MAKE) deploy-podman-direct; \
 	fi
-	@echo "${BOLD}Podman default readiness checklist:${RESET}"
-	@echo "  ✓ values file resolved and validated"
-	@echo "  ✓ Podman engine reachable"
-	@echo "  ✓ deployment manifest applied"
-	@echo "  ✓ PostgreSQL readiness gate passed"
 
 deploy-podman-helm:
 	@$(call require_podman_values)
 	@# Verify values file exists before proceeding
-	@if [ ! -f "$(PODMAN_VALS)" ]; then \
-		echo "${RED}✗ Values file not found: $(PODMAN_VALS)${RESET}"; \
-		echo "Available values files:"; \
-		ls -1 $(CHART_DIR)/values*.yaml 2>/dev/null || echo "  (none found)"; \
+	@$(CLI_OUTPUT) if [ ! -f "$(PODMAN_VALS)" ]; then \
+		ui_error "Values file not found: $(PODMAN_VALS)"; \
+		ui_info "  Available values files:"; \
+		ls -1 $(CHART_DIR)/values*.yaml >&2 2>/dev/null || ui_info "  (none found)"; \
 		exit 1; \
 	fi
-	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
 	@$(MAKE) network-setup
-	@echo "Rendering deployment manifest..."
-	@DATA_VOL_NAME="$(VOLUME_PREFIX)-$(ENV)-data"; \
+	@$(CLI_OUTPUT) ui_info "Rendering deployment manifest..."
+	@$(CLI_OUTPUT) DATA_VOL_NAME="$(VOLUME_PREFIX)-$(ENV)-data"; \
 	SOCKET_GID=$$(stat -c '%g' "$(PODMAN_SOCKET_PATH)" 2>/dev/null || echo ""); \
 	HOST_DATA_PATH=$$($(PODMAN_CMD) volume inspect "$$DATA_VOL_NAME" --format '{{.Mountpoint}}' 2>/dev/null || echo ""); \
 	if ! helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(PODMAN_VALS)" \
@@ -1257,36 +1200,27 @@ deploy-podman-helm:
 		--set-string podman.containerSocket.hostPath="$(PODMAN_SOCKET_PATH)" \
 		$${SOCKET_GID:+--set security.pod.supplementalGroups[0]=$$SOCKET_GID} \
 		$${HOST_DATA_PATH:+--set backend.hostDataPath=$$HOST_DATA_PATH} > render.yaml; then \
-		echo "${RED}✗ Helm template generation failed${RESET}"; \
-		echo "Check your values file: $(PODMAN_VALS)"; \
+		ui_error "Helm template generation failed"; \
+		ui_info "  Check your values file: $(PODMAN_VALS)"; \
 		exit 1; \
 	fi
-	@echo "Deploying application pod..."
+	@$(CLI_OUTPUT) ui_info "Applying deployment manifest..."
 	@# Ensure pause image exists (Podman uses it automatically for pod infra)
 	@./scripts/ensure-pause-image.sh
-	@$(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
+	@$(CLI_OUTPUT) ui_run $(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
+	@$(CLI_OUTPUT) ui_success "Deployment manifest applied."
 	@$(MAKE) wait-postgres
 	@$(MAKE) test-podman-socket
-	@echo ""
-	@echo "${GREEN}✓ Deployment complete!${RESET}"
-	@echo "  Environment: ${BOLD}$(ENV)${RESET}"
-	@echo "  Values: $(PODMAN_VALS)"
-	@echo "  Migrations: Executed automatically during startup"
-	@echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"
-	@echo ""
-	@echo "${BOLD}Useful commands:${RESET}"
-	@echo "  make db-shell               	- PostgreSQL shell"
-	@echo "  make volumes-backup ENV=$(ENV)	- Backup volumes"
-	@echo "  podman logs $(APP_CONTAINER)	- Application logs"
-	@echo "  podman logs $(DB_CONTAINER)	- Database logs"
+	@$(CLI_OUTPUT) ui_detail "Environment: $(ENV); values: $(PODMAN_VALS)"; \
+	ui_info "Migrations: not verified by this command"; \
+	ui_info "Application URL (HTTP readiness not checked): http://localhost:$(APP_PORT)/starexec"; \
+	ui_detail "Application logs: make logs-app ENV=$(ENV) RELEASE_NAME=$(RELEASE_NAME)"; \
+	ui_detail "Database logs: make logs-postgres ENV=$(ENV) RELEASE_NAME=$(RELEASE_NAME)"
 
 deploy-podman-direct:
-	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
 	@$(MAKE) network-setup
-	@echo "Ensuring Podman infra image exists..."
 	@./scripts/ensure-pause-image.sh
-	@echo "Generating deployment manifest from template..."
 	@STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
 	 STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
 	 STAREXEC_BACKEND_TYPE=$${STAREXEC_BACKEND_TYPE:-podman} \
@@ -1294,100 +1228,88 @@ deploy-podman-direct:
 	 IMAGE_NAME=$(RELEASE_NAME) \
 	 IMAGE_TAG=$(IMAGE_TAG) \
 	 ./scripts/generate-render-yaml.sh
-	@echo "Deploying application pod..."
-	@$(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
+	@$(CLI_OUTPUT) ui_info "Applying deployment manifest..."
+	@$(CLI_OUTPUT) ui_run $(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
+	@$(CLI_OUTPUT) ui_success "Deployment manifest applied."
 	@$(MAKE) wait-postgres
-	@echo ""
-	@echo "${GREEN}✓ Deployment complete!${RESET}"
-	@echo "  Environment: ${BOLD}$(ENV)${RESET}"
-	@echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"
-	@echo "  Migrations: Executed automatically during startup"
-	@echo ""
-	@echo "${BOLD}Useful commands:${RESET}"
-	@echo "  make db-shell                	- PostgreSQL shell"
-	@echo "  make volumes-backup ENV=$(ENV)	- Backup volumes"
-	@echo "  podman logs $(APP_CONTAINER)	- Application logs"
-	@echo "  podman logs $(DB_CONTAINER)	- Database logs"
+	@$(CLI_OUTPUT) ui_detail "Environment: $(ENV)"; \
+	ui_info "Migrations: not verified by this command"; \
+	ui_info "Application URL (HTTP readiness not checked): http://localhost:$(APP_PORT)/starexec"; \
+	ui_detail "Application logs: make logs-app ENV=$(ENV) RELEASE_NAME=$(RELEASE_NAME)"; \
+	ui_detail "Database logs: make logs-postgres ENV=$(ENV) RELEASE_NAME=$(RELEASE_NAME)"
 
 deploy-podman-cached: preflight-podman
 	@$(MAKE) image
-	@if [ ! -f render.yaml ]; then \
-		echo "${YELLOW}WARNING: render.yaml not found! Running 'make template' to generate...${RESET}"; \
+	@$(CLI_OUTPUT) if [ ! -f render.yaml ]; then \
+		ui_info "render.yaml not found. Running 'make template' to generate..."; \
 		$(MAKE) template; \
 	fi
-	@echo "Deploying using cached render.yaml..."
-	@echo "Cleaning up existing deployment..."
+	@$(CLI_OUTPUT) ui_info "Deploying using cached render.yaml..."
 	$(call cleanup_deployment)
 	@$(MAKE) network-setup
-	@$(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
+	@$(CLI_OUTPUT) ui_run $(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
+	@$(CLI_OUTPUT) ui_success "Deployment manifest applied."
 	@$(MAKE) wait-postgres
-	@echo ""
-	@echo "${GREEN}✓ Deployment complete (using cached manifest)!${RESET}"
-	@echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"
-	@echo ""
-	@echo "Note: To regenerate manifest, run '${BLUE}make template${RESET}' or '${BLUE}make deploy-podman${RESET}'"
+	@$(CLI_OUTPUT) ui_info "Migrations: not verified by this command"; \
+	ui_info "Application URL (HTTP readiness not checked): http://localhost:$(APP_PORT)/starexec"; \
+	ui_detail "To regenerate manifest: make template or make deploy-podman"
 
 wait-postgres:
-	@echo "Waiting for PostgreSQL readiness..."
-	@$(call resolve_postgres_container); \
+	@$(CLI_OUTPUT) ui_info "Waiting for PostgreSQL to accept connections..."
+	@$(CLI_OUTPUT) $(call resolve_postgres_container); \
 	DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
 	MAX_RETRIES=$${WAIT_POSTGRES_RETRIES:-60}; \
 	WAIT_SECONDS=$${WAIT_POSTGRES_INTERVAL_SECONDS:-2}; \
 	i=1; \
 	ready=0; \
-	echo "Using PostgreSQL container: $$PG_CONTAINER"; \
+	ui_detail "Using PostgreSQL container: $$PG_CONTAINER"; \
 	while [ $$i -le $$MAX_RETRIES ]; do \
 		if $(PODMAN_CMD) exec "$$PG_CONTAINER" pg_isready -h localhost -p 5432 -U "$$DB_USER" >/dev/null 2>&1; then \
 			ready=1; \
 			break; \
 		fi; \
-		echo "  PostgreSQL not ready yet ($$i/$$MAX_RETRIES), retrying in $${WAIT_SECONDS}s..."; \
+		ui_detail "PostgreSQL not ready yet ($$i/$$MAX_RETRIES), retrying in $${WAIT_SECONDS}s..."; \
 		i=$$((i + 1)); \
 		sleep $$WAIT_SECONDS; \
 	done; \
 	if [ $$ready -ne 1 ]; then \
-		echo "${RED}✗ PostgreSQL failed readiness check after $$MAX_RETRIES attempts.${RESET}"; \
+		ui_error "PostgreSQL did not become ready after $$MAX_RETRIES attempts."; \
 		PG_EXIT=$$($(PODMAN_CMD) inspect "$$PG_CONTAINER" --format '{{.State.ExitCode}}' 2>/dev/null || echo "unknown"); \
 		PG_RUNNING=$$($(PODMAN_CMD) inspect "$$PG_CONTAINER" --format '{{.State.Running}}' 2>/dev/null || echo "unknown"); \
 		if [ "$$PG_RUNNING" = "false" ] && [ "$$PG_EXIT" != "0" ] && [ "$$PG_EXIT" != "unknown" ]; then \
-			echo "${RED}  Container exited with code $$PG_EXIT.${RESET}"; \
+			ui_info "  Container exited with code $$PG_EXIT."; \
 			case "$$PG_EXIT" in \
 				137) \
-					echo "${RED}  Exit 137 = SIGKILL (OOM killer or external kill).${RESET}"; \
-					echo "${YELLOW}The host OOM killer terminated PostgreSQL. This is NOT a WAL issue.${RESET}"; \
-					echo "Recommendations:"; \
-					echo "  1) Increase container memory limit or host swap"; \
-					echo "  2) Check host memory pressure: dmesg | grep -i oom"; \
-					echo "  3) Reduce PostgreSQL shared_buffers or work_mem"; \
+					ui_info "  Exit 137 can indicate SIGKILL (OOM killer or external kill); the cause is not verified."; \
+					ui_info "  Inspect host memory pressure: dmesg | grep -i oom"; \
+					ui_info "  If memory pressure is confirmed, increase container memory or host swap, or reduce shared_buffers/work_mem."; \
 					;; \
 				143) \
-					echo "${YELLOW}  Exit 143 = SIGTERM (graceful shutdown requested but Postgres did not stop in time).${RESET}"; \
+					ui_info "  Exit 143 can indicate SIGTERM; the shutdown cause is not verified."; \
 					;; \
 				*) \
 					if $(PODMAN_CMD) logs "$$PG_CONTAINER" 2>&1 | grep -Eqi "(invalid primary checkpoint|could not locate a valid checkpoint|PANIC:|WAL)"; then \
-						echo "${YELLOW}Detected potential PostgreSQL WAL inconsistency after unclean shutdown.${RESET}"; \
-						echo "Recommended recovery order:"; \
-						echo "  1) Restore a known-good backup: make volumes-restore ENV=$(ENV)"; \
-						echo "  2) If no backup exists, inspect logs: make logs-postgres"; \
-						echo "  3) Last resort (destructive): manual pg_resetwal in postgres volume"; \
+						ui_warn "PostgreSQL logs contain WAL/checkpoint messages; inspect them before choosing recovery."; \
+						ui_info "  Restore a known-good backup: make volumes-restore ENV=$(ENV)"; \
+						ui_info "  Inspect logs: make logs-postgres ENV=$(ENV) RELEASE_NAME=$(RELEASE_NAME)"; \
+						ui_info "  Last resort (destructive): manual pg_resetwal in postgres volume"; \
 					fi; \
 					;; \
 			esac; \
 		fi; \
-		echo "Last PostgreSQL logs:"; \
-		$(PODMAN_CMD) logs --tail 80 "$$PG_CONTAINER" 2>&1 || true; \
+		ui_info "  Last PostgreSQL logs:"; \
+		$(PODMAN_CMD) logs --tail 80 "$$PG_CONTAINER" >&2 2>&1 || true; \
 		exit 1; \
 	fi
-	@echo "${GREEN}✓ PostgreSQL is ready${RESET}"
+	@$(CLI_OUTPUT) ui_success "PostgreSQL is accepting connections."
 
 undeploy-podman:
-	@echo "Removing Podman deployment (volumes preserved)"
+	@$(CLI_OUTPUT) ui_info "Removing Podman deployment (volumes preserved)"
 	$(call cleanup_deployment)
-	@echo "Waiting for resources to be fully released..."
+	@$(CLI_OUTPUT) ui_info "Waiting for resource release..."
 	@sleep 2
-	@echo ""
-	@echo "${GREEN}✓ Cleanup complete (volumes preserved)${RESET}"
-	@echo "Note: Use '${BLUE}make volumes-delete ENV=$(ENV)${RESET}' to remove data"
+	@$(CLI_OUTPUT) ui_info "Deployment cleanup steps finished (volumes preserved); review any warnings above."; \
+	ui_detail "To remove data: make volumes-delete ENV=$(ENV)"
 
 # ============================================================================
 # KUBERNETES DEPLOYMENT (with Auto-Detection)
@@ -1395,27 +1317,19 @@ undeploy-podman:
 
 # Auto-detect Kubernetes configuration
 k8s-detect:
-	@echo "${BOLD}Auto-detecting Kubernetes configuration...${RESET}"
 	@bash ./scripts/k8s-auto-detect.sh
 
 # Generate optimized Kubernetes values file
 k8s-generate-values:
-	@echo "${BOLD}Generating optimized Kubernetes values file...${RESET}"
 	@bash ./scripts/k8s-auto-detect.sh --generate-values
-	@echo ""
-	@echo "${GREEN}✓ Generated: charts/starexec/values-auto-detected.yaml${RESET}"
-	@echo "Deploy with: make deploy-k8s ENV=prod HELM_VALUES=charts/starexec/values-auto-detected.yaml"
+	@$(CLI_OUTPUT) ui_detail "Deploy with: make deploy-k8s ENV=prod HELM_VALUES=charts/starexec/values-auto-detected.yaml"
 
 # Setup Kubernetes cluster (nodes, namespaces, storage)
 k8s-setup:
-	@echo "${BOLD}Setting up Kubernetes cluster for StarExec...${RESET}"
 	@bash ./scripts/k8s-node-setup.sh --all
-	@echo ""
-	@echo "${GREEN}✓ Kubernetes cluster setup complete!${RESET}"
 
 # Setup with dry-run (preview changes)
 k8s-setup-dry-run:
-	@echo "${BOLD}Previewing Kubernetes cluster setup (DRY-RUN)...${RESET}"
 	@bash ./scripts/k8s-node-setup.sh --all --dry-run
 
 # Label worker nodes only
@@ -1424,20 +1338,12 @@ k8s-label-workers:
 
 # Complete automated Kubernetes deployment (auto-setup + deployment)
 k8s-deploy-auto: k8s-detect
-	@echo ""
-	@echo "${BLUE}Starting automated Kubernetes deployment...${RESET}"
-	@echo ""
-	@echo "Step 1: Setting up cluster infrastructure..."
+	@$(CLI_OUTPUT) ui_info "Setting up cluster infrastructure..."
 	@bash ./scripts/k8s-node-setup.sh --all
-	@echo ""
-	@echo "Step 2: Generating optimized configuration..."
+	@$(CLI_OUTPUT) ui_info "Generating configuration..."
 	@bash ./scripts/k8s-auto-detect.sh --generate-values
-	@echo ""
-	@echo "Step 3: Deploying StarExec..."
+	@$(CLI_OUTPUT) ui_info "Deploying StarExec..."
 	@$(MAKE) deploy-k8s ENV=prod HELM_VALUES=charts/starexec/values-auto-detected.yaml
-	@echo ""
-	@echo "${GREEN}✓✓✓ Automated Kubernetes deployment complete!${RESET}"
-	@echo ""
 	@KUBECTL_CMD="kubectl"; \
 	if ! kubectl cluster-info >/dev/null 2>&1; then \
 		if command -v microk8s >/dev/null 2>&1 && microk8s kubectl cluster-info >/dev/null 2>&1; then \
@@ -1445,8 +1351,7 @@ k8s-deploy-auto: k8s-detect
 		fi; \
 	fi; \
 	$$KUBECTL_CMD get pods -n starexec
-	@echo ""
-	@echo "Access StarExec at: http://<cluster-ip>/starexec"
+	@$(CLI_OUTPUT) ui_info "Application URL (HTTP readiness not checked): http://<cluster-ip>/starexec"
 
 # Deploy to Kubernetes with specified environment
 deploy-k8s:
@@ -1573,11 +1478,11 @@ k8s-status:
 # ============================================================================
 
 clean-podman:
-	@echo "Cleaning Podman artifacts (preserving volumes and cache)"
+	@$(CLI_OUTPUT) ui_info "Cleaning Podman artifacts (preserving volumes and cache)"
 	$(call cleanup_deployment)
-	@echo "Removing StarExec images..."
-	@$(PODMAN_CMD) rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
-	@echo "${GREEN}✓ Cleanup complete (volumes and cache preserved)${RESET}"
+	@$(CLI_OUTPUT) ui_info "Removing StarExec images..."
+	@$(CLI_OUTPUT) ui_run $(PODMAN_CMD) rmi $(RELEASE_NAME):$(IMAGE_TAG) || true
+	@$(CLI_OUTPUT) ui_info "Cleanup steps finished (volumes and cache preserved); review any warnings above."
 
 clean-cache:
 	@echo "${YELLOW}⚠️  WARNING: Clearing Podman build cache${RESET}"
@@ -1609,44 +1514,39 @@ clean-cache:
 	@echo "${GREEN}✓ Build cache cleared successfully${RESET}"
 
 clean-all: clean-podman volumes-delete
-	@echo "${GREEN}✓ Full cleanup complete (pods, images, volumes removed; cache preserved)${RESET}"
+	@$(CLI_OUTPUT) ui_info "Cleanup steps finished (cache preserved); review any warnings above."
 
 clean-hard:
 ifeq ($(DRY_RUN),1)
-	@echo "[DRY RUN] Would perform HARD RESET for ENV=$(ENV):"
-	@echo "  - Remove pods: starexec, starexec-pod, $(POD_NAME)"
-	@echo "  - Remove containers: $(APP_CONTAINER), $(DB_CONTAINER)"
-	@echo "  - Remove secrets: $(RELEASE_NAME)-$(SECRET_NAME)-*"
-	@echo "  - Remove volumes: $(VOLUME_PREFIX)-$(ENV)-data, $(VOLUME_PREFIX)-$(ENV)-sandbox, $(VOLUME_PREFIX)-$(ENV)-backend, $(VOLUME_PREFIX)-$(ENV)-work, $(VOLUME_PREFIX)-$(ENV)-postgres, and $(VOLUME_PREFIX)-data and $(VOLUME_PREFIX)-postgres if they exist"
-	@if [ "$${CLEAN_HOSTPATH:-0}" = "1" ]; then \
-		echo "  - Remove host directories: $${HOSTPATH_DATA:-/tmp/starexec-data}, $${HOSTPATH_POSTGRES:-/tmp/postgres-data} (CLEAN_HOSTPATH=1)"; \
+	@$(CLI_OUTPUT) ui_info "[DRY RUN] Would perform hard reset for ENV=$(ENV):"
+	@$(CLI_OUTPUT) ui_info "  - Remove pods: starexec, starexec-pod, $(POD_NAME)"
+	@$(CLI_OUTPUT) ui_info "  - Remove containers: $(APP_CONTAINER), $(DB_CONTAINER)"
+	@$(CLI_OUTPUT) ui_info "  - Remove secrets: $(RELEASE_NAME)-$(SECRET_NAME)-*"
+	@$(CLI_OUTPUT) ui_info "  - Remove volumes: $(VOLUME_PREFIX)-$(ENV)-data, $(VOLUME_PREFIX)-$(ENV)-sandbox, $(VOLUME_PREFIX)-$(ENV)-backend, $(VOLUME_PREFIX)-$(ENV)-work, $(VOLUME_PREFIX)-$(ENV)-postgres, and $(VOLUME_PREFIX)-data and $(VOLUME_PREFIX)-postgres if they exist"
+	@$(CLI_OUTPUT) if [ "$${CLEAN_HOSTPATH:-0}" = "1" ]; then \
+		ui_info "  - Remove host directories: $${HOSTPATH_DATA:-/tmp/starexec-data}, $${HOSTPATH_POSTGRES:-/tmp/postgres-data} (CLEAN_HOSTPATH=1)"; \
 	fi
-	@echo "  - Remove image: $(RELEASE_NAME):$(IMAGE_TAG)"
+	@$(CLI_OUTPUT) ui_info "  - Remove image: $(RELEASE_NAME):$(IMAGE_TAG)"
 else
-	@echo "${YELLOW}⚠️  HARD RESET: Removes ALL StarExec resources for ENV=$(ENV)${RESET}"
-	@echo "${RED}This will delete:${RESET}"
-	@echo "  - Pods and containers"
-	@echo "  - Secrets"
-	@echo "  - ${RED}Volumes (ALL DATA will be lost)${RESET}"
-	@echo "  - Images"
-	@echo ""
-	@if [ "$(FORCE)" != "1" ]; then \
-		printf "Type '$(ENV)' to confirm: "; \
+	@$(CLI_OUTPUT) ui_warn "Hard reset: removes StarExec resources for ENV=$(ENV)"; \
+	ui_info "  This will delete pods, containers, secrets, volumes and images."; \
+	ui_warn "All data in the selected volumes will be lost."
+	@$(CLI_OUTPUT) if [ "$(FORCE)" != "1" ]; then \
+		printf '%s' "Type '$(ENV)' to confirm: " >&2; \
 		read ans; \
 		if [ "$$ans" != "$(ENV)" ]; then \
-			echo "${YELLOW}Cancelled; nothing was changed${RESET}"; \
+			ui_info "Cancelled; nothing was changed"; \
 			exit 1; \
 		fi; \
 	else \
-		echo "${YELLOW}FORCE=1 detected, skipping confirmation${RESET}"; \
+		ui_warn "FORCE=1 detected, skipping confirmation"; \
 	fi
 	$(call cleanup_deployment)
 	@sleep 3  # Allow network cleanup to complete
-	@echo "Removing StarExec volumes..."
 	@$(MAKE) volumes-delete ENV=$(ENV) FORCE=1
-	@echo "Removing StarExec image..."
-	@$(PODMAN_CMD) rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
-	@echo "${GREEN}✓ Hard reset complete for ENV=$(ENV)${RESET}"
+	@$(CLI_OUTPUT) ui_info "Removing StarExec image..."
+	@$(CLI_OUTPUT) ui_run $(PODMAN_CMD) rmi $(RELEASE_NAME):$(IMAGE_TAG) || true
+	@$(CLI_OUTPUT) ui_info "Reset steps finished for ENV=$(ENV); review any warnings above."
 endif
 
 # ============================================================================
@@ -1656,90 +1556,70 @@ endif
 # clean-hard removes the deployment itself, after its confirmation; a `stop` prerequisite would take the
 # deployment down before the question is even asked, and during a DRY_RUN.
 reset: clean-hard
-ifneq ($(DRY_RUN),1)
-	@echo ""
-	@echo "${GREEN}✓✓✓ Complete reset finished ✓✓✓${RESET}"
-	@echo "Environment ${BOLD}$(ENV)${RESET} has been completely cleaned:"
-	@echo "  - All containers stopped and removed"
-	@echo "  - All volumes deleted"
-	@echo "  - All images removed"
-	@echo ""
-	@echo "To redeploy: ${BLUE}make deploy-podman ENV=$(ENV)${RESET}"
-endif
 
 nuke: reset
-ifneq ($(DRY_RUN),1)
-	@echo "${GREEN}Environment $(ENV) nuked successfully${RESET}"
-endif
 
 status:
-	@echo "${BOLD}${BLUE}══════════════════════════════════════════${RESET}"
-	@echo "${BOLD}${BLUE}  StarExec Status (ENV=$(ENV))${RESET}"
-	@echo "${BOLD}${BLUE}══════════════════════════════════════════${RESET}"
-	@echo ""
-	@printf "%-20s: " "Deployment State"
+	@printf 'StarExec status (ENV=%s)\n\n' "$(ENV)"
+	@printf "%-20s: " "Pod state"
 	@$(call resolve_pod_state,$(POD_NAME)); \
 	if [ -z "$$POD_STATE" ]; then \
-		echo "${RED}STOPPED${RESET}"; \
+		printf '%s\n' 'unavailable (absent or inspection failed)'; \
 	elif [ "$$POD_STATE" = "Degraded" ] || [ "$$POD_STATE" = "degraded" ]; then \
-		echo "${YELLOW}DEGRADED${RESET}"; \
+		printf '%s\n' "$$POD_STATE"; \
 	elif [ "$$POD_STATE" = "Running" ] || [ "$$POD_STATE" = "running" ]; then \
-		echo "${GREEN}RUNNING${RESET}"; \
+		printf '%s\n' "$$POD_STATE"; \
 	else \
-		echo "${YELLOW}$$POD_STATE${RESET}"; \
+		printf '%s\n' "$$POD_STATE"; \
 	fi
 	@printf "%-20s: %s\n" "Environment" "$(ENV)"
 	@printf "%-20s: %s\n" "Image" "$(RELEASE_NAME):$(IMAGE_TAG)"
 	@printf "%-20s: " "Data Volume"
 	@if $(PODMAN_CMD) volume exists $(VOLUME_PREFIX)-$(ENV)-data 2>/dev/null; then \
-		echo "${GREEN}✓ exists${RESET}"; \
+		printf '%s\n' 'exists'; \
 	else \
-		echo "${RED}✗ missing${RESET}"; \
+		printf '%s\n' 'unavailable (absent or query failed)'; \
 	fi
 	@printf "%-20s: " "Sandbox Volume"
 	@if $(PODMAN_CMD) volume exists $(VOLUME_PREFIX)-$(ENV)-sandbox 2>/dev/null; then \
-		echo "${GREEN}✓ exists${RESET}"; \
+		printf '%s\n' 'exists'; \
 	else \
-		echo "${RED}✗ missing${RESET}"; \
+		printf '%s\n' 'unavailable (absent or query failed)'; \
 	fi
 	@printf "%-20s: " "Backend Volume"
 	@if $(PODMAN_CMD) volume exists $(VOLUME_PREFIX)-$(ENV)-backend 2>/dev/null; then \
-		echo "${GREEN}✓ exists${RESET}"; \
+		printf '%s\n' 'exists'; \
 	else \
-		echo "${RED}✗ missing${RESET}"; \
+		printf '%s\n' 'unavailable (absent or query failed)'; \
 	fi
 	@printf "%-20s: " "Work Volume"
 	@if $(PODMAN_CMD) volume exists $(VOLUME_PREFIX)-$(ENV)-work 2>/dev/null; then \
-		echo "${GREEN}✓ exists${RESET}"; \
+		printf '%s\n' 'exists'; \
 	else \
-		echo "${RED}✗ missing${RESET}"; \
+		printf '%s\n' 'unavailable (absent or query failed)'; \
 	fi
 	@printf "%-20s: " "Postgres Volume"
 	@if $(PODMAN_CMD) volume exists $(VOLUME_PREFIX)-$(ENV)-postgres 2>/dev/null; then \
-		echo "${GREEN}✓ exists${RESET}"; \
+		printf '%s\n' 'exists'; \
 	else \
-		echo "${RED}✗ missing${RESET}"; \
+		printf '%s\n' 'unavailable (absent or query failed)'; \
 	fi
 	@echo ""
-	@echo "${BOLD}=== Containers ===${RESET}"
-	@$(PODMAN_CMD) ps -a --filter name=$(RELEASE_NAME) --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "${YELLOW}No StarExec containers found${RESET}"
+	@printf '%s\n' 'Containers:'
+	@$(CLI_OUTPUT) $(PODMAN_CMD) ps -a --filter name=$(RELEASE_NAME) --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || ui_warn "Could not query StarExec containers."
 	@echo ""
-	@echo "${BOLD}=== Images ===${RESET}"
-	@$(PODMAN_CMD) images --filter reference=$(RELEASE_NAME) --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.Created}}" 2>/dev/null || echo "${YELLOW}No StarExec images found${RESET}"
+	@printf '%s\n' 'Images:'
+	@$(CLI_OUTPUT) $(PODMAN_CMD) images --filter reference=$(RELEASE_NAME) --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.Created}}" 2>/dev/null || ui_warn "Could not query StarExec images."
 	@echo ""
 	@$(call resolve_pod_state,$(POD_NAME)); \
 	if [ "$$POD_STATE" = "Running" ] || [ "$$POD_STATE" = "running" ]; then \
-		echo "${GREEN}✓ StarExec is RUNNING${RESET}"; \
-		echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"; \
+		printf '%s\n' "Application URL (HTTP readiness not checked): http://localhost:$(APP_PORT)/starexec"; \
 	elif [ "$$POD_STATE" = "Degraded" ] || [ "$$POD_STATE" = "degraded" ]; then \
-		echo "${YELLOW}⚠ StarExec is DEGRADED${RESET}"; \
-		echo "  Some containers are not healthy. Check the container table above."; \
+		printf '%s\n' "  Inspect container states in the table above."; \
 	elif [ -n "$$POD_STATE" ]; then \
-		echo "${YELLOW}⚠ StarExec pod state: $$POD_STATE${RESET}"; \
-		echo "  Restart with: ${BLUE}make start${RESET}"; \
+		printf '%s\n' "  Restart with: make start ENV=$(ENV) RELEASE_NAME=$(RELEASE_NAME)"; \
 	else \
-		echo "${YELLOW}○ StarExec is NOT running${RESET}"; \
-		echo "  Deploy with: ${BLUE}make start${RESET}"; \
+		printf '%s\n' "  Deploy with: make start ENV=$(ENV) RELEASE_NAME=$(RELEASE_NAME)"; \
 	fi
 
 # ============================================================================
@@ -1815,88 +1695,72 @@ test-deps:
 	@echo "${GREEN}✓ All job execution dependencies validated${RESET}"
 
 fix-cgroup-delegation:
-	@echo "Fixing cgroup controller delegation for Podman rootless mode..."
 	@./scripts/check-cgroup-delegation.sh --fix
 
 preflight-cgroup:
-	@echo "${BOLD}Checking cgroup controller delegation...${RESET}"
-	@if ./scripts/check-cgroup-delegation.sh >/dev/null 2>&1; then \
-		echo "${GREEN}✓ Cgroup delegation correct${RESET}"; \
+	@$(CLI_OUTPUT) ui_info "Checking cgroup controller delegation..."
+	@$(CLI_OUTPUT) if ./scripts/check-cgroup-delegation.sh >/dev/null 2>&1; then \
+		ui_detail "Cgroup delegation check passed."; \
 	else \
-		echo "${YELLOW}⚠️  Cgroup delegation check failed${RESET}"; \
+		ui_warn "Cgroup delegation check failed"; \
 		if [ -t 0 ]; then \
-			echo "  Run 'make fix-cgroup-delegation' to apply manually (requires sudo)"; \
+			ui_info "  Run 'make fix-cgroup-delegation' to apply manually (requires sudo)"; \
 		else \
-			echo "  Non-interactive environment detected, skipping auto-fix."; \
-			echo "  If deployment fails with cgroup errors, run manually:"; \
-			echo "    make fix-cgroup-delegation"; \
+			ui_info "  Non-interactive environment detected, skipping auto-fix."; \
+			ui_info "  If deployment fails with cgroup errors: make fix-cgroup-delegation"; \
 		fi; \
 	fi
 
 verify-deps:
-	@echo "${BOLD}Validating required CLI tooling...${RESET}"
-	@printf "  podman: "
-	@command -v podman >/dev/null && echo "${GREEN}✓${RESET}" || { echo "${RED}✗ required${RESET}"; exit 1; }
-	@printf "  sha256sum: "
-	@command -v sha256sum >/dev/null && echo "${GREEN}✓${RESET}" || { echo "${RED}✗ required${RESET}"; exit 1; }
-	@echo "${BOLD}Optional tools:${RESET}"
-	@printf "  helm: "
-	@command -v helm >/dev/null && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○ not installed (needed for template/deploy)${RESET}"
-	@printf "  yq: "
-	@command -v yq >/dev/null 2>&1 && yq --version >/dev/null 2>&1 && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○ not installed (only needed for config-show)${RESET}"
-	@echo "${BOLD}Podman rootless configuration:${RESET}"
-	@printf "  cgroup delegation: "
-	@./scripts/check-cgroup-delegation.sh >/dev/null 2>&1 && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○ needs configuration (run 'make fix-cgroup-delegation')${RESET}"
-	@printf "  newuidmap/newgidmap: "
-	@if [ "$(PODMAN_REQUIRES_SUDO)" = "no" ]; then \
+	@$(CLI_OUTPUT) ui_info "Checking Podman prerequisites..."
+	@$(CLI_OUTPUT) command -v podman >/dev/null && ui_detail "podman: available" || { ui_error "podman is required"; exit 1; }
+	@$(CLI_OUTPUT) command -v sha256sum >/dev/null && ui_detail "sha256sum: available" || { ui_error "sha256sum is required"; exit 1; }
+	@$(CLI_OUTPUT) command -v helm >/dev/null && ui_detail "helm: available" || ui_detail "helm: not installed (needed for Helm deployment)"
+	@$(CLI_OUTPUT) command -v yq >/dev/null 2>&1 && yq --version >/dev/null 2>&1 && ui_detail "yq: available" || ui_detail "yq: not installed (optional)"
+	@$(CLI_OUTPUT) ./scripts/check-cgroup-delegation.sh >/dev/null 2>&1 && ui_detail "cgroup delegation: check passed" || ui_warn "Cgroup delegation needs configuration (run 'make fix-cgroup-delegation')"
+	@$(CLI_OUTPUT) if [ "$(PODMAN_REQUIRES_SUDO)" = "no" ]; then \
 		if command -v newuidmap >/dev/null 2>&1 && command -v newgidmap >/dev/null 2>&1; then \
-			echo "${GREEN}✓${RESET}"; \
+			ui_detail "newuidmap/newgidmap: available"; \
 		else \
-			echo "${RED}✗ missing${RESET}"; \
-			echo "  Install uidmap package (Debian/Ubuntu: sudo apt install uidmap)"; \
+			ui_error "newuidmap/newgidmap: missing"; \
+			ui_info "  Install uidmap package (Debian/Ubuntu: sudo apt install uidmap)"; \
 			exit 1; \
 		fi; \
 	else \
-		echo "${YELLOW}○ skipped (rootful podman mode)${RESET}"; \
+		ui_detail "newuidmap/newgidmap: skipped (rootful podman mode)"; \
 	fi
-	@printf "  /etc/subuid + /etc/subgid: "
-	@if [ "$(PODMAN_REQUIRES_SUDO)" = "no" ]; then \
+	@$(CLI_OUTPUT) if [ "$(PODMAN_REQUIRES_SUDO)" = "no" ]; then \
 		U=$$(id -un); \
 		if grep -q "^$$U:" /etc/subuid 2>/dev/null && grep -q "^$$U:" /etc/subgid 2>/dev/null; then \
-			echo "${GREEN}✓${RESET}"; \
+			ui_detail "subuid/subgid: mapping found"; \
 		else \
-			echo "${RED}✗ missing mapping${RESET}"; \
-			echo "  Rootless Podman requires subuid/subgid entries for user '$$U'."; \
-			echo "  Ask admin to add ranges in /etc/subuid and /etc/subgid, then relogin."; \
+			ui_error "subuid/subgid: missing mapping"; \
+			ui_info "  Rootless Podman requires subuid/subgid entries for user '$$U'."; \
+			ui_info "  Ask admin to add ranges in /etc/subuid and /etc/subgid, then relogin."; \
 			exit 1; \
 		fi; \
 	else \
-		echo "${YELLOW}○ skipped (rootful podman mode)${RESET}"; \
+		ui_detail "subuid/subgid: skipped (rootful podman mode)"; \
 	fi
 	@# Check for common rootless Podman issue (missing /run/user/UID)
-	@if [ -z "$$XDG_RUNTIME_DIR" ] && [ ! -w "/run/user/$$(id -u)" ]; then \
-		echo ""; \
-		echo "${RED}✗ Error: XDG_RUNTIME_DIR not set and /run/user/$$(id -u) is not writable.${RESET}"; \
-		echo "  This is common on lab/shared machines without full PAM integration."; \
-		echo "  Podman cannot start without a place to store runtime data."; \
-		echo ""; \
-		echo "  ${BOLD}Solution:${RESET} Run this before make:"; \
-		echo "    ${BLUE}export XDG_RUNTIME_DIR=/tmp/run-$$(id -u) && mkdir -p \$$XDG_RUNTIME_DIR${RESET}"; \
-		echo ""; \
+	@$(CLI_OUTPUT) if [ -z "$$XDG_RUNTIME_DIR" ] && [ ! -w "/run/user/$$(id -u)" ]; then \
+		ui_error "XDG_RUNTIME_DIR not set and /run/user/$$(id -u) is not writable."; \
+		ui_info "  This is common on lab/shared machines without full PAM integration."; \
+		ui_info "  Podman cannot start without a place to store runtime data."; \
+		ui_info "  Run before make: export XDG_RUNTIME_DIR=/tmp/run-$$(id -u) && mkdir -p \$$XDG_RUNTIME_DIR"; \
 		exit 1; \
 	fi
-	@echo "${GREEN}✓ All required dependencies satisfied${RESET}"
-	@printf "  catatonit (rootful infra image builder): "
-	@if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
+	@$(CLI_OUTPUT) ui_detail "Required dependency checks passed."
+	@$(CLI_OUTPUT) if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
 		if command -v catatonit >/dev/null 2>&1; then \
-            echo "${GREEN}✓${RESET}"; \
+            ui_detail "catatonit: available"; \
         else \
-            echo "${YELLOW}○ not installed${RESET}"; \
-            echo "  Rootful Podman needs catatonit to build infra/pause containers."; \
-            echo "  Install with: sudo apt install catatonit"; \
+            ui_warn "catatonit: not installed"; \
+            ui_info "  Rootful Podman needs catatonit to build infra/pause containers."; \
+            ui_info "  Install with: sudo apt install catatonit"; \
         fi; \
     else \
-        echo "${YELLOW}○ skipped (rootless mode uses pre-pulled pause image)${RESET}"; \
+        ui_detail "catatonit: skipped (rootless mode uses pre-pulled pause image)"; \
     fi
 
 lint:
@@ -1928,14 +1792,14 @@ lint:
 	fi
 
 template:
-	@if command -v helm >/dev/null 2>&1; then \
-		echo "Rendering templates with environment: $(ENV)"; \
+	@$(CLI_OUTPUT) if command -v helm >/dev/null 2>&1; then \
+		ui_info "Rendering templates with environment: $(ENV)"; \
 		$(call require_values_file); \
 		helm template $(RELEASE_NAME) $(CHART_DIR) -f $(PODMAN_VALS) \
 			> render.yaml; \
-		echo "Output written to: render.yaml"; \
+		ui_success "Output written to: render.yaml"; \
 	else \
-		echo "Helm not installed, generating from template..."; \
+		ui_detail "Helm not installed, generating from template..."; \
 		STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
 		STAREXEC_SANDBOX_VOL=$${STAREXEC_SANDBOX_VOL:-starexec-$(ENV)-sandbox} \
 		STAREXEC_BACKEND_VOL=$${STAREXEC_BACKEND_VOL:-starexec-$(ENV)-backend} \
