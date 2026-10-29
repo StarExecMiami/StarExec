@@ -70,6 +70,20 @@ a[target="_blank"] .ext-link-icon::after {
 			align-items: center;
 			justify-content: center;
 			text-decoration: none;
+
+			// A flex container drops the space that the markup or jQuery UI puts
+			// between an icon and its label, so gap spaces them instead.
+			gap: $spacing-2xs;
+
+			// jQuery UI's spacer would be a flex item too, with a gap on each side.
+			.ui-button-icon-space {
+				display: none;
+			}
 		}
 	}
+}
+
+// The "all / none" toggles write the icon right before its word.
+.selectWrap .ui-icon {
+	margin-inline-end: $spacing-2xs;
 }
