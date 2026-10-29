@@ -225,8 +225,6 @@ $(document).ready(function () {
     checkForHelpFile();
   }
 
-  $(".hiddenDialog").hide();
-
   var defaultDialogConfig = {
     modal: true,
     width: 380,
