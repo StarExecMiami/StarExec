@@ -16,12 +16,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+. "$SCRIPT_DIR/lib/cli-output.sh"
 
 # Options
 DRY_RUN=false
@@ -46,19 +41,19 @@ PVC_NAME="starexec-data"
 # =============================================================================
 
 log_info() {
-  echo -e "${BLUE}ℹ${NC} $*"
+  ui_info "$@"
 }
 
 log_success() {
-  echo -e "${GREEN}✓${NC} $*"
+  ui_success "$@"
 }
 
 log_warning() {
-  echo -e "${YELLOW}⚠${NC} $*"
+  ui_warn "$@"
 }
 
 log_error() {
-  echo -e "${RED}✗${NC} $*" >&2
+  ui_error "$@"
 }
 
 dry_run_prefix() {
@@ -84,7 +79,7 @@ kubectl_run() {
   if [ "$DRY_RUN" = true ]; then
     log_info "$(dry_run_prefix)Would run: $(kubectl_cmd_string "${KUBECTL_CMD[@]}" "$@")"
   else
-    "${KUBECTL_CMD[@]}" "$@" || return 1
+    ui_run "${KUBECTL_CMD[@]}" "$@" || return 1
   fi
 }
 
@@ -235,7 +230,7 @@ create_namespaces() {
   done
   
   if [ "$DRY_RUN" != true ]; then
-    log_success "Namespaces ready"
+    log_info "Namespace creation steps finished; review any warnings above."
   fi
 }
 
@@ -290,7 +285,7 @@ EOF
     log_info "$(dry_run_prefix)Would create PVC with the following spec:"
     echo "$pvc_yaml" | sed 's/^/  /'
   else
-    echo "$pvc_yaml" | "${KUBECTL_CMD[@]}" apply -f - || return 1
+    echo "$pvc_yaml" | ui_run "${KUBECTL_CMD[@]}" apply -f - || return 1
     local pvc_phase
     pvc_phase=$("${KUBECTL_CMD[@]}" get pvc "$PVC_NAME" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)
     log_success "Created PVC: $PVC_NAME"
@@ -305,34 +300,34 @@ verify_setup() {
   log_info "Verifying setup..."
   
   echo ""
-  log_info "=== Node Status ==="
+  printf '%s\n' 'Nodes:'
   "${KUBECTL_CMD[@]}" get nodes -o wide
   
   echo ""
-  log_info "=== Worker Node Labels ==="
+  printf '%s\n' 'Worker node labels:'
   "${KUBECTL_CMD[@]}" get nodes -L starexec.org/worker,starexec/queue 2>/dev/null || "${KUBECTL_CMD[@]}" get nodes
   
   echo ""
-  log_info "=== Namespaces ==="
+  printf '%s\n' 'Namespaces:'
   "${KUBECTL_CMD[@]}" get namespaces | grep -E "starexec|NAME" || "${KUBECTL_CMD[@]}" get namespaces
   
   echo ""
-  log_info "=== PersistentVolumeClaims ==="
+  printf '%s\n' 'PersistentVolumeClaims:'
   "${KUBECTL_CMD[@]}" get pvc -A | grep -E "starexec|NAMESPACE" || "${KUBECTL_CMD[@]}" get pvc -A
   
   echo ""
-  log_success "Verification complete"
+  log_info "Setup report finished; review resource states above."
 }
 
 # Print help
 print_help() {
   cat << EOF
-${BLUE}k8s-node-setup.sh${NC} - Kubernetes Node Labeling and Configuration
+k8s-node-setup.sh - Kubernetes Node Labeling and Configuration
 
-${BLUE}Usage:${NC}
+Usage:
   ./scripts/k8s-node-setup.sh [OPTIONS]
 
-${BLUE}Options:${NC}
+Options:
   --all               Run all setup tasks (label, namespaces, PVC)
   --label-workers     Label all nodes as StarExec workers
   --create-ns         Create required namespaces
@@ -343,7 +338,7 @@ ${BLUE}Options:${NC}
   --dry-run           Preview changes without applying
   --help              Show this help message
 
-${BLUE}Examples:${NC}
+Examples:
   # Complete setup with all tasks
   ./scripts/k8s-node-setup.sh --all
 
@@ -356,10 +351,10 @@ ${BLUE}Examples:${NC}
   # Preview changes without applying
   ./scripts/k8s-node-setup.sh --all --dry-run
 
-${BLUE}Default Behavior:${NC}
+Default Behavior:
   If no options are specified, runs verification only.
 
-${BLUE}Requirements:${NC}
+Requirements:
   - kubectl installed and configured
   - Access to Kubernetes cluster
   - Sufficient permissions to label nodes and create resources

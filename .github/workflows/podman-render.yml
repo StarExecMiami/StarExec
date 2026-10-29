@@ -8,6 +8,7 @@ on:
     paths:
       - "render.yaml.template"
       - "scripts/generate-render-yaml.sh"
+      - "scripts/lib/cli-output.sh"
       - "scripts/test_generate_render_yaml.py"
       - "charts/starexec/values.yaml"
       - "Makefile"
@@ -17,6 +18,7 @@ on:
     paths:
       - "render.yaml.template"
       - "scripts/generate-render-yaml.sh"
+      - "scripts/lib/cli-output.sh"
       - "scripts/test_generate_render_yaml.py"
       - "charts/starexec/values.yaml"
       - "Makefile"

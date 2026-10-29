@@ -17,12 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 CHARTS_DIR="$REPO_ROOT/charts/starexec"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+. "$SCRIPT_DIR/lib/cli-output.sh"
 
 # Output format
 OUTPUT_JSON=false
@@ -33,19 +28,19 @@ GENERATE_VALUES=false
 # =============================================================================
 
 log_info() {
-  echo -e "${BLUE}ℹ${NC} $*" >&2
+  ui_info "$@"
 }
 
 log_success() {
-  echo -e "${GREEN}✓${NC} $*" >&2
+  ui_success "$@"
 }
 
 log_warning() {
-  echo -e "${YELLOW}⚠${NC} $*" >&2
+  ui_warn "$@"
 }
 
 log_error() {
-  echo -e "${RED}✗${NC} $*" >&2
+  ui_error "$@"
 }
 
 print_json() {
@@ -241,7 +236,7 @@ get_cluster_info() {
     print_json_string "kubernetes_version" "$k8s_version"
   else
     echo ""
-    echo "=== Cluster Information ==="
+    printf '%s\n' 'Cluster information:'
     echo "Cluster Name: $cluster_name"
     echo "Cluster Type: $cluster_type"
     echo "API Server: $api_server"
@@ -266,7 +261,7 @@ get_nodes_info() {
     print_json "worker_nodes_labeled" "$worker_count"
   else
     echo ""
-    echo "=== Node Information ==="
+    printf '%s\n' 'Node information:'
     echo "Total Nodes: $node_count"
     echo "Ready Nodes: $ready_node_count"
     echo "StarExec Worker Nodes (labeled): $worker_count"
@@ -348,7 +343,7 @@ get_storage_info() {
     print_json_string "storage_class_state" "$storage_class_state"
   else
     echo ""
-    echo "=== Storage Classes ==="
+    printf '%s\n' 'Storage classes:'
     echo "Available: $storage_classes"
     echo "Default: $default_sc"
     echo "Access mode heuristic: $storage_access_mode"
@@ -369,7 +364,7 @@ check_namespaces() {
     print_json_string "legacy_starexec_jobs_namespace" "$starexec_jobs_ns"
   else
     echo ""
-    echo "=== Namespaces ==="
+    printf '%s\n' 'Namespaces:'
     echo "starexec: $starexec_ns"
     echo "starexec-jobs (legacy, unused by current backend contract): $starexec_jobs_ns"
   fi
@@ -389,7 +384,7 @@ check_pvcs() {
     print_json "starexec_pvcs" "$starexec_pvcs"
   else
     echo ""
-    echo "=== PersistentVolumeClaims ==="
+    printf '%s\n' 'PersistentVolumeClaims:'
     echo "Total PVCs: $pvc_count"
     echo "StarExec PVCs: $starexec_pvcs"
   fi
@@ -426,7 +421,7 @@ get_resource_availability() {
     print_json "recommended_memory_gb" "$recommended_memory"
   else
     echo ""
-    echo "=== Resource Availability ==="
+    printf '%s\n' 'Resource availability:'
     echo "Total CPU: $(describe_node_resource cpu "$total_cpu_millicores")"
     echo "Total Memory: ${total_memory}GB"
     echo "Recommended for StarExec:"
@@ -448,7 +443,7 @@ detect_ingress() {
     print_json_string "ingress_controller" "$ingress_type"
   else
     echo ""
-    echo "=== Ingress Controller ==="
+    printf '%s\n' 'Ingress controller:'
     echo "Type: $ingress_type"
   fi
 }
@@ -630,17 +625,17 @@ detect_cluster_type() {
 # Print help
 print_help() {
   cat << EOF
-${BLUE}k8s-auto-detect.sh${NC} - Kubernetes Environment Auto-Detection
+k8s-auto-detect.sh - Kubernetes Environment Auto-Detection
 
-${BLUE}Usage:${NC}
+Usage:
   ./scripts/k8s-auto-detect.sh [OPTIONS]
 
-${BLUE}Options:${NC}
+Options:
   --json              Output detection results as JSON
   --generate-values   Generate optimized Helm values file
   --help              Show this help message
 
-${BLUE}Examples:${NC}
+Examples:
   # Detect and display cluster configuration
   ./scripts/k8s-auto-detect.sh
 
@@ -650,7 +645,7 @@ ${BLUE}Examples:${NC}
   # Output as JSON for programmatic use
   ./scripts/k8s-auto-detect.sh --json
 
-${BLUE}Generated Files:${NC}
+Generated Files:
   - charts/starexec/values-auto-detected.yaml (when using --generate-values)
 
 EOF
@@ -706,7 +701,7 @@ if [ "$OUTPUT_JSON" = true ]; then
   echo "}"
 else
   echo ""
-  log_success "Auto-detection complete!"
+  log_info "Auto-detection finished."
 fi
 
 # Generate values file if requested
