@@ -436,15 +436,15 @@ public class XMLUtil {
 	/**
 	 * Writes XML Document object out to a file and returns that file
 	 *
-	 * @param relPath The path to where the file should be place, relative to R.STAREXEC_ROOT.
-	 * Any spaces will be removed from the name
+	 * @param directory The directory to write the file into, such as a private temporary directory.
+	 * @param fileName The name of the file. Any spaces will be removed from the name
 	 * @param doc
 	 * @return The File where the XML document was saved
 	 * @throws Exception
 	 */
-	public static File writeDocumentToFile(String relPath, Document doc) throws Exception {
+	public static File writeDocumentToFile(File directory, String fileName, Document doc) throws Exception {
 		//no spaces are permitted at the top level
-		relPath = relPath.replaceAll("\\s+", "");
+		fileName = fileName.replaceAll("\\s+", "");
 		// write the content into xml file
 		TransformerFactory transformerFactory = TransformerFactory.newInstance();
 		Transformer transformer = transformerFactory.newTransformer();
@@ -452,10 +452,29 @@ public class XMLUtil {
 		DOMSource source = new DOMSource(doc);
 
 		//we can't let the top level have spaces in the name
-		File file = new File(R.STAREXEC_ROOT, relPath);
+		File file = fileIn(directory, fileName);
 		log.debug(file.getAbsolutePath());
 		StreamResult result = new StreamResult(file);
 		transformer.transform(source, result);
+		return file;
+	}
+
+	/**
+	 * The file called {@code fileName} directly inside {@code directory}. Export files are named after a space or
+	 * job, so a name with a path separator, or one that resolves anywhere but {@code directory}, is refused rather
+	 * than written elsewhere. The backslash is refused too: archive tools on Windows read it as a separator.
+	 *
+	 * @param directory the directory the file must be in
+	 * @param fileName the file's name
+	 * @return the file inside directory
+	 * @throws IOException if the name would leave the directory
+	 */
+	public static File fileIn(File directory, String fileName) throws IOException {
+		File file = new File(directory, fileName);
+		if (fileName.contains("/") || fileName.contains("\\")
+				|| !directory.getCanonicalFile().equals(file.getCanonicalFile().getParentFile())) {
+			throw new IOException("Refusing an export file name that leaves its directory: " + fileName);
+		}
 		return file;
 	}
 }
