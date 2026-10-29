@@ -491,7 +491,7 @@ public class LocalCoreListValidationTest {
                 !requestedAffinity.isEmpty(),
                 "The test process must have an effective CPU affinity");
 
-        Process lookup = new ProcessBuilder("bash", "-c", "command -v taskset")
+        Process lookup = new ProcessBuilder("/bin/bash", "-c", "command -v taskset")
                 .redirectErrorStream(true)
                 .start();
         String taskset = new String(lookup.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
@@ -522,13 +522,13 @@ public class LocalCoreListValidationTest {
                 + "log() { :; }\n"
                 + "initSandbox\n"
                 + "printf '%s\\n' \"$CORES\" > '" + output + "'\n"
-                + taskset + " -c \"$CORES\" bash -c \"awk '/^Cpus_allowed_list:/ { print \\$2 }' "
+                + taskset + " -c \"$CORES\" /bin/bash -c \"awk '/^Cpus_allowed_list:/ { print \\$2 }' "
                 + "/proc/self/status\" >> '" + output + "'\n";
         Process process = new ProcessBuilder(
                 taskset,
                 "-c",
                 affinity,
-                "bash",
+                "/bin/bash",
                 "-c",
                 script)
                 .redirectErrorStream(true)
