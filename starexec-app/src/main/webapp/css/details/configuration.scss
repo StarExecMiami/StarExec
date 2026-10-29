@@ -1,3 +1,4 @@
+@use "../global/mixins" as m;
 @import "shared/prettyprint";
 
 fieldset {
@@ -36,7 +37,7 @@ tr {
 	margin-right: 185px;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	th, td {
 		text-align: center;
 	}

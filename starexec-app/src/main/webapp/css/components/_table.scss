@@ -177,7 +177,7 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
 @mixin table-responsive {
   overflow-x: auto;
 
-  @media (max-width: 768px) {
+  @include mobile {
     display: block;
     width: 100%;
   }
@@ -750,7 +750,7 @@ td {
 // RESPONSIVE TABLE BREAKPOINTS
 // =============================================================================
 
-@media (max-width: 768px) {
+@include mobile {
   // Stack tables on mobile if needed
   .table-responsive-stack {
     thead {

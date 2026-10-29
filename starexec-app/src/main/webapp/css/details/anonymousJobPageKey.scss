@@ -1,8 +1,10 @@
+@use "../global/mixins" as m;
+
 .noteText {
 	padding: 10px 0 10px 0;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	#solverNameKeyFieldset {
 		width: 85%;
 	}

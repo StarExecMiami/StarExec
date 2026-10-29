@@ -1,3 +1,5 @@
+@use "../global/mixins" as m;
+
 #subspaceSummaryField {
 	width:97%;	
 }
@@ -48,7 +50,7 @@ table.panel .solvedHead, table.panel .timeHead {
 	width: 20%;	
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	#wrapper #subspaceSummaryField .panelField {
 		max-width: 100%;
 		width: 100%;

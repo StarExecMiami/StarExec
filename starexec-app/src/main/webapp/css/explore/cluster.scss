@@ -100,7 +100,7 @@
 	padding: 15px;
 }
 
-@media only screen and (max-width: 767px) {
+@include mobile {
 	#explorer {
 		width: 100%;
 		float: none;

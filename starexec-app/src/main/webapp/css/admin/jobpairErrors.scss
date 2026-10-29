@@ -83,7 +83,7 @@
         font-size: 0.9em;
     }
 
-    @media (max-width: 768px) {
+    @include mobile {
         display: flex;
         width: 100%;
 
@@ -309,7 +309,7 @@
 }
 
 /* ========== Responsive Design ========== */
-@media (max-width: 768px) {
+@include mobile {
     #dateselector {
         fieldset {
             padding: 10px 15px;

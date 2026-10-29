@@ -1,3 +1,5 @@
+@use "../global/mixins" as m;
+
 #loginForm {
 	// As wide and tall as its fields: a fixed 370x140px box, which the fieldset
 	// and table filled, was smaller than them, so they ran past its border.
@@ -31,7 +33,7 @@
 	}
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	#loginForm {
 		margin: 20px 0 0 10px;
 		width: auto;
