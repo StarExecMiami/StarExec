@@ -115,6 +115,9 @@ class Render:
         test.addCleanup(shutil.rmtree, self.dir)
         (self.dir / "scripts").mkdir()
         shutil.copy2(SCRIPT, self.dir / "scripts" / SCRIPT.name)
+        library_dir = self.dir / "scripts" / "lib"
+        library_dir.mkdir()
+        shutil.copy2(SCRIPT.parent / "lib" / "cli-output.sh", library_dir)
         shutil.copy2(TEMPLATE, self.dir / TEMPLATE.name)
         bin_dir = self.dir / "bin"
         bin_dir.mkdir()
