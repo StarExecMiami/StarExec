@@ -1986,7 +1986,8 @@ config-show:
 	@echo "  (This shows what would actually be used at runtime)"
 	@if [ -f render.yaml ]; then \
 		echo "  From rendered manifest (render.yaml):"; \
-		grep -A 5 "STAREXEC_DB" render.yaml | head -20; \
+		awk -f scripts/mask-env-values.awk render.yaml | \
+			grep -A 5 "STAREXEC_DB" | head -20; \
 	else \
 		echo "  ⚠️  No render.yaml found. Run 'make template' first."; \
 	fi
