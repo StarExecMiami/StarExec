@@ -150,7 +150,7 @@ $container-max-width: s.$container-max-width;
   align-items: start;
   margin-bottom: $spacing-3xl;
 
-  @include m.tablet {
+  @include m.tablet-down {
     grid-template-columns: minmax(0, 1fr);
     gap: $spacing-xl;
   }
@@ -166,7 +166,7 @@ $container-max-width: s.$container-max-width;
   border-radius: 12px;
   overflow: hidden;
 
-  @include m.desktop {
+  @include m.not-mobile {
     position: sticky;
     top: $spacing-lg;
   }

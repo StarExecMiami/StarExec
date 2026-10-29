@@ -1,6 +1,7 @@
 //noinspection CssUnknownTarget
 @import "../properties";
 @import "icon-data";
+@import "breakpoints";
 
 // Draws a vendored icon in the current text colour. Icons are data URIs, so
 // they also work in the offline job page opened from file://. Unprefixed
@@ -24,30 +25,6 @@
 	border-right-color: transparent;
 	border-radius: 50%;
 	animation: loading-spinner-rotate 0.75s linear infinite;
-}
-
-@mixin mobile {
-	@media only screen and (max-width: 767px) {
-		@content;
-	}
-}
-
-@mixin tablet {
-	@media only screen and (min-width: 768px) and (max-width: 1024px) {
-		@content;
-	}
-}
-
-@mixin desktop {
-	@media only screen and (min-width: 1025px) {
-		@content;
-	}
-}
-
-@mixin not-mobile {
-	@media only screen and (min-width: 768px) {
-		@content;
-	}
 }
 
 $helper-first-include: true !default;

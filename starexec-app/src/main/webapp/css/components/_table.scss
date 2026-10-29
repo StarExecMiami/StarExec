@@ -254,10 +254,9 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
 // fields fill their column and labels take their own width and may wrap, so
 // the table fits. DataTables keep their own layout. The #content id outweighs
 // the page rules that set those widths (#tblSpace input, #loginForm input,
-// .label). $breakpoint-mobile is 768px, as in global.css; @include mobile here
-// comes from global/helper and stops at 767px.
+// .label).
 #content :is(form fieldset, fieldset form) table:not(.dataTable) {
-  @media (max-width: $breakpoint-mobile) {
+  @include mobile {
     :is(input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="image"]), select, textarea) {
       width: 100%;
     }
