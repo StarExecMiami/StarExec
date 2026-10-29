@@ -95,5 +95,5 @@ $helper-first-include: true !default;
 		clear: both;
 	}
 
-	$helper-already-imported: false;
+	$helper-first-include: false !global;
 }
