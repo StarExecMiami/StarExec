@@ -62,7 +62,6 @@ function initUI() {
 		$('#dialog-warning').dialog({
 			modal: true,
 			width: 700,
-			height: 500,
 			buttons: {
 				'OK': function() {
 					$('#dialog-warning').dialog('close');
@@ -78,7 +77,6 @@ function initUI() {
 		$('#dialog-building-job').dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					$('#dialog-building-job').dialog('close');
@@ -101,7 +99,6 @@ function attachButtonActions() {
 		$('#dialog-confirm-copy').dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'default': function() {
 					log("default selected");
@@ -217,7 +214,6 @@ function registerAnonymousLinkButtonEventHandler() {
 		$('#dialog-confirm-anonymous-link').dialog({
 			modal: true,
 			width: 600,
-			height: 200,
 			buttons: {
 				'yes': function() {
 					$(this).dialog('close');

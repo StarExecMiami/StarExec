@@ -141,7 +141,6 @@ function attachWebsiteMonitor() {
 		$('#dialog-confirm-delete').dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					$('#dialog-confirm-delete').dialog('close');

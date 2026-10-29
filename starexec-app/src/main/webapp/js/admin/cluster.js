@@ -121,7 +121,6 @@ jQuery(function($) {
 		$confirmRemove.dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					log('user confirmed giving global access.');
@@ -192,7 +191,6 @@ jQuery(function($) {
 		$confirmRemove.dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					log('user confirmed removing global access.');
@@ -223,7 +221,6 @@ jQuery(function($) {
 		$confirmRemove.dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					log('user confirmed queue removal.');

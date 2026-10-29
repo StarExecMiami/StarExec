@@ -72,7 +72,6 @@ $(document).ready(function() {
 		$('.dialog-copy-to-stardev').dialog({
 			modal: true,
 			width: 480,
-			height: 330,
 			buttons: {
 				'submit': function() {
 					$(this).dialog('close');

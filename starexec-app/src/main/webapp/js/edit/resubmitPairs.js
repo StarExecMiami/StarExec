@@ -22,7 +22,6 @@ jQuery(function($) {
 		$("#dialog-confirm").dialog({
 			modal: true,
 			width: 380,
-			height: 265,
 			buttons: {
 				'YES': function() {
 					$('#dialog-confirm').dialog('close');
@@ -43,7 +42,6 @@ jQuery(function($) {
                 $("#dialog-confirm").dialog({
                         modal: true,
                         width: 380,
-                        height: 265,
                         buttons: {
                                 'YES': function() {
                                         $('#dialog-confirm').dialog('close');
@@ -63,7 +61,6 @@ jQuery(function($) {
                 $("#dialog-confirm").dialog({
                         modal: true,
                         width: 380,
-                        height: 265,
                         buttons: {
                                 'YES': function() {
                                         $('#dialog-confirm').dialog('close');

@@ -91,7 +91,6 @@ function makeAnonymousLinkPost(
 
 				$('#dialog-show-anonymous-link').dialog({
 					width: 750,
-					height: 200,
 				});
 			} else {
 				parseReturnCode(returnCode);

@@ -399,7 +399,6 @@ function recycleSelected(prim) {
 	// Display the confirmation dialog
 	$('#dialog-confirm-recycle').dialog({
 		modal: true,
-		height: 220,
 		buttons: {
 			'Move to Trash': function() {
 				$("#dialog-confirm-recycle").dialog("close");
@@ -437,7 +436,6 @@ function linkAllOrphaned() {
 	// Display the confirmation dialog
 	$('#dialog-confirm-copy').dialog({
 		modal: true,
-		height: 220,
 		buttons: {
 			'link all': function() {
 				$("#dialog-confirm-copy").dialog("close");
@@ -477,7 +475,6 @@ function recycleOrphaned(prim) {
 	// Display the confirmation dialog
 	$('#dialog-confirm-recycle').dialog({
 		modal: true,
-		height: 220,
 		buttons: {
 			'Move to Trash': function() {
 				$("#dialog-confirm-recycle").dialog("close");
@@ -516,7 +513,6 @@ function deleteSelectedJobs() {
 	// Display the confirmation dialog
 	$('#dialog-confirm-delete').dialog({
 		modal: true,
-		height: 220,
 		buttons: {
 			'delete permanently': function() {
 				$("#dialog-confirm-delete").dialog("close");
@@ -554,7 +550,6 @@ function deleteOrphanedJobs() {
 	// Display the confirmation dialog
 	$('#dialog-confirm-delete').dialog({
 		modal: true,
-		height: 220,
 		buttons: {
 			'delete permanently': function() {
 				$("#dialog-confirm-delete").dialog("close");
@@ -647,7 +642,6 @@ function onSpaceDrop(event, ui) {
 		$('#dialog-confirm-copy').dialog({
 			modal: true,
 			width: 500,
-			height: 200,
 
 			//depending on what the user
 			buttons: {

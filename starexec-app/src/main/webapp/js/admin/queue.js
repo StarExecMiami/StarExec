@@ -30,7 +30,6 @@ $(document).ready(function() {
 		$('#dialog-warning').dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					$('#dialog-warning').dialog('close');
