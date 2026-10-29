@@ -168,7 +168,8 @@ public class DownloadExportLocationTest {
 			assertEquals(new File(System.getProperty("java.io.tmpdir")).getCanonicalFile(), dir.getParentFile().getCanonicalFile());
 			assertEquals("rwx------",
 					PosixFilePermissions.toString(Files.getPosixFilePermissions(dir.toPath())), "only the server's own user may enter it");
-			assertFalse(dir.getCanonicalPath().startsWith(webRoot.getCanonicalPath()));
+			assertFalse(dir.getCanonicalFile().toPath().startsWith(webRoot.getCanonicalFile().toPath()),
+					"outside the web root, compared element by element");
 			assertNotEquals(dir, other, "each export gets its own directory");
 		} finally {
 			FileUtils.deleteQuietly(dir);
