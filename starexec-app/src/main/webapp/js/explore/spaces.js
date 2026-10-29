@@ -299,7 +299,6 @@ function onSpaceDrop(event, ui) {
 			$('#dialog-confirm-copy').dialog({
 				modal: true,
 				width: 600,
-				height: 400,
 				//depending on what the user
 				buttons: solverCopyDialogButtons
 			});
@@ -342,7 +341,6 @@ function onSpaceDrop(event, ui) {
 			// Display the confirmation dialog
 			$('#dialog-confirm-copy').dialog({
 				modal: true,
-				height: 200,
 				width: 500,
 				buttons: {
 					'yes': function() {
@@ -422,7 +420,6 @@ function setupSpaceCopyDialog(ids, destSpace, destName) {
 	$(EXP_SP.copySpaceDialog).dialog({
 		modal: true,
 		width: 700,
-		height: 300,
 		buttons: spaceCopyDialogButtons
 	});
 }
@@ -455,7 +452,6 @@ function setupUserCopyDialog(ids, destSpace, destName, ui, destIsLeafSpace) {
 	$('#dialog-confirm-copy').dialog({
 		modal: true,
 		width: 500,
-		height: 200,
 		buttons: userCopyDialogButtons
 	});
 }
@@ -655,7 +651,6 @@ function removeBenchmarks(selectedBenches, ownsAll) {
 	$('#dialog-confirm-delete').dialog({
 		modal: true,
 		width: 800,
-		height: 400,
 		open: EXP_SP.hierarchyDialogConfig.open,
 		close: EXP_SP.hierarchyDialogConfig.close,
 		buttons: [
@@ -763,7 +758,6 @@ function removeUsers(selectedUsers) {
 	$('#dialog-confirm-delete').dialog({
 		modal: true,
 		width: 800,
-		height: 400,
 		open: EXP_SP.hierarchyDialogConfig.open,
 		close: EXP_SP.hierarchyDialogConfig.close,
 		buttons: [
@@ -880,7 +874,6 @@ function removeSolvers(selectedSolvers, ownsAll) {
 	$('#dialog-confirm-delete').dialog({
 		modal: true,
 		width: 800,
-		height: 400,
 		open: EXP_SP.hierarchyDialogConfig.open,
 		close: EXP_SP.hierarchyDialogConfig.close,
 		buttons: [
@@ -935,7 +928,6 @@ function removeJobs(selectedJobs, ownsAll) {
 	$('#dialog-confirm-delete').dialog({
 		modal: true,
 		width: 800,
-		height: 400,
 		open: EXP_SP.hierarchyDialogConfig.open,
 		close: EXP_SP.hierarchyDialogConfig.close,
 		buttons: [
@@ -1027,7 +1019,6 @@ function removeSubspaces(selectedSubspaces) {
 	$('#dialog-confirm-delete').dialog({
 		modal: true,
 		width: 800,
-		height: 400,
 		buttons: {
 			"Remove subspace(s) only": function() {
 				log('user confirmed subspace deletion');
@@ -1484,7 +1475,6 @@ function updateButtonIds(id) {
 		$('#dialog-spacexml').dialog({
 			modal: true,
 			width: 380,
-			height: 300,
 			buttons: {
 				"download": function() {
 					var attVal = $('input[name=att]:checked').val();
@@ -1507,7 +1497,6 @@ function updateButtonIds(id) {
 		$('#dialog-spaceUpdateXml').dialog({
 			modal: true,
 			width: 380,
-			height: 300,
 			buttons: {
 				"download": function() {
 					var updatePID = $('#updateID').val();
@@ -1530,18 +1519,14 @@ function updateButtonIds(id) {
 		// Display the confirmation dialog
 		$("#downloadBoth").prop("checked", "checked");
 		$('#noIdDirectories').prop('checked', 'checked');
-		var dialogHeight = 500;
 		if (isLeafSpace) {
 			$('#downloadHierarchyOptionContainer').hide();
-			dialogHeight = 400;
 		} else {
 			$('#downloadHierarchyOptionContainer').show();
-			dialogHeight = 500;
 		}
 		$('#dialog-download-space').dialog({
 			modal: true,
 			width: 380,
-			height: dialogHeight,
 			buttons: {
 				'submit': function() {
 					createDownloadSpacePost(id);

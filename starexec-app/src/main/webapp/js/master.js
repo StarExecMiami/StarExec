@@ -225,12 +225,22 @@ $(document).ready(function () {
     checkForHelpFile();
   }
 
-  $(".hiddenDialog").hide();
+  // A dialog sized to its content (height "auto", jQuery UI's default) grows
+  // up to 90% of the window, as getResponsiveDialogConfig in details/job.js
+  // does; past that its content scrolls and the buttons stay in view. A
+  // dialog with a fixed height, or with its own maxHeight, is left as it is.
+  $.widget("ui.dialog", $.ui.dialog, {
+    _create: function () {
+      if (this.options.height === "auto" && this.options.maxHeight === null) {
+        this.options.maxHeight = Math.max(260, Math.floor($(window).height() * 0.9));
+      }
+      this._super();
+    },
+  });
 
   var defaultDialogConfig = {
     modal: true,
     width: 380,
-    height: 165,
     appendTo: "body",
     autoOpen: true,
   };

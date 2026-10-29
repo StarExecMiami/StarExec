@@ -119,7 +119,6 @@ function initUI(userId, spaceId) {
 		$("#dialog-confirm-update").dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					$('#dialog-confirm-update').dialog('close');
@@ -163,7 +162,6 @@ function initUI(userId, spaceId) {
 		$("#dialog-confirm-update").dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					$('#dialog-confirm-update').dialog('close');

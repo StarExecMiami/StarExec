@@ -540,7 +540,6 @@ function initUI() {
 		$("#dialog-warning").dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'clear cache': function() {
 					$(this).dialog("close");
@@ -920,7 +919,6 @@ function setupDeleteJobButton() {
 		$('#dialog-confirm-delete').dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					log('user confirmed job deletion.');
@@ -1098,7 +1096,6 @@ function setupChangeQueueButton() {
 		$('#dialog-changeQueue').dialog({
 			modal: true,
 			width: 380,
-			height: 200,
 			buttons: {
 				'OK': function() {
 					$('#dialog-changeQueue').dialog('close');
@@ -1135,7 +1132,6 @@ function setupPostProcessButton() {
 		$('#dialog-postProcess').dialog({
 			modal: true,
 			width: 380,
-			height: 200,
 			buttons: {
 				'OK': function() {
 					$('#dialog-postProcess').dialog('close');
@@ -2091,7 +2087,6 @@ function registerAnonymousLinkButtonEventHandler() {
 		$('#dialog-confirm-anonymous-link').dialog({
 			modal: true,
 			width: 600,
-			height: 200,
 			buttons: {
 				'everything': function() {
 					$(this).dialog('close');
