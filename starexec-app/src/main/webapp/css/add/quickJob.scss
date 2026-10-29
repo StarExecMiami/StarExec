@@ -1,6 +1,7 @@
 @use "../global/colors" as c;
 @use "../global/typography" as t;
 @use "../global/spacing" as s;
+@use "../global/mixins" as m;
 
 #benchmarkField {
   width: 96%;
@@ -34,7 +35,7 @@
   }
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
   #content fieldset,
   #wrapper fieldset {
     width: 100%;

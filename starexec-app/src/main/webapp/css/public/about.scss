@@ -355,7 +355,7 @@ $spacing-2xs: s.$spacing-2xs;
 // Responsive Design
 // ============================================================================
 
-@media (max-width: 768px) {
+@include m.mobile {
   .about-hero {
     padding: $spacing-xl $spacing-md;
   }
