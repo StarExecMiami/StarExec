@@ -28,6 +28,27 @@ EXCEPTION WHEN invalid_text_representation OR invalid_datetime_format OR datetim
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION starexec.guard_solver_build_stop_receipt() RETURNS trigger AS $$
+BEGIN
+    IF OLD.execution_stop_receipt_payload IS NOT NULL AND
+        (NEW.execution_stop_receipt_payload, NEW.execution_stop_receipt_sha256, NEW.execution_stop_receipt_recorded_at)
+        IS DISTINCT FROM
+        (OLD.execution_stop_receipt_payload, OLD.execution_stop_receipt_sha256, OLD.execution_stop_receipt_recorded_at) THEN
+        RAISE EXCEPTION 'A build stop receipt is immutable';
+    END IF;
+    IF OLD.execution_stop_receipt_payload IS NULL AND NEW.execution_stop_receipt_payload IS NOT NULL
+        AND OLD.state NOT IN ('PLANNED', 'STAGED', 'REJECTED') THEN
+        RAISE EXCEPTION 'Stop evidence must precede artifact validation';
+    END IF;
+    IF NEW.state = 'PUBLISHED' AND OLD.state <> 'PUBLISHED' AND NEW.execution_stop_receipt_payload IS NOT NULL THEN
+        IF NEW.execution_stop_receipt_payload::jsonb #>> '{facts,disposition}' IN ('never_started', 'cancelled') THEN
+            RAISE EXCEPTION 'A non-completion receipt cannot authorize solver publication';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION starexec.record_solver_build_stop_receipt(
     _pair INTEGER, _attempt INTEGER, _token UUID, _engine TEXT, _payload TEXT, _digest TEXT)
 RETURNS BOOLEAN AS $$
@@ -85,6 +106,37 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Cancellation conserves positive stop observations without publishing a result.
+CREATE OR REPLACE FUNCTION starexec.record_solver_build_cancelled(
+    _pair INTEGER, _attempt INTEGER, _token UUID, _engine TEXT, _payload TEXT, _digest TEXT)
+RETURNS BOOLEAN AS $$
+DECLARE
+    _artifact starexec.solver_build_artifacts%ROWTYPE;
+BEGIN
+    SELECT * INTO _artifact FROM starexec.solver_build_artifacts
+    WHERE origin_pair_id = _pair AND attempt_no = _attempt AND execution_token = _token
+        AND engine_identity = _engine FOR UPDATE;
+    IF NOT FOUND OR NOT starexec.solver_build_stop_receipt_matches(
+        _payload, _digest, _artifact.id, _pair, _attempt, _engine) THEN RETURN FALSE; END IF;
+    IF _payload::jsonb #>> '{facts,disposition}' IS DISTINCT FROM 'cancelled' THEN RETURN FALSE; END IF;
+    IF _artifact.execution_stop_receipt_payload IS NOT NULL THEN
+        IF _artifact.execution_stop_receipt_payload <> _payload
+            OR _artifact.execution_stop_receipt_sha256 <> _digest THEN RETURN FALSE; END IF;
+        IF _artifact.state IN ('REJECTED', 'DELETED') THEN RETURN TRUE; END IF;
+        IF _artifact.state NOT IN ('PLANNED', 'STAGED', 'VALIDATED') THEN RETURN FALSE; END IF;
+        UPDATE starexec.solver_build_artifacts SET state = 'REJECTED' WHERE id = _artifact.id;
+        RETURN TRUE;
+    END IF;
+    IF _artifact.state NOT IN ('PLANNED', 'STAGED', 'REJECTED') THEN RETURN FALSE; END IF;
+    UPDATE starexec.solver_build_artifacts SET state = 'REJECTED',
+        execution_stopped_at = COALESCE(execution_stopped_at, clock_timestamp()),
+        execution_stop_receipt_payload = _payload, execution_stop_receipt_sha256 = _digest,
+        execution_stop_receipt_recorded_at = clock_timestamp()
+    WHERE id = _artifact.id;
+    RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION starexec.publish_solver_build_output(_artifact BIGINT) RETURNS BOOLEAN AS $$
 DECLARE
     _a starexec.solver_build_artifacts%ROWTYPE;
@@ -97,7 +149,7 @@ BEGIN
         OR NOT starexec.solver_build_stop_receipt_matches(_a.execution_stop_receipt_payload,
             _a.execution_stop_receipt_sha256, _a.id, _a.origin_pair_id, _a.attempt_no, _a.engine_identity)
         THEN RETURN FALSE; END IF;
-    IF _a.execution_stop_receipt_payload::jsonb #>> '{facts,disposition}' = 'never_started'
+    IF _a.execution_stop_receipt_payload::jsonb #>> '{facts,disposition}' IN ('never_started', 'cancelled')
         THEN RETURN FALSE; END IF;
     RETURN starexec.publish_solver_build_artifact(_artifact);
 END;

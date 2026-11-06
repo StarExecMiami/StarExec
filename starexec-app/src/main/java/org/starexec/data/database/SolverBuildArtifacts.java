@@ -77,6 +77,22 @@ public final class SolverBuildArtifacts {
                 pairId, attemptNo, token, engine, receipt.payload(), receipt.sha256());
     }
 
+    /** Call only after the trusted observer establishes physical termination following cancellation. */
+    public static boolean recordCancelled(int pairId, int attemptNo, UUID token, String engine,
+                                          SolverBuildStopReceipt receipt) throws SQLException {
+        try (Connection connection = Common.getConnection()) {
+            return Common.runTransactional(connection,
+                    transaction -> recordCancelled(transaction, pairId, attemptNo, token, engine, receipt));
+        }
+    }
+
+    /** Rejects cancelled output and conserves its stop proof; the caller owns the commit. */
+    public static boolean recordCancelled(Connection connection, int pairId, int attemptNo, UUID token,
+                                          String engine, SolverBuildStopReceipt receipt) throws SQLException {
+        return call(connection, "SELECT starexec.record_solver_build_cancelled(?,?,?,?,?,?)",
+                pairId, attemptNo, token, engine, receipt.payload(), receipt.sha256());
+    }
+
     public static BuildExecutionContext prepareStaging(int pairId, int attemptNo, Path parent)
             throws SQLException, IOException {
         try (Connection con = Common.getConnection()) {
