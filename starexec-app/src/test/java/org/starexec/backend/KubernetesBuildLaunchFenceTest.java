@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -41,13 +42,18 @@ class KubernetesBuildLaunchFenceTest {
         return KubernetesBuildStopObserver.identify("starexec", initialJob());
     }
 
-    private static final class Api implements AutoCloseable {
+    static final class Api implements AutoCloseable {
         final KubernetesSerialization json = new KubernetesSerialization();
         final HttpServer server;
         final AtomicInteger writes = new AtomicInteger();
         final AtomicInteger censuses = new AtomicInteger();
         final List<String> writeVersions = new CopyOnWriteArrayList<>();
         final List<String> writePaths = new CopyOnWriteArrayList<>();
+        final AtomicInteger deletes = new AtomicInteger();
+        final List<String> deleteVersions = new CopyOnWriteArrayList<>();
+        volatile boolean deleted;
+        volatile boolean refuseDeletion;
+        volatile BooleanSupplier deletionAllowed = () -> true;
         volatile Job current = initialJob();
         volatile String invalidCensus;
         volatile boolean lateCensus;
@@ -68,7 +74,8 @@ class KubernetesBuildLaunchFenceTest {
                         code = 409; body = status("Conflict", code);
                     } else {
                         long generation = current.getMetadata().getGeneration() + (current.getSpec().equals(requested.getSpec()) ? 0 : 1);
-                        current = new JobBuilder(requested).editMetadata().withResourceVersion("18").withGeneration(generation).endMetadata().build();
+                        String nextVersion = Long.toString(Long.parseLong(current.getMetadata().getResourceVersion()) + 1);
+                        current = new JobBuilder(requested).editMetadata().withResourceVersion(nextVersion).withGeneration(generation).endMetadata().build();
                         Job reply = new JobBuilder(current).build();
                         if (invalidReply != null) {
                             switch (invalidReply) {
@@ -82,6 +89,19 @@ class KubernetesBuildLaunchFenceTest {
                         }
                         if (failAfterWrite) { code = 500; body = status("InternalError", code); }
                         else body = json.asJson(reply);
+                    }
+                } else if (exchange.getRequestMethod().equals("DELETE")) {
+                    deletes.incrementAndGet();
+                    var options = com.google.gson.JsonParser.parseString(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
+                    var preconditions = options.getAsJsonObject("preconditions");
+                    String version = preconditions == null || !preconditions.has("resourceVersion") ? null : preconditions.get("resourceVersion").getAsString();
+                    deleteVersions.add(version);
+                    if (refuseDeletion || !current.getMetadata().getResourceVersion().equals(version)) {
+                        code = 409; body = status("Conflict", code);
+                    } else if (!deletionAllowed.getAsBoolean()) {
+                        code = 412; body = status("PreconditionFailed", code);
+                    } else {
+                        deleted = true; body = "{\"apiVersion\":\"v1\",\"kind\":\"Status\",\"status\":\"Success\"}";
                     }
                 } else if (exchange.getRequestURI().getPath().endsWith("/pods")) {
                     int census = censuses.incrementAndGet();
@@ -98,6 +118,10 @@ class KubernetesBuildLaunchFenceTest {
                         }
                     }
                     body = json.asJson(listing);
+                } else if (exchange.getRequestURI().getPath().endsWith("/jobs")) {
+                    body = json.asJson(new JobListBuilder().withItems(deleted ? List.<Job>of() : List.of(current)).build());
+                } else if (deleted) {
+                    code = 404; body = status("NotFound", code);
                 } else {
                     body = json.asJson(current);
                 }

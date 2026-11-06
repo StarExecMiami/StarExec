@@ -658,6 +658,41 @@ public class SolverArtifactPublicationSqlTest {
         }
     }
 
+    @Test void anUnstartedRetryPlansANewArtifactWithoutRevivingRejectedOutput() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = neverStartedReceipt(Instant.now());
+        var original = SolverBuildArtifacts.find(con, pair, 1).orElseThrow();
+        assertEquals(original, SolverBuildArtifacts.findCurrent(con, pair).orElseThrow());
+        assertTrue(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, "engine-a", receipt));
+        execute(con, "UPDATE job_pairs SET status_code=2,sge_id=7 WHERE id=" + pair);
+        con.commit();
+        assertEquals("REQUEUED", text(con, "SELECT RetryNeverStartedPair(" + pair + ",7,1)"));
+        assertEquals("2", text(con, "SELECT current_attempt_no FROM job_pair_attempts WHERE pair_id=" + pair));
+        var next = SolverBuildArtifacts.find(con, pair, 2).orElseThrow();
+        assertEquals(next, SolverBuildArtifacts.findCurrent(con, pair).orElseThrow());
+        assertNotEquals(original.id(), next.id()); assertTrue(next.generation() > original.generation());
+        assertEquals("PLANNED", next.state()); assertNull(next.engineIdentity()); assertNull(next.executionToken());
+        assertEquals(original.sourcePath(), next.sourcePath());
+        assertEquals("REJECTED", SolverBuildArtifacts.find(con, pair, 1).orElseThrow().state());
+        assertEquals(receipt.payload(), SolverBuildArtifacts.findStopReceipt(con, pair, 1).orElseThrow().receipt().payload());
+        assertEquals("f", text(con, "SELECT publish_solver_build_output(" + original.id() + ")"));
+        assertEquals("t", text(con, "SELECT prepare_solver_build_storage(" + pair + ",2,'" + UUID.randomUUID()
+                + "'::uuid,'/execution/next-attempt')"));
+    }
+
+    @Test void aStandaloneUnstartedReceiptCommitsBeforeItsCleanupAcknowledgement() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = neverStartedReceipt(Instant.now()); con.commit();
+        org.starexec.data.database.Common.initialize();
+        assertTrue(SolverBuildArtifacts.recordUnstarted(pair, 1, token, "engine-a", receipt));
+        execute(con, "UPDATE job_pairs SET status_code=2,sge_id=7 WHERE id=" + pair); con.commit();
+        assertEquals(org.starexec.data.database.JobPairs.NeverStartedRetryResult.REQUEUED,
+                org.starexec.data.database.JobPairs.retryNeverStartedPair(pair, 7, 1));
+        try (Connection observer = connect()) {
+            assertEquals("REJECTED", SolverBuildArtifacts.find(observer, pair, 1).orElseThrow().state());
+            assertEquals(receipt.payload(), SolverBuildArtifacts.findStopReceipt(observer, pair, 1).orElseThrow().receipt().payload());
+            assertEquals(2, SolverBuildArtifacts.findCurrent(observer, pair).orElseThrow().attemptNo());
+        }
+    }
+
     private UUID boundReceiptFixture() throws Exception {
         UUID token = UUID.randomUUID();
         assertEquals("t", text(con, prepare(token)));
