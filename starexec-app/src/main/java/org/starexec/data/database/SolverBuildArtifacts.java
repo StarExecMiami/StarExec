@@ -72,6 +72,38 @@ public final class SolverBuildArtifacts {
         }
     }
 
+    /** Revalidates the prepared attempt and commits its engine identity before launch. */
+    public static boolean admitExecution(BuildExecutionContext build, String engineIdentity) throws SQLException {
+        try (Connection connection = Common.getConnection()) {
+            connection.setAutoCommit(false);
+            try {
+                boolean admitted = admitExecution(connection, build, engineIdentity);
+                if (admitted) connection.commit(); else connection.rollback();
+                return admitted;
+            } catch (SQLException | RuntimeException failure) {
+                try { connection.rollback(); }
+                catch (SQLException rollback) { failure.addSuppressed(rollback); }
+                throw failure;
+            }
+        }
+    }
+
+    /** The caller must commit this transaction before starting the engine resource. */
+    public static boolean admitExecution(Connection connection, BuildExecutionContext build,
+                                         String engineIdentity) throws SQLException {
+        if (connection.getAutoCommit()) throw new SQLException("Build admission requires an explicit transaction");
+        Artifact artifact = find(connection, build.pairId(), build.attemptNo()).orElse(null);
+        if (artifact == null || artifact.id() != build.artifactId()
+                || !build.token().equals(artifact.executionToken())
+                || !build.staging().toString().equals(artifact.stagingPath())
+                || !build.source().toString().equals(artifact.sourcePath())) return false;
+        // The prepare routine locks job, pair, attempt, solver and artifact until commit.
+        if (!prepare(connection, build.pairId(), build.attemptNo(), build.token(), build.staging())) return false;
+        artifact = find(connection, build.pairId(), build.attemptNo()).orElseThrow();
+        if (artifact.stoppedAt() != null) return false;
+        return bindExecution(connection, build.pairId(), build.attemptNo(), build.token(), engineIdentity);
+    }
+
     public static boolean bindExecution(Connection con, int pairId, int attemptNo, UUID token,
                                         String engineIdentity) throws SQLException {
         return call(con, "SELECT starexec.bind_solver_build_execution(?,?,?,?)",

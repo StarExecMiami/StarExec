@@ -168,6 +168,67 @@ public class SolverArtifactPublicationSqlTest {
         try (var paths = Files.list(parent)) { assertEquals(0, paths.count()); }
     }
 
+    @Test void launchAdmissionCommitsItsMatchingEngineIdentity() throws Exception {
+        Path parent = seedFilesystemBuild();
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        con.setAutoCommit(false);
+        assertTrue(SolverBuildArtifacts.admitExecution(con, context, "podman:owned-container"));
+        try (Connection observer = connect()) {
+            assertNull(SolverBuildArtifacts.find(observer, pair, 1).orElseThrow().engineIdentity());
+        }
+        con.commit();
+        try (Connection observer = connect()) {
+            assertEquals("podman:owned-container", SolverBuildArtifacts.find(observer, pair, 1).orElseThrow().engineIdentity());
+        }
+        assertTrue(SolverBuildArtifacts.admitExecution(con, context, "podman:owned-container"));
+        assertFalse(SolverBuildArtifacts.admitExecution(con, context, "podman:different-container"));
+    }
+
+    @Test void launchAdmissionRefusesAnUnpreparedOrMismatchedIdentity() throws Exception {
+        Path parent = seedFilesystemBuild();
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        var wrong = new org.starexec.backend.BuildExecutionContext(context.artifactId(), pair, 1,
+                UUID.randomUUID(), context.source(), context.staging());
+        con.setAutoCommit(false);
+        assertFalse(SolverBuildArtifacts.admitExecution(con, wrong, "podman:wrong"));
+        assertNull(SolverBuildArtifacts.find(con, pair, 1).orElseThrow().engineIdentity());
+    }
+
+    @Test void launchAdmissionRefusesAStoppedExecution() throws Exception {
+        Path parent = seedFilesystemBuild();
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        assertTrue(SolverBuildArtifacts.bindExecution(con, pair, 1, context.token(), "podman:stopped"));
+        assertTrue(SolverBuildArtifacts.recordStopped(con, pair, 1, context.token(), "podman:stopped"));
+        con.setAutoCommit(false);
+        assertFalse(SolverBuildArtifacts.admitExecution(con, context, "podman:stopped"));
+    }
+
+    @Test void lateCleanupBindingDoesNotAuthorizeLaunchingADeletedSolver() throws Exception {
+        Path parent = seedFilesystemBuild();
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        execute(con, "DELETE FROM solvers WHERE id=" + solver);
+        assertTrue(SolverBuildArtifacts.bindExecution(con, pair, 1, context.token(), "podman:late"));
+        con.setAutoCommit(false);
+        assertFalse(SolverBuildArtifacts.admitExecution(con, context, "podman:late"));
+        assertEquals("REJECTED", SolverBuildArtifacts.find(con, pair, 1).orElseThrow().state());
+    }
+
+    @Test void aRebuildRequestRevokesAnOlderPreparedLaunch() throws Exception {
+        Path parent = seedFilesystemBuild();
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        execute(con, "UPDATE solvers SET build_generation=build_generation+1 WHERE id=" + solver);
+        con.setAutoCommit(false);
+        assertFalse(SolverBuildArtifacts.admitExecution(con, context, "podman:older-build"));
+        assertNull(SolverBuildArtifacts.find(con, pair, 1).orElseThrow().engineIdentity());
+    }
+
+    @Test void launchAdmissionRefusesAutocommitSoLocksSurviveUntilTheDecision() throws Exception {
+        Path parent = seedFilesystemBuild();
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        assertThrows(SQLException.class, () -> SolverBuildArtifacts.admitExecution(con, context, "podman:wrong"));
+        assertNull(SolverBuildArtifacts.find(con, pair, 1).orElseThrow().engineIdentity());
+    }
+
     private static int build(Connection c, int solver, int user) throws SQLException {
         long job = number(c, "INSERT INTO jobs(user_id,name,total_pairs,disk_size,buildjob) VALUES ("
                 + user + ",'artifact-build',1,0,true) RETURNING id");
