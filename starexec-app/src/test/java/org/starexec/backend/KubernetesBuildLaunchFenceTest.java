@@ -60,6 +60,7 @@ class KubernetesBuildLaunchFenceTest {
         volatile String invalidReply;
         volatile boolean failAfterWrite;
         volatile String selector;
+        volatile Runnable onCensus = () -> { };
 
         Api() throws Exception {
             server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
@@ -104,6 +105,7 @@ class KubernetesBuildLaunchFenceTest {
                         deleted = true; body = "{\"apiVersion\":\"v1\",\"kind\":\"Status\",\"status\":\"Success\"}";
                     }
                 } else if (exchange.getRequestURI().getPath().endsWith("/pods")) {
+                    onCensus.run();
                     int census = censuses.incrementAndGet();
                     selector = URLDecoder.decode(exchange.getRequestURI().getRawQuery(), StandardCharsets.UTF_8);
                     PodList listing = new PodListBuilder().withNewMetadata().withResourceVersion("41").endMetadata().withItems(List.<Pod>of()).build();
