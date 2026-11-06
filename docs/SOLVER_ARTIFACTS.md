@@ -62,6 +62,11 @@ transaction can publish. The root contains `solver/` and `logs/`; only its solve
 directory becomes the solver's execution path. The lower-level metadata function
 does not establish stopped writers, validate files or enforce filesystem quotas.
 
+`SolverBuildArtifacts` exposes parameterized JDBC operations for dispatch and
+engine adapters. Missing records and mismatched ownership return refusal; database
+errors propagate for infrastructure retry. It does not allocate directories or
+observe processes, and callers must supply an absolute staging directory.
+
 Use a disposable PostgreSQL database configured through the documented
 `STAREXEC_DB_*` variables and apply the migrations before running:
 

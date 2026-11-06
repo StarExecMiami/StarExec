@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.starexec.constants.R;
+import org.starexec.data.database.SolverBuildArtifacts;
 import org.starexec.jobs.SolverArtifactTree;
 import org.starexec.test.util.DatabaseTestSupport;
 
@@ -399,6 +400,37 @@ public class SolverArtifactPublicationSqlTest {
         assertEquals("t", text(con, prepare(UUID.randomUUID())));
         refused("UPDATE solver_build_artifacts SET staging_path='/other/output' WHERE id=" + artifact);
         refused("UPDATE solver_build_artifacts SET execution_token=NULL WHERE id=" + artifact);
+    }
+
+    @Test
+    void jdbcAdapterBindsUuidAndQuotedPathsAsData() throws Exception {
+        UUID token = UUID.randomUUID();
+        Path staging = Path.of("/execution/owner's output");
+        assertTrue(SolverBuildArtifacts.prepare(con, pair, 1, token, staging));
+        var actual = SolverBuildArtifacts.find(con, pair, 1).orElseThrow();
+        assertEquals(artifact, actual.id());
+        assertEquals(solver, actual.solverId());
+        assertEquals(Integer.valueOf(solver), actual.liveSolverId());
+        assertEquals(user, actual.ownerId());
+        assertEquals(token, actual.executionToken());
+        assertEquals(staging.toString(), actual.stagingPath());
+        assertFalse(SolverBuildArtifacts.prepare(con, pair, 1, UUID.randomUUID(), staging));
+        assertTrue(SolverBuildArtifacts.bindExecution(con, pair, 1, token, "engine:'quoted'"));
+        assertTrue(SolverBuildArtifacts.recordStopped(con, pair, 1, token, "engine:'quoted'"));
+        assertNotNull(SolverBuildArtifacts.find(con, pair, 1).orElseThrow().stoppedAt());
+    }
+
+    @Test
+    void jdbcAdapterKeepsHistoricalLookupWithoutTreatingMissingRowsAsSuccess() throws Exception {
+        assertTrue(SolverBuildArtifacts.find(con, pair, 2).isEmpty());
+        assertFalse(SolverBuildArtifacts.bindExecution(con, pair, 2, UUID.randomUUID(), "engine"));
+        assertFalse(SolverBuildArtifacts.recordStopped(con, pair, 2, UUID.randomUUID(), "engine"));
+        execute(con, "DELETE FROM solvers WHERE id=" + solver);
+        var actual = SolverBuildArtifacts.find(con, pair, 1).orElseThrow();
+        assertEquals(solver, actual.solverId());
+        assertNull(actual.liveSolverId());
+        assertEquals("REJECTED", actual.state());
+        assertEquals("/solver/source_src", actual.sourcePath());
     }
 
     @Test

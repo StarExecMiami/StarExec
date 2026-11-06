@@ -1,0 +1,90 @@
+package org.starexec.data.database;
+
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.Optional;
+import java.util.UUID;
+
+/** Registry access for trusted build dispatch, engine observation and publication. */
+public final class SolverBuildArtifacts {
+    public record Artifact(long id, int pairId, int attemptNo, int solverId, Integer liveSolverId,
+                           int ownerId, long generation, String sourcePath, String stagingPath,
+                           String storageRoot, String solverPath, UUID executionToken,
+                           String engineIdentity, Instant stoppedAt, String state) { }
+
+    private SolverBuildArtifacts() { }
+
+    public static Optional<Artifact> find(int pairId, int attemptNo) throws SQLException {
+        try (Connection con = Common.getConnection()) { return find(con, pairId, attemptNo); }
+    }
+
+    /** Historical lookup remains possible after the live pair or solver is deleted. */
+    public static Optional<Artifact> find(Connection con, int pairId, int attemptNo) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(
+                "SELECT * FROM starexec.solver_build_artifacts WHERE origin_pair_id=? AND attempt_no=?")) {
+            ps.setInt(1, pairId); ps.setInt(2, attemptNo);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return Optional.empty();
+                int solver = rs.getInt("solver_id");
+                Integer liveSolver = rs.wasNull() ? null : solver;
+                Timestamp stopped = rs.getTimestamp("execution_stopped_at");
+                return Optional.of(new Artifact(rs.getLong("id"), rs.getInt("origin_pair_id"),
+                        rs.getInt("attempt_no"), rs.getInt("origin_solver_id"), liveSolver,
+                        rs.getInt("origin_owner_id"), rs.getLong("build_generation"),
+                        rs.getString("source_path"), rs.getString("staging_path"), rs.getString("storage_root"),
+                        rs.getString("artifact_path"), rs.getObject("execution_token", UUID.class),
+                        rs.getString("engine_identity"), stopped == null ? null : stopped.toInstant(), rs.getString("state")));
+            }
+        }
+    }
+
+    public static boolean prepare(int pairId, int attemptNo, UUID token, Path staging) throws SQLException {
+        try (Connection con = Common.getConnection()) { return prepare(con, pairId, attemptNo, token, staging); }
+    }
+
+    /** Allocating and protecting the directory is the dispatcher's responsibility. */
+    public static boolean prepare(Connection con, int pairId, int attemptNo, UUID token, Path staging) throws SQLException {
+        if (staging == null || !staging.isAbsolute() || staging.getParent() == null) {
+            throw new IllegalArgumentException("Build staging must be an absolute non-root directory");
+        }
+        return call(con, "SELECT starexec.prepare_solver_build_storage(?,?,?,?)",
+                pairId, attemptNo, token, staging.toString());
+    }
+
+    public static boolean bindExecution(int pairId, int attemptNo, UUID token, String engineIdentity) throws SQLException {
+        try (Connection con = Common.getConnection()) {
+            return bindExecution(con, pairId, attemptNo, token, engineIdentity);
+        }
+    }
+
+    public static boolean bindExecution(Connection con, int pairId, int attemptNo, UUID token,
+                                        String engineIdentity) throws SQLException {
+        return call(con, "SELECT starexec.bind_solver_build_execution(?,?,?,?)",
+                pairId, attemptNo, token, engineIdentity);
+    }
+
+    /** Call only after observing the registered engine resource terminate, not from status.json. */
+    public static boolean recordStopped(int pairId, int attemptNo, UUID token, String engineIdentity) throws SQLException {
+        try (Connection con = Common.getConnection()) {
+            return recordStopped(con, pairId, attemptNo, token, engineIdentity);
+        }
+    }
+
+    public static boolean recordStopped(Connection con, int pairId, int attemptNo, UUID token,
+                                         String engineIdentity) throws SQLException {
+        return call(con, "SELECT starexec.record_solver_build_execution_stop(?,?,?,?)",
+                pairId, attemptNo, token, engineIdentity);
+    }
+
+    private static boolean call(Connection con, String sql, Object... values) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(sql)) {
+            for (int i = 0; i < values.length; i++) ps.setObject(i + 1, values[i]);
+            try (ResultSet rs = ps.executeQuery()) { return rs.next() && rs.getBoolean(1); }
+        }
+    }
+}
