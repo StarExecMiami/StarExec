@@ -9,6 +9,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.starexec.constants.R;
 import org.starexec.data.database.SolverBuildArtifacts;
+import org.starexec.data.to.SolverBuildStopReceipt;
+import com.google.gson.JsonObject;
+import java.time.Instant;
 import org.starexec.jobs.SolverArtifactTree;
 import org.starexec.jobs.SolverBuildStaging;
 import org.starexec.test.util.DatabaseTestSupport;
@@ -493,6 +496,10 @@ public class SolverArtifactPublicationSqlTest {
     }
 
     private UUID prepareExecutionOutput(boolean stopped) throws Exception {
+        return prepareExecutionOutput(stopped, false);
+    }
+
+    private UUID prepareExecutionOutput(boolean stopped, boolean conservedReceipt) throws Exception {
         UUID token = UUID.randomUUID();
         Path raw = Files.createDirectory(files.resolve("staging"));
         Files.writeString(Files.createDirectory(raw.resolve("solver")).resolve("program"), "BUILT");
@@ -502,6 +509,8 @@ public class SolverArtifactPublicationSqlTest {
         }
         assertEquals("t", text(con, callback("bind_solver_build_execution", token)));
         if (stopped) assertEquals("t", text(con, callback("record_solver_build_execution_stop", token)));
+        if (conservedReceipt) assertTrue(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token,
+                "engine-a", syntheticReceipt(Instant.parse("2026-01-01T00:00:00Z"))));
         Path root = files.resolve("published");
         reservePath(con, artifact, root.resolve("solver"));
         try (PreparedStatement ps = con.prepareStatement("UPDATE solver_build_artifacts SET storage_root=? WHERE id=?")) {
@@ -513,11 +522,143 @@ public class SolverArtifactPublicationSqlTest {
 
     @Test
     void stoppedExecutionCanRetryItsCallbackAfterPublication() throws Exception {
-        UUID token = prepareExecutionOutput(true);
+        UUID token = prepareExecutionOutput(true, true);
         assertEquals("t", text(con, "SELECT publish_solver_build_output(" + artifact + ")"));
         String stopped = field("execution_stopped_at::text");
         assertEquals("t", text(con, callback("record_solver_build_execution_stop", token)));
         assertEquals(stopped, field("execution_stopped_at::text"));
+    }
+
+    @Test
+    void aStopTimestampWithoutAConservedReceiptCannotPublishRuntimeOutput() throws Exception {
+        prepareExecutionOutput(true);
+        assertNotNull(field("execution_stopped_at"));
+        assertEquals("f", text(con, "SELECT publish_solver_build_output(" + artifact + ")"),
+                "runtime publication requires conserved positive engine evidence");
+    }
+
+    private SolverBuildStopReceipt syntheticReceipt(Instant observed) {
+        JsonObject facts = new JsonObject(); facts.addProperty("status", "exited");
+        facts.addProperty("note", "Unicode \u03b1 and quoted input");
+        return SolverBuildStopReceipt.observed("podman", artifact, pair, 1, "engine-a",
+                "owned-container", observed, facts);
+    }
+
+    private UUID boundReceiptFixture() throws Exception {
+        UUID token = UUID.randomUUID();
+        assertEquals("t", text(con, prepare(token)));
+        assertTrue(SolverBuildArtifacts.bindExecution(con, pair, 1, token, "engine-a"));
+        return token;
+    }
+
+    private static String receiptDigest(String payload) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private boolean rawReceipt(UUID token, String engine, String payload, String digest) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement("SELECT record_solver_build_stop_receipt(?,1,?,?,?,?)")) {
+            ps.setInt(1, pair); ps.setObject(2, token); ps.setString(3, engine);
+            ps.setString(4, payload); ps.setString(5, digest);
+            try (ResultSet rs = ps.executeQuery()) { assertTrue(rs.next()); return rs.getBoolean(1); }
+        }
+    }
+
+    @Test void anIndependentConnectionSeesTheExactReceiptOnlyAfterCommit() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = syntheticReceipt(Instant.parse("2026-01-01T00:00:00Z"));
+        String raw = " " + receipt.payload() + "\n";
+        assertTrue(rawReceipt(token, "engine-a", raw, receiptDigest(raw)));
+        try (Connection observer = connect()) { assertTrue(SolverBuildArtifacts.findStopReceipt(observer, pair, 1).isEmpty()); }
+        con.commit();
+        try (Connection observer = connect()) {
+            var stored = SolverBuildArtifacts.findStopReceipt(observer, pair, 1).orElseThrow();
+            assertEquals(raw, stored.receipt().payload()); assertEquals(receiptDigest(raw), stored.receipt().sha256());
+            assertNotNull(stored.recordedAt());
+        }
+    }
+
+    @Test void receiptRetryPreservesTheFirstBytesAndTimestamp() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = syntheticReceipt(Instant.parse("2026-01-01T00:00:00Z"));
+        assertTrue(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token, "engine-a", receipt));
+        String recorded = field("execution_stop_receipt_recorded_at::text");
+        String stopped = field("execution_stopped_at::text");
+        assertTrue(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token, "engine-a", receipt));
+        assertEquals(recorded, field("execution_stop_receipt_recorded_at::text"));
+        assertEquals(stopped, field("execution_stopped_at::text"));
+        assertFalse(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token, "engine-a",
+                syntheticReceipt(Instant.parse("2026-01-01T00:00:01Z"))));
+        assertEquals(receipt.payload(), field("execution_stop_receipt_payload"));
+    }
+
+    @Test void aDifferentTokenOrEngineCannotRecordAReceipt() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = syntheticReceipt(Instant.parse("2026-01-01T00:00:00Z"));
+        assertFalse(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, UUID.randomUUID(), "engine-a", receipt));
+        assertFalse(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token, "engine-b", receipt));
+        assertNull(field("execution_stop_receipt_payload")); assertNull(field("execution_stopped_at"));
+    }
+
+    @Test void anUnboundExecutionCannotAcquireStopProofFromAPayload() throws Exception {
+        UUID token = UUID.randomUUID(); assertEquals("t", text(con, prepare(token)));
+        assertFalse(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token, "engine-a",
+                syntheticReceipt(Instant.parse("2026-01-01T00:00:00Z"))));
+        assertNull(field("engine_identity")); assertNull(field("execution_stopped_at"));
+    }
+
+    @ParameterizedTest @ValueSource(strings = { "artifact_id", "pair_id", "attempt_no", "engine_identity" })
+    void receiptPayloadCannotNameADifferentArtifactOrExecution(String field) throws Exception {
+        UUID token = boundReceiptFixture();
+        JsonObject payload = com.google.gson.JsonParser.parseString(syntheticReceipt(Instant.now()).payload()).getAsJsonObject();
+        if (field.equals("engine_identity")) payload.addProperty(field, "engine-b");
+        else payload.addProperty(field, payload.get(field).getAsLong() + 1);
+        String raw = payload.toString(); assertFalse(rawReceipt(token, "engine-a", raw, receiptDigest(raw)));
+        assertNull(field("execution_stop_receipt_payload")); assertNull(field("execution_stopped_at"));
+    }
+
+    @ParameterizedTest @ValueSource(strings = { "{}", "[]", "null", "not JSON" })
+    void malformedOrIncompleteReceiptIsRejectedWithoutAStop(String payload) throws Exception {
+        UUID token = boundReceiptFixture(); assertFalse(rawReceipt(token, "engine-a", payload, receiptDigest(payload)));
+        assertNull(field("execution_stopped_at"));
+    }
+
+    @Test void receiptDigestMismatchDoesNotRecordAStop() throws Exception {
+        UUID token = boundReceiptFixture(); String payload = syntheticReceipt(Instant.now()).payload();
+        assertFalse(rawReceipt(token, "engine-a", payload, "0".repeat(64)));
+        assertNull(field("execution_stopped_at"));
+    }
+
+    @Test void aReceiptCannotBeRetrofittedAfterValidation() throws Exception {
+        UUID token = boundReceiptFixture(); validate(con, artifact);
+        assertFalse(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token, "engine-a", syntheticReceipt(Instant.now())));
+        assertNull(field("execution_stop_receipt_payload"));
+    }
+
+    @Test void aDeletedSolverKeepsItsActualReceiptForCleanupWithoutPublishing() throws Exception {
+        UUID token = boundReceiptFixture(); execute(con, "DELETE FROM solvers WHERE id=" + solver);
+        var receipt = syntheticReceipt(Instant.now());
+        assertTrue(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token, "engine-a", receipt));
+        assertEquals("REJECTED", field("state"));
+        assertTrue(SolverBuildArtifacts.findStopReceipt(con, pair, 1).orElseThrow().receipt()
+                .matches(artifact, pair, 1, "engine-a"));
+        assertEquals("f", text(con, "SELECT publish_solver_build_output(" + artifact + ")"));
+    }
+
+    @Test void aStoredReceiptCannotBeClearedRewrittenOrRedated() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = syntheticReceipt(Instant.now());
+        assertTrue(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token, "engine-a", receipt));
+        refused("UPDATE solver_build_artifacts SET execution_stop_receipt_payload=NULL,execution_stop_receipt_sha256=NULL,"
+                + "execution_stop_receipt_recorded_at=NULL WHERE id=" + artifact);
+        refused("UPDATE solver_build_artifacts SET execution_stop_receipt_recorded_at=now()+interval '1 second' WHERE id=" + artifact);
+        refused("UPDATE solver_build_artifacts SET execution_stop_receipt_payload=execution_stop_receipt_payload::jsonb::text,"
+                + "execution_stop_receipt_sha256=encode(sha256(convert_to(execution_stop_receipt_payload::jsonb::text,'UTF8')),'hex')"
+                + " WHERE id=" + artifact);
+        assertEquals(receipt.payload(), field("execution_stop_receipt_payload"));
+    }
+
+    @Test void directPartialOrWrongDigestReceiptWritesAreRefused() throws Exception {
+        boundReceiptFixture();
+        refused("UPDATE solver_build_artifacts SET execution_stop_receipt_payload='{}' WHERE id=" + artifact);
+        refused("UPDATE solver_build_artifacts SET execution_stop_receipt_payload='{}',execution_stop_receipt_sha256=repeat('0',64),"
+                + "execution_stop_receipt_recorded_at=now() WHERE id=" + artifact);
+        assertNull(field("execution_stop_receipt_payload"));
     }
 
     @Test

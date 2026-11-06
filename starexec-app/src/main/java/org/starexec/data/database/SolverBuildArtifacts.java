@@ -12,6 +12,7 @@ import java.util.UUID;
 import java.io.IOException;
 import org.starexec.backend.BuildExecutionContext;
 import org.starexec.jobs.SolverBuildStaging;
+import org.starexec.data.to.SolverBuildStopReceipt;
 
 /** Registry access for trusted build dispatch, engine observation and publication. */
 public final class SolverBuildArtifacts {
@@ -21,6 +22,43 @@ public final class SolverBuildArtifacts {
                            String engineIdentity, Instant stoppedAt, String state) { }
 
     private SolverBuildArtifacts() { }
+
+    public record StoredStopReceipt(SolverBuildStopReceipt receipt, Instant recordedAt) { }
+
+    public static Optional<StoredStopReceipt> findStopReceipt(int pairId, int attemptNo) throws SQLException {
+        try (Connection connection = Common.getConnection()) { return findStopReceipt(connection, pairId, attemptNo); }
+    }
+
+    public static Optional<StoredStopReceipt> findStopReceipt(Connection connection, int pairId, int attemptNo)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT execution_stop_receipt_payload,execution_stop_receipt_sha256,execution_stop_receipt_recorded_at"
+                + " FROM starexec.solver_build_artifacts WHERE origin_pair_id=? AND attempt_no=?")) {
+            statement.setInt(1, pairId); statement.setInt(2, attemptNo);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next() || result.getString(1) == null) return Optional.empty();
+                try {
+                    return Optional.of(new StoredStopReceipt(SolverBuildStopReceipt.restored(result.getString(1),
+                            result.getString(2)), result.getTimestamp(3).toInstant()));
+                } catch (IllegalArgumentException invalid) {
+                    throw new SQLException("Stored build stop receipt is invalid", invalid);
+                }
+            }
+        }
+    }
+
+    public static boolean recordStopReceipt(int pairId, int attemptNo, UUID token, String engine,
+                                            SolverBuildStopReceipt receipt) throws SQLException {
+        try (Connection connection = Common.getConnection()) {
+            return recordStopReceipt(connection, pairId, attemptNo, token, engine, receipt);
+        }
+    }
+
+    public static boolean recordStopReceipt(Connection connection, int pairId, int attemptNo, UUID token,
+                                            String engine, SolverBuildStopReceipt receipt) throws SQLException {
+        return call(connection, "SELECT starexec.record_solver_build_stop_receipt(?,?,?,?,?,?)",
+                pairId, attemptNo, token, engine, receipt.payload(), receipt.sha256());
+    }
 
     public static BuildExecutionContext prepareStaging(int pairId, int attemptNo, Path parent)
             throws SQLException, IOException {
