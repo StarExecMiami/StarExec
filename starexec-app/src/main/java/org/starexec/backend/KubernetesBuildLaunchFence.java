@@ -47,10 +47,27 @@ final class KubernetesBuildLaunchFence {
     }
 
     static Map<String, String> validate(String namespace, KubernetesBuildStopObserver.Identity expected, Job job) {
+        return validate(namespace, expected, job, false);
+    }
+
+    /** Reuses an already committed fence, including while its Job is being removed. */
+    static Observation observeConserved(KubernetesClient client, String namespace,
+                                        KubernetesBuildStopObserver.Identity expected, Job job, String previousVersion) {
+        Map<String, String> selector = validate(namespace, expected, job, true);
+        require(isFenced(job) && previousVersion.equals(job.getMetadata().getAnnotations().get(ANNOTATION)),
+                "Build Job does not retain its conserved launch fence");
+        requireValidFence(job);
+        PodList pods = client.pods().inNamespace(namespace).withLabels(selector).list();
+        requireEmpty(pods);
+        return new Observation(job, pods);
+    }
+
+    private static Map<String, String> validate(String namespace, KubernetesBuildStopObserver.Identity expected,
+                                                Job job, boolean removing) {
         require(expected != null && expected.equals(KubernetesBuildStopObserver.identify(namespace, job)),
                 "Build Job differs from its expected identity");
         var metadata = job.getMetadata(); var spec = job.getSpec();
-        require(Long.valueOf(1).equals(metadata.getGeneration()) && metadata.getDeletionTimestamp() == null,
+        require(Long.valueOf(1).equals(metadata.getGeneration()) && (removing || metadata.getDeletionTimestamp() == null),
                 "Build Job is not an intact initial generation");
         require(nonblank(metadata.getResourceVersion()), "Build Job resource version is unavailable");
         require(spec != null && Boolean.TRUE.equals(spec.getSuspend()) && !Boolean.TRUE.equals(spec.getManualSelector())
