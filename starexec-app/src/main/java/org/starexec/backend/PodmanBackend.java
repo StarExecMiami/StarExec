@@ -3870,15 +3870,14 @@ public class PodmanBackend implements Backend {
     }
 
     public void removeCompletedContainer(String containerId) {
-        awaitingIngestion.values().remove(containerId);
-        Integer execId = removeTrackedExecutionByContainerId(containerId);
-        if (execId != null) {
-            releaseSubmissionSlot(execId, "container completed");
-        }
-
-        containerIdToPairId.invalidate(containerId);
         try {
             removeContainerArtifacts(containerId, false);
+            awaitingIngestion.values().remove(containerId);
+            Integer execId = removeTrackedExecutionByContainerId(containerId);
+            if (execId != null) {
+                releaseSubmissionSlot(execId, "container completed");
+            }
+            containerIdToPairId.invalidate(containerId);
             log.debug("Removed completed container: " + containerId);
         } catch (Exception e) {
             log.warn(

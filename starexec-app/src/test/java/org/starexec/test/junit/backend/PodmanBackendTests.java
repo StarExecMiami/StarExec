@@ -1671,6 +1671,19 @@ public class PodmanBackendTests {
     }
 
     @Test
+    public void failedCompletedRemovalRetainsExecutionAndItsCapacityForRetry() throws Exception {
+        getExecIdMap().put(TEST_EXEC_ID, TEST_CONTAINER_ID);
+        markSubmissionSlotHeld(TEST_EXEC_ID);
+        doThrow(new RuntimeException("engine unavailable")).when(mockRemoveContainerCmd).exec();
+
+        backend.removeCompletedContainer(TEST_CONTAINER_ID);
+
+        assertEquals(TEST_CONTAINER_ID, getExecIdMap().get(TEST_EXEC_ID));
+        assertTrue(getSlotHolderSet().contains(TEST_EXEC_ID));
+        assertEquals(1, getActiveSubmissionSlots());
+    }
+
+    @Test
     public void testStartContainerWithVerification_StartThrowsButContainerRunning_TreatedAsSuccess()
         throws Exception {
         // Arrange
