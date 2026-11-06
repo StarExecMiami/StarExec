@@ -2110,6 +2110,15 @@ public class KubernetesNativeBackend implements Backend {
                 );
             }
 
+            if (build != null) {
+                execIdToPairId.put(execId, pairId);
+                putAttemptNo(execId, attemptNo);
+                execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
+                execIdToJobName.put(execId, submitted.jobName());
+                execIdToJobUid.put(execId, submitted.jobUid());
+                resumeAdmittedBuild(build, submitted, created);
+            }
+
             try {
                 if (!JobPairs.setStartTime(pairId)) {
                     log.warn(
@@ -2156,6 +2165,28 @@ public class KubernetesNativeBackend implements Backend {
         } catch (Exception e) {
             log.error("Failed to submit Kubernetes Job: " + jobName, e);
             return resolveAmbiguousSubmission(execId, pairId, jobName, logPath, attemptNo);
+        }
+    }
+
+    private void resumeAdmittedBuild(BuildExecutionContext build, ExecutionRef execution, Job created)
+        throws java.sql.SQLException {
+        if (created.getSpec() == null || !Boolean.TRUE.equals(created.getSpec().getSuspend())) {
+            throw new IllegalStateException("Build creation did not return a suspended Job");
+        }
+        String version = created.getMetadata().getResourceVersion();
+        if (version == null || version.isBlank()) {
+            throw new IllegalStateException("Build creation did not return a resource version");
+        }
+        String identity = "kubernetes:" + namespace + ":" + execution.execId() + ":" + execution.jobUid();
+        if (!org.starexec.data.database.SolverBuildArtifacts.admitExecution(build, identity)) {
+            throw new IllegalStateException("Build execution admission was refused; Job remains suspended");
+        }
+        Job resume = new JobBuilder(created).editSpec().withSuspend(false).endSpec().build();
+        Job updated = kubernetesClient.batch().v1().jobs().inNamespace(namespace)
+            .resource(resume).lockResourceVersion(version).replace();
+        if (!execution.equals(ExecutionRef.fromJob(execution.execId(), updated))
+                || updated.getSpec() == null || !Boolean.FALSE.equals(updated.getSpec().getSuspend())) {
+            throw new IllegalStateException("Build resume did not return the admitted enabled Job");
         }
     }
 
@@ -2379,6 +2410,7 @@ public class KubernetesNativeBackend implements Backend {
                 .addToAnnotations(OUTPUT_DIR_ANNOTATION, outputDir.toString())
             .endMetadata()
             .withNewSpec()
+                .withSuspend(pendingBuildContext.get() == null ? null : true)
                 .withBackoffLimit(backoffLimit)
                 .withTtlSecondsAfterFinished(ttlSecondsAfterFinished)
                 .withNewTemplate()
@@ -2387,6 +2419,7 @@ public class KubernetesNativeBackend implements Backend {
                     .endMetadata()
                     .withNewSpec()
                         .withServiceAccountName(serviceAccountName)
+                        .withAutomountServiceAccountToken(false)
                         .withSecurityContext(jobPodSecurityContext())
                         .withRestartPolicy("Never")
                         .withNodeName(pinnedNodeName)

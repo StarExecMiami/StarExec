@@ -406,6 +406,18 @@ The Kubernetes backend routes `kubernetes`, `k8s`, and `kubernetes-native` to `K
 
 **Status:** Experimental. Core submission logic exists, but monitoring still runs in polling mode and production-scale validation is still pending.
 
+The build-aware `Backend.submitScript` overload carries a registered per-attempt
+staging destination. Podman commits execution admission before calling the engine
+start operation. Kubernetes creates build Jobs suspended, admits their returned
+UID in the database, and resumes the exact observed UID and resource version.
+An uncertain engine response retains execution tracking and capacity.
+
+Resuming a build requires `update` on Jobs in the application's namespace Role.
+The Helm chart grants this to the application account. Runner Pods explicitly
+disable service-account token mounting, including when a custom account is used.
+Engine termination, artifact validation and publication remain separate operations;
+a terminal `status.json` does not establish that writers have stopped.
+
 ### Architecture
 
 The current implementation uses this flow:
