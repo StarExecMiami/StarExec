@@ -61,6 +61,22 @@ public final class SolverBuildArtifacts {
                 pairId, attemptNo, token, engine, receipt.payload(), receipt.sha256());
     }
 
+    /** Call only after the provider has fenced launch of an execution that never started. */
+    public static boolean recordUnstarted(int pairId, int attemptNo, UUID token, String engine,
+                                          SolverBuildStopReceipt receipt) throws SQLException {
+        try (Connection connection = Common.getConnection()) {
+            return Common.runTransactional(connection,
+                    transaction -> recordUnstarted(transaction, pairId, attemptNo, token, engine, receipt));
+        }
+    }
+
+    /** Atomically rejects the output and records non-execution; the caller owns the commit. */
+    public static boolean recordUnstarted(Connection connection, int pairId, int attemptNo, UUID token,
+                                          String engine, SolverBuildStopReceipt receipt) throws SQLException {
+        return call(connection, "SELECT starexec.record_solver_build_unstarted(?,?,?,?,?,?)",
+                pairId, attemptNo, token, engine, receipt.payload(), receipt.sha256());
+    }
+
     public static BuildExecutionContext prepareStaging(int pairId, int attemptNo, Path parent)
             throws SQLException, IOException {
         try (Connection con = Common.getConnection()) {

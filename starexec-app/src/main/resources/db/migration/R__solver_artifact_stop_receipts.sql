@@ -53,6 +53,38 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- The provider must fence launch before recording non-execution. Rejecting the
+-- output and conserving the receipt are atomic, including after solver deletion.
+CREATE OR REPLACE FUNCTION starexec.record_solver_build_unstarted(
+    _pair INTEGER, _attempt INTEGER, _token UUID, _engine TEXT, _payload TEXT, _digest TEXT)
+RETURNS BOOLEAN AS $$
+DECLARE
+    _artifact starexec.solver_build_artifacts%ROWTYPE;
+BEGIN
+    SELECT * INTO _artifact FROM starexec.solver_build_artifacts
+    WHERE origin_pair_id = _pair AND attempt_no = _attempt AND execution_token = _token FOR UPDATE;
+    IF NOT FOUND OR _engine IS NULL OR length(btrim(_engine)) = 0
+        OR NOT starexec.solver_build_stop_receipt_matches(
+            _payload, _digest, _artifact.id, _pair, _attempt, _engine) THEN RETURN FALSE; END IF;
+    IF _payload::jsonb->>'backend' IS DISTINCT FROM 'kubernetes'
+        OR _payload::jsonb #>> '{facts,disposition}' IS DISTINCT FROM 'never_started'
+        OR _artifact.engine_identity IS NOT NULL AND _artifact.engine_identity <> _engine
+        THEN RETURN FALSE; END IF;
+    IF _artifact.execution_stop_receipt_payload IS NOT NULL THEN
+        RETURN _artifact.state IN ('REJECTED', 'DELETED') AND _artifact.engine_identity = _engine
+            AND _artifact.execution_stop_receipt_payload = _payload
+            AND _artifact.execution_stop_receipt_sha256 = _digest;
+    END IF;
+    IF _artifact.state NOT IN ('PLANNED', 'STAGED', 'REJECTED')
+        OR _artifact.execution_stopped_at IS NOT NULL THEN RETURN FALSE; END IF;
+    UPDATE starexec.solver_build_artifacts SET state = 'REJECTED', engine_identity = _engine,
+        execution_stopped_at = clock_timestamp(), execution_stop_receipt_payload = _payload,
+        execution_stop_receipt_sha256 = _digest, execution_stop_receipt_recorded_at = clock_timestamp()
+    WHERE id = _artifact.id;
+    RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION starexec.publish_solver_build_output(_artifact BIGINT) RETURNS BOOLEAN AS $$
 DECLARE
     _a starexec.solver_build_artifacts%ROWTYPE;

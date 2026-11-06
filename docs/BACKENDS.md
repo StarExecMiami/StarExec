@@ -445,6 +445,12 @@ resource and capacity. Active cancellation and initially suspended build cleanup
 still require an evidence-preserving stop protocol; they are retained for recovery
 rather than treated as successful cleanup.
 
+The artifact catalog distinguishes a build that never ran from a completed build.
+Recording non-execution atomically rejects the artifact and conserves its immutable
+receipt, including after the solver is deleted. Such a receipt cannot authorize
+publication or another launch. The backend must fence launch before using this
+operation; suspension or a missing Pod alone is insufficient.
+
 ### Architecture
 
 The current implementation uses this flow:
