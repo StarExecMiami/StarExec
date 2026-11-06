@@ -67,8 +67,7 @@ final class KubernetesBuildPodRetention {
         }
     }
 
-    private static PodList list(KubernetesClient client, String namespace,
-                                KubernetesBuildStopObserver.Identity expected, Job job) {
+    static Map<String, String> validate(String namespace, KubernetesBuildStopObserver.Identity expected, Job job) {
         require(expected != null && expected.equals(KubernetesBuildStopObserver.identify(namespace, job)) && isRetained(job),
                 "Build Job differs from its retained identity");
         var spec = job.getSpec();
@@ -85,6 +84,12 @@ final class KubernetesBuildPodRetention {
         var labels = spec.getTemplate().getMetadata().getLabels();
         require(labels != null && selector.entrySet().stream().allMatch(e -> e.getValue().equals(labels.get(e.getKey()))),
                 "Build Pod template differs from its selector");
+        return selector;
+    }
+
+    private static PodList list(KubernetesClient client, String namespace,
+                                KubernetesBuildStopObserver.Identity expected, Job job) {
+        Map<String, String> selector = validate(namespace, expected, job);
         PodList pods = client.pods().inNamespace(namespace).withLabels(selector).list();
         require(pods != null && pods.getItems() != null && pods.getMetadata() != null
                 && nonblank(pods.getMetadata().getResourceVersion())

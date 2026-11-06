@@ -66,16 +66,29 @@ final class KubernetesBuildStopObserver {
         var artifact = registered(namespace, expected);
         String engine = expected.engine(namespace);
         var prior = SolverBuildArtifacts.findStopReceipt(expected.pairId(), expected.attemptNo());
+        String cancelRequest = KubernetesBuildCancellation.isRequested(job)
+                ? KubernetesBuildCancellation.acknowledgedVersion(namespace, expected, job) : null;
         SolverBuildStopReceipt receipt;
         if (prior.isPresent()) {
             receipt = prior.get().receipt();
             require(matches(namespace, expected, receipt), "Conserved build stop receipt names another Job");
+            requireCancellationMatches(namespace, expected, job, receipt);
         } else {
             JsonObject facts = new JsonObject();
             facts.addProperty("namespace", namespace); facts.addProperty("job_name", expected.execution().jobName());
             facts.addProperty("job_uid", expected.execution().jobUid());
             facts.addProperty("job_resource_version", job.getMetadata().getResourceVersion());
             facts.addProperty("terminal_condition", terminal); facts.add("pods", observations);
+            if (cancelRequest != null) {
+                KubernetesBuildCancellation.requireOwnedPods(namespace, expected, pods);
+                require(pods.getItems().stream().allMatch(p -> p.getMetadata().getFinalizers() != null
+                        && p.getMetadata().getFinalizers().contains(KubernetesBuildPodRetention.FINALIZER)),
+                        "Build cancellation evidence was not retained before its first receipt");
+                facts.addProperty("disposition", "cancelled");
+                facts.addProperty("cancel_request_resource_version", cancelRequest);
+                facts.addProperty("cancel_deadline_seconds", KubernetesBuildCancellation.DEADLINE_SECONDS);
+                facts.addProperty("pod_list_resource_version", pods.getMetadata().getResourceVersion());
+            }
             receipt = SolverBuildStopReceipt.observed("kubernetes", expected.artifactId(), expected.pairId(),
                     expected.attemptNo(), engine, expected.execution().jobUid(), Instant.now(), facts);
         }
@@ -103,6 +116,14 @@ final class KubernetesBuildStopObserver {
 
     static boolean isCancelled(SolverBuildStopReceipt receipt) {
         return receipt != null && textEquals(receipt.facts(), "disposition", "cancelled");
+    }
+
+    static void requireCancellationMatches(String namespace, Identity identity, Job job, SolverBuildStopReceipt receipt) {
+        if (!KubernetesBuildCancellation.isRequested(job)) return;
+        String request = KubernetesBuildCancellation.acknowledgedVersion(namespace, identity, job);
+        require(isCancelled(receipt) && (!receipt.facts().has("cancel_request_resource_version")
+                || textEquals(receipt.facts(), "cancel_request_resource_version", request)),
+                "Build cancellation differs from its conserved stop outcome");
     }
 
     static Identity restoreCancelledIdentity(String namespace, SolverBuildArtifacts.Artifact artifact,
@@ -153,7 +174,19 @@ final class KubernetesBuildStopObserver {
                 && textEquals(facts, "namespace", namespace) && textEquals(facts, "job_uid", identity.execution().jobUid())
                 && textEquals(facts, "job_name", identity.execution().jobName())
                 && (textEquals(facts, "terminal_condition", "Complete") || textEquals(facts, "terminal_condition", "Failed"))
-                && nonblank(facts, "job_resource_version") && validStoredPods(facts);
+                && nonblank(facts, "job_resource_version") && validStoredPods(facts) && validCancellationProvenance(facts);
+    }
+
+    private static boolean validCancellationProvenance(JsonObject facts) {
+        if (!facts.has("cancel_request_resource_version") && !facts.has("cancel_deadline_seconds")
+                && !facts.has("pod_list_resource_version")) return true;
+        if (!textEquals(facts, "disposition", "cancelled") || !nonblank(facts, "cancel_request_resource_version")
+                || !nonblank(facts, "pod_list_resource_version") || !facts.has("cancel_deadline_seconds")
+                || !facts.get("cancel_deadline_seconds").isJsonPrimitive()
+                || !facts.getAsJsonPrimitive("cancel_deadline_seconds").isNumber()
+                || facts.get("cancel_request_resource_version").equals(facts.get("job_resource_version"))) return false;
+        try { return facts.get("cancel_deadline_seconds").getAsBigDecimal().longValueExact() == KubernetesBuildCancellation.DEADLINE_SECONDS; }
+        catch (RuntimeException invalid) { return false; }
     }
 
     private static boolean validStoredPods(JsonObject facts) {

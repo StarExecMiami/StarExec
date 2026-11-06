@@ -441,9 +441,15 @@ initialization and ephemeral containers. Marked build Jobs have no automatic TTL
 individual cleanup uses Foreground propagation with a resource-version precondition.
 Bulk deletion excludes these Jobs and recovers their accounting individually.
 Missing Pod observations, an unreadable API or a failed receipt write retain the
-resource and capacity. Active cancellation of a build that already started still
-requires an evidence-preserving stop protocol; unresolved builds retain their
-resources and capacity for recovery.
+resource and capacity. An explicit stop of an eligible enabled build sets the
+Job's active deadline to one second with its observed resource version and a
+request marker; it preserves the remaining specification and does not suspend
+the Job. A stale or ambiguous update cannot authorize deletion or capacity release.
+The first matching terminal controller and container observations after the
+acknowledged request conserve a cancelled receipt before cleanup. A bounded stop
+wait advances this cleanup using the captured Job identity. Passive safety checks
+do not request cancellation. Old Jobs without retained Pod evidence and enabled
+Pods without positive runtime termination observations remain unresolved.
 
 Build Pod templates include an evidence-retention finalizer before admission.
 Cleanup requires a complete census bound to the actual Job UID, conserves the
