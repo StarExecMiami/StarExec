@@ -82,8 +82,16 @@ fi
 # Path to Olivier Roussel's runSolver
 export RUNSOLVER_PATH='$$RUNSOLVER_PATH$$'
 
-# Include common functions and status codes
+# Include common functions and status codes. The helper must declare its own capability.
+unset STAREXEC_BUILD_STAGING_PROTOCOL
 . "$SCRIPT_DIR/functions.bash"
+
+if [ "$CONTAINER_MODE" = "true" ] && [ "$BUILD_JOB" = "true" ]; then
+	if [ "${STAREXEC_BUILD_STAGING_PROTOCOL:-}" != "1" ] || [ -z "${STAREXEC_BUILD_OUTPUT_DIR:-}" ]; then
+		printf '%s\n' 'Build helper and isolated output protocol are incompatible' >&2
+		exit 1
+	fi
+fi
 
 
 # Array of secondary benchmarks starexec paths
