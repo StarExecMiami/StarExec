@@ -46,7 +46,7 @@ final class KubernetesBuildStopObserver {
         return new Identity(artifact, pair, attempt, ref);
     }
 
-    static void record(String namespace, Identity expected, Job job, PodList pods) throws SQLException {
+    static SolverBuildStopReceipt record(String namespace, Identity expected, Job job, PodList pods) throws SQLException {
         require(expected != null && expected.equals(identify(namespace, job)), "Build Job differs from its admitted identity");
         String terminal = terminalCondition(job);
         require(terminal != null, "Build controller can still create Pods");
@@ -79,8 +79,8 @@ final class KubernetesBuildStopObserver {
             receipt = SolverBuildStopReceipt.observed("kubernetes", expected.artifactId(), expected.pairId(),
                     expected.attemptNo(), engine, expected.execution().jobUid(), Instant.now(), facts);
         }
-        require(SolverBuildArtifacts.recordStopReceipt(expected.pairId(), expected.attemptNo(), artifact.executionToken(),
-                engine, receipt), "Could not commit the build stop receipt");
+        persist(namespace, expected, artifact, receipt);
+        return receipt;
     }
 
     /** Absence may reuse an already committed observation, but cannot create a new one. */
@@ -90,8 +90,51 @@ final class KubernetesBuildStopObserver {
 
     static SolverBuildStopReceipt conservedReceipt(String namespace, Identity identity) throws SQLException {
         registered(namespace, identity);
+        return findConserved(namespace, identity);
+    }
+
+    /** Reuses existing physical proof and acknowledges atomic cancellation rejection. */
+    static SolverBuildStopReceipt conserveExisting(String namespace, Identity identity) throws SQLException {
+        var artifact = registered(namespace, identity);
+        SolverBuildStopReceipt receipt = findConserved(namespace, identity);
+        if (receipt != null && isCancelled(receipt)) persist(namespace, identity, artifact, receipt);
+        return receipt;
+    }
+
+    static boolean isCancelled(SolverBuildStopReceipt receipt) {
+        return receipt != null && textEquals(receipt.facts(), "disposition", "cancelled");
+    }
+
+    static Identity restoreCancelledIdentity(String namespace, SolverBuildArtifacts.Artifact artifact,
+                                              SolverBuildArtifacts.StoredStopReceipt stored) {
+        require(artifact.stoppedAt() != null && stored.recordedAt() != null && isCancelled(stored.receipt()),
+                "Registered cancellation proof is unavailable");
+        String prefix = "kubernetes:" + namespace + ":";
+        require(artifact.engineIdentity() != null && artifact.engineIdentity().startsWith(prefix),
+                "Build cancellation belongs to another backend or namespace");
+        String[] engine = artifact.engineIdentity().substring(prefix.length()).split(":", 2);
+        require(engine.length == 2 && !engine[1].isBlank(), "Build cancellation engine identity is invalid");
+        int execution = Integer.parseInt(engine[0]);
+        require(execution > 0, "Build cancellation execution must be positive");
+        var facts = stored.receipt().facts();
+        require(nonblank(facts, "job_name"), "Build cancellation Job name is unavailable");
+        var identity = new Identity(artifact.id(), artifact.pairId(), artifact.attemptNo(),
+                new ExecutionRef(execution, facts.get("job_name").getAsString(), engine[1]));
+        require(matches(namespace, identity, stored.receipt()), "Build cancellation receipt differs from its registered identity");
+        return identity;
+    }
+
+    private static SolverBuildStopReceipt findConserved(String namespace, Identity identity) throws SQLException {
         var stored = SolverBuildArtifacts.findStopReceipt(identity.pairId(), identity.attemptNo());
         return stored.isPresent() && matches(namespace, identity, stored.get().receipt()) ? stored.get().receipt() : null;
+    }
+
+    private static void persist(String namespace, Identity identity, SolverBuildArtifacts.Artifact artifact,
+                                 SolverBuildStopReceipt receipt) throws SQLException {
+        boolean committed = isCancelled(receipt)
+                ? SolverBuildArtifacts.recordCancelled(identity.pairId(), identity.attemptNo(), artifact.executionToken(), identity.engine(namespace), receipt)
+                : SolverBuildArtifacts.recordStopReceipt(identity.pairId(), identity.attemptNo(), artifact.executionToken(), identity.engine(namespace), receipt);
+        require(committed, "Could not commit the build stop receipt and outcome");
     }
 
     private static SolverBuildArtifacts.Artifact registered(String namespace, Identity identity) throws SQLException {
@@ -106,7 +149,8 @@ final class KubernetesBuildStopObserver {
         if (!receipt.matches(identity.artifactId(), identity.pairId(), identity.attemptNo(), identity.engine(namespace))
                 || !"kubernetes".equals(receipt.backend()) || !identity.execution().jobUid().equals(receipt.resourceId())) return false;
         JsonObject facts = receipt.facts();
-        return textEquals(facts, "namespace", namespace) && textEquals(facts, "job_uid", identity.execution().jobUid())
+        return (!facts.has("disposition") || isCancelled(receipt))
+                && textEquals(facts, "namespace", namespace) && textEquals(facts, "job_uid", identity.execution().jobUid())
                 && textEquals(facts, "job_name", identity.execution().jobName())
                 && (textEquals(facts, "terminal_condition", "Complete") || textEquals(facts, "terminal_condition", "Failed"))
                 && nonblank(facts, "job_resource_version") && validStoredPods(facts);

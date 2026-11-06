@@ -467,6 +467,14 @@ and non-execution receipts; the publication state transition enforces the same
 rule for callers of the lower-level catalog function. Conserving a cancellation
 receipt does not itself establish termination or decide the pair's intervention.
 
+Native callbacks conserve cancellation as a distinct outcome and acknowledge its
+catalog rejection before cleanup. They do not read scientific status files or
+write solver results for that outcome; the intervention owner settles the pair.
+Cleanup and accounting retain the original Job UID through retries and startup,
+including when the Job is already gone. Callback ownership is checked again after
+provider I/O before tracking and capacity are released. Unknown receipt outcomes
+remain unresolved rather than being treated as normal completion.
+
 The initial launch fence accepts only a generation-one suspended Job with a
 UID-bound selector and complete empty Pod census. It updates metadata using the
 observed resource version; build admission refuses the resulting marker. A
