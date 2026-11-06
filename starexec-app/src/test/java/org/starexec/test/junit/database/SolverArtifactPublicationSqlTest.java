@@ -10,6 +10,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.starexec.constants.R;
 import org.starexec.data.database.SolverBuildArtifacts;
 import org.starexec.jobs.SolverArtifactTree;
+import org.starexec.jobs.SolverBuildStaging;
 import org.starexec.test.util.DatabaseTestSupport;
 
 import java.nio.charset.StandardCharsets;
@@ -91,6 +92,80 @@ public class SolverArtifactPublicationSqlTest {
                 return FileVisitResult.CONTINUE;
             }
         });
+    }
+
+    private Path seedFilesystemBuild() throws Exception {
+        Path source = Files.createDirectory(files.resolve("source_src"),
+                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+        Files.writeString(source.resolve("starexec_build"), "source remains unchanged");
+        try (PreparedStatement ps = con.prepareStatement("INSERT INTO solvers(user_id,name,uploaded,path,disk_size,build_status)"
+                + " VALUES (?,'filesystem-build',now(),?,20,0) RETURNING id")) {
+            ps.setInt(1, user); ps.setString(2, source.toString());
+            try (ResultSet rs = ps.executeQuery()) { assertTrue(rs.next()); solver = rs.getInt(1); }
+        }
+        pair = build(con, solver, user);
+        artifact = SolverBuildArtifacts.find(con, pair, 1).orElseThrow().id();
+        con.commit(); con.setAutoCommit(true);
+        return Files.createDirectory(files.resolve("staged"),
+                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+    }
+
+    @Test void stagingRegistrationCommitsBeforeTheDirectoryCanBeDispatched() throws Exception {
+        Path parent = seedFilesystemBuild();
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        try (Connection observer = connect()) {
+            var observed = SolverBuildArtifacts.find(observer, pair, 1).orElseThrow();
+            assertEquals(context.token(), observed.executionToken());
+            assertEquals(context.staging().toString(), observed.stagingPath());
+        }
+        assertTrue(Files.isDirectory(context.staging()));
+        assertEquals(PosixFilePermissions.fromString("rwx------"), Files.getPosixFilePermissions(context.staging()));
+        assertEquals("source remains unchanged", Files.readString(context.source().resolve("starexec_build")));
+    }
+
+    @Test void aProvenNoStartRetryReusesItsOwnDirectoryWithoutRemovingFiles() throws Exception {
+        Path parent = seedFilesystemBuild();
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        Files.writeString(context.staging().resolve("keep"), "preserve retry data");
+        assertEquals(context, SolverBuildStaging.prepare(con, pair, 1, parent));
+        assertEquals("preserve retry data", Files.readString(context.staging().resolve("keep")));
+        try (var paths = Files.list(parent)) { assertEquals(1, paths.count()); }
+    }
+
+    @Test void aBoundExecutionCannotAcquireAnotherStagingSubmission() throws Exception {
+        Path parent = seedFilesystemBuild();
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        assertTrue(SolverBuildArtifacts.bindExecution(con, pair, 1, context.token(), "podman:owned-container"));
+        assertThrows(IOException.class, () -> SolverBuildStaging.prepare(con, pair, 1, parent));
+        try (var paths = Files.list(parent)) { assertEquals(1, paths.count()); }
+    }
+
+    @Test void stagingRetryRefusesASymbolicLinkWithoutModifyingItsTarget() throws Exception {
+        Path parent = seedFilesystemBuild();
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        Path target = Files.createDirectory(files.resolve("other"));
+        Files.writeString(target.resolve("keep"), "unrelated");
+        Files.delete(context.staging());
+        Files.createSymbolicLink(context.staging(), target);
+        assertThrows(IOException.class, () -> SolverBuildStaging.prepare(con, pair, 1, parent));
+        assertEquals("unrelated", Files.readString(target.resolve("keep")));
+        assertEquals(context.staging().toString(), SolverBuildArtifacts.find(con, pair, 1).orElseThrow().stagingPath());
+    }
+
+    @Test void stagingRefusesAnUncommittedRegistration() throws Exception {
+        Path parent = seedFilesystemBuild();
+        con.setAutoCommit(false);
+        assertThrows(SQLException.class, () -> SolverBuildStaging.prepare(con, pair, 1, parent));
+        assertNull(SolverBuildArtifacts.find(con, pair, 1).orElseThrow().stagingPath());
+        try (var paths = Files.list(parent)) { assertEquals(0, paths.count()); }
+    }
+
+    @Test void stagingRefusesAnUnprotectedParentBeforeReservingAPath() throws Exception {
+        Path parent = seedFilesystemBuild();
+        Files.setPosixFilePermissions(parent, PosixFilePermissions.fromString("rwxrwx---"));
+        assertThrows(IOException.class, () -> SolverBuildStaging.prepare(con, pair, 1, parent));
+        assertNull(SolverBuildArtifacts.find(con, pair, 1).orElseThrow().stagingPath());
+        try (var paths = Files.list(parent)) { assertEquals(0, paths.count()); }
     }
 
     private static int build(Connection c, int solver, int user) throws SQLException {
