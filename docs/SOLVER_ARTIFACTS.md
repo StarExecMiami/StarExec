@@ -49,6 +49,19 @@ updating a WAR alone does not guarantee the helper volume changed. Drain old
 generated build jobs or refuse them before dispatch. Never restore compatibility
 by allowing a container build to write directly into a published solver tree.
 
+`prepare_solver_build_storage` binds one execution token and staging directory to
+the current pair attempt, source and generation. Engine adapters bind the resource
+identity they created and record its observed termination. These observations are
+separate from solver-written status files. A duplicate callback keeps the original
+timestamp; deletion preserves enough identity to finish tracking an already
+prepared execution.
+
+Runtime callers use `publish_solver_build_output`, which requires that execution
+binding, a recorded stop and an immutable storage root before the metadata
+transaction can publish. The root contains `solver/` and `logs/`; only its solver
+directory becomes the solver's execution path. The lower-level metadata function
+does not establish stopped writers, validate files or enforce filesystem quotas.
+
 Use a disposable PostgreSQL database configured through the documented
 `STAREXEC_DB_*` variables and apply the migrations before running:
 

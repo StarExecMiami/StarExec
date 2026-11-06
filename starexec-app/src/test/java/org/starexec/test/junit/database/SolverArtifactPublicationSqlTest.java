@@ -298,6 +298,109 @@ public class SolverArtifactPublicationSqlTest {
         refused("UPDATE solver_build_artifacts SET origin_owner_id=origin_owner_id+1 WHERE id=" + artifact);
     }
 
+    private String prepare(UUID token) {
+        return "SELECT prepare_solver_build_storage(" + pair + ",1,'" + token + "'::uuid,'/execution/" + token + "')";
+    }
+
+    @Test
+    void executionPreparationIsIdempotentAndCannotBeReassigned() throws Exception {
+        UUID token = UUID.randomUUID();
+        assertEquals("t", text(con, prepare(token)));
+        assertEquals("t", text(con, prepare(token)));
+        assertEquals("f", text(con, prepare(UUID.randomUUID())));
+        assertEquals(token.toString(), field("execution_token::text"));
+    }
+
+    @Test
+    void anOlderAttemptCannotPrepareStorage() throws Exception {
+        execute(con, "UPDATE job_pair_attempts SET current_attempt_no=2 WHERE pair_id=" + pair);
+        assertEquals("f", text(con, prepare(UUID.randomUUID())));
+    }
+
+    @Test
+    void engineBindingRequiresPreparedOwnershipAndRejectsReplacement() throws Exception {
+        UUID token = UUID.randomUUID();
+        String bind = "SELECT bind_solver_build_execution(" + pair + ",1,'" + token + "'::uuid,'engine-a')";
+        assertEquals("f", text(con, bind));
+        assertEquals("t", text(con, prepare(token)));
+        assertEquals("t", text(con, bind));
+        assertEquals("t", text(con, bind));
+        assertEquals("f", text(con, bind.replace("engine-a", "engine-b")));
+    }
+
+    @Test
+    void stopObservationMustMatchBothTokenAndEngineIdentity() throws Exception {
+        UUID token = UUID.randomUUID();
+        assertEquals("t", text(con, prepare(token)));
+        String stop = "SELECT record_solver_build_execution_stop(" + pair + ",1,'" + token + "'::uuid,'engine-a')";
+        assertEquals("f", text(con, stop));
+        assertEquals("t", text(con, "SELECT bind_solver_build_execution(" + pair + ",1,'" + token + "'::uuid,'engine-a')"));
+        assertEquals("f", text(con, stop.replace("engine-a", "engine-b")));
+        assertEquals("f", text(con, stop.replace(token.toString(), UUID.randomUUID().toString())));
+        assertEquals("t", text(con, stop));
+        String observed = field("execution_stopped_at::text");
+        assertEquals("t", text(con, stop));
+        assertEquals(observed, field("execution_stopped_at::text"));
+    }
+
+    @Test
+    void aTerminalPairStatusDoesNotEstablishStoppedWriters() throws Exception {
+        prepareExecutionOutput(false);
+        assertEquals("7", text(con, "SELECT status_code FROM job_pairs WHERE id=" + pair));
+        assertNull(field("execution_stopped_at"));
+        assertEquals("f", text(con, "SELECT publish_solver_build_output(" + artifact + ")"));
+    }
+
+    private String callback(String function, UUID token) {
+        return "SELECT " + function + "(" + pair + ",1,'" + token + "'::uuid,'engine-a')";
+    }
+
+    private UUID prepareExecutionOutput(boolean stopped) throws Exception {
+        UUID token = UUID.randomUUID();
+        Path raw = Files.createDirectory(files.resolve("staging"));
+        Files.writeString(Files.createDirectory(raw.resolve("solver")).resolve("program"), "BUILT");
+        try (PreparedStatement ps = con.prepareStatement("SELECT prepare_solver_build_storage(?,1,?,?)")) {
+            ps.setInt(1, pair); ps.setObject(2, token); ps.setString(3, raw.toString());
+            try (ResultSet rs = ps.executeQuery()) { assertTrue(rs.next()); assertTrue(rs.getBoolean(1)); }
+        }
+        assertEquals("t", text(con, callback("bind_solver_build_execution", token)));
+        if (stopped) assertEquals("t", text(con, callback("record_solver_build_execution_stop", token)));
+        Path root = files.resolve("published");
+        reservePath(con, artifact, root.resolve("solver"));
+        try (PreparedStatement ps = con.prepareStatement("UPDATE solver_build_artifacts SET storage_root=? WHERE id=?")) {
+            ps.setString(1, root.toString()); ps.setLong(2, artifact); assertEquals(1, ps.executeUpdate());
+        }
+        validateSnapshot(con, artifact, SolverArtifactTree.copy(raw, root, 1000, 20));
+        return token;
+    }
+
+    @Test
+    void stoppedExecutionCanRetryItsCallbackAfterPublication() throws Exception {
+        UUID token = prepareExecutionOutput(true);
+        assertEquals("t", text(con, "SELECT publish_solver_build_output(" + artifact + ")"));
+        String stopped = field("execution_stopped_at::text");
+        assertEquals("t", text(con, callback("record_solver_build_execution_stop", token)));
+        assertEquals(stopped, field("execution_stopped_at::text"));
+    }
+
+    @Test
+    void deletionDoesNotLoseAnAlreadyPreparedExecutionStop() throws Exception {
+        UUID token = UUID.randomUUID();
+        assertEquals("t", text(con, prepare(token)));
+        execute(con, "DELETE FROM solvers WHERE id=" + solver);
+        assertEquals("t", text(con, callback("bind_solver_build_execution", token)));
+        assertEquals("t", text(con, callback("record_solver_build_execution_stop", token)));
+        assertNull(field("solver_id"));
+        assertEquals("f", text(con, "SELECT publish_solver_build_output(" + artifact + ")"));
+    }
+
+    @Test
+    void preparedStagingAndExecutionBindingsCannotBeEdited() throws Exception {
+        assertEquals("t", text(con, prepare(UUID.randomUUID())));
+        refused("UPDATE solver_build_artifacts SET staging_path='/other/output' WHERE id=" + artifact);
+        refused("UPDATE solver_build_artifacts SET execution_token=NULL WHERE id=" + artifact);
+    }
+
     @Test
     void aReservedPathCannotBeReplaced() throws Exception {
         validate(con, artifact);
