@@ -278,7 +278,7 @@ class KubernetesBuildLaunchFenceTest {
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"generation", "unknown-generation", "version", "deletion", "enabled", "manual", "managed-by",
+    @ParameterizedTest @ValueSource(strings = {"generation", "unknown-generation", "version", "deletion", "enabled", "manual", "managed-by", "typed-managed-by",
             "selector", "uid-selector", "conflicting-uids", "template", "start", "completion", "active", "ready", "failed", "succeeded", "terminating", "condition", "uncounted"})
     void onlyAnInitialSuspendedControllerCanReachTheApi(String changed) {
         Job job = initialJob();
@@ -290,6 +290,7 @@ class KubernetesBuildLaunchFenceTest {
             case "enabled" -> job.getSpec().setSuspend(false);
             case "manual" -> job.getSpec().setManualSelector(true);
             case "managed-by" -> job.getSpec().setAdditionalProperty("managedBy", "other-controller");
+            case "typed-managed-by" -> job.getSpec().setManagedBy("other-controller");
             case "selector" -> job.getSpec().setSelector(null);
             case "uid-selector" -> job.getSpec().getSelector().setMatchLabels(Map.of("app", "builder"));
             case "conflicting-uids" -> {

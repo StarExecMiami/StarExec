@@ -318,7 +318,7 @@ class KubernetesBuildPodRetentionTest {
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"namespace", "uid", "selector", "manual", "controller", "template", "retention", "expressions"})
+    @ParameterizedTest @ValueSource(strings = {"namespace", "uid", "selector", "manual", "controller", "typed-controller", "template", "retention", "expressions"})
     void aDifferentControllerCannotReleaseTheConservedPods(String changed) throws Exception {
         try (Api api = new Api(); KubernetesClient client = api.client(); var dao = registered(api)) {
             conserve(api, client);
@@ -328,6 +328,7 @@ class KubernetesBuildPodRetentionTest {
                 case "selector" -> api.job.getSpec().getSelector().setMatchLabels(Map.of("controller-uid", "other-job"));
                 case "manual" -> api.job.getSpec().setManualSelector(true);
                 case "controller" -> api.job.getSpec().getAdditionalProperties().put("managedBy", "example.org/controller");
+                case "typed-controller" -> api.job.getSpec().setManagedBy("example.org/controller");
                 case "template" -> api.job.getSpec().getTemplate().getMetadata().setLabels(Map.of());
                 case "retention" -> api.job.getSpec().getTemplate().getMetadata().setFinalizers(List.of());
                 case "expressions" -> api.job.getSpec().getSelector().setMatchExpressions(List.of(

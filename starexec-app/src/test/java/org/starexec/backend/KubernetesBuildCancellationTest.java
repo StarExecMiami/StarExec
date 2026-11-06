@@ -226,7 +226,7 @@ class KubernetesBuildCancellationTest {
     }
 
     @ParameterizedTest @ValueSource(strings = {"namespace", "uid", "generation", "unknown-generation", "version", "deletion",
-            "suspended", "fenced", "manual", "managed-by", "retention", "selector", "template", "terminal"})
+            "suspended", "fenced", "manual", "managed-by", "typed-managed-by", "retention", "selector", "template", "terminal"})
     void anIneligibleJobIsNotModified(String fault) throws Exception {
         try (var api = new KubernetesBuildLaunchFenceTest.Api(); var client = api.client(); var dao = catalog()) {
             api.current = runningJob();
@@ -241,6 +241,7 @@ class KubernetesBuildCancellationTest {
                 case "fenced" -> api.current.getMetadata().setAnnotations(Map.of(KubernetesBuildLaunchFence.ANNOTATION, "16"));
                 case "manual" -> api.current.getSpec().setManualSelector(true);
                 case "managed-by" -> api.current.getSpec().getAdditionalProperties().put("managedBy", "example.org/controller");
+                case "typed-managed-by" -> api.current.getSpec().setManagedBy("example.org/controller");
                 case "retention" -> api.current.getSpec().getTemplate().getMetadata().setFinalizers(List.of());
                 case "selector" -> api.current.getSpec().getSelector().setMatchLabels(Map.of("controller-uid", "different-uid"));
                 case "template" -> api.current.getSpec().getTemplate().getMetadata().setLabels(Map.of());
