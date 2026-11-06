@@ -1779,7 +1779,7 @@ public class PodmanBackendTests {
         verify(mockDockerClient).removeContainerCmd("stale-container");
         verify(mockDockerClient, never()).removeContainerCmd("fresh-container");
         verify(mockDockerClient, never()).removeContainerCmd("protected-container");
-        verify(mockDockerClient).inspectContainerCmd("stale-container");
+        verify(mockDockerClient, times(2)).inspectContainerCmd("stale-container");
         verify(mockRemoveContainerCmd).withRemoveVolumes(true);
     }
 
