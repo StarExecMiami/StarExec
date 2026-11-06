@@ -257,6 +257,79 @@ $(document).ready(function () {
   };
 });
 
+jQuery(function ($) {
+  "use strict";
+
+  /**
+   * A .table-wrapper whose table is wider than the box scrolls, and keyboard
+   * users must be able to reach it to scroll it (WCAG 2.1.1). While it
+   * overflows, it is a focusable region named after its fieldset's legend,
+   * its table's caption or the heading before it; once its content fits, it
+   * leaves the tab order.
+   * Boxes whose tabindex or role a page set itself are left alone. Not in the
+   * DataTables block below, which returns on pages without DataTables.
+   */
+  function updateScrollBox(box) {
+    var $box = $(box);
+    var ours = $box.attr("data-scroll-region") === "true";
+    if (!box || (!ours && ($box.is("[tabindex]") || $box.is("[role]")))) {
+      return;
+    }
+    if (box.scrollWidth > box.clientWidth) {
+      var name = [
+        $box.closest("fieldset").children("legend").first(),
+        $box.find("caption").first(),
+        $box.prevAll("h1, h2, h3, h4, h5, h6").first(),
+      ]
+        .map(function ($el) {
+          return $el.text().replace(/\s+/g, " ").trim();
+        })
+        .filter(Boolean)[0];
+      $box.attr({
+        tabindex: "0",
+        role: "region",
+        "aria-label": name || "Table",
+        "data-scroll-region": "true",
+      });
+    } else if (ours) {
+      $box.removeAttr("tabindex role aria-label data-scroll-region");
+    }
+  }
+
+  // A box starts or stops overflowing when the window or the table resizes.
+  var scrollBoxObserver =
+    typeof ResizeObserver === "function"
+      ? new ResizeObserver(function (entries) {
+          entries.forEach(function (entry) {
+            updateScrollBox($(entry.target).closest(".table-wrapper")[0]);
+          });
+        })
+      : null;
+  if (!scrollBoxObserver) {
+    $(window).on("resize", function () {
+      $(".table-wrapper").each(function () {
+        updateScrollBox(this);
+      });
+    });
+  }
+
+  star.watchScrollBox = function (box) {
+    updateScrollBox(box);
+    if (scrollBoxObserver && box) {
+      scrollBoxObserver.observe(box);
+      $(box)
+        .children("table")
+        .each(function () {
+          scrollBoxObserver.observe(this);
+        });
+    }
+  };
+
+  $(".table-wrapper").each(function () {
+    star.watchScrollBox(this);
+  });
+});
+
 /**
  * Special configuration for DataTables
  * https://datatables.net/reference/event/
@@ -364,6 +437,7 @@ jQuery(function ($) {
       return;
     }
     table.wrap('<div class="table-wrapper table-wrapper--flush"></div>');
+    star.watchScrollBox(table.parent()[0]);
   });
 
   /**

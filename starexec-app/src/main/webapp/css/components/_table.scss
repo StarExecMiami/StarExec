@@ -234,6 +234,12 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
   margin-bottom: 0;
 }
 
+// A wrapper that scrolls is focusable (master.js), so show where focus is.
+.table-wrapper:focus-visible {
+  outline: 2px solid $accent-orange;
+  outline-offset: 2px;
+}
+
 // Detail pages and forms list label/value pairs in two-cell rows. A long word in
 // a value (a URL, a file name) set the table's minimum width and widened the
 // page, so values may break anywhere; labels keep whole words. A button or a
