@@ -434,6 +434,17 @@ container refused by admission can be removed without claiming build completion.
 These checks establish process termination separately from input and output mount
 authorization, artifact validation, and publication.
 
+Kubernetes build Jobs retain their resources until a matching terminal controller
+and terminated containers can be recorded durably. The observer checks Job and
+Pod UIDs, owner references, runtime container and image IDs, and all regular,
+initialization and ephemeral containers. Marked build Jobs have no automatic TTL;
+individual cleanup uses Foreground propagation with a resource-version precondition.
+Bulk deletion excludes these Jobs and recovers their accounting individually.
+Missing Pod observations, an unreadable API or a failed receipt write retain the
+resource and capacity. Active cancellation and initially suspended build cleanup
+still require an evidence-preserving stop protocol; they are retained for recovery
+rather than treated as successful cleanup.
+
 ### Architecture
 
 The current implementation uses this flow:
