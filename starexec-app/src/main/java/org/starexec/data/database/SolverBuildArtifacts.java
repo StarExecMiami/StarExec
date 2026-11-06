@@ -9,6 +9,9 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.io.IOException;
+import org.starexec.backend.BuildExecutionContext;
+import org.starexec.jobs.SolverBuildStaging;
 
 /** Registry access for trusted build dispatch, engine observation and publication. */
 public final class SolverBuildArtifacts {
@@ -18,6 +21,13 @@ public final class SolverBuildArtifacts {
                            String engineIdentity, Instant stoppedAt, String state) { }
 
     private SolverBuildArtifacts() { }
+
+    public static BuildExecutionContext prepareStaging(int pairId, int attemptNo, Path parent)
+            throws SQLException, IOException {
+        try (Connection con = Common.getConnection()) {
+            return SolverBuildStaging.prepare(con, pairId, attemptNo, parent);
+        }
+    }
 
     public static Optional<Artifact> find(int pairId, int attemptNo) throws SQLException {
         try (Connection con = Common.getConnection()) { return find(con, pairId, attemptNo); }
