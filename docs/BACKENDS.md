@@ -459,6 +459,8 @@ conflicts and failed acknowledgements retain the Job for retry. Other owners'
 finalizers remain untouched; accepting deletion does not establish resource absence.
 The application service account needs namespace-scoped Pod `update` permission for
 this metadata operation. Runner Pods do not receive its service account token.
+Build stop validation requires `spec.managedBy` to remain unset, checking both
+the modeled field and additional properties before fencing or releasing evidence.
 
 The artifact catalog distinguishes a build that never ran from a completed build.
 Recording non-execution atomically rejects the artifact and conserves its immutable

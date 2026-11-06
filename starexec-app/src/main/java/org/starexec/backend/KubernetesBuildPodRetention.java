@@ -71,7 +71,8 @@ final class KubernetesBuildPodRetention {
         require(expected != null && expected.equals(KubernetesBuildStopObserver.identify(namespace, job)) && isRetained(job),
                 "Build Job differs from its retained identity");
         var spec = job.getSpec();
-        require(!Boolean.TRUE.equals(spec.getManualSelector()) && spec.getAdditionalProperties().get("managedBy") == null
+        require(!Boolean.TRUE.equals(spec.getManualSelector()) && spec.getManagedBy() == null
+                && spec.getAdditionalProperties().get("managedBy") == null
                 && spec.getSelector() != null && spec.getSelector().getMatchLabels() != null
                 && (spec.getSelector().getMatchExpressions() == null || spec.getSelector().getMatchExpressions().isEmpty()),
                 "Build controller selector is unverified");

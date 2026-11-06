@@ -71,7 +71,7 @@ final class KubernetesBuildLaunchFence {
                 "Build Job is not an intact initial generation");
         require(nonblank(metadata.getResourceVersion()), "Build Job resource version is unavailable");
         require(spec != null && Boolean.TRUE.equals(spec.getSuspend()) && !Boolean.TRUE.equals(spec.getManualSelector())
-                && spec.getAdditionalProperties().get("managedBy") == null,
+                && spec.getManagedBy() == null && spec.getAdditionalProperties().get("managedBy") == null,
                 "Build initial suspended controller is unverified");
         require(spec.getSelector() != null && spec.getSelector().getMatchLabels() != null
                 && (spec.getSelector().getMatchExpressions() == null || spec.getSelector().getMatchExpressions().isEmpty()),
