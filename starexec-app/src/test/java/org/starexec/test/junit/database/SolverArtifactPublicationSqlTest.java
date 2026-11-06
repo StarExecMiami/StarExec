@@ -172,6 +172,38 @@ public class SolverArtifactPublicationSqlTest {
                 + pair + " AND attempt_no=2 AND state='PLANNED'"));
     }
 
+    @Test
+    void rebuildingAPublishedSolverUsesItsOriginalSource() throws Exception {
+        validate(con, artifact); assertTrue(publish(con, artifact));
+        long generation = number(con, "SELECT build_generation FROM solvers WHERE id=" + solver);
+        execute(con, "SELECT RebuildSolver(" + solver + ")");
+        assertEquals("/solver/source_src", text(con, "SELECT path FROM solvers WHERE id=" + solver));
+        assertTrue(number(con, "SELECT build_generation FROM solvers WHERE id=" + solver) > generation);
+        assertFalse(publish(con, artifact));
+    }
+
+    @Test
+    void aFailedRebuildFencesTheOldResultBeforeItsNewJobExists() throws Exception {
+        validate(con, artifact);
+        execute(con, "UPDATE solvers SET build_status=3 WHERE id=" + solver);
+        execute(con, "SELECT RebuildSolver(" + solver + ")");
+        assertFalse(publish(con, artifact));
+        assertEquals("3", text(con, "SELECT build_status FROM solvers WHERE id=" + solver));
+    }
+
+    @Test
+    void publishingARebuildRetiresThePreviousVersion() throws Exception {
+        validate(con, artifact); assertTrue(publish(con, artifact));
+        execute(con, "SELECT RebuildSolver(" + solver + ")");
+        int next = build(con, solver, user);
+        long replacement = number(con, "SELECT id FROM solver_build_artifacts WHERE pair_id=" + next);
+        validate(con, replacement);
+        assertTrue(publish(con, replacement));
+        assertEquals("RETIRED", field("state"));
+        assertEquals(path(replacement), text(con, "SELECT path FROM solvers WHERE id=" + solver));
+        assertFalse(publish(con, artifact));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"deleted=true", "recycled=true", "path='/other/source_src'", "build_status=1"})
     void solverChangesPreventPublication(String change) throws Exception {

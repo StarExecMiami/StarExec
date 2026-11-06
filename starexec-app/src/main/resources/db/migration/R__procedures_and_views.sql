@@ -7710,12 +7710,18 @@ BEGIN
         FROM starexec.jobpair_stage_data jpsd
         WHERE jpsd.solver_id = _solverId
     );
-    -- Set Solver status to Unbuilt
+    -- Keep the original source of immutable build artifacts. Fence the old result
+    -- before its replacement job exists, including rebuilds of failed solvers.
     UPDATE solvers
-        SET build_status = 0, -- 0 = Unbuilt : SolverBuildStatus.java
-            path = CONCAT(path, '_src')
+        SET build_generation = build_generation + 1,
+            build_source_path = COALESCE(build_source_path,
+                CASE WHEN build_status = 2 THEN path || '_src' ELSE path END),
+            path = COALESCE(build_source_path,
+                CASE WHEN build_status = 2 THEN path || '_src' ELSE path END),
+            build_status = CASE WHEN build_status = 2 THEN 0 ELSE build_status END
         WHERE id = _solverId
-        AND build_status = 2;  -- 2 = Built by StarExec
+        AND deleted IS NOT TRUE
+        AND build_status IN (2, 3); -- Built by StarExec, or failed and being rebuilt.
 END;
 $$ LANGUAGE plpgsql;
 

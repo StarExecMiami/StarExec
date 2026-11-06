@@ -15,6 +15,10 @@ completion, deletion state and newer build jobs before switching the solver path
 and publication state in one database transaction. A retry of the current
 publication succeeds without replacing its timestamp.
 
+Rebuilding resolves the original source independently of the published artifact
+path and advances the build generation before the replacement job exists. Failed
+solvers keep their existing failure status until the replacement result is recorded.
+
 Database metadata cannot make runner-writable files immutable. Before validation,
 the application must copy a completed execution's output into storage the runner
 cannot modify, validate types, links, byte limits and content, then publish that
