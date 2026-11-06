@@ -1666,7 +1666,21 @@ public class PodmanBackend implements Backend {
         }
 
         // Start container (with post-failure verification to avoid duplicate retries)
-        startContainerWithVerification(containerId);
+        if (build == null) {
+            startContainerWithVerification(containerId);
+        } else {
+            execIdToContainerId.put(execId, containerId);
+            if (!admitBuildBeforeStart(build, execId, containerId)) return execId;
+            try {
+                dockerClient.startContainerCmd(containerId).exec();
+            } catch (Exception failure) {
+                // A failed response is not proof that start failed at the engine. Keep the
+                // exact resource and its capacity; never retry by creating another build.
+                log.error("Build start outcome is unresolved for execution " + execId
+                    + "; container and capacity retained for observation", failure);
+                return execId;
+            }
+        }
 
         // Track execution only after successful start
         execIdToContainerId.put(execId, containerId);
@@ -1686,6 +1700,35 @@ public class PodmanBackend implements Backend {
                 containerId
         );
         return execId;
+    }
+
+    private boolean admitBuildBeforeStart(BuildExecutionContext build, int execId, String containerId) {
+        boolean admitted = false;
+        try {
+            admitted = org.starexec.data.database.SolverBuildArtifacts.admitExecution(
+                build, "podman:" + execId + ":" + containerId);
+        } catch (java.sql.SQLException | RuntimeException failure) {
+            log.warn("Could not commit build execution admission for execution " + execId, failure);
+        }
+        if (admitted) return true;
+
+        boolean removed = false;
+        try {
+            removeContainerArtifacts(containerId, true);
+            removed = true;
+        } catch (NotFoundException absent) {
+            removed = true;
+        } catch (Exception failure) {
+            log.warn("Could not remove refused build container for execution " + execId, failure);
+        }
+        if (!removed || observeExecutionSafety(execId) != KillOutcome.CONFIRMED_SAFE) {
+            log.error("Build admission was refused for execution " + execId
+                + "; cleanup is unresolved, so its container and capacity remain tracked");
+            return false;
+        }
+        execIdToContainerId.remove(execId, containerId);
+        containerIdToPairId.invalidate(containerId);
+        throw new IllegalStateException("Build admission was refused and its container was removed");
     }
 
     /**

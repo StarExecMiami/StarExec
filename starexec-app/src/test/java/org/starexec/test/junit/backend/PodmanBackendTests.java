@@ -590,11 +590,19 @@ public class PodmanBackendTests {
         configureCreateContainerSuccess(TEST_CONTAINER_ID);
         var build = new org.starexec.backend.BuildExecutionContext(5, 42, 1,
             java.util.UUID.randomUUID(), tempDir.resolve("source"), tempDir.resolve("build output"));
-        try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class)) {
+        java.util.concurrent.atomic.AtomicBoolean committed = new java.util.concurrent.atomic.AtomicBoolean();
+        doAnswer(call -> { assertTrue(committed.get(), "admission must commit before start"); return null; })
+            .when(mockStartContainerCmd).exec();
+        try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class);
+             var artifacts = mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
             pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            artifacts.when(() -> org.starexec.data.database.SolverBuildArtifacts.admitExecution(eq(build), anyString()))
+                .thenAnswer(call -> { committed.set(true); return true; });
             int execution = backend.submitScript(42, tempDir.resolve("script.sh").toString(),
                 tempDir.toString(), tempDir.resolve("job.log").toString(), "queue", build);
             assertTrue(execution > 0);
+            artifacts.verify(() -> org.starexec.data.database.SolverBuildArtifacts.admitExecution(
+                build, "podman:" + execution + ":" + TEST_CONTAINER_ID));
             org.mockito.ArgumentCaptor<List> environment = org.mockito.ArgumentCaptor.forClass(List.class);
             verify(mockCreateContainerCmd).withEnv(environment.capture());
             List<String> values = environment.getValue();
@@ -621,6 +629,107 @@ public class PodmanBackendTests {
             assertEquals(0, getActiveSubmissionSlots());
             assertTrue(getExecIdMap().isEmpty());
         }
+    }
+
+    @Test
+    public void refusedBuildAdmissionCannotStartAndReleasesOnlyConfirmedEmptyCapacity() throws Exception {
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+        var build = buildContext();
+        try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class);
+             var artifacts = mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
+            pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            assertTrue(submitBuild(build) < 0);
+            verify(mockDockerClient, never()).startContainerCmd(anyString());
+            verify(mockRemoveContainerCmd).withForce(true);
+            assertEquals(0, getActiveSubmissionSlots());
+            assertTrue(getExecIdMap().isEmpty());
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = { false, true })
+    public void refusedBuildAdmissionRetainsCapacityWhenRemovalCannotBeEstablished(boolean removeFails) throws Exception {
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+        if (removeFails) doThrow(new RuntimeException("engine unavailable")).when(mockRemoveContainerCmd).exec();
+        when(mockListContainersCmd.exec()).thenThrow(new RuntimeException("engine unavailable"));
+        try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class);
+             var artifacts = mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
+            pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            int execution = submitBuild(buildContext());
+            assertTrue(execution > 0);
+            verify(mockDockerClient, never()).startContainerCmd(anyString());
+            assertEquals(TEST_CONTAINER_ID, getExecIdMap().get(execution));
+            assertEquals(1, getActiveSubmissionSlots());
+        }
+    }
+
+    @Test
+    public void aDatabaseAdmissionFailureCannotTriggerASecondContainerOrStart() throws Exception {
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+        var build = buildContext();
+        try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class);
+             var artifacts = mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
+            pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            artifacts.when(() -> org.starexec.data.database.SolverBuildArtifacts.admitExecution(eq(build), anyString()))
+                .thenThrow(new java.sql.SQLException("Broken pipe"));
+            assertTrue(submitBuild(build) < 0);
+            verify(mockDockerClient, times(1)).createContainerCmd(anyString());
+            verify(mockDockerClient, never()).startContainerCmd(anyString());
+            assertEquals(0, getActiveSubmissionSlots());
+        }
+    }
+
+    @Test
+    public void anUncheckedAdmissionFailureCannotStartOrRetryTheBuild() throws Exception {
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+        var build = buildContext();
+        try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class);
+             var artifacts = mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
+            pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            artifacts.when(() -> org.starexec.data.database.SolverBuildArtifacts.admitExecution(eq(build), anyString()))
+                .thenThrow(new IllegalStateException("Broken pipe"));
+            assertTrue(submitBuild(build) < 0);
+            verify(mockDockerClient, times(1)).createContainerCmd(anyString());
+            verify(mockDockerClient, never()).startContainerCmd(anyString());
+            assertEquals(0, getActiveSubmissionSlots());
+        }
+    }
+
+    @Test
+    public void anUncertainAdmittedStartRetainsItsContainerAndCapacityWithoutRetry() throws Exception {
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+        doThrow(new RuntimeException("Broken pipe")).when(mockStartContainerCmd).exec();
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID)).thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenThrow(new RuntimeException("engine unavailable"));
+        var build = buildContext();
+        try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class);
+             var artifacts = mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
+            pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            artifacts.when(() -> org.starexec.data.database.SolverBuildArtifacts.admitExecution(eq(build), anyString()))
+                .thenReturn(true);
+            int execution = submitBuild(build);
+            assertTrue(execution > 0);
+            assertEquals(TEST_CONTAINER_ID, getExecIdMap().get(execution));
+            assertEquals(1, getActiveSubmissionSlots());
+            verify(mockDockerClient, times(1)).createContainerCmd(anyString());
+            verify(mockStartContainerCmd, times(1)).exec();
+            verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
+        }
+    }
+
+    private org.starexec.backend.BuildExecutionContext buildContext() {
+        return new org.starexec.backend.BuildExecutionContext(5, 42, 1,
+            UUID.randomUUID(), tempDir.resolve("source"), tempDir.resolve("build output"));
+    }
+
+    private int submitBuild(org.starexec.backend.BuildExecutionContext build) {
+        return backend.submitScript(42, tempDir.resolve("script.sh").toString(),
+            tempDir.toString(), tempDir.resolve("job.log").toString(), "queue", build);
     }
 
     // ==================== Virtual Queue/Node Tests ====================
