@@ -424,6 +424,16 @@ disable service-account token mounting, including when a custom account is used.
 Engine termination, artifact validation and publication remain separate operations;
 a terminal `status.json` does not establish that writers have stopped.
 
+Podman build containers marked with a registered artifact identity require a matching
+terminal engine inspection before ingestion or removal. The observer checks the
+actual container ID, pair attempt, admitted execution, effective restart policy,
+private process namespace and stopped process flags. It commits an immutable stop
+receipt before cleanup. A failed observation or database write retains the build
+resource and its capacity for retry. A positively inspected, never-started
+container refused by admission can be removed without claiming build completion.
+These checks establish process termination separately from input and output mount
+authorization, artifact validation, and publication.
+
 ### Architecture
 
 The current implementation uses this flow:

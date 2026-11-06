@@ -197,6 +197,9 @@ public class PodmanBackend implements Backend {
     private final Map<Integer, String> execIdToContainerId =
         new ConcurrentHashMap<>();
 
+    // Build identities survive tracking transitions until their engine resource is safely removed.
+    private final Map<Integer, String> buildExecutions = new ConcurrentHashMap<>();
+
     // Executions whose container has exited but whose result ContainerJobMonitor has not
     // ingested yet (execId -> containerId). Reported by getActiveExecutionIds() so the
     // broken-pair sweep does not file a finished pair as ERROR_SUBMIT_FAIL while the monitor
@@ -1014,6 +1017,16 @@ public class PodmanBackend implements Backend {
      * Releases one container submission slot for the given execution id.
      */
     private void releaseSubmissionSlot(int execId, String reason) {
+        String buildContainer = buildExecutions.get(execId);
+        if (buildContainer != null) {
+            try {
+                observeStoppedBuild(dockerClient.inspectContainerCmd(buildContainer).exec(), buildContainer);
+            } catch (Exception uncertain) {
+                execIdToContainerId.putIfAbsent(execId, buildContainer);
+                log.warn("Retaining build execution capacity until termination evidence is conserved", uncertain);
+                return;
+            }
+        }
         Integer partitionIndex = execIdToPartitionIndex.remove(execId);
         if (partitionIndex != null) {
             releasePartitionSlot(partitionIndex, execId, reason);
@@ -1557,6 +1570,7 @@ public class PodmanBackend implements Backend {
         );
         if (build != null) {
             build.environment().forEach((name, value) -> envVars.add(name + "=" + value));
+            hostConfig.withRestartPolicy(com.github.dockerjava.api.model.RestartPolicy.noRestart());
         }
         Map<String, String> labels = createContainerLabels(
             pairId,
@@ -1564,6 +1578,7 @@ public class PodmanBackend implements Backend {
             selectedPartition,
             attemptNo
         );
+        if (build != null) labels.put(PodmanBuildStopObserver.ARTIFACT_LABEL, Long.toString(build.artifactId()));
 
         // Log container creation parameters for debugging
         log.info("Creating container with:");
@@ -1654,6 +1669,7 @@ public class PodmanBackend implements Backend {
         if (build == null) {
             startContainerWithVerification(containerId);
         } else {
+            buildExecutions.put(execId, containerId);
             execIdToContainerId.put(execId, containerId);
             if (!admitBuildBeforeStart(build, execId, containerId)) return execId;
             try {
@@ -1699,10 +1715,12 @@ public class PodmanBackend implements Backend {
 
         boolean removed = false;
         try {
-            removeContainerArtifacts(containerId, true);
+            PodmanBuildStopObserver.requireNeverStarted(dockerClient.inspectContainerCmd(containerId).exec(),
+                    containerId, build, execId);
+            deleteContainerArtifacts(containerId, true);
             removed = true;
         } catch (NotFoundException absent) {
-            removed = true;
+            log.warn("Refused build resource disappeared without positive never-started inspection");
         } catch (Exception failure) {
             log.warn("Could not remove refused build container for execution " + execId, failure);
         }
@@ -1901,6 +1919,10 @@ public class PodmanBackend implements Backend {
 
         // HostConfig
         json.append("\"HostConfig\":{");
+        if (hostConfig.getRestartPolicy() != null) {
+            json.append("\"RestartPolicy\":{\"Name\":\"")
+                .append(escapeJson(hostConfig.getRestartPolicy().getName())).append("\"},");
+        }
 
         // Binds
         Bind[] binds = hostConfig.getBinds();
@@ -2951,6 +2973,7 @@ public class PodmanBackend implements Backend {
             var inspection = dockerClient
                 .inspectContainerCmd(listedContainer.getId())
                 .exec();
+            rememberBuild(inspection, listedContainer.getId());
             var state = inspection.getState();
             return state != null && Boolean.TRUE.equals(state.getRunning());
         } catch (Exception e) {
@@ -3130,6 +3153,7 @@ public class PodmanBackend implements Backend {
                     if (pairId <= 0) continue;
 
                     var inspection = dockerClient.inspectContainerCmd(container.getId()).exec();
+                    observeStoppedBuild(inspection, container.getId());
                     var state = inspection.getState();
                     int exitCode = 0;
                     if (state != null && state.getExitCodeLong() != null) {
@@ -3333,6 +3357,7 @@ public class PodmanBackend implements Backend {
                 var inspection = dockerClient
                     .inspectContainerCmd(entry.getValue())
                     .exec();
+                rememberBuild(inspection, entry.getValue());
                 var state = inspection.getState();
                 if (state != null && Boolean.TRUE.equals(state.getRunning())) {
                     activeIds.add(entry.getKey());
@@ -3367,6 +3392,7 @@ public class PodmanBackend implements Backend {
             }
         }
 
+        activeIds.addAll(buildExecutions.keySet());
         return activeIds;
     }
 
@@ -3553,6 +3579,7 @@ public class PodmanBackend implements Backend {
                 var inspection = client
                     .inspectContainerCmd(container.getId())
                     .exec();
+                observeStoppedBuild(inspection, container.getId());
                 var mounts = inspection.getMounts();
                 var state = inspection.getState();
 
@@ -3693,11 +3720,41 @@ public class PodmanBackend implements Backend {
     }
 
     private void removeContainerArtifacts(String containerId, boolean force) {
+        try {
+            observeStoppedBuild(dockerClient.inspectContainerCmd(containerId).exec(), containerId);
+        } catch (java.sql.SQLException failure) {
+            throw new IllegalStateException("Could not conserve build stop evidence before cleanup", failure);
+        }
+        deleteContainerArtifacts(containerId, force);
+    }
+
+    private void observeStoppedBuild(com.github.dockerjava.api.command.InspectContainerResponse inspection,
+                                      String containerId) throws java.sql.SQLException {
+        rememberBuild(inspection, containerId);
+        PodmanBuildStopObserver.recordIfBuild(inspection, containerId);
+    }
+
+    private void rememberBuild(com.github.dockerjava.api.command.InspectContainerResponse inspection,
+                               String containerId) {
+        Integer execution = PodmanBuildStopObserver.buildExecution(inspection, containerId);
+        if (buildExecutions.containsValue(containerId) && execution == null) {
+            throw new IllegalStateException("Tracked build resource lost its ownership labels");
+        }
+        if (execution != null) {
+            String prior = buildExecutions.putIfAbsent(execution, containerId);
+            if (prior != null && !prior.equals(containerId)) {
+                throw new IllegalStateException("Build execution has conflicting engine resource identities");
+            }
+        }
+    }
+
+    private void deleteContainerArtifacts(String containerId, boolean force) {
         dockerClient
             .removeContainerCmd(containerId)
             .withForce(force)
             .withRemoveVolumes(true)
             .exec();
+        buildExecutions.values().remove(containerId);
     }
 
     private boolean isContainerOlderThanCleanupThreshold(

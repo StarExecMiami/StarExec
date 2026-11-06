@@ -556,6 +556,10 @@ public class PodmanBackendTests {
      * Sets up common mock behaviors used across multiple tests.
      */
     private void setupCommonMocks() {
+        // Ordinary jobs carry no build marker; successful cleanup still needs an inspection.
+        when(mockDockerClient.inspectContainerCmd(anyString())).thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getConfig()).thenReturn(new ContainerConfig().withLabels(Collections.emptyMap()));
         // Mock version command for connection test
         VersionCmd mockVersionCmd = mock(VersionCmd.class);
         Version mockVersion = mock(Version.class);
@@ -723,6 +727,23 @@ public class PodmanBackendTests {
     }
 
     private org.starexec.backend.BuildExecutionContext buildContext() {
+        var labels = new java.util.concurrent.atomic.AtomicReference<Map<String, String>>();
+        var config = mock(ContainerConfig.class);
+        when(config.getLabels()).thenAnswer(call -> labels.get());
+        when(mockInspectContainerResponse.getConfig()).thenReturn(config);
+        when(mockInspectContainerResponse.getId()).thenReturn(TEST_CONTAINER_ID);
+        when(mockCreateContainerCmd.withLabels(anyMap())).thenAnswer(call -> {
+            labels.set(new HashMap<>(call.getArgument(0))); return mockCreateContainerCmd;
+        });
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getStatus()).thenReturn("created");
+        when(mockContainerState.getRunning()).thenReturn(false);
+        when(mockContainerState.getPaused()).thenReturn(false);
+        when(mockContainerState.getRestarting()).thenReturn(false);
+        when(mockContainerState.getPidLong()).thenReturn(0L);
+        when(mockContainerState.getStartedAt()).thenReturn("0001-01-01T00:00:00Z");
+        when(mockInspectContainerResponse.getHostConfig()).thenReturn(HostConfig.newHostConfig()
+            .withRestartPolicy(RestartPolicy.noRestart()).withPrivileged(false));
         return new org.starexec.backend.BuildExecutionContext(5, 42, 1,
             UUID.randomUUID(), tempDir.resolve("source"), tempDir.resolve("build output"));
     }
@@ -1379,6 +1400,7 @@ public class PodmanBackendTests {
         InspectContainerResponse.ContainerState stoppedState = mock(InspectContainerResponse.ContainerState.class);
         when(mockDockerClient.inspectContainerCmd("stopped-container")).thenReturn(stoppedInspect);
         when(stoppedInspect.exec()).thenReturn(stoppedResponse);
+        when(stoppedResponse.getConfig()).thenReturn(new ContainerConfig().withLabels(Collections.emptyMap()));
         when(stoppedResponse.getState()).thenReturn(stoppedState);
         when(stoppedState.getRunning()).thenReturn(false);
 
@@ -1407,6 +1429,7 @@ public class PodmanBackendTests {
         InspectContainerResponse.ContainerState stoppedState = mock(InspectContainerResponse.ContainerState.class);
         when(mockDockerClient.inspectContainerCmd("stopped-container")).thenReturn(stoppedInspect);
         when(stoppedInspect.exec()).thenReturn(stoppedResponse);
+        when(stoppedResponse.getConfig()).thenReturn(new ContainerConfig().withLabels(Collections.emptyMap()));
         when(stoppedResponse.getState()).thenReturn(stoppedState);
         when(stoppedState.getRunning()).thenReturn(false);
 
@@ -1496,6 +1519,7 @@ public class PodmanBackendTests {
         InspectContainerResponse.ContainerState state = mock(InspectContainerResponse.ContainerState.class);
         when(mockDockerClient.inspectContainerCmd(containerId)).thenReturn(inspect);
         when(inspect.exec()).thenReturn(response);
+        when(response.getConfig()).thenReturn(new ContainerConfig().withLabels(Collections.emptyMap()));
         when(response.getState()).thenReturn(state);
         when(state.getRunning()).thenReturn(false);
         return inspect;
@@ -1683,6 +1707,41 @@ public class PodmanBackendTests {
         assertEquals(1, getActiveSubmissionSlots());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"unavailable", "missing", "running", "database"})
+    public void buildStopUncertaintyRetainsCapacityAndActiveIdentity(String failure) throws Exception {
+        configureBackendForSubmitScript(); configureCreateContainerSuccess(TEST_CONTAINER_ID);
+        var build = buildContext();
+        try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class);
+             var artifacts = mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
+            pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            artifacts.when(() -> org.starexec.data.database.SolverBuildArtifacts.admitExecution(eq(build), anyString()))
+                .thenReturn(true);
+            int execution = submitBuild(build);
+            assertTrue(execution > 0);
+            if (failure.equals("unavailable")) when(mockInspectContainerCmd.exec()).thenThrow(new RuntimeException("unavailable"));
+            if (failure.equals("missing")) when(mockInspectContainerCmd.exec()).thenThrow(new NotFoundException("missing"));
+            if (failure.equals("running")) {
+                when(mockContainerState.getStatus()).thenReturn("running"); when(mockContainerState.getRunning()).thenReturn(true);
+            }
+            if (failure.equals("database")) {
+                when(mockContainerState.getStatus()).thenReturn("exited");
+                when(mockContainerState.getExitCodeLong()).thenReturn(0L);
+                when(mockContainerState.getFinishedAt()).thenReturn("2026-01-01T00:01:00Z");
+                when(mockInspectContainerResponse.getImageId()).thenReturn("sha256:runner-image");
+                artifacts.when(() -> org.starexec.data.database.SolverBuildArtifacts.find(42, 1))
+                    .thenThrow(new java.sql.SQLException("unavailable"));
+            }
+            backend.releaseSlotForCompletedContainer(TEST_CONTAINER_ID);
+            assertEquals(TEST_CONTAINER_ID, getExecIdMap().get(execution));
+            assertEquals(1, getActiveSubmissionSlots());
+            backend.removeCompletedContainer(TEST_CONTAINER_ID);
+            assertEquals(TEST_CONTAINER_ID, getExecIdMap().get(execution));
+            assertEquals(1, getActiveSubmissionSlots());
+            verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
+        }
+    }
+
     @Test
     public void testStartContainerWithVerification_StartThrowsButContainerRunning_TreatedAsSuccess()
         throws Exception {
@@ -1764,6 +1823,7 @@ public class PodmanBackendTests {
         when(mockDockerClient.inspectContainerCmd("stale-container"))
             .thenReturn(staleInspect);
         when(staleInspect.exec()).thenReturn(staleInspectResponse);
+        when(staleInspectResponse.getConfig()).thenReturn(new ContainerConfig().withLabels(Collections.emptyMap()));
         when(staleInspectResponse.getState()).thenReturn(staleState);
         when(staleState.getRunning()).thenReturn(false);
 
