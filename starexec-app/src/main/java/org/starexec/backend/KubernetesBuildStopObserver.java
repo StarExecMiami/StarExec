@@ -85,9 +85,13 @@ final class KubernetesBuildStopObserver {
 
     /** Absence may reuse an already committed observation, but cannot create a new one. */
     static boolean hasConservedReceipt(String namespace, Identity identity) throws SQLException {
+        return conservedReceipt(namespace, identity) != null;
+    }
+
+    static SolverBuildStopReceipt conservedReceipt(String namespace, Identity identity) throws SQLException {
         registered(namespace, identity);
         var stored = SolverBuildArtifacts.findStopReceipt(identity.pairId(), identity.attemptNo());
-        return stored.isPresent() && matches(namespace, identity, stored.get().receipt());
+        return stored.isPresent() && matches(namespace, identity, stored.get().receipt()) ? stored.get().receipt() : null;
     }
 
     private static SolverBuildArtifacts.Artifact registered(String namespace, Identity identity) throws SQLException {
@@ -149,7 +153,7 @@ final class KubernetesBuildStopObserver {
                 && expected.equals(facts.get(key).getAsString());
     }
 
-    private static String terminalCondition(Job job) {
+    static String terminalCondition(Job job) {
         if (job.getStatus() == null || job.getStatus().getConditions() == null) return null;
         for (var condition : job.getStatus().getConditions()) {
             if (condition != null && "True".equals(condition.getStatus())
@@ -158,7 +162,7 @@ final class KubernetesBuildStopObserver {
         return null;
     }
 
-    private static JsonObject observePod(String namespace, Identity identity, Pod pod) {
+    static JsonObject observePod(String namespace, Identity identity, Pod pod) {
         var metadata = pod.getMetadata(); var spec = pod.getSpec(); var status = pod.getStatus();
         require(namespace.equals(metadata.getNamespace()) && metadata.getUid() != null && !metadata.getUid().isBlank()
                 && metadata.getName() != null && !metadata.getName().isBlank(), "Build Pod namespace or identity differs");

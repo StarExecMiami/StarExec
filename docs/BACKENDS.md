@@ -445,6 +445,15 @@ resource and capacity. Active cancellation of a build that already started still
 requires an evidence-preserving stop protocol; unresolved builds retain their
 resources and capacity for recovery.
 
+Build Pod templates include an evidence-retention finalizer before admission.
+Cleanup requires a complete census bound to the actual Job UID, conserves the
+matching physical observations, and removes only the application's finalizer
+using each Pod's observed resource version. Unknown or changed container evidence,
+conflicts and failed acknowledgements retain the Job for retry. Other owners'
+finalizers remain untouched; accepting deletion does not establish resource absence.
+The application service account needs namespace-scoped Pod `update` permission for
+this metadata operation. Runner Pods do not receive its service account token.
+
 The artifact catalog distinguishes a build that never ran from a completed build.
 Recording non-execution atomically rejects the artifact and conserves its immutable
 receipt, including after the solver is deleted. Such a receipt cannot authorize

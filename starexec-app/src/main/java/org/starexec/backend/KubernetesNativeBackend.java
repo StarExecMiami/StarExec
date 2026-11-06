@@ -2444,6 +2444,7 @@ public class KubernetesNativeBackend implements Backend {
                 .withNewTemplate()
                     .withNewMetadata()
                         .addToLabels(labels)
+                        .withFinalizers(pendingBuildContext.get() == null ? null : List.of(KubernetesBuildPodRetention.FINALIZER))
                     .endMetadata()
                     .withNewSpec()
                         .withServiceAccountName(serviceAccountName)
@@ -3849,6 +3850,9 @@ public class KubernetesNativeBackend implements Backend {
                 if (identity != null) {
                     if (isControllerSpent(observed)) {
                         if (!conserveBuildStop(identity, observed)) return false;
+                        if (KubernetesBuildPodRetention.isRetained(observed)) {
+                            KubernetesBuildPodRetention.release(kubernetesClient, namespace, identity, observed);
+                        }
                     } else {
                         observed = KubernetesBuildUnstartedObserver.record(kubernetesClient, namespace, identity, observed);
                         recordConservedBuildStop(identity, BuildStopKind.NEVER_STARTED);
@@ -3910,8 +3914,10 @@ public class KubernetesNativeBackend implements Backend {
     private boolean conserveBuildStop(KubernetesBuildStopObserver.Identity identity, Job observed) {
         try {
             if (!isControllerSpent(observed)) return false;
-            var pods = kubernetesClient.pods().inNamespace(namespace).withLabels(Map.of(
-                    MANAGED_LABEL, "true", EXEC_ID_LABEL, Integer.toString(identity.execution().execId()))).list();
+            var pods = KubernetesBuildPodRetention.isRetained(observed)
+                    ? KubernetesBuildPodRetention.observe(kubernetesClient, namespace, identity, observed)
+                    : kubernetesClient.pods().inNamespace(namespace).withLabels(Map.of(
+                        MANAGED_LABEL, "true", EXEC_ID_LABEL, Integer.toString(identity.execution().execId()))).list();
             if (pods != null && pods.getItems() != null && pods.getItems().isEmpty()) {
                 boolean conserved = KubernetesBuildStopObserver.hasConservedReceipt(namespace, identity);
                 if (conserved) recordConservedBuildStop(identity, BuildStopKind.TERMINATED);
