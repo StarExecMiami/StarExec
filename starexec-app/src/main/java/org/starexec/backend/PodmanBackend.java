@@ -1490,21 +1490,6 @@ public class PodmanBackend implements Backend {
     /**
      * Internal method to actually submit the job script.
      */
-    private int doSubmitScript(
-        int pairId,
-        String jobName,
-        String scriptPath,
-        String workingDirectory,
-        String logPath,
-        long timestamp,
-        int attempt,
-        int execId,
-        CpuPartition selectedPartition
-    ) throws Exception {
-        return doSubmitScript(pairId, jobName, scriptPath, workingDirectory, logPath,
-                timestamp, attempt, execId, selectedPartition, null);
-    }
-
     private int doSubmitScript(int pairId, String jobName, String scriptPath, String workingDirectory,
                                String logPath, long timestamp, int attempt, int execId,
                                CpuPartition selectedPartition, BuildExecutionContext build) throws Exception {
