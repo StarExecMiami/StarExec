@@ -1,6 +1,8 @@
 // Override the global fieldset { width: 600px } rule from shared.css.
 // max-width prevents illegible ultra-wide bars on 4K/ultrawide monitors;
 // auto width + margin: 0 auto centres the content at any viewport size.
+@use "../global/mixins" as m;
+
 #statistics,
 #statsTableField,
 #graph {
@@ -30,7 +32,7 @@
 	font-style: italic;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	#statistics,
 	#statsTableField,
 	#graph {

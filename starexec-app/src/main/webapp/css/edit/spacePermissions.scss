@@ -1,8 +1,10 @@
+@use "../global/mixins" as m;
+
 .addUsersTitle {
 	margin: 70px 0 0 0;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	#wrapper #usersTable {
 		width: 100%;
 	}

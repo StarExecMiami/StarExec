@@ -1,3 +1,5 @@
+@use "../global/mixins" as m;
+
 fieldset {
   width: 75%;
   margin-bottom: 30px;
@@ -215,7 +217,7 @@ tr th {
   width: 90px;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
   #wrapper table td,
   #wrapper table th,
   #wrapper button {

@@ -5,6 +5,7 @@
 // Base explorer styles are in components/_explorer.scss
 // =============================================================================
 
+@use "../global/mixins" as m;
 @import "../global/colors";
 
 // Note: .dragClone and #exploreList base styles are now in components/_explorer.scss
@@ -166,7 +167,7 @@ div.selectWrap {
 	display: none;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	#explorer {
 		width: 100%;
 		float: none;

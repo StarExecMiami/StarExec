@@ -204,7 +204,7 @@
 // Responsive Design - Tablets (max 767px)
 // ============================================================================
 
-@media only screen and (max-width: 767px) {
+@include mobile {
     .login-container {
         min-height: auto;
         padding: 10px;

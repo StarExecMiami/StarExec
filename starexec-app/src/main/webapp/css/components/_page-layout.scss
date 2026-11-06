@@ -276,7 +276,7 @@
   align-items: start;
   margin-bottom: s.$spacing-3xl;
 
-  @include m.tablet {
+  @include m.tablet-down {
     grid-template-columns: 240px minmax(0, 1fr);
     gap: s.$spacing-xl;
   }
@@ -302,7 +302,7 @@
   border-radius: 12px;
   overflow: hidden;
 
-  @include m.desktop {
+  @include m.not-mobile {
     position: sticky;
     top: s.$spacing-lg;
   }

@@ -1,3 +1,5 @@
+@use "../global/mixins" as m;
+
 #editSpaceForm fieldset {
 	width: 600px;
 	margin: 50px auto 30px auto;	
@@ -11,7 +13,7 @@
 	text-align: left;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	#editSpaceForm table tr > *:first-child {
 		width: 33.33%;
 	}
