@@ -1,0 +1,33 @@
+# Solver build artifacts
+
+`solver_build_artifacts` records a build's original solver, owner, pair, attempt,
+source path and generation. Live foreign keys may become null when an execution
+or solver is deleted; historical identities and cleanup paths remain available.
+
+The lifecycle is `PLANNED → STAGED → VALIDATED → PUBLISHED → RETIRED`. Rejected
+artifacts retain cleanup records. Only retired or rejected artifacts can be marked
+deleted. Reserved paths and validated payload bytes cannot be replaced. The digest
+covers the exact UTF-8 manifest text, including whitespace, rather than JSONB output.
+
+`publish_solver_build_artifact` locks the job, pair, current attempt, solver and
+artifact in that order. It checks ownership, source, build generation, successful
+completion, deletion state and newer build jobs before switching the solver path
+and publication state in one database transaction. A retry of the current
+publication succeeds without replacing its timestamp.
+
+Database metadata cannot make runner-writable files immutable. Before validation,
+the application must copy a completed execution's output into storage the runner
+cannot modify, validate types, links, byte limits and content, then publish that
+distinct artifact. Catalog transactions do not provide filesystem isolation or
+automatically protect the existing path-based build helpers.
+
+Use a disposable PostgreSQL database configured through the documented
+`STAREXEC_DB_*` variables and apply the migrations before running:
+
+```sh
+mvn -B -pl starexec-app -Dtest=SolverArtifactPublicationSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+```
+
+These database tests cover ownership changes, stale jobs and attempts, rollback,
+exact manifest bytes, deletion retention and a forced concurrent build insertion.
+They do not establish deployed runner isolation.
