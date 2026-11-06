@@ -34,6 +34,8 @@ import org.junit.jupiter.api.Assertions;
 import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.Backend;
@@ -43,6 +45,7 @@ import org.starexec.backend.KubernetesJobMonitor;
 import org.starexec.backend.PodPhaseView;
 import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.SolverBuildArtifacts;
 import org.starexec.data.to.JobPair;
 import org.starexec.data.database.JobPairs.NeverStartedRetryResult;
 import org.starexec.data.database.JobPairs.PairStatusLookupState;
@@ -55,6 +58,14 @@ import org.starexec.data.to.Status.StatusCode;
  * require a live Kubernetes cluster.
  */
 public class KubernetesNativeBackendTests {
+    private MockedStatic<SolverBuildArtifacts> legacyArtifacts;
+
+    @BeforeEach void legacyArtifactRegistry() {
+        legacyArtifacts = Mockito.mockStatic(SolverBuildArtifacts.class);
+        legacyArtifacts.when(() -> SolverBuildArtifacts.findCurrent(Mockito.anyInt())).thenReturn(java.util.Optional.empty());
+    }
+
+    @AfterEach void closeArtifactRegistry() { legacyArtifacts.close(); }
 
     private static Path terminalOutput(StatusCode status) throws Exception {
         Path dir = java.nio.file.Files.createTempDirectory("k8s-terminal-evidence");

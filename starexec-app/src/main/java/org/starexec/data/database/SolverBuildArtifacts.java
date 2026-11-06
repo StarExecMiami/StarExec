@@ -88,6 +88,15 @@ public final class SolverBuildArtifacts {
         try (Connection con = Common.getConnection()) { return find(con, pairId, attemptNo); }
     }
 
+    /** The current attempt can change after this read; any mutation must fence it again. */
+    public static Optional<Artifact> findCurrent(int pairId) throws SQLException {
+        try (Connection connection = Common.getConnection()) { return findCurrent(connection, pairId); }
+    }
+
+    public static Optional<Artifact> findCurrent(Connection connection, int pairId) throws SQLException {
+        return find(connection, pairId, JobPairs.getCurrentAttemptNo(connection, pairId));
+    }
+
     /** Historical lookup remains possible after the live pair or solver is deleted. */
     public static Optional<Artifact> find(Connection con, int pairId, int attemptNo) throws SQLException {
         try (PreparedStatement ps = con.prepareStatement(

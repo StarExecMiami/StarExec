@@ -441,9 +441,9 @@ initialization and ephemeral containers. Marked build Jobs have no automatic TTL
 individual cleanup uses Foreground propagation with a resource-version precondition.
 Bulk deletion excludes these Jobs and recovers their accounting individually.
 Missing Pod observations, an unreadable API or a failed receipt write retain the
-resource and capacity. Active cancellation and initially suspended build cleanup
-still require an evidence-preserving stop protocol; they are retained for recovery
-rather than treated as successful cleanup.
+resource and capacity. Active cancellation of a build that already started still
+requires an evidence-preserving stop protocol; unresolved builds retain their
+resources and capacity for recovery.
 
 The artifact catalog distinguishes a build that never ran from a completed build.
 Recording non-execution atomically rejects the artifact and conserves its immutable
@@ -456,6 +456,14 @@ UID-bound selector and complete empty Pod census. It updates metadata using the
 observed resource version; build admission refuses the resulting marker. A
 conflict leaves the newer Job untouched. The fence alone does not record
 non-execution or authorize artifact publication.
+
+Cleanup of an initially suspended build commits its non-execution receipt and
+artifact rejection before deleting the acknowledged fenced Job version. Tracking
+remains until resource removal and accounting settlement both finish. Callbacks
+use the attempt-fenced retry routine without reading status files or recording
+scientific results. Startup resumes this lifecycle from the conserved catalog
+even if the Job is already gone. Unknown registered builds cannot use the legacy
+pending reset, which would otherwise reuse a rejected artifact.
 
 ### Architecture
 

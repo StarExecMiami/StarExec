@@ -175,7 +175,10 @@ class KubernetesBuildStopCleanupTest {
             reset.invoke(backend);
             assertEquals(0, this.<AtomicInteger>field("activeJobCount").get());
             assertTrue(this.<java.util.Set<Integer>>field("jobsHoldingSlot").isEmpty());
-            assertTrue(this.<java.util.Set<ExecutionRef>>field("conservedBuilds").isEmpty());
+            for (Object tracking : this.<java.util.Map<?, ?>>field("buildJobs").values()) {
+                var proof = tracking.getClass().getDeclaredField("stopKind"); proof.setAccessible(true);
+                assertNull(proof.get(tracking), "accounting reset must not create a stop proof");
+            }
             dao.verifyNoInteractions();
         }
     }
