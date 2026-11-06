@@ -1331,6 +1331,20 @@ public class PodmanBackend implements Backend {
         String workingDirectory,
         String logPath
     ) {
+        return submitScriptInternal(pairId, scriptPath, workingDirectory, logPath, null);
+    }
+
+    @Override
+    public boolean supportsBuildStaging() { return true; }
+
+    @Override
+    public int submitScript(int pairId, String scriptPath, String workingDirectory,
+                            String logPath, String queueName, BuildExecutionContext build) {
+        return submitScriptInternal(pairId, scriptPath, workingDirectory, logPath, build);
+    }
+
+    private int submitScriptInternal(int pairId, String scriptPath, String workingDirectory,
+                                     String logPath, BuildExecutionContext build) {
         int execIdForSlot = -1;
         boolean slotAcquired = false;
         boolean submissionAccepted = false;
@@ -1408,7 +1422,8 @@ public class PodmanBackend implements Backend {
                         timestamp,
                         attempt,
                         execIdForSlot,
-                        selectedPartition
+                        selectedPartition,
+                        build
                     );
                     submissionAccepted = true;
                     return execId;
@@ -1486,6 +1501,13 @@ public class PodmanBackend implements Backend {
         int execId,
         CpuPartition selectedPartition
     ) throws Exception {
+        return doSubmitScript(pairId, jobName, scriptPath, workingDirectory, logPath,
+                timestamp, attempt, execId, selectedPartition, null);
+    }
+
+    private int doSubmitScript(int pairId, String jobName, String scriptPath, String workingDirectory,
+                               String logPath, long timestamp, int attempt, int execId,
+                               CpuPartition selectedPartition, BuildExecutionContext build) throws Exception {
         // Capture the attempt this container belongs to (#185), after JobManager has claimed
         // the pair and so after any rerun reset. It travels as a label so a monitor that
         // finds the container later -- including after a restart -- fences its writes on it.
@@ -1505,6 +1527,8 @@ public class PodmanBackend implements Backend {
                 );
             }
         }
+
+        if (build != null) build.requireMatches(pairId, attemptNo);
 
         log.info("Submitting job: " + jobName);
         log.debug("Working directory: " + workingDirectory);
@@ -1546,6 +1570,9 @@ public class PodmanBackend implements Backend {
             workingDirectory,
             outputDir
         );
+        if (build != null) {
+            build.environment().forEach((name, value) -> envVars.add(name + "=" + value));
+        }
         Map<String, String> labels = createContainerLabels(
             pairId,
             execId,

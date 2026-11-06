@@ -583,6 +583,46 @@ public class PodmanBackendTests {
         when(mockRemoveContainerCmd.withRemoveVolumes(anyBoolean())).thenReturn(mockRemoveContainerCmd);
     }
 
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public void buildSubmissionPassesOnlyItsEncodedStagingPath() throws Exception {
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+        var build = new org.starexec.backend.BuildExecutionContext(5, 42, 1,
+            java.util.UUID.randomUUID(), tempDir.resolve("source"), tempDir.resolve("build output"));
+        try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class)) {
+            pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            int execution = backend.submitScript(42, tempDir.resolve("script.sh").toString(),
+                tempDir.toString(), tempDir.resolve("job.log").toString(), "queue", build);
+            assertTrue(execution > 0);
+            org.mockito.ArgumentCaptor<List> environment = org.mockito.ArgumentCaptor.forClass(List.class);
+            verify(mockCreateContainerCmd).withEnv(environment.capture());
+            List<String> values = environment.getValue();
+            String expected = org.starexec.backend.BuildExecutionContext.OUTPUT_VARIABLE + "="
+                + build.environment().get(org.starexec.backend.BuildExecutionContext.OUTPUT_VARIABLE);
+            assertTrue(values.contains(expected));
+            assertEquals(1, values.stream().filter(value -> value.startsWith(
+                org.starexec.backend.BuildExecutionContext.OUTPUT_VARIABLE + "=")).count());
+            assertFalse(values.toString().contains(build.token().toString()));
+        }
+    }
+
+    @Test
+    public void aSupersededBuildContextNeverCreatesAContainerAndReleasesItsSlot() throws Exception {
+        configureBackendForSubmitScript();
+        var build = new org.starexec.backend.BuildExecutionContext(5, 42, 1,
+            java.util.UUID.randomUUID(), tempDir.resolve("source"), tempDir.resolve("build output"));
+        try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class)) {
+            pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(2);
+            assertTrue(backend.submitScript(42, tempDir.resolve("script.sh").toString(),
+                tempDir.toString(), tempDir.resolve("job.log").toString(), "queue", build) < 0);
+            verify(mockDockerClient, never()).createContainerCmd(anyString());
+            verify(mockDockerClient, never()).startContainerCmd(anyString());
+            assertEquals(0, getActiveSubmissionSlots());
+            assertTrue(getExecIdMap().isEmpty());
+        }
+    }
+
     // ==================== Virtual Queue/Node Tests ====================
 
     @Test

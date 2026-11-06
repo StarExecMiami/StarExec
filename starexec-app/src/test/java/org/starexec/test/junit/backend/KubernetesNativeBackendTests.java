@@ -3345,6 +3345,35 @@ public class KubernetesNativeBackendTests {
         return backend;
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    public void theBuildOutputPathIsPresentOnlyInItsOwnPodSpec() throws Exception {
+        KubernetesNativeBackend backend = backendWithCpu("1");
+        var context = new org.starexec.backend.BuildExecutionContext(5, 42, 1,
+            java.util.UUID.randomUUID(), java.nio.file.Path.of("/data/source"),
+            java.nio.file.Path.of("/data/build output"));
+        Field field = KubernetesNativeBackend.class.getDeclaredField("pendingBuildContext");
+        field.setAccessible(true);
+        ThreadLocal<org.starexec.backend.BuildExecutionContext> pending =
+            (ThreadLocal<org.starexec.backend.BuildExecutionContext>) field.get(backend);
+        Method build = KubernetesNativeBackend.class.getDeclaredMethod("buildKubernetesJob",
+            int.class, int.class, String.class, String.class, String.class, String.class);
+        build.setAccessible(true);
+        pending.set(context);
+        Job built;
+        try {
+            built = (Job) build.invoke(backend, 42, 7, "build-job", "/script.sh", "/work", "/work/log.txt");
+        } finally { pending.remove(); }
+        var environment = built.getSpec().getTemplate().getSpec().getContainers().get(0).getEnv();
+        assertEquals(1, environment.stream().filter(value ->
+            org.starexec.backend.BuildExecutionContext.OUTPUT_VARIABLE.equals(value.getName())
+                && context.environment().get(value.getName()).equals(value.getValue())).count());
+        assertFalse(environment.toString().contains(context.token().toString()));
+        Job ordinary = (Job) build.invoke(backend, 43, 8, "ordinary-job", "/script.sh", "/work", "/work/log.txt");
+        assertFalse(ordinary.getSpec().getTemplate().getSpec().getContainers().get(0).getEnv().stream()
+            .anyMatch(value -> org.starexec.backend.BuildExecutionContext.OUTPUT_VARIABLE.equals(value.getName())));
+    }
+
     private Container buildContainer(String cpu) throws Exception {
         KubernetesNativeBackend backend = backendWithCpu(cpu);
         Method build = KubernetesNativeBackend.class.getDeclaredMethod(

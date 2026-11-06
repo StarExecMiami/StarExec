@@ -221,6 +221,7 @@ public class LocalBackend implements Backend {
         volatile Integer coreId; // The leased CPU core ID
         /** The pair's attempt at submit (#185); null for maintenance jobs. */
         volatile Integer attemptNo;
+        BuildExecutionContext buildContext;
 
         // Serialises tree kills for this job, and remembers every descendant observed so a
         // later kill can still find processes that were re-parented after an earlier one.
@@ -890,6 +891,8 @@ public class LocalBackend implements Backend {
         // Jobs write status.json instead of directly calling database functions
         // The LocalJobMonitor will read these files and update the database
         env.put("CONTAINER_MODE", "true");
+        env.remove(BuildExecutionContext.OUTPUT_VARIABLE);
+        if (job.buildContext != null) env.putAll(job.buildContext.environment());
         if (forceSandbox) {
             env.put("STAREXEC_FORCE_SANDBOX", "true");
         }
@@ -1150,6 +1153,20 @@ public class LocalBackend implements Backend {
             String scriptPath,
             String workingDirectoryPath,
             String logPath) {
+        return submitScriptInternal(pairId, scriptPath, workingDirectoryPath, logPath, null);
+    }
+
+    @Override
+    public boolean supportsBuildStaging() { return true; }
+
+    @Override
+    public synchronized int submitScript(int pairId, String scriptPath, String workingDirectoryPath,
+                                          String logPath, String queueName, BuildExecutionContext build) {
+        return submitScriptInternal(pairId, scriptPath, workingDirectoryPath, logPath, build);
+    }
+
+    private int submitScriptInternal(int pairId, String scriptPath, String workingDirectoryPath,
+                                     String logPath, BuildExecutionContext build) {
         if (executorService == null) {
             log.error("Cannot submit job: executor service is not available");
             return -1;
@@ -1208,6 +1225,8 @@ public class LocalBackend implements Backend {
                 }
             }
 
+            if (build != null) build.requireMatches(pairId, attemptNo);
+
             // Create the job
             int execId = generateExecId();
             LocalJob job = new LocalJob(
@@ -1217,6 +1236,7 @@ public class LocalBackend implements Backend {
                     workingDirectoryPath,
                     logPath);
             job.attemptNo = attemptNo;
+            job.buildContext = build;
 
             // Publish all cancellation state before a worker can observe the job. This
             // also makes a custom caller-run handler safe: a synchronously completed job

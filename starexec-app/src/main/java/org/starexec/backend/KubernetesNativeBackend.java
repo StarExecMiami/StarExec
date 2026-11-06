@@ -1943,6 +1943,28 @@ public class KubernetesNativeBackend implements Backend {
      * pod spec — which would be the original routing bug wearing a different hat.
      */
     private final ThreadLocal<String> pendingQueueName = new ThreadLocal<>();
+    private final ThreadLocal<BuildExecutionContext> pendingBuildContext = new ThreadLocal<>();
+
+    @Override
+    public boolean supportsBuildStaging() { return true; }
+
+    @Override
+    public int submitScript(int pairId, String scriptPath, String workingDirectoryPath,
+                            String logPath, String queueName, BuildExecutionContext build) {
+        pendingBuildContext.set(build);
+        try {
+            return submitScript(pairId, scriptPath, workingDirectoryPath, logPath, queueName);
+        } finally {
+            pendingBuildContext.remove();
+        }
+    }
+
+    private java.util.List<io.fabric8.kubernetes.api.model.EnvVar> buildStagingEnvironment() {
+        BuildExecutionContext build = pendingBuildContext.get();
+        if (build == null) return java.util.List.of();
+        return build.environment().entrySet().stream().map(entry ->
+                new io.fabric8.kubernetes.api.model.EnvVar(entry.getKey(), entry.getValue(), null)).toList();
+    }
 
     @Override
     public int submitScript(
@@ -2016,6 +2038,8 @@ public class KubernetesNativeBackend implements Backend {
         );
 
         try {
+            BuildExecutionContext build = pendingBuildContext.get();
+            if (build != null) build.requireMatches(pairId, attemptNo);
             Job job = buildKubernetesJob(
                 pairId,
                 execId,
@@ -2375,6 +2399,7 @@ public class KubernetesNativeBackend implements Backend {
                             .withCommand("/bin/bash")
                             .withArgs(scriptPath)
                             .withWorkingDir(workingDirectoryPath)
+                            .addAllToEnv(buildStagingEnvironment())
                             .addNewEnv()
                                 .withName("STAREXEC_PAIR_ID")
                                 .withValue(String.valueOf(pairId))
