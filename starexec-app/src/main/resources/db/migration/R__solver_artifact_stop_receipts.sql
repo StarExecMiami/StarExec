@@ -65,6 +65,8 @@ BEGIN
         OR NOT starexec.solver_build_stop_receipt_matches(_a.execution_stop_receipt_payload,
             _a.execution_stop_receipt_sha256, _a.id, _a.origin_pair_id, _a.attempt_no, _a.engine_identity)
         THEN RETURN FALSE; END IF;
+    IF _a.execution_stop_receipt_payload::jsonb #>> '{facts,disposition}' = 'never_started'
+        THEN RETURN FALSE; END IF;
     RETURN starexec.publish_solver_build_artifact(_artifact);
 END;
 $$ LANGUAGE plpgsql;

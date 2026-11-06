@@ -500,6 +500,11 @@ public class SolverArtifactPublicationSqlTest {
     }
 
     private UUID prepareExecutionOutput(boolean stopped, boolean conservedReceipt) throws Exception {
+        return prepareExecutionOutput(stopped, conservedReceipt
+                ? syntheticReceipt(Instant.parse("2026-01-01T00:00:00Z")) : null);
+    }
+
+    private UUID prepareExecutionOutput(boolean stopped, SolverBuildStopReceipt receipt) throws Exception {
         UUID token = UUID.randomUUID();
         Path raw = Files.createDirectory(files.resolve("staging"));
         Files.writeString(Files.createDirectory(raw.resolve("solver")).resolve("program"), "BUILT");
@@ -509,8 +514,7 @@ public class SolverArtifactPublicationSqlTest {
         }
         assertEquals("t", text(con, callback("bind_solver_build_execution", token)));
         if (stopped) assertEquals("t", text(con, callback("record_solver_build_execution_stop", token)));
-        if (conservedReceipt) assertTrue(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token,
-                "engine-a", syntheticReceipt(Instant.parse("2026-01-01T00:00:00Z"))));
+        if (receipt != null) assertTrue(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token, "engine-a", receipt));
         Path root = files.resolve("published");
         reservePath(con, artifact, root.resolve("solver"));
         try (PreparedStatement ps = con.prepareStatement("UPDATE solver_build_artifacts SET storage_root=? WHERE id=?")) {
@@ -542,6 +546,24 @@ public class SolverArtifactPublicationSqlTest {
         facts.addProperty("note", "Unicode \u03b1 and quoted input");
         return SolverBuildStopReceipt.observed("podman", artifact, pair, 1, "engine-a",
                 "owned-container", observed, facts);
+    }
+
+    private SolverBuildStopReceipt neverStartedReceipt(Instant observed) {
+        JsonObject facts = new JsonObject(); facts.addProperty("disposition", "never_started");
+        facts.addProperty("namespace", "starexec"); facts.addProperty("job_name", "build-job");
+        facts.addProperty("job_uid", "job-uid"); facts.addProperty("job_generation", 1);
+        facts.addProperty("job_resource_version", "18"); facts.addProperty("suspended", true);
+        facts.addProperty("fenced_resource_version", "17"); facts.addProperty("pod_count", 0);
+        return SolverBuildStopReceipt.observed("kubernetes", artifact, pair, 1, "engine-a",
+                "job-uid", observed, facts);
+    }
+
+    @Test void aNeverStartedReceiptCannotPublishAsACompletedBuild() throws Exception {
+        prepareExecutionOutput(true, neverStartedReceipt(Instant.now()));
+        assertEquals("VALIDATED", field("state"));
+        assertEquals("f", text(con, "SELECT publish_solver_build_output(" + artifact + ")"),
+                "a non-execution observation cannot authorize solver publication");
+        assertEquals("VALIDATED", field("state"));
     }
 
     private UUID boundReceiptFixture() throws Exception {
