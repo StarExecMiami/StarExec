@@ -37,6 +37,18 @@ before calling it. File permissions alone cannot isolate another process with th
 same UID. The caller must reserve the artifact path durably before copying and
 complete ownership, quota and cleanup coordination before publication.
 
+Container-mode build helpers require an execution-specific
+`STAREXEC_BUILD_OUTPUT_DIR`; generated scripts encode it with the other paths.
+They stage solver files under `solver/` and logs under `logs/`, and leave helper
+benchmark inputs for application cleanup. Missing staging is an explicit failure;
+database-connected legacy jobs retain their existing copy and cleanup behavior.
+
+The producer, script template and trusted recorder must be upgraded together.
+Persistent helper scripts must also be refreshed through the deployment process;
+updating a WAR alone does not guarantee the helper volume changed. Drain old
+generated build jobs or refuse them before dispatch. Never restore compatibility
+by allowing a container build to write directly into a published solver tree.
+
 Use a disposable PostgreSQL database configured through the documented
 `STAREXEC_DB_*` variables and apply the migrations before running:
 

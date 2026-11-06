@@ -21,6 +21,7 @@ set -euo pipefail
 
 # Idempotency flag for EXIT trap: when true, trap must not send status again (e.g. after verifyWorkspace or SIGTERM).
 STATUS_SENT=false
+STAREXEC_BUILD_STAGING_PROTOCOL=1
 
 #################################################################################
 # Container Mode Support
@@ -355,6 +356,9 @@ function decodePathArrays {
 function decodeBenchmarkName {
 	BENCH_PATH=$(base64 -d <<< "$BENCH_PATH")
 	PAIR_OUTPUT_DIRECTORY=$(base64 -d <<< "$PAIR_OUTPUT_DIRECTORY")
+	if [[ -n "${STAREXEC_BUILD_OUTPUT_DIR:-}" ]]; then
+		STAREXEC_BUILD_OUTPUT_DIR=$(base64 -d <<< "$STAREXEC_BUILD_OUTPUT_DIR")
+	fi
 }
 
 #need to make sure benchmark name is decoded in every file
@@ -1887,12 +1891,26 @@ function checkCache {
 	fi
 }
 
-# Saves a build job's output as its solver's build log, where the solver's page reads it, in
-# place of the last build's log. Best effort: a build killed before its output was saved has
-# no log to save, and the build's outcome does not depend on its log.
+# Container builds stage their log beside their output; trusted publication decides
+# which log belongs to the current solver. Legacy database-connected jobs keep their path.
+function requireBuildStaging {
+	local staged="${STAREXEC_BUILD_OUTPUT_DIR:-}"
+	local source="${SOLVER_PATH:-}"
+	if [[ "$staged" != /* || "$staged" == / || "$staged" == "$source" || "$staged" == "${source%_src}" ]]; then
+		log "container build requires an isolated output directory"
+		return 1
+	fi
+}
+
+# Best effort: a killed build may have no saved output, and log failure must not
+# misreport an otherwise successful build. It must never fall back to shared input.
 function saveBuildLog {
 	local output="$PAIR_OUTPUT_DIRECTORY/$PAIR_ID.txt"
 	local dir="$SHARED_DIR/Solvers/buildoutput/$SOLVER_ID"
+	if [[ "${CONTAINER_MODE:-false}" == "true" ]]; then
+		if ! requireBuildStaging; then return 0; fi
+		dir="$STAREXEC_BUILD_OUTPUT_DIR/logs"
+	fi
 	if [ ! -f "$output" ]; then
 		log "no build output at $output, so there is no build log to save"
 		return 0
@@ -1905,14 +1923,18 @@ function saveBuildLog {
 }
 
 # Run once a build job's starexec_build has finished without error, before anything reports
-# the pair complete: the server records the build from that status, and looks for the built
-# solver at the solver's path without "_src". Nothing here touches the database.
+# the pair complete. Container builds write only execution output; the server
+# validates and publishes it. Nothing here touches the database.
 function copySolverBack {
 	if [[ "$SOLVER_PATH" != *_src ]]; then
 		log "the solver path $SOLVER_PATH does not end in _src, so there is no built path to copy the solver to"
 		return 1
 	fi
 	NEW_SOLVER_PATH="${SOLVER_PATH%_src}"
+	if [[ "${CONTAINER_MODE:-false}" == "true" ]]; then
+		requireBuildStaging || return 1
+		NEW_SOLVER_PATH="$STAREXEC_BUILD_OUTPUT_DIR/solver"
+	fi
 
 	log "OLD solver path: $SOLVER_PATH"
 	log "NEW solver path: $NEW_SOLVER_PATH"
@@ -1928,8 +1950,10 @@ function copySolverBack {
 	safeCpAll "copying solver back" "$LOCAL_SOLVER_DIR" "$NEW_SOLVER_PATH"
 	log "solver copied back to $NEW_SOLVER_PATH"
 
-	# The server deletes the build's helper benchmark when it records the build.
-	rm -f "$BENCH_PATH" || log "could not delete the build's helper benchmark $BENCH_PATH"
+	# Container inputs are read-only; the server owns their cleanup.
+	if [[ "${CONTAINER_MODE:-false}" != "true" ]]; then
+		rm -f "$BENCH_PATH" || log "could not delete the build's helper benchmark $BENCH_PATH"
+	fi
 }
 
 # For build jobs this cleans up files used in the build script. The server records the failed
@@ -1939,9 +1963,11 @@ function cleanUpAfterKilledBuildJob {
 		log "Build job has been failed, cleaning up:"
 		saveBuildLog
 
-		BENCH_PATH_DIR=$(dirname "$BENCH_PATH")
-		log "Deleting benchmark directory: $BENCH_PATH_DIR"
-		safeRm benchmark-directory "$BENCH_PATH_DIR"
+		if [[ "${CONTAINER_MODE:-false}" != "true" ]]; then
+			BENCH_PATH_DIR=$(dirname "$BENCH_PATH")
+			log "Deleting benchmark directory: $BENCH_PATH_DIR"
+			safeRm benchmark-directory "$BENCH_PATH_DIR"
+		fi
 	fi
 }
 
