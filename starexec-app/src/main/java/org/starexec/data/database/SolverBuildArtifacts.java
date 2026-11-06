@@ -50,7 +50,8 @@ public final class SolverBuildArtifacts {
     public static boolean recordStopReceipt(int pairId, int attemptNo, UUID token, String engine,
                                             SolverBuildStopReceipt receipt) throws SQLException {
         try (Connection connection = Common.getConnection()) {
-            return recordStopReceipt(connection, pairId, attemptNo, token, engine, receipt);
+            return Common.runTransactional(connection,
+                    transaction -> recordStopReceipt(transaction, pairId, attemptNo, token, engine, receipt));
         }
     }
 

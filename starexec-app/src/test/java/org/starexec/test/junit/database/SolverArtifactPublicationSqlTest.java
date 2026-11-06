@@ -589,6 +589,19 @@ public class SolverArtifactPublicationSqlTest {
         assertEquals(receipt.payload(), field("execution_stop_receipt_payload"));
     }
 
+    @Test void anExplicitReceiptTransactionIsVisibleBeforeCleanupCanProceed() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = syntheticReceipt(Instant.now());
+        con.commit(); con.setAutoCommit(true);
+        boolean recorded = org.starexec.data.database.Common.runTransactional(con,
+                transaction -> SolverBuildArtifacts.recordStopReceipt(transaction, pair, 1, token, "engine-a", receipt));
+        assertTrue(recorded);
+        assertTrue(con.getAutoCommit());
+        try (Connection observer = connect()) {
+            assertEquals(receipt.payload(), SolverBuildArtifacts.findStopReceipt(observer, pair, 1)
+                    .orElseThrow().receipt().payload());
+        }
+    }
+
     @Test void aDifferentTokenOrEngineCannotRecordAReceipt() throws Exception {
         UUID token = boundReceiptFixture(); var receipt = syntheticReceipt(Instant.parse("2026-01-01T00:00:00Z"));
         assertFalse(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, UUID.randomUUID(), "engine-a", receipt));
