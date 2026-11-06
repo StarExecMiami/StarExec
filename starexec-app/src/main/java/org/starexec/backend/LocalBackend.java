@@ -918,7 +918,35 @@ public class LocalBackend implements Backend {
 
         // NOTE: Process is created without explicit resource limits.
         // If running untrusted code, STAREXEC_LOCAL_USE_RUNSOLVER must be enabled.
+        if (job.buildContext != null) return startAdmittedBuild(builder, job);
         return builder.start();
+    }
+
+    private Process startAdmittedBuild(ProcessBuilder builder, LocalJob job) throws IOException {
+        List<String> command = new ArrayList<>(List.of("/bin/bash", "-c",
+                "IFS= read -r admission && [ \"$admission\" = start ] && exec \"$@\"",
+                "starexec-build-admission"));
+        command.addAll(builder.command());
+        Process process = builder.command(command).start();
+        job.process = process;
+        try {
+            String started = process.info().startInstant()
+                    .orElseThrow(() -> new IOException("Local build process start identity is unavailable")).toString();
+            String identity = "local:" + job.execId + ":" + process.pid() + ":" + started;
+            if (!org.starexec.data.database.SolverBuildArtifacts.admitExecution(job.buildContext, identity)) {
+                throw new IOException("Local build execution admission was refused");
+            }
+            try (var permission = process.getOutputStream()) {
+                permission.write("start\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                permission.flush();
+            }
+            return process;
+        } catch (IOException | java.sql.SQLException | RuntimeException failure) {
+            try { process.getOutputStream().close(); }
+            catch (IOException close) { failure.addSuppressed(close); }
+            killTree(job);
+            throw new IOException("Local build could not pass execution admission", failure);
+        }
     }
 
     /**

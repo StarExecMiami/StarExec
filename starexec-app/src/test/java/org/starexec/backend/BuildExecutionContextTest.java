@@ -111,7 +111,12 @@ class BuildExecutionContextTest {
         Field runsolver = LocalBackend.class.getDeclaredField("useRunsolver");
         runsolver.setAccessible(true); runsolver.set(backend, false);
         Method start = LocalBackend.class.getDeclaredMethod("startJobProcess", type); start.setAccessible(true);
-        Process process = (Process) start.invoke(backend, job);
+        Process process;
+        try (var artifacts = Mockito.mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
+            if (build != null) artifacts.when(() -> org.starexec.data.database.SolverBuildArtifacts.admitExecution(
+                    Mockito.eq(build), Mockito.anyString())).thenReturn(true);
+            process = (Process) start.invoke(backend, job);
+        }
         boolean exited = process.waitFor(10, TimeUnit.SECONDS);
         if (!exited) process.destroyForcibly().waitFor();
         assertTrue(exited); assertEquals(0, process.exitValue(), Files.readString(output));

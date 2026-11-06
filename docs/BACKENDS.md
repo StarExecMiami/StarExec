@@ -141,6 +141,12 @@ The Local Backend executes jobs as processes on the host system. It's simple and
 
 **Not for:** Production, untrusted code, large-scale jobs
 
+Build-aware submissions hold a real process on an anonymous input pipe while the
+server records its PID and start identity and commits execution admission. The
+server then releases the existing CPU-affinity command. Refusal or an admission
+failure closes the pipe and terminates the owned process. Use this lifecycle
+control only with trusted local workloads.
+
 ### Configuration
 
 ```bash
