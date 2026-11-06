@@ -51,6 +51,11 @@ class KubernetesBuildLaunchFenceTest {
         final List<String> writePaths = new CopyOnWriteArrayList<>();
         final AtomicInteger deletes = new AtomicInteger();
         final List<String> deleteVersions = new CopyOnWriteArrayList<>();
+        final AtomicInteger podWrites = new AtomicInteger();
+        final List<String> podWriteVersions = new CopyOnWriteArrayList<>();
+        final List<String> events = new CopyOnWriteArrayList<>();
+        volatile List<Pod> podItems = List.of();
+        volatile boolean refusePodWrite;
         volatile boolean deleted;
         volatile boolean refuseDeletion;
         volatile BooleanSupplier deletionAllowed = () -> true;
@@ -66,7 +71,21 @@ class KubernetesBuildLaunchFenceTest {
             server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
             server.createContext("/", exchange -> {
                 String body; int code = 200;
-                if (exchange.getRequestMethod().equals("PUT")) {
+                if (exchange.getRequestMethod().equals("PUT") && exchange.getRequestURI().getPath().contains("/pods/")) {
+                    podWrites.incrementAndGet();
+                    Pod requested = json.unmarshal(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8), Pod.class);
+                    podWriteVersions.add(requested.getMetadata().getResourceVersion());
+                    Pod observed = podItems.stream().filter(p -> p.getMetadata().getName().equals(requested.getMetadata().getName()))
+                            .findFirst().orElseThrow();
+                    if (refusePodWrite || !observed.getMetadata().getResourceVersion().equals(requested.getMetadata().getResourceVersion())) {
+                        code = 409; body = status("Conflict", code);
+                    } else {
+                        Pod updated = new PodBuilder(requested).editMetadata().withResourceVersion(
+                                Long.toString(Long.parseLong(observed.getMetadata().getResourceVersion()) + 1)).endMetadata().build();
+                        podItems = podItems.stream().map(p -> p == observed ? updated : p).toList();
+                        events.add("pod:release"); body = json.asJson(updated);
+                    }
+                } else if (exchange.getRequestMethod().equals("PUT")) {
                     writes.incrementAndGet();
                     Job requested = json.unmarshal(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8), Job.class);
                     writeVersions.add(requested.getMetadata().getResourceVersion());
@@ -77,6 +96,7 @@ class KubernetesBuildLaunchFenceTest {
                         long generation = current.getMetadata().getGeneration() + (current.getSpec().equals(requested.getSpec()) ? 0 : 1);
                         String nextVersion = Long.toString(Long.parseLong(current.getMetadata().getResourceVersion()) + 1);
                         current = new JobBuilder(requested).editMetadata().withResourceVersion(nextVersion).withGeneration(generation).endMetadata().build();
+                        events.add("job:update");
                         Job reply = new JobBuilder(current).build();
                         if (invalidReply != null) {
                             switch (invalidReply) {
@@ -85,6 +105,8 @@ class KubernetesBuildLaunchFenceTest {
                                 case "version" -> reply.getMetadata().setResourceVersion("17");
                                 case "marker" -> reply.getMetadata().setAnnotations(Map.of());
                                 case "enabled" -> reply.getSpec().setSuspend(false);
+                                case "suspended" -> reply.getSpec().setSuspend(true);
+                                case "deadline" -> reply.getSpec().setActiveDeadlineSeconds(99L);
                                 default -> throw new AssertionError(invalidReply);
                             }
                         }
@@ -102,13 +124,16 @@ class KubernetesBuildLaunchFenceTest {
                     } else if (!deletionAllowed.getAsBoolean()) {
                         code = 412; body = status("PreconditionFailed", code);
                     } else {
-                        deleted = true; body = "{\"apiVersion\":\"v1\",\"kind\":\"Status\",\"status\":\"Success\"}";
+                        events.add("job:delete"); deleted = true;
+                        podItems = podItems.stream().filter(p -> p.getMetadata().getFinalizers() != null
+                                && !p.getMetadata().getFinalizers().isEmpty()).toList();
+                        body = "{\"apiVersion\":\"v1\",\"kind\":\"Status\",\"status\":\"Success\"}";
                     }
                 } else if (exchange.getRequestURI().getPath().endsWith("/pods")) {
                     onCensus.run();
                     int census = censuses.incrementAndGet();
                     selector = URLDecoder.decode(exchange.getRequestURI().getRawQuery(), StandardCharsets.UTF_8);
-                    PodList listing = new PodListBuilder().withNewMetadata().withResourceVersion("41").endMetadata().withItems(List.<Pod>of()).build();
+                    PodList listing = new PodListBuilder().withNewMetadata().withResourceVersion("41").endMetadata().withItems(podItems).build();
                     if (invalidCensus != null && (!lateCensus || census > 1)) {
                         switch (invalidCensus) {
                             case "version" -> listing.getMetadata().setResourceVersion(null);
