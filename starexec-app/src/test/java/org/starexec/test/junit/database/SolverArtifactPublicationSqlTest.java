@@ -4,12 +4,21 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.starexec.constants.R;
+import org.starexec.jobs.SolverArtifactTree;
 import org.starexec.test.util.DatabaseTestSupport;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.FileVisitResult;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.io.IOException;
 import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -30,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** Publication ownership and recovery against a configured disposable PostgreSQL database. */
 public class SolverArtifactPublicationSqlTest {
+    @TempDir Path files;
     private Connection con;
     private int user;
     private int solver;
@@ -74,6 +84,12 @@ public class SolverArtifactPublicationSqlTest {
                 con.close();
             }
         }
+        Files.walkFileTree(files, new SimpleFileVisitor<>() {
+            @Override public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwx------"));
+                return FileVisitResult.CONTINUE;
+            }
+        });
     }
 
     private static int build(Connection c, int solver, int user) throws SQLException {
@@ -161,6 +177,54 @@ public class SolverArtifactPublicationSqlTest {
         assertFalse(publish(con, artifact));
         assertEquals(path(newer), text(con, "SELECT path FROM solvers WHERE id=" + solver));
         assertEquals("VALIDATED", field("state"));
+    }
+
+    @Test
+    void trustedTreeCopiesAndPublicationPreserveNewerBytesAfterLateOldCompletion() throws Exception {
+        Path oldOutput = Files.createDirectory(files.resolve("old-output"));
+        Path newOutput = Files.createDirectory(files.resolve("new-output"));
+        Files.writeString(oldOutput.resolve("solver"), "OLDER");
+        Files.writeString(newOutput.resolve("solver"), "NEWER");
+        Path oldArtifact = files.resolve("old-artifact");
+        Path newArtifact = files.resolve("new-artifact");
+        reservePath(con, artifact, oldArtifact);
+        con.commit();
+
+        int newerPair = build(con, solver, user);
+        long newer = number(con, "SELECT id FROM solver_build_artifacts WHERE pair_id=" + newerPair);
+        reservePath(con, newer, newArtifact);
+        con.commit();
+        var newerSnapshot = SolverArtifactTree.copy(newOutput, newArtifact, 1000, 20);
+        validateSnapshot(con, newer, newerSnapshot);
+        assertTrue(publish(con, newer));
+        con.commit();
+
+        var olderSnapshot = SolverArtifactTree.copy(oldOutput, oldArtifact, 1000, 20);
+        validateSnapshot(con, artifact, olderSnapshot);
+        assertFalse(publish(con, artifact));
+        con.commit();
+        try (Connection observer = connect()) {
+            assertEquals(newArtifact.toString(), text(observer, "SELECT path FROM solvers WHERE id=" + solver));
+        }
+        assertEquals("NEWER", Files.readString(newArtifact.resolve("solver")));
+        SolverArtifactTree.verify(newArtifact, newerSnapshot);
+        assertEquals("OLDER", Files.readString(oldArtifact.resolve("solver")));
+    }
+
+    private static void reservePath(Connection c, long artifact, Path destination) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("UPDATE solver_build_artifacts SET state='STAGED',artifact_path=? WHERE id=?")) {
+            ps.setString(1, destination.toString()); ps.setLong(2, artifact);
+            assertEquals(1, ps.executeUpdate());
+        }
+    }
+
+    private static void validateSnapshot(Connection c, long artifact, SolverArtifactTree.Snapshot snapshot) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("UPDATE solver_build_artifacts SET state='VALIDATED',"
+                + "byte_size=?,manifest_payload=?,manifest_sha256=?,validated_at=now() WHERE id=?")) {
+            ps.setLong(1, snapshot.byteSize()); ps.setString(2, snapshot.payload());
+            ps.setString(3, snapshot.sha256()); ps.setLong(4, artifact);
+            assertEquals(1, ps.executeUpdate());
+        }
     }
 
     @Test

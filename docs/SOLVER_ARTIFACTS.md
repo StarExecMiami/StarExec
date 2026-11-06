@@ -25,6 +25,18 @@ cannot modify, validate types, links, byte limits and content, then publish that
 distinct artifact. Catalog transactions do not provide filesystem isolation or
 automatically protect the existing path-based build helpers.
 
+`SolverArtifactTree` creates an exclusive destination, enforces byte and entry
+limits, copies regular files into distinct inodes and preserves only relative
+links that resolve inside the tree. It refuses hard links, special files and
+unsafe ancestors. It normalizes permissions, forces copied files and directories
+to storage, and reads the result back against its exact manifest. A failed copy
+cleans only the destination it created.
+
+All input writers must have stopped and both trees' ancestors must be protected
+before calling it. File permissions alone cannot isolate another process with the
+same UID. The caller must reserve the artifact path durably before copying and
+complete ownership, quota and cleanup coordination before publication.
+
 Use a disposable PostgreSQL database configured through the documented
 `STAREXEC_DB_*` variables and apply the migrations before running:
 
@@ -35,3 +47,9 @@ mvn -B -pl starexec-app -Dtest=SolverArtifactPublicationSqlTest -Dskip.installno
 These database tests cover ownership changes, stale jobs and attempts, rollback,
 exact manifest bytes, deletion retention and a forced concurrent build insertion.
 They do not establish deployed runner isolation.
+
+The file-copy tests run without a database:
+
+```sh
+mvn -B -pl starexec-app -Dtest=SolverArtifactTreeTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+```
