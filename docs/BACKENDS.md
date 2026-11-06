@@ -451,6 +451,12 @@ receipt, including after the solver is deleted. Such a receipt cannot authorize
 publication or another launch. The backend must fence launch before using this
 operation; suspension or a missing Pod alone is insufficient.
 
+The initial launch fence accepts only a generation-one suspended Job with a
+UID-bound selector and complete empty Pod census. It updates metadata using the
+observed resource version; build admission refuses the resulting marker. A
+conflict leaves the newer Job untouched. The fence alone does not record
+non-execution or authorize artifact publication.
+
 ### Architecture
 
 The current implementation uses this flow:

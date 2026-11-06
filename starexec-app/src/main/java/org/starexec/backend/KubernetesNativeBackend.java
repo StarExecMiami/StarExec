@@ -2183,6 +2183,9 @@ public class KubernetesNativeBackend implements Backend {
         if (created.getSpec() == null || !Boolean.TRUE.equals(created.getSpec().getSuspend())) {
             throw new IllegalStateException("Build creation did not return a suspended Job");
         }
+        if (KubernetesBuildLaunchFence.isFenced(created)) {
+            throw new IllegalStateException("Build initial launch has been fenced");
+        }
         String version = created.getMetadata().getResourceVersion();
         if (version == null || version.isBlank()) {
             throw new IllegalStateException("Build creation did not return a resource version");

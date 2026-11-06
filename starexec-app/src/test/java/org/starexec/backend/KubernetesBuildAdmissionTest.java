@@ -118,6 +118,13 @@ class KubernetesBuildAdmissionTest {
         artifacts.verifyNoInteractions(); verify(client, never()).batch();
     }
 
+    @Test void aLaunchFencedJobCannotBeResumedByAnotherAdmissionAttempt() {
+        Job job = created();
+        job.getMetadata().setAnnotations(java.util.Map.of(KubernetesBuildLaunchFence.ANNOTATION, "16"));
+        assertThrows(IllegalStateException.class, () -> resume(job));
+        artifacts.verifyNoInteractions(); verify(client, never()).batch();
+    }
+
     @Test void anAmbiguousUpdateIsNotRetriedAgainstAnotherJobVersion() {
         RuntimeException failure = new RuntimeException("ambiguous update");
         when(locked.replace()).thenThrow(failure);
