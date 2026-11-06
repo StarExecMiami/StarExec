@@ -566,6 +566,98 @@ public class SolverArtifactPublicationSqlTest {
         assertEquals("VALIDATED", field("state"));
     }
 
+    @ParameterizedTest @ValueSource(strings = {"planned", "staged", "admitted", "detached"})
+    void nonExecutionRejectionAndItsReceiptAreAtomic(String condition) throws Exception {
+        UUID token = UUID.randomUUID(); assertEquals("t", text(con, prepare(token)));
+        if (condition.equals("staged")) reservePath(con, artifact, Path.of(path(artifact)));
+        if (condition.equals("admitted")) assertTrue(SolverBuildArtifacts.bindExecution(con, pair, 1, token, "engine-a"));
+        if (condition.equals("detached")) execute(con, "DELETE FROM solvers WHERE id=" + solver);
+        var receipt = neverStartedReceipt(Instant.now());
+        assertTrue(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, "engine-a", receipt));
+        var stored = SolverBuildArtifacts.find(con, pair, 1).orElseThrow();
+        assertEquals("REJECTED", stored.state()); assertEquals("engine-a", stored.engineIdentity());
+        assertNotNull(stored.stoppedAt());
+        assertEquals(receipt.payload(), SolverBuildArtifacts.findStopReceipt(con, pair, 1).orElseThrow().receipt().payload());
+        var build = new org.starexec.backend.BuildExecutionContext(artifact, pair, 1, token,
+                Path.of(stored.sourcePath()), Path.of(stored.stagingPath()));
+        assertFalse(SolverBuildArtifacts.admitExecution(con, build, "engine-a"));
+        if (condition.equals("detached")) execute(con, "UPDATE solver_build_artifacts SET state='VALIDATED' WHERE id=" + artifact);
+        else refused("UPDATE solver_build_artifacts SET state='VALIDATED' WHERE id=" + artifact);
+        assertEquals("REJECTED", field("state"));
+        assertEquals("f", text(con, "SELECT publish_solver_build_output(" + artifact + ")"));
+    }
+
+    @Test void nonExecutionRetryCannotReplaceItsFirstReceiptOrTimestamp() throws Exception {
+        UUID token = boundReceiptFixture(); Instant observed = Instant.now(); var receipt = neverStartedReceipt(observed);
+        assertTrue(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, "engine-a", receipt));
+        String recorded = field("execution_stop_receipt_recorded_at::text");
+        String stopped = field("execution_stopped_at::text");
+        assertTrue(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, "engine-a", receipt));
+        assertFalse(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, "engine-a",
+                neverStartedReceipt(observed.plusSeconds(1))));
+        execute(con, "UPDATE solver_build_artifacts SET state='DELETED' WHERE id=" + artifact);
+        assertTrue(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, "engine-a", receipt));
+        assertEquals("DELETED", field("state"));
+        assertEquals(recorded, field("execution_stop_receipt_recorded_at::text"));
+        assertEquals(stopped, field("execution_stopped_at::text"));
+        assertEquals(receipt.payload(), field("execution_stop_receipt_payload"));
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"token", "engine", "artifact", "attempt", "kind", "backend", "stopped", "receipt", "validated"})
+    void conflictingNonExecutionClaimsChangeNothing(String conflict) throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = neverStartedReceipt(Instant.now());
+        if (conflict.equals("stopped")) assertTrue(SolverBuildArtifacts.recordStopped(con, pair, 1, token, "engine-a"));
+        if (conflict.equals("receipt")) assertTrue(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token,
+                "engine-a", syntheticReceipt(Instant.now())));
+        if (conflict.equals("validated")) validate(con, artifact);
+        var before = SolverBuildArtifacts.find(con, pair, 1).orElseThrow();
+        var beforeReceipt = SolverBuildArtifacts.findStopReceipt(con, pair, 1);
+        JsonObject body = com.google.gson.JsonParser.parseString(receipt.payload()).getAsJsonObject();
+        if (conflict.equals("artifact")) body.addProperty("artifact_id", artifact + 1);
+        if (conflict.equals("engine")) body.addProperty("engine_identity", "engine-b");
+        if (conflict.equals("kind")) body.getAsJsonObject("facts").addProperty("disposition", "terminated");
+        if (conflict.equals("backend")) body.addProperty("backend", "podman");
+        receipt = SolverBuildStopReceipt.restored(body.toString(), receiptDigest(body.toString()));
+        assertFalse(SolverBuildArtifacts.recordUnstarted(con, pair, conflict.equals("attempt") ? 2 : 1,
+                conflict.equals("token") ? UUID.randomUUID() : token,
+                conflict.equals("engine") ? "engine-b" : "engine-a", receipt));
+        assertEquals(before, SolverBuildArtifacts.find(con, pair, 1).orElseThrow());
+        var after = SolverBuildArtifacts.findStopReceipt(con, pair, 1);
+        assertEquals(beforeReceipt.map(value -> value.receipt().payload()), after.map(value -> value.receipt().payload()));
+    }
+
+    @Test void nonExecutionIsVisibleToCleanupOnlyAfterCommit() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = neverStartedReceipt(Instant.now());
+        con.commit(); con.setAutoCommit(true);
+        boolean recorded = org.starexec.data.database.Common.runTransactional(con, transaction -> {
+            assertTrue(SolverBuildArtifacts.recordUnstarted(transaction, pair, 1, token, "engine-a", receipt));
+            try (Connection observer = connect()) {
+                assertEquals("PLANNED", SolverBuildArtifacts.find(observer, pair, 1).orElseThrow().state());
+                assertTrue(SolverBuildArtifacts.findStopReceipt(observer, pair, 1).isEmpty());
+            }
+            return true;
+        });
+        assertTrue(recorded);
+        try (Connection observer = connect()) {
+            assertEquals("REJECTED", SolverBuildArtifacts.find(observer, pair, 1).orElseThrow().state());
+            assertEquals(receipt.payload(), SolverBuildArtifacts.findStopReceipt(observer, pair, 1).orElseThrow().receipt().payload());
+        }
+    }
+
+    @Test void rollbackCannotLeaveARejectionWithoutItsNonExecutionReceipt() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = neverStartedReceipt(Instant.now());
+        con.commit(); con.setAutoCommit(true);
+        assertThrows(SQLException.class, () -> org.starexec.data.database.Common.runTransactional(con, transaction -> {
+            assertTrue(SolverBuildArtifacts.recordUnstarted(transaction, pair, 1, token, "engine-a", receipt));
+            throw new SQLException("simulated transaction failure");
+        }));
+        try (Connection observer = connect()) {
+            var retained = SolverBuildArtifacts.find(observer, pair, 1).orElseThrow();
+            assertEquals("PLANNED", retained.state()); assertNull(retained.stoppedAt());
+            assertTrue(SolverBuildArtifacts.findStopReceipt(observer, pair, 1).isEmpty());
+        }
+    }
+
     private UUID boundReceiptFixture() throws Exception {
         UUID token = UUID.randomUUID();
         assertEquals("t", text(con, prepare(token)));
