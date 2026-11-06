@@ -3380,6 +3380,9 @@ public class KubernetesNativeBackendTests {
         assertEquals("5", built.getMetadata().getLabels().get("starexec.org/build-artifact"));
         assertEquals("5", built.getSpec().getTemplate().getMetadata().getLabels().get("starexec.org/build-artifact"));
         assertNull(built.getSpec().getTtlSecondsAfterFinished(), "build evidence must survive until its stop receipt commits");
+        assertEquals(List.of("starexec.org/build-stop-evidence"),
+            built.getSpec().getTemplate().getMetadata().getFinalizers(),
+            "controller cancellation must retain build Pod observations until their receipt commits");
         assertEquals(Boolean.FALSE, built.getSpec().getTemplate().getSpec().getAutomountServiceAccountToken(),
             "runners must not inherit the application permission to resume Jobs");
         assertEquals(1, environment.stream().filter(value ->
@@ -3388,6 +3391,8 @@ public class KubernetesNativeBackendTests {
         assertFalse(environment.toString().contains(context.token().toString()));
         Job ordinary = (Job) build.invoke(backend, 43, 8, "ordinary-job", "/script.sh", "/work", "/work/log.txt");
         assertNull(ordinary.getSpec().getSuspend(), "ordinary scheduling must remain unchanged");
+        assertTrue(ordinary.getSpec().getTemplate().getMetadata().getFinalizers() == null
+            || ordinary.getSpec().getTemplate().getMetadata().getFinalizers().isEmpty());
         assertEquals(3600, ordinary.getSpec().getTtlSecondsAfterFinished());
         assertFalse(ordinary.getMetadata().getLabels().containsKey("starexec.org/build-artifact"));
         assertEquals(Boolean.FALSE, ordinary.getSpec().getTemplate().getSpec().getAutomountServiceAccountToken());
