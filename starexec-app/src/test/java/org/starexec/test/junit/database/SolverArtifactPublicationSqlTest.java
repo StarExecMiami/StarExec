@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.starexec.constants.R;
 import org.starexec.data.database.SolverBuildArtifacts;
@@ -556,6 +557,193 @@ public class SolverArtifactPublicationSqlTest {
         facts.addProperty("fenced_resource_version", "17"); facts.addProperty("pod_count", 0);
         return SolverBuildStopReceipt.observed("kubernetes", artifact, pair, 1, "engine-a",
                 "job-uid", observed, facts);
+    }
+
+    private SolverBuildStopReceipt cancelledReceipt(Instant observed) {
+        JsonObject facts = new JsonObject(); facts.addProperty("disposition", "cancelled");
+        facts.addProperty("status", "exited");
+        return SolverBuildStopReceipt.observed("podman", artifact, pair, 1, "engine-a",
+                "owned-container", observed, facts);
+    }
+
+    @Test void aCancelledReceiptCannotPublishAsACompletedBuild() throws Exception {
+        prepareExecutionOutput(true, cancelledReceipt(Instant.now()));
+        assertEquals("VALIDATED", field("state"));
+        assertEquals("f", text(con, "SELECT publish_solver_build_output(" + artifact + ")"),
+                "positive termination after cancellation cannot authorize solver publication");
+        assertEquals("VALIDATED", field("state"));
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"planned", "staged", "detached"})
+    void cancellationRejectionAndItsStopReceiptAreAtomic(String condition) throws Exception {
+        UUID token = boundReceiptFixture();
+        if (condition.equals("staged")) reservePath(con, artifact, Path.of(path(artifact)));
+        if (condition.equals("detached")) execute(con, "DELETE FROM solvers WHERE id=" + solver);
+        var receipt = cancelledReceipt(Instant.now());
+        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", receipt));
+        var stored = SolverBuildArtifacts.find(con, pair, 1).orElseThrow();
+        assertEquals("REJECTED", stored.state()); assertNotNull(stored.stoppedAt());
+        assertEquals(receipt.payload(), SolverBuildArtifacts.findStopReceipt(con, pair, 1).orElseThrow().receipt().payload());
+        var build = new org.starexec.backend.BuildExecutionContext(artifact, pair, 1, token,
+                Path.of(stored.sourcePath()), Path.of(stored.stagingPath()));
+        assertFalse(SolverBuildArtifacts.admitExecution(con, build, "engine-a"));
+        assertEquals("f", text(con, "SELECT publish_solver_build_output(" + artifact + ")"));
+        if (!condition.equals("detached")) refused("UPDATE solver_build_artifacts SET state='VALIDATED' WHERE id=" + artifact);
+        assertEquals("REJECTED", field("state"));
+    }
+
+    @Test void anExistingCancelledReceiptCanBeRejectedWithoutRewritingItsProof() throws Exception {
+        var receipt = cancelledReceipt(Instant.now());
+        UUID token = prepareExecutionOutput(true, receipt);
+        String recorded = field("execution_stop_receipt_recorded_at::text");
+        String stopped = field("execution_stopped_at::text");
+        assertEquals("VALIDATED", field("state"));
+        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", receipt));
+        assertEquals("REJECTED", field("state"));
+        assertEquals(recorded, field("execution_stop_receipt_recorded_at::text"));
+        assertEquals(stopped, field("execution_stopped_at::text"));
+        assertEquals(receipt.payload(), field("execution_stop_receipt_payload"));
+    }
+
+    @Test void cancellationReplayPreservesItsFirstBytesAndTimestampAfterDeletion() throws Exception {
+        UUID token = boundReceiptFixture(); Instant observed = Instant.now(); var receipt = cancelledReceipt(observed);
+        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", receipt));
+        String recorded = field("execution_stop_receipt_recorded_at::text");
+        String stopped = field("execution_stopped_at::text");
+        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", receipt));
+        assertFalse(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", cancelledReceipt(observed.plusSeconds(1))));
+        execute(con, "UPDATE solver_build_artifacts SET state='DELETED' WHERE id=" + artifact);
+        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", receipt));
+        assertEquals("DELETED", field("state")); assertEquals(recorded, field("execution_stop_receipt_recorded_at::text"));
+        assertEquals(stopped, field("execution_stopped_at::text")); assertEquals(receipt.payload(), field("execution_stop_receipt_payload"));
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"token", "engine", "attempt", "artifact", "ordinary", "never_started", "receipt"})
+    void conflictingCancellationCannotReplaceOwnershipOrTheFirstReceipt(String conflict) throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = cancelledReceipt(Instant.now());
+        if (conflict.equals("receipt")) assertTrue(SolverBuildArtifacts.recordStopReceipt(con, pair, 1, token, "engine-a", syntheticReceipt(Instant.now())));
+        if (conflict.equals("ordinary")) receipt = syntheticReceipt(Instant.now());
+        if (conflict.equals("never_started")) receipt = neverStartedReceipt(Instant.now());
+        if (conflict.equals("artifact")) {
+            JsonObject raw = com.google.gson.JsonParser.parseString(receipt.payload()).getAsJsonObject();
+            raw.addProperty("artifact_id", artifact + 1);
+            receipt = SolverBuildStopReceipt.restored(raw.toString(), receiptDigest(raw.toString()));
+        }
+        var before = SolverBuildArtifacts.findStopReceipt(con, pair, 1);
+        String stopped = field("execution_stopped_at::text");
+        assertFalse(SolverBuildArtifacts.recordCancelled(con, pair, conflict.equals("attempt") ? 2 : 1,
+                conflict.equals("token") ? UUID.randomUUID() : token, conflict.equals("engine") ? "engine-b" : "engine-a", receipt));
+        assertEquals("PLANNED", field("state")); assertEquals(stopped, field("execution_stopped_at::text"));
+        assertEquals(before.map(value -> value.receipt().payload()),
+                SolverBuildArtifacts.findStopReceipt(con, pair, 1).map(value -> value.receipt().payload()));
+    }
+
+    @Test void anUnboundExecutionCannotAcquireCancellationProof() throws Exception {
+        UUID token = UUID.randomUUID(); assertEquals("t", text(con, prepare(token)));
+        assertFalse(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", cancelledReceipt(Instant.now())));
+        assertEquals("PLANNED", field("state")); assertNull(field("execution_stopped_at"));
+    }
+
+    @ParameterizedTest @NullAndEmptySource @ValueSource(strings = {"{}", "[]", "null", "not JSON"})
+    void malformedCancellationCannotRejectOrStopAnArtifact(String payload) throws Exception {
+        UUID token = boundReceiptFixture();
+        assertFalse(rawCancellation(token, payload, payload == null ? null : receiptDigest(payload)));
+        assertEquals("PLANNED", field("state")); assertNull(field("execution_stopped_at"));
+        assertNull(field("execution_stop_receipt_payload"));
+    }
+
+    @Test void aCancellationDigestMismatchCannotChangeArtifactState() throws Exception {
+        UUID token = boundReceiptFixture();
+        assertFalse(rawCancellation(token, cancelledReceipt(Instant.now()).payload(), "0".repeat(64)));
+        assertEquals("PLANNED", field("state")); assertNull(field("execution_stop_receipt_payload"));
+    }
+
+    private boolean rawCancellation(UUID token, String payload, String digest) throws SQLException {
+        try (PreparedStatement statement = con.prepareStatement("SELECT record_solver_build_cancelled(?,1,?,?,?,?)")) {
+            statement.setInt(1, pair); statement.setObject(2, token); statement.setString(3, "engine-a");
+            statement.setString(4, payload); statement.setString(5, digest);
+            try (ResultSet result = statement.executeQuery()) { assertTrue(result.next()); return result.getBoolean(1); }
+        }
+    }
+
+    @Test void cancellationCannotIntroduceTheFirstReceiptAfterValidation() throws Exception {
+        UUID token = boundReceiptFixture(); validate(con, artifact);
+        assertFalse(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", cancelledReceipt(Instant.now())));
+        assertEquals("VALIDATED", field("state")); assertNull(field("execution_stop_receipt_payload"));
+    }
+
+    @Test void aPublishedArtifactCannotBeRetroactivelyReclassifiedAsCancelled() throws Exception {
+        var receipt = syntheticReceipt(Instant.now()); UUID token = prepareExecutionOutput(true, receipt);
+        assertTrue(publish(con, artifact));
+        assertFalse(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", cancelledReceipt(Instant.now())));
+        assertEquals("PUBLISHED", field("state")); assertEquals(receipt.payload(), field("execution_stop_receipt_payload"));
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"cancelled", "never_started"})
+    void nonCompletionReceiptsCannotBypassTheRuntimePublicationGuard(String disposition) throws Exception {
+        prepareExecutionOutput(true, disposition.equals("cancelled")
+                ? cancelledReceipt(Instant.now()) : neverStartedReceipt(Instant.now()));
+        refused("SELECT publish_solver_build_artifact(" + artifact + ")");
+        assertEquals("VALIDATED", field("state"));
+        assertEquals("/solver/source_src", text(con, "SELECT path FROM solvers WHERE id=" + solver));
+    }
+
+    @Test void cancellationRejectionAndReceiptBecomeVisibleTogetherAtCommit() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = cancelledReceipt(Instant.now()); con.commit();
+        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", receipt));
+        try (Connection observer = connect()) {
+            assertEquals("PLANNED", SolverBuildArtifacts.find(observer, pair, 1).orElseThrow().state());
+            assertTrue(SolverBuildArtifacts.findStopReceipt(observer, pair, 1).isEmpty());
+            con.commit();
+            var stored = SolverBuildArtifacts.find(observer, pair, 1).orElseThrow();
+            assertEquals("REJECTED", stored.state()); assertNotNull(stored.stoppedAt());
+            assertEquals(receipt.payload(), SolverBuildArtifacts.findStopReceipt(observer, pair, 1).orElseThrow().receipt().payload());
+        }
+    }
+
+    @Test void cancellationRollbackCannotLeaveHalfARejection() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = cancelledReceipt(Instant.now());
+        con.commit(); con.setAutoCommit(true);
+        assertThrows(SQLException.class, () -> org.starexec.data.database.Common.runTransactional(con, transaction -> {
+            assertTrue(SolverBuildArtifacts.recordCancelled(transaction, pair, 1, token, "engine-a", receipt));
+            throw new SQLException("synthetic rollback after cancellation proof");
+        }));
+        try (Connection observer = connect()) {
+            var stored = SolverBuildArtifacts.find(observer, pair, 1).orElseThrow();
+            assertEquals("PLANNED", stored.state()); assertNull(stored.stoppedAt());
+            assertTrue(SolverBuildArtifacts.findStopReceipt(observer, pair, 1).isEmpty());
+        }
+    }
+
+    @Test void aStandaloneCancellationReceiptCommitsBeforeAcknowledgingCleanup() throws Exception {
+        UUID token = boundReceiptFixture(); var receipt = cancelledReceipt(Instant.now()); con.commit();
+        assertTrue(SolverBuildArtifacts.recordCancelled(pair, 1, token, "engine-a", receipt));
+        try (Connection observer = connect()) {
+            var stored = SolverBuildArtifacts.find(observer, pair, 1).orElseThrow();
+            assertEquals("REJECTED", stored.state()); assertNotNull(stored.stoppedAt());
+            assertEquals(receipt.payload(), SolverBuildArtifacts.findStopReceipt(observer, pair, 1).orElseThrow().receipt().payload());
+        }
+    }
+
+    @Test void concurrentCancellationObservationsCannotReplaceTheCommittedProof() throws Exception {
+        UUID token = boundReceiptFixture(); Instant observed = Instant.now();
+        var first = cancelledReceipt(observed); var other = cancelledReceipt(observed.plusSeconds(1));
+        con.commit();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Connection competing = connect(); Connection observer = connect()) {
+            int pid = (int) number(competing, "SELECT pg_backend_pid()");
+            assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", first));
+            Future<Boolean> result = executor.submit(() -> SolverBuildArtifacts.recordCancelled(competing, pair, 1, token, "engine-a", other));
+            try {
+                await().atMost(5, TimeUnit.SECONDS).until(() -> "t".equals(text(observer,
+                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=" + pid + " AND wait_event_type='Lock')")));
+            } finally { con.commit(); }
+            assertFalse(result.get(5, TimeUnit.SECONDS));
+            assertEquals(first.payload(), SolverBuildArtifacts.findStopReceipt(observer, pair, 1).orElseThrow().receipt().payload());
+            assertEquals("REJECTED", SolverBuildArtifacts.find(observer, pair, 1).orElseThrow().state());
+        } finally {
+            executor.shutdownNow(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+        }
     }
 
     @Test void aNeverStartedReceiptCannotPublishAsACompletedBuild() throws Exception {
