@@ -1642,8 +1642,12 @@ public abstract class JobManager {
 		stage.setSolver(s);
 		stage.setConfiguration(c);
 		// SolverBuildRecorder finds the build job's helper benchmark by this name.
-		int bench = UploadBenchmark.addBenchmarkFromText("dummy benchmark", R.SOLVER_BUILD_SCRIPT, s.getUserId(),
+		Integer bench = UploadBenchmark.addBenchmarkFromText("dummy benchmark", R.SOLVER_BUILD_SCRIPT, s.getUserId(),
 				R.NO_TYPE_PROC_ID, true);
+		if (bench == null || bench <= 0) {
+			Solvers.setSolverBuildStatus(s, SolverBuildStatusCode.BUILD_FAILED.getVal());
+			return -1;
+		}
 		pair.addStage(stage);
 		pair.setBench(Benchmarks.get(bench)); // This hard coded value should be changed before feature is used.
 		pair.setSpace(Spaces.get(spaceId));
