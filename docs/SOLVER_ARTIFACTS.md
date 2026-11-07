@@ -266,6 +266,10 @@ dispatcher integration remain prerequisites for activation. Byte and entry limit
 logical content rather than filesystem block, inode or metadata consumption;
 database accounting alone cannot enforce a storage provider's physical capacity.
 
+The dedicated-filesystem observer described in [Bounded execution storage](EXECUTION_STORAGE.md)
+checks actual mount identity and finite data-block/inode capacity. It does not
+replace the durable resource lease or authorize an execution on its own.
+
 Use a disposable PostgreSQL database configured through the documented
 `STAREXEC_DB_*` variables and apply the migrations before running:
 
