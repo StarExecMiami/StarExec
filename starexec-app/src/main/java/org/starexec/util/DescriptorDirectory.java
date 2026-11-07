@@ -3,14 +3,21 @@ package org.starexec.util;
 import java.io.IOException;
 import java.io.Writer;
 import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributeView;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.SecureDirectoryStream;
 import java.nio.file.StandardOpenOption;
 import java.util.Set;
@@ -22,10 +29,12 @@ import java.util.Set;
 public final class DescriptorDirectory implements AutoCloseable {
     private final SecureDirectoryStream<Path> directory;
     private final FileSystem fileSystem;
+    private final Path path;
 
-    private DescriptorDirectory(SecureDirectoryStream<Path> directory, FileSystem fileSystem) {
+    private DescriptorDirectory(SecureDirectoryStream<Path> directory, FileSystem fileSystem, Path path) {
         this.directory = directory;
         this.fileSystem = fileSystem;
+        this.path = path;
     }
 
     /**
@@ -54,7 +63,7 @@ public final class DescriptorDirectory implements AutoCloseable {
                 opened = next;
                 current = next;
             }
-            return new DescriptorDirectory(current, absolute.getFileSystem());
+            return new DescriptorDirectory(current, absolute.getFileSystem(), absolute);
         } catch (IOException | RuntimeException e) {
             try {
                 opened.close();
@@ -81,6 +90,54 @@ public final class DescriptorDirectory implements AutoCloseable {
                 Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS));
              Writer writer = Channels.newWriter(channel, StandardCharsets.UTF_8)) {
             writer.write(contents == null ? "" : contents);
+        }
+    }
+
+    /** Removes one child tree without following links or changing linked file modes. */
+    public void deleteTree(String name, int maxEntries) throws IOException {
+        if (name == null || name.isEmpty() || name.equals(".") || name.equals("..")
+                || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || maxEntries < 1) {
+            throw new IOException("Cleanup requires one child name and a positive entry limit");
+        }
+        Path child = fileSystem.getPath(name);
+        try {
+            if (!directory.getFileAttributeView(child, BasicFileAttributeView.class,
+                    LinkOption.NOFOLLOW_LINKS).readAttributes().isDirectory()) {
+                throw new IOException("Registered cleanup root is not a directory");
+            }
+        } catch (NoSuchFileException absent) { return; }
+        remove(directory, child, new int[]{maxEntries}, 0);
+        try {
+            directory.getFileAttributeView(child, BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).readAttributes();
+            throw new IOException("Registered cleanup tree remains present");
+        } catch (NoSuchFileException absent) { }
+    }
+
+    private static void remove(SecureDirectoryStream<Path> parent, Path name, int[] remaining, int depth)
+            throws IOException {
+        if (--remaining[0] < 0 || depth > 256) throw new IOException("Cleanup tree exceeds its traversal limit");
+        var attributes = parent.getFileAttributeView(name, BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).readAttributes();
+        if (!attributes.isDirectory()) {
+            parent.deleteFile(name);
+            return;
+        }
+        try (SecureDirectoryStream<Path> child = parent.newDirectoryStream(name, LinkOption.NOFOLLOW_LINKS)) {
+            var permissions = child.getFileAttributeView(PosixFileAttributeView.class);
+            if (permissions == null) throw new IOException("Cleanup requires descriptor-bound POSIX permissions");
+            permissions.setPermissions(PosixFilePermissions.fromString("rwx------"));
+            for (Path entry : child) remove(child, entry.getFileName(), remaining, depth + 1);
+            parent.deleteDirectory(name);
+        }
+    }
+
+    /** Forces namespace changes only while the named parent still matches this open directory. */
+    public void force() throws IOException {
+        Object identity = directory.getFileAttributeView(BasicFileAttributeView.class).readAttributes().fileKey();
+        if (identity == null || !identity.equals(Files.readAttributes(path, BasicFileAttributes.class,
+                LinkOption.NOFOLLOW_LINKS).fileKey())) throw new IOException("Cleanup parent identity is unavailable or changed");
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) { channel.force(true); }
+        if (!identity.equals(Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).fileKey())) {
+            throw new IOException("Cleanup parent changed before storage was forced");
         }
     }
 

@@ -27,6 +27,37 @@ public final class SolverBuildArtifacts {
 
     public record OutputManifest(String payload, String sha256, long byteSize) { }
 
+    public record Cleanup(long artifactId, int pairId, int attemptNo, UUID executionToken,
+                          String sourcePath, String stagingPath, String storageRoot, UUID token,
+                          String removedSourcePath, long solverBytes, Instant finishedAt) { }
+
+    /** The caller commits this durable claim before removing any registered files. */
+    public static boolean claimCleanup(Connection connection, long artifact, UUID token) throws SQLException {
+        return call(connection, "SELECT starexec.claim_solver_build_cleanup(?,?)", artifact, token);
+    }
+
+    public static Optional<Cleanup> findCleanup(Connection connection, long artifact) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT origin_pair_id,attempt_no,execution_token,source_path,staging_path,storage_root,"
+                + "cleanup_token,cleanup_source_path,cleanup_solver_bytes,cleanup_finished_at"
+                + " FROM starexec.solver_build_artifacts WHERE id=?")) {
+            statement.setLong(1, artifact);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return Optional.empty();
+                Timestamp finished = result.getTimestamp(10);
+                return Optional.of(new Cleanup(artifact, result.getInt(1), result.getInt(2),
+                        result.getObject(3, UUID.class), result.getString(4), result.getString(5), result.getString(6),
+                        result.getObject(7, UUID.class), result.getString(8), result.getLong(9),
+                        finished == null ? null : finished.toInstant()));
+            }
+        }
+    }
+
+    /** Call only after every captured filesystem path is positively confirmed absent. */
+    public static boolean finishCleanup(Connection connection, long artifact, UUID token) throws SQLException {
+        return call(connection, "SELECT starexec.finish_solver_build_cleanup(?,?)", artifact, token);
+    }
+
     /** Reserves immutable output without authorizing publication or replacing an earlier destination. */
     public static boolean reserveOutput(Connection connection, BuildExecutionContext build, String engine,
                                          String receiptDigest, Path root) throws SQLException {

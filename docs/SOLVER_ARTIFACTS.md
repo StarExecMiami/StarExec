@@ -141,6 +141,33 @@ Job cleanup uses the directory captured before that commit rather than resolving
 a different migration-mode location after its database identity is gone.
 Ordinary legacy users can still delete their own historical stages. Registered
 managed physical purge remains required before retained accounts can be removed.
+`SolverBuildCleanup` provides that registered-tree purge. It commits a cleanup
+identity before filesystem changes, rechecks stopped execution and live references,
+and holds the captured identities through removal and settlement. Current applied
+output remains protected until its solver is deleted and its stage references are
+gone. Cleanup of the last retained build can include the deleted solver's original
+source, provided no other solver, build or benchmark requires those paths.
+
+The caller supplies trusted staging, output and source parents. Staging/output
+names must exactly match their execution and artifact reservations. Descriptor-
+relative traversal unlinks links themselves and never chmods linked regular files;
+unsafe ancestors, changed parents, unsupported directory forcing and traversal
+limits preserve the claim for recovery. Each removed root's parent is forced to
+storage and absence is checked before the captured existing solver charge is
+released. A filesystem or database-commit failure retains the same cleanup token
+and charge for retry. Completed cleanup never adopts a reappeared directory.
+
+New stage references take a solver identity lock and refuse input with a pending
+cleanup or a completed managed source removal. Existing historical stage snapshots
+are preserved. Cancellation and non-execution receipts can authorize cleanup but
+never solver publication. Local cleanup remains refused without complete physical
+termination proof. Engine identity and exact receipt bytes survive settlement.
+
+This operation settles an existing solver charge; reservation/accounting for every
+new staging and immutable-output byte, helper recovery, mounted isolation and the
+runtime integration remain required before enabling the complete lifecycle. The
+storage provider must support the directory-forcing semantics being relied on;
+these component tests do not establish power-loss behavior on a deployed volume.
 Orphan sweeps reuse that deletion protocol and retire metadata only after charge
 settlement and reference checks. Explicit permanent removal also refuses retained
 or unsettled storage. Permission repair skips symbolic links and shared file
