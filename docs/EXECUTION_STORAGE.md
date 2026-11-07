@@ -108,6 +108,21 @@ serialized flags alone do not establish those properties. Runtime device files
 must be distinguished from allocatable storage using their actual file type and
 device identity, without exempting unknown writable mounts.
 
+The jobscript recognizes the private layout only for a matching container build.
+It validates all fixed paths before loading any control file, selects the mounted
+controls and translates the helper and monitor paths before base64 decoding.
+The helper must freshly declare the private-path capability; an inherited
+environment variable cannot satisfy that check. One exported source replaces the
+shared source path. Extra stages, processors, benchmark inputs, pipeline arguments
+or benchmark-creating output options are refused rather than silently discarded.
+
+Private builds invoke their own `starexec_build`, bypassing the legacy image-run
+shims. Their final shell cleanup leaves read-only controls, output and workspace
+for trusted reclamation after positive termination. Ordinary container jobs and
+database-connected legacy jobs retain their existing initialization and cleanup.
+The host monitor must resolve the registered host output directory independently
+of the runner's private path; backend admission and that wiring remain required.
+
 The leased admission operation reobserves the filesystem before committing the
 lease and existing engine-admission checks together. Resource registration cannot
 redirect an existing filesystem key, reuse an existing root under a second key or
@@ -175,6 +190,16 @@ unchanged input bytes, authority revocation, permission/identity changes and saf
 directory retries. They also preserve strict immutable-output verification.
 Database authority and physical capacity are synthetic in these component tests;
 they do not verify dispatcher activation or a deployed application flow.
+
+For the private bootstrap and existing jobscript behavior, run:
+
+```sh
+mvn -B -pl starexec-app -Dtest=JobScriptPrivateBuildPathsTest,JobScriptBuildAdmissionTest,SolverBuildCopyBackTest,SolverBuildStatusOrderTest,JobscriptDecodePathArraysTest,ExecutionWorkspaceIsolationTest,AdjustForK8sStageIndexTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+```
+
+These checks execute Bash with disposable files, including missing or redirected
+paths, unsupported stage inputs, zero benchmark inputs, unchanged legacy behavior
+and retained private controls. They do not attest an application deployment.
 
 After applying the migrations to a disposable PostgreSQL database configured
 through `STAREXEC_DB_*`, run:

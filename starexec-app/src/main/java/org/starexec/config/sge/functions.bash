@@ -22,6 +22,7 @@ set -euo pipefail
 # Idempotency flag for EXIT trap: when true, trap must not send status again (e.g. after verifyWorkspace or SIGTERM).
 STATUS_SENT=false
 STAREXEC_BUILD_STAGING_PROTOCOL=1
+STAREXEC_BUILD_PRIVATE_PROTOCOL=1
 
 #################################################################################
 # Container Mode Support
@@ -353,6 +354,23 @@ function decodePathArrays {
 	done
 }
 
+# One build artifact has one source and helper; refuse inputs this layout cannot expose.
+function configurePrivateBuildStagePaths {
+	if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" != "1" || "${CONTAINER_MODE:-false}" != "true" \
+		|| "${BUILD_JOB:-false}" != "true" || "${STAREXEC_BUILD_SOURCE_DIR:-}" != /starexec/inputs/source_src \
+		|| "$NUM_STAGES" != 1 || "$NUM_BENCH_INPUTS" != 0 || "$HAS_DEPENDS" != 0 \
+		|| ${#SOLVER_IDS[@]} != 1 || ${#SOLVER_PATHS[@]} != 1 \
+		|| ${#PRE_PROCESSOR_PATHS[@]} != 1 || ${#POST_PROCESSOR_PATHS[@]} != 1 \
+		|| ${#STDOUT_SAVE_OPTIONS[@]} != 1 || ${#EXTRA_SAVE_OPTIONS[@]} != 1 \
+		|| -n "${PRIMARY_PREPROCESSOR_PATH:-}" || -n "${PRE_PROCESSOR_PATHS[0]:-}" \
+		|| -n "${POST_PROCESSOR_PATHS[0]:-}" \
+		|| ! "${STDOUT_SAVE_OPTIONS[0]:-}" =~ ^[12]$ || ! "${EXTRA_SAVE_OPTIONS[0]:-}" =~ ^[12]$ ]]; then
+		printf '%s\n' 'Private build stage requires exactly its exported source and helper' >&2
+		return 1
+	fi
+	SOLVER_PATHS[0]=$(printf '%s' "$STAREXEC_BUILD_SOURCE_DIR" | base64 -w0)
+}
+
 function decodeBenchmarkName {
 	BENCH_PATH=$(base64 -d <<< "$BENCH_PATH")
 	PAIR_OUTPUT_DIRECTORY=$(base64 -d <<< "$PAIR_OUTPUT_DIRECTORY")
@@ -393,6 +411,7 @@ JOB_OUT_DIR="$SHARED_DIR/joboutput"
 # In order for this to work, some global variables need to be changed.#
 #######################################################################
 function adjustForK8s {
+    if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" ]]; then return 0; fi
     log "adjustForK8s called"
     # A local iterator, deliberately not the global STAGE_INDEX the stage loop owns.
     # This function runs before any stage starts, and `for STAGE_INDEX in ...` left the
@@ -1091,6 +1110,10 @@ function copyOutputIncrementally {
 # $1 0 if we are done with the job and 1 otherwise. Used to decide whether to clean up scripts and locks
 # $2 The name of the user that executed this job. Used to clear out the /tmp directory. Only used if we are done with the job
 function cleanWorkspace {
+	if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" && "$1" == 0 ]]; then
+		log "private build cleanup is reserved for trusted stopped-resource settlement"
+		return 0
+	fi
 	log "cleaning execution host workspace..."
 
 	# Create the working directory first if it doesn't exist
@@ -2319,6 +2342,7 @@ function exitJobscript {
 # Every command is therefore failure-tolerant: losing a directory is an operational problem,
 # and misreporting a pair is a scientific one.
 function removePrivateWorkspace {
+	if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" ]]; then return 0; fi
 	if ! isContainerMode || [ "${STAREXEC_FORCE_SANDBOX:-false}" = "true" ]; then
 		# The non-container sandboxes are a fixed pair of directories governed by the lock
 		# protocol and are meant to persist.

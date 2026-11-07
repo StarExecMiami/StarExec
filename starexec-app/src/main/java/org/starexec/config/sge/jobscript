@@ -82,8 +82,33 @@ fi
 # Path to Olivier Roussel's runSolver
 export RUNSOLVER_PATH='$$RUNSOLVER_PATH$$'
 
+# Private builds use only the provider's fixed input, control and reserved write paths.
+if [ -n "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" ]; then
+	if [[ "$STAREXEC_BUILD_PRIVATE_MOUNTS" != "1" || "$CONTAINER_MODE" != "true" || "$BUILD_JOB" != "true" ]]; then
+		printf '%s\n' 'Private build paths require the matching container build protocol' >&2
+		exit 1
+	fi
+	if [[ "${STAREXEC_BUILD_SOURCE_DIR:-}" != /starexec/inputs/source_src \
+		|| "${STAREXEC_BUILD_HELPER_FILE:-}" != /starexec/inputs/starexec_build \
+		|| "${STAREXEC_BUILD_CONTROL_DIR:-}" != /starexec/control \
+		|| "${STAREXEC_BUILD_WORK_DIR:-}" != /starexec/execution/work \
+		|| "${STAREXEC_OUTPUT_DIR:-}" != /starexec/execution/monitor \
+		|| "${HOME:-}" != /starexec/execution/home || "${TMPDIR:-}" != /tmp \
+		|| "${STAREXEC_BUILD_OUTPUT_DIR:-}" != "$(printf '%s' /starexec/execution | base64 -w0)" ]]; then
+		printf '%s\n' 'Private build paths differ from the reserved provider layout' >&2
+		exit 1
+	fi
+	SCRIPT_DIR="$STAREXEC_BUILD_CONTROL_DIR"
+	SCRIPT_PATH="$SCRIPT_DIR/jobscript"
+	SHARED_DIR=/starexec/execution
+	WORKING_DIR_BASE="$STAREXEC_BUILD_WORK_DIR"
+	BENCH_PATH=$(printf '%s' "$STAREXEC_BUILD_HELPER_FILE" | base64 -w0)
+	PAIR_OUTPUT_DIRECTORY=$(printf '%s' "$STAREXEC_OUTPUT_DIR" | base64 -w0)
+fi
+
 # Include common functions and status codes. The helper must declare its own capability.
 unset STAREXEC_BUILD_STAGING_PROTOCOL
+unset STAREXEC_BUILD_PRIVATE_PROTOCOL
 . "$SCRIPT_DIR/functions.bash"
 
 if [ "$CONTAINER_MODE" = "true" ] && [ "$BUILD_JOB" = "true" ]; then
@@ -91,6 +116,10 @@ if [ "$CONTAINER_MODE" = "true" ] && [ "$BUILD_JOB" = "true" ]; then
 		printf '%s\n' 'Build helper and isolated output protocol are incompatible' >&2
 		exit 1
 	fi
+fi
+if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" && "${STAREXEC_BUILD_PRIVATE_PROTOCOL:-}" != "1" ]]; then
+	printf '%s\n' 'Build helper and private path protocol are incompatible' >&2
+	exit 1
 fi
 
 
@@ -157,6 +186,9 @@ NUM_STAGES=${#STAGE_NUMBERS[@]}
 # stuck in ENQUEUED status forever.
 NUM_BENCH_INPUTS=$(( ${#BENCH_INPUT_PATHS[@]} - 1 )) # we terminate the array with an empty string, so the number is the size-1
 
+if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" ]]; then
+	configurePrivateBuildStagePaths
+fi
 
 
 #==========================================================================
@@ -218,6 +250,11 @@ log "there are this many benchmark inputs $NUM_BENCH_INPUTS"
 decodePathArrays
 
 $$STAGE_DEPENDENCY_ARRAY$$
+if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" \
+	&& ( ${#STAGE_DEPENDENCIES[@]} != 1 || -n "${STAGE_DEPENDENCIES[0]:-}" ) ]]; then
+	printf '%s\n' 'Private build stage cannot consume unexported pipeline dependencies' >&2
+	exit 1
+fi
 fillDependArrays
 
 if ! checkIfBenchmarkDependenciesExists; then
@@ -477,7 +514,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	fi		# If $WORKING_DIR/solver/bin/run_image.py exists, we use it instead of runsolver.
 		# Also, in this case, we're using the local backend, so this jobscript is actually running on the
 		# head node of starexec. (this run_image without k8s is likely buggy and should be considered deprecated.)
-		if [ -f "$WORKING_DIR/solver/bin/run_image.py" ]; then
+		if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" != "1" ]] && [ -f "$WORKING_DIR/solver/bin/run_image.py" ]; then
 			# Run a theorem proving image: https://www.eprover.org/EVENTS/IWIL-2024/IWIL-24-Preproceedings.pdf
 			# get prover tag:
 			PROVER=$(cat "$WORKING_DIR/solver/bin/prover.txt")
@@ -500,7 +537,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 			log "Running run_image.py: $RUNIMAGE_CMD"
 			eval "$RUNIMAGE_CMD"
 
-		elif [ -f "$WORKING_DIR/solver/bin/run_image_k8s.py" ]; then
+		elif [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" != "1" ]] && [ -f "$WORKING_DIR/solver/bin/run_image_k8s.py" ]; then
 			# Run a theorem proving image: https://www.eprover.org/EVENTS/IWIL-2024/IWIL-24-Preproceedings.pdf
 			# in kubernettes instead of podman remote. Assumes kubectl is working in the container.
 
