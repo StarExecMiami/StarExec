@@ -123,6 +123,21 @@ database-connected legacy jobs retain their existing initialization and cleanup.
 The host monitor must resolve the registered host output directory independently
 of the runner's private path; backend admission and that wiring remain required.
 
+`BuildExecutionHold` supplies a bounded trusted launcher for provider attestation.
+It waits before invoking the jobscript, accepts only an explicit `USR2` release,
+and refuses to treat `CONT` or `USR1` as authorization. Expiration and termination
+signals exit without running the payload. Protected Bash startup prevents inherited
+startup files or shell functions from executing before the wait or the jobscript.
+Providers must fix the stop signal to `SIGTERM` and disable automatic restarts.
+
+The readiness message only indicates that the signal handlers are installed.
+Before release, the controller must verify the exact live provider resource,
+effective kernel mounts, user mappings, namespaces and resource limits, then
+conserve current-attempt admission. Neither readiness text nor configured flags
+can substitute for that observation. An ambiguous start or release response must
+retain the same resource for reconciliation; never create or restart a replacement.
+The launcher alone does not connect these checks to backend dispatch or recovery.
+
 The leased admission operation reobserves the filesystem before committing the
 lease and existing engine-admission checks together. Resource registration cannot
 redirect an existing filesystem key, reuse an existing root under a second key or
@@ -201,6 +216,16 @@ These checks execute Bash with disposable files, including missing or redirected
 paths, unsupported stage inputs, zero benchmark inputs, unchanged legacy behavior
 and retained private controls. They do not attest an application deployment.
 
+The trusted launch wait can be checked independently:
+
+```sh
+mvn -B -pl starexec-app -Dtest=BuildExecutionHoldTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+```
+
+Those process tests cover early execution, explicit release, unrelated signals,
+expiration, cancellation and inherited startup-file injection. They do not verify
+database admission or the physical capacity of a deployed provider resource.
+
 After applying the migrations to a disposable PostgreSQL database configured
 through `STAREXEC_DB_*`, run:
 
@@ -233,6 +258,10 @@ tests.
 
 - [Podman read-only temporary mounts](https://docs.podman.io/en/v5.7.0/markdown/podman-run.1.html#read-only-tmpfs)
   describe writable runtime scratch defaults that must be overridden or bounded.
+- [Linux PID namespaces](https://man7.org/linux/man-pages/man7/pid_namespaces.7.html)
+  describe init-process signal handling and termination of its namespace.
+- [Linux signal dispositions](https://man7.org/linux/man-pages/man7/signal.7.html)
+  describe signal handlers and their reset on execution of another program.
 - [Linux ext4 superblock fields](https://docs.kernel.org/filesystems/ext4/super.html)
   describe total blocks and inodes.
 - [Linux mount information](https://man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html)
