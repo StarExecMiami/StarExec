@@ -497,6 +497,14 @@ class SolverBuildPublicationSqlTest {
         unchangedSource();
     }
 
+    @Test void unknownBuildStatusCannotPublishEvenWithAConservedStop() throws Exception {
+        stopped("podman", null);
+        execute(connection, "UPDATE starexec.solvers SET build_status=NULL WHERE id=?", solver);
+        assertFalse(publish()); assertEquals("VALIDATED", state());
+        assertEquals(source.toString(), text(connection, "SELECT path FROM starexec.solvers WHERE id=?", solver));
+        unchangedSource();
+    }
+
     @Test void aDifferentTokenCannotReserveOrPublishThisAttempt() throws Exception {
         stopped("podman", null);
         var other = new BuildExecutionContext(build.artifactId(), pair, 1, UUID.randomUUID(), source, build.staging());

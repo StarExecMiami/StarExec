@@ -309,6 +309,17 @@ public class SolverArtifactPublicationSqlTest {
         assertEquals(published, field("published_at::text"));
     }
 
+    @ParameterizedTest @ValueSource(strings = {"pair", "solver"})
+    void unknownStatusesCannotAuthorizePublication(String condition) throws Exception {
+        validate(con, artifact);
+        if (condition.equals("pair")) execute(con, "UPDATE job_pairs SET status_code=NULL WHERE id=" + pair);
+        else execute(con, "UPDATE solvers SET build_status=NULL WHERE id=" + solver);
+        assertFalse(publish(con, artifact));
+        assertEquals("VALIDATED", field("state"));
+        assertNull(field("published_at::text"));
+        assertEquals("/solver/source_src", text(con, "SELECT path FROM solvers WHERE id=" + solver));
+    }
+
     @Test
     void anOlderBuildCannotReplaceTheNewerArtifact() throws Exception {
         validate(con, artifact);
