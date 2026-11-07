@@ -35,6 +35,15 @@ public final class SolverBuildPublication {
         return conserve(connection, build, parent, maxBytes, maxEntries, true);
     }
 
+    /** Read back the conserved copy before its stopped execution staging is discarded. */
+    static void verifyConservedOutput(Path root, SolverBuildArtifacts.OutputManifest manifest,
+                                      boolean failed, int maxEntries) throws IOException {
+        SolverArtifactTree.Snapshot snapshot = restore(manifest);
+        if (snapshot.entryCount() > maxEntries) throw new IOException("Conserved output exceeds its verification entry limit");
+        if (failed) { SolverArtifactTree.verifyFailureLogs(root,snapshot); requireFailureLayout(snapshot); }
+        else { SolverArtifactTree.verify(root,snapshot); requireLayout(root,snapshot); }
+    }
+
     private static boolean conserve(Connection connection, BuildExecutionContext build, Path parent,
                                     long maxBytes, int maxEntries, boolean failed) throws SQLException, IOException {
         if (!connection.getAutoCommit()) throw new SQLException("Output reservation must commit before copying");

@@ -6,6 +6,11 @@ BEGIN
         OR left(_root,1)<>'/' OR _root='/' OR _root ~ '(^|/)[.]{1,2}(/|$)'
         OR strpos(_root,'//')>0 OR right(_root,1)='/' OR _identity IS NULL OR btrim(_identity)=''
         OR _bytes IS NULL OR _bytes<=0 OR _inodes IS NULL OR _inodes<=0 THEN RETURN FALSE; END IF;
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_resources
+        WHERE resource_key=_key AND root_path=_root AND observed_identity=_identity
+            AND capacity_bytes=_bytes AND inode_limit=_inodes) THEN
+        RETURN starexec.execution_storage_root_unreferenced(_root);
+    END IF;
     INSERT INTO starexec.execution_storage_resources
         (resource_key,root_path,observed_identity,capacity_bytes,inode_limit)
         VALUES (_key,_root,_identity,_bytes,_inodes) ON CONFLICT DO NOTHING;
@@ -46,6 +51,7 @@ BEGIN
         WHERE owner_id=_a.origin_owner_id AND released_at IS NULL) THEN RETURN FALSE; END IF;
     SELECT * INTO _r FROM starexec.execution_storage_resources WHERE resource_key=_key FOR UPDATE NOWAIT;
     IF NOT FOUND OR _r.observed_identity IS DISTINCT FROM _identity OR _r.capacity_bytes>_c.limit_bytes
+        OR NOT starexec.execution_storage_root_unreferenced(_r.root_path)
         OR _staging IS DISTINCT FROM _r.root_path || '/build-' || _token::text
         OR _source=_r.root_path OR starts_with(_source,_r.root_path || '/')
         OR starts_with(_r.root_path,_source || '/') THEN RETURN FALSE; END IF;
@@ -77,8 +83,13 @@ DECLARE
     _l starexec.solver_build_storage_leases%ROWTYPE;
 BEGIN
     SELECT * INTO _a FROM starexec.solver_build_artifacts WHERE id=_artifact FOR SHARE NOWAIT;
-    IF NOT FOUND OR _token IS NULL OR _a.execution_token IS DISTINCT FROM _token
-        OR _a.state<>'DELETED' OR _a.cleanup_finished_at IS NULL
+    IF NOT FOUND OR _token IS NULL OR _a.execution_token IS DISTINCT FROM _token THEN RETURN FALSE; END IF;
+    IF EXISTS (SELECT 1 FROM starexec.solver_build_storage_leases l
+        JOIN starexec.execution_storage_resources r ON r.resource_key=l.resource_key
+        JOIN starexec.solver_build_storage_charges c ON c.artifact_id=l.artifact_id AND c.storage_kind='STAGING'
+        WHERE l.artifact_id=_artifact AND l.execution_token=_token AND l.resource_key=_key
+            AND r.observed_identity=_identity AND l.released_at IS NOT NULL AND c.released_at IS NOT NULL) THEN RETURN TRUE; END IF;
+    IF _a.state<>'DELETED' OR _a.cleanup_finished_at IS NULL
         OR EXISTS (SELECT 1 FROM starexec.solver_build_storage_charges
             WHERE artifact_id=_artifact AND released_at IS NULL) THEN RETURN FALSE; END IF;
     PERFORM resource_key FROM starexec.execution_storage_resources

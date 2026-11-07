@@ -185,7 +185,8 @@ class ExecutionStorageLeaseSqlTest extends Common {
         when(observation.identity()).thenReturn("other-observed-filesystem");
         when(observation.capacityBytes()).thenReturn(64L);
         when(observation.inodeLimit()).thenReturn(16L);
-        assertTrue(ExecutionStorageLeases.register(connection, observation));
+        SQLException refused=assertThrows(SQLException.class,()->ExecutionStorageLeases.register(connection, observation));
+        assertEquals("23514",refused.getSQLState());
         assertFalse(ExecutionStorageLeases.reserve(connection, enclosed, observation));
         assertEquals(0, number(connection, "SELECT count(*) FROM starexec.solver_build_storage_leases WHERE artifact_id=?", enclosed.artifactId()));
     }

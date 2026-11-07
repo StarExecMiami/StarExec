@@ -69,17 +69,34 @@ change capacity after registration. An old mount observation cannot authorize a
 replacement mount. Existing raw engine-observation callbacks remain distinct
 from launch admission.
 
-Release currently requires completed registered artifact cleanup, settlement of
-all its storage charges and an independently observed empty filesystem. It forces
-the resource root before release; residual files, unavailable capacity or failed
-commit leave the lease unavailable. Successful retries preserve release time and
-never refund the booked allowance again.
+`SolverBuildStagingCleanup` reclaims staging independently of immutable executable
+retention. Its durable claim binds the execution, resource, cleanup token and
+original directory identity or positive absence. It requires a matching conserved
+Podman or Kubernetes stop and an already conserved outcome. Unapplied, unknown or
+unsupported Local outcomes cannot authorize cleanup.
 
-This conservative cleanup boundary is insufficient for an operational finite
-pool: staging must also be reclaimable after successful publication while the
-immutable executable and its separate charge remain retained. That independent
-staging-cleanup integration is required before activating the pool; keeping every
-published solver's execution resource until solver deletion would exhaust it.
+Before unlinking staging, the coordinator reads published executables or failed
+logs back against their original exact manifest. Explicit cancelled/non-execution
+receipts allow discarded staging without inventing a scientific result. It removes
+only the registered child through directory handles, forces its parent and confirms
+the resource empty. Staging-charge settlement and lease release then commit
+together; source, helper and immutable-output charges remain independent.
+
+The directory's inode and creation identity must remain stable across partial
+cleanup and retries. Missing or changed identity, residual files, unavailable
+capacity, force failure or failed settlement retain the claim and allowance.
+A replaced or reappeared directory is refused rather than adopted. A completed
+retry checks only its old registered path absent and does not touch a later lease
+or refund staging twice. Full artifact cleanup can subsequently settle the source
+and immutable copy without releasing staging again.
+
+Private resource roots cannot become solver, benchmark or immutable-artifact
+references. Registration and asset-reference guards coordinate through a shared
+policy row; new registration advances its version so a stale repeatable-read
+writer cannot miss the new exclusion. Contention refuses the operation for retry.
+Existing immutable resource registration is idempotent; registering new resources
+uses a current read-committed transaction. Deploy resource configuration through
+the normal operator process before admitting work.
 
 Only authorized source, helper, benchmark and control inputs may be mounted, and
 they must be read-only. Output and scratch must remain inside the leased capacity;
@@ -88,8 +105,8 @@ outcomes, memory accounting and the established stop-receipt protocol. A marker,
 deadline, provider deletion acknowledgement or terminal solver status does not
 prove physical termination.
 
-The observer and lease coordinator are validation components. Provider mounts,
-dispatch, result recording and independent staging cleanup must be connected before
+The observer and lifecycle coordinators are validation components. Provider mounts,
+dispatch, result recording and cleanup scheduling must be connected before
 enabling this lifecycle. Local process execution also requires a verified complete
 isolation and termination scope. No existing deployment is automatically migrated
 or made safe by adding this observer.
@@ -111,12 +128,13 @@ After applying the migrations to a disposable PostgreSQL database configured
 through `STAREXEC_DB_*`, run:
 
 ```sh
-mvn -B -pl starexec-app -Dtest=ExecutionStorageLeaseSqlTest,SolverBuildStorageQuotaSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+mvn -B -pl starexec-app -Dtest=SolverBuildStagingCleanupSqlTest,ExecutionStorageLeaseSqlTest,SolverBuildStorageQuotaSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
 ```
 
 The database tests use synthetic provider observations. They verify concurrent
 exclusivity, attempt and allowance fencing, refused/failed transaction recovery,
-cleanup settlement, residual-file refusal and immutable resource/lease history.
+cleanup settlement, residual-file refusal, immutable resource/lease history,
+staging reuse, conserved-output integrity and reference-registration races.
 They do not establish a real provider capacity limit or deployed acceptance.
 
 Before qualifying a deployment, verify block and inode exhaustion on an owned
@@ -136,3 +154,7 @@ tests.
   distinguishes project-quota-filtered statistics from whole-filesystem counts.
 - [Podman volume quota requirements](https://docs.podman.io/en/v5.7.0/markdown/podman-volume-create.1.html#quotas)
   distinguish project-quota support from an ordinary local volume.
+- [PostgreSQL transaction isolation](https://www.postgresql.org/docs/16/transaction-iso.html)
+  describes current snapshots and rejection of stale row-lock observations.
+- [PostgreSQL function volatility](https://www.postgresql.org/docs/16/xfunc-volatility.html)
+  describes snapshot visibility inside constraint and registration functions.

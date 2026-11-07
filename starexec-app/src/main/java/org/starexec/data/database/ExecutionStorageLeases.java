@@ -9,10 +9,56 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.Optional;
+import java.util.UUID;
 
 /** Durable resource exclusivity; capacity and physical cleanup remain independently observed. */
 public final class ExecutionStorageLeases {
     private ExecutionStorageLeases() { }
+
+    public record StagingCleanup(UUID token, String stagingIdentity, Instant startedAt, Instant finishedAt, Instant releasedAt) { }
+
+    /** Matches the complete conserved context; detached live foreign keys do not erase its origin. */
+    public static Optional<StagingCleanup> findStagingCleanup(Connection connection, BuildExecutionContext build,
+                                                             DedicatedStorageResource resource) throws SQLException {
+        try (var statement = connection.prepareStatement("SELECT l.cleanup_token,l.cleanup_started_at,l.cleanup_finished_at,l.released_at,l.cleanup_staging_identity"
+                + " FROM starexec.solver_build_storage_leases l JOIN starexec.solver_build_artifacts a ON a.id=l.artifact_id"
+                + " JOIN starexec.execution_storage_resources r ON r.resource_key=l.resource_key"
+                + " WHERE a.id=? AND a.origin_pair_id=? AND a.attempt_no=? AND a.execution_token=?"
+                + " AND a.source_path=? AND a.staging_path=? AND l.execution_token=a.execution_token"
+                + " AND r.resource_key=? AND r.observed_identity=? AND r.root_path=?"
+                + " AND r.capacity_bytes=? AND r.inode_limit=?")) {
+            Object[] args = {build.artifactId(),build.pairId(),build.attemptNo(),build.token(),build.source().toString(),
+                    build.staging().toString(),resource.filesystemKey(),resource.identity(),resource.root().toString(),
+                    resource.capacityBytes(),resource.inodeLimit()};
+            for (int i=0;i<args.length;i++) statement.setObject(i+1,args[i]);
+            try (var result = statement.executeQuery()) {
+                if (!result.next()) return Optional.empty();
+                return Optional.of(new StagingCleanup(result.getObject(1,UUID.class),result.getString(5),instant(result.getTimestamp(2)),
+                        instant(result.getTimestamp(3)),instant(result.getTimestamp(4))));
+            }
+        }
+    }
+
+    /** The coordinator commits this identity before filesystem removal. */
+    public static boolean claimStagingCleanup(Connection connection, BuildExecutionContext build,
+                                              DedicatedStorageResource resource, UUID cleanup, String stagingIdentity) throws SQLException {
+        if (connection.getAutoCommit()) throw new SQLException("Staging cleanup claim requires an explicit transaction");
+        return call(connection,"SELECT starexec.claim_solver_build_staging_cleanup(?,?,?,?,?,?)",
+                build.artifactId(),build.token(),resource.filesystemKey(),resource.identity(),cleanup,stagingIdentity);
+    }
+
+    /** Call only after forced removal and positive absence under the retained identity locks. */
+    public static boolean finishStagingCleanup(Connection connection, BuildExecutionContext build,
+                                               DedicatedStorageResource resource, UUID cleanup, String stagingIdentity) throws SQLException {
+        if (connection.getAutoCommit()) throw new SQLException("Staging cleanup settlement requires an explicit transaction");
+        return call(connection,"SELECT starexec.finish_solver_build_staging_cleanup(?,?,?,?,?,?)",
+                build.artifactId(),build.token(),resource.filesystemKey(),resource.identity(),cleanup,stagingIdentity);
+    }
+
+    private static Instant instant(Timestamp value) { return value == null ? null : value.toInstant(); }
 
     public static boolean register(Connection connection, DedicatedStorageResource resource) throws SQLException {
         return transact(connection, tx -> {

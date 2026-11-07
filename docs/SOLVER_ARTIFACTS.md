@@ -271,8 +271,14 @@ checks actual mount identity and finite data-block/inode capacity. It does not
 replace the durable resource lease or authorize an execution on its own.
 `ExecutionStorageLeases` couples that observation to an exclusive database lease
 and existing build admission, while preserving separate engine-observation
-callbacks. Its conservative full-cleanup release still needs independent staging
-reclamation and backend/dispatcher integration before pool activation.
+callbacks. `SolverBuildStagingCleanup` reclaims the stopped mutable tree after
+verifying the conserved output, or after an explicit cancelled/non-execution
+disposition. Its durable claim preserves directory identity across failures;
+forced absence, staging settlement and lease release do not delete the immutable
+copy or refund its charge. Completed callbacks cannot adopt a reappeared old path
+or remove a reused resource. Private roots are excluded from durable asset paths.
+Backend/dispatcher integration and real provider acceptance remain required before
+pool activation.
 
 Use a disposable PostgreSQL database configured through the documented
 `STAREXEC_DB_*` variables and apply the migrations before running:
