@@ -5,13 +5,18 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Solvers;
+import org.starexec.data.database.SolverBuildArtifacts;
+import org.starexec.constants.R;
 import org.starexec.data.to.FinishedSolverBuild;
 import org.starexec.data.to.Solver;
 import org.starexec.data.to.SolverBuildStatus.SolverBuildStatusCode;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.jobs.SolverBuildRecorder;
+import org.starexec.jobs.SolverBuildStaging;
 import org.starexec.test.util.DatabaseTestSupport;
 
 import java.io.File;
@@ -28,10 +33,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -374,6 +383,215 @@ public class SolverBuildRecordSqlTest extends Common {
 		assertFalse(deleted(problem), "the ordinary job's benchmark is not a helper");
 	}
 
+	private void prepareExecution(FinishedSolverBuild build) throws Exception {
+		Path parent = Files.createDirectory(folder.toPath().resolve("execution-staging"),
+				PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+		try (Connection connection = Common.getConnection()) {
+			SolverBuildStaging.prepare(connection, build.getPairId(), 1, parent);
+		}
+	}
+
+	@ParameterizedTest @ValueSource(ints = {7, 11})
+	public void executionBoundBuildsAreNotConsumedByLegacyRecorder(int status) throws Exception {
+		int solver = insertSolver(source, UNBUILT);
+		Path input = benchmarkFile();
+		int benchmark = insertBenchmark("starexec_build", input);
+		buildJob(solver, benchmark, StatusCode.toStatusCode(status));
+		prepareExecution(finishedBuildOf(solver));
+		SolverBuildRecorder.recordFinishedBuilds();
+		assertEquals(UNBUILT, buildStatus(solver));
+		assertEquals(source.toString(), path(solver));
+		assertFalse(deleted(benchmark));
+		assertTrue(Files.exists(input));
+	}
+
+	@Test
+	public void anExecutionPreparedAfterTheReadCannotUseLegacyCAS() throws Exception {
+		int solver = insertSolver(source, UNBUILT);
+		int benchmark = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE);
+		FinishedSolverBuild snapshot = finishedBuildOf(solver);
+		prepareExecution(snapshot);
+		assertFalse(Solvers.recordBuildOutcome(snapshot, snapshot.getBuiltPath()));
+		assertEquals(UNBUILT, buildStatus(solver));
+		assertEquals(source.toString(), path(solver));
+		assertFalse(deleted(benchmark));
+	}
+
+	@Test
+	public void aSupersededExecutionBuildKeepsItsHelper() throws Exception {
+		int solver = insertSolver(source, UNBUILT);
+		Path input = benchmarkFile();
+		int older = insertBenchmark("starexec_build", input);
+		buildJob(solver, older, StatusCode.STATUS_COMPLETE);
+		prepareExecution(finishedBuildOf(solver));
+		int newer = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, newer, StatusCode.STATUS_PENDING_SUBMIT);
+		SolverBuildRecorder.recordFinishedBuilds();
+		assertEquals(UNBUILT, buildStatus(solver));
+		assertFalse(deleted(older));
+		assertFalse(deleted(newer));
+		assertTrue(Files.exists(input));
+	}
+
+	@Test
+	public void anExecutionPreparedAfterTheReadCannotRetireItsHelper() throws Exception {
+		int solver = insertSolver(source, UNBUILT);
+		Path input = benchmarkFile();
+		int benchmark = insertBenchmark("starexec_build", input);
+		buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE);
+		FinishedSolverBuild snapshot = finishedBuildOf(solver);
+		prepareExecution(snapshot);
+		assertTrue(Solvers.claimLegacyBuildRetirement(snapshot).isEmpty());
+		assertFalse(deleted(benchmark)); assertTrue(Files.exists(input));
+	}
+
+	private boolean prepareMetadata(Connection connection, FinishedSolverBuild snapshot, int attempt) throws SQLException {
+		return SolverBuildArtifacts.prepare(connection, snapshot.getPairId(), attempt, UUID.randomUUID(),
+				folder.toPath().resolve("reserved-execution").toAbsolutePath());
+	}
+
+	private String finishLegacy(Connection connection, FinishedSolverBuild snapshot, boolean apply) throws SQLException {
+		try (PreparedStatement statement = connection.prepareStatement("SELECT starexec.finish_legacy_solver_build(?,?,?,?,?,?,?,?,?,?)")) {
+			statement.setInt(1, snapshot.getJobId()); statement.setInt(2, snapshot.getPairId());
+			statement.setInt(3, snapshot.getBenchmarkId()); statement.setInt(4, snapshot.getSolverId());
+			statement.setString(5, snapshot.getSolverPath()); statement.setInt(6, snapshot.getSolverBuildStatus().getVal());
+			statement.setInt(7, snapshot.getPairStatus().getVal()); statement.setString(8, snapshot.getBuiltPath());
+			statement.setString(9, R.SOLVER_BUILD_SCRIPT); statement.setBoolean(10, apply);
+			try (ResultSet result = statement.executeQuery()) { assertTrue(result.next()); return result.getString(1); }
+		}
+	}
+
+	private Connection directConnection() throws SQLException {
+		return java.sql.DriverManager.getConnection(R.POSTGRES_URL, R.POSTGRES_USERNAME, R.POSTGRES_PASSWORD);
+	}
+
+	private static int backendPid(Connection connection) throws SQLException {
+		try (PreparedStatement statement = connection.prepareStatement("SELECT pg_backend_pid()"); ResultSet result = statement.executeQuery()) {
+			assertTrue(result.next()); return result.getInt(1);
+		}
+	}
+
+	private void awaitLock(int pid) {
+		await().atMost(5, TimeUnit.SECONDS).until(() -> "t".equals(read(
+				"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=? AND wait_event_type='Lock')", pid)));
+	}
+
+	@Test
+	public void aCommittedLegacyOutcomePreventsPreparationEvenAfterARerun() throws Exception {
+		int solver = insertSolver(source, UNBUILT);
+		int benchmark = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE);
+		FinishedSolverBuild snapshot = finishedBuildOf(solver);
+		assertTrue(Solvers.recordBuildOutcome(snapshot, snapshot.getBuiltPath()));
+		rebuild(solver);
+		try (Connection connection = directConnection()) {
+			try (PreparedStatement statement = connection.prepareStatement(
+					"UPDATE starexec.job_pair_attempts SET current_attempt_no=current_attempt_no+1 WHERE pair_id=?")) {
+				statement.setInt(1, snapshot.getPairId()); assertEquals(1, statement.executeUpdate());
+			}
+			assertFalse(prepareMetadata(connection, snapshot, 2));
+		}
+		assertEquals(source.toString(), path(solver)); assertFalse(deleted(benchmark));
+	}
+
+	@Test
+	public void aRetiredInputCannotBePreparedByAnotherPairBeforeFileDeletion() throws Exception {
+		int solver = insertSolver(source, UNBUILT);
+		Path input = benchmarkFile(); int benchmark = insertBenchmark("starexec_build", input);
+		buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE);
+		FinishedSolverBuild snapshot = finishedBuildOf(solver);
+		assertTrue(Solvers.recordBuildOutcome(snapshot, snapshot.getBuiltPath()));
+		int other = insertSolver(source, UNBUILT); buildJob(other, benchmark, StatusCode.STATUS_COMPLETE);
+		try (Connection connection = directConnection()) { assertFalse(prepareMetadata(connection, finishedBuildOf(other), 1)); }
+		assertTrue(Files.exists(input)); assertFalse(deleted(benchmark));
+	}
+
+	@Test
+	public void sharedHelpersAreNeverClaimedOrDeletedByTheLegacyRecorder() throws Exception {
+		int solver = insertSolver(source, UNBUILT);
+		Path input = benchmarkFile(); int benchmark = insertBenchmark("starexec_build", input);
+		buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE);
+		FinishedSolverBuild snapshot = finishedBuildOf(solver);
+		int other = insertSolver(source, UNBUILT); buildJob(other, benchmark, StatusCode.STATUS_PENDING_SUBMIT);
+		assertFalse(Solvers.recordBuildOutcome(snapshot, snapshot.getBuiltPath()));
+		assertTrue(Solvers.claimLegacyBuildRetirement(snapshot).isEmpty());
+		SolverBuildRecorder.recordFinishedBuilds();
+		assertEquals(UNBUILT, buildStatus(solver)); assertFalse(deleted(benchmark)); assertTrue(Files.exists(input));
+	}
+
+	@Test
+	public void preparedExecutionWinsTheRaceAgainstLegacyMetadata() throws Exception {
+		int solver = insertSolver(source, UNBUILT); int benchmark = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE); FinishedSolverBuild snapshot = finishedBuildOf(solver);
+		var executor = Executors.newSingleThreadExecutor();
+		try (Connection preparing = directConnection(); Connection recording = directConnection()) {
+			preparing.setAutoCommit(false); assertTrue(prepareMetadata(preparing, snapshot, 1));
+			int pid = backendPid(recording);
+			var result = executor.submit(() -> finishLegacy(recording, snapshot, true));
+			awaitLock(pid); preparing.commit();
+			assertNull(result.get(5, TimeUnit.SECONDS)); assertEquals(UNBUILT, buildStatus(solver));
+			assertFalse(deleted(benchmark));
+		} finally { executor.shutdownNow(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS)); }
+	}
+
+	@Test
+	public void claimedRetirementWinsTheRaceAgainstExecutionPreparation() throws Exception {
+		int solver = insertSolver(source, UNBUILT); Path input = benchmarkFile();
+		int benchmark = insertBenchmark("starexec_build", input); buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE);
+		FinishedSolverBuild snapshot = finishedBuildOf(solver); var executor = Executors.newSingleThreadExecutor();
+		try (Connection retiring = directConnection(); Connection preparing = directConnection()) {
+			retiring.setAutoCommit(false); assertEquals(input.toString(), finishLegacy(retiring, snapshot, false));
+			int pid = backendPid(preparing); var result = executor.submit(() -> prepareMetadata(preparing, snapshot, 1));
+			awaitLock(pid); retiring.commit();
+			assertFalse(result.get(5, TimeUnit.SECONDS)); assertTrue(deleted(benchmark));
+			assertTrue(Files.exists(input), "the committed claim preserves its path until filesystem cleanup");
+		} finally { executor.shutdownNow(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS)); }
+	}
+
+	@Test
+	public void helperAccountingIsSettledExactlyOnceBeforeFileCleanup() throws Exception {
+		int solver = insertSolver(source, UNBUILT); Path input = benchmarkFile();
+		int benchmark = insertBenchmark("starexec_build", input); buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE);
+		FinishedSolverBuild snapshot = finishedBuildOf(solver);
+		long original = Long.parseLong(read("SELECT disk_size FROM starexec.users WHERE id=?", userId));
+		try (Connection connection = directConnection()) {
+			try {
+				try (PreparedStatement statement = connection.prepareStatement("UPDATE starexec.users SET disk_size=disk_size+17 WHERE id=?")) {
+					statement.setInt(1, userId); assertEquals(1, statement.executeUpdate());
+				}
+				try (PreparedStatement statement = connection.prepareStatement("UPDATE starexec.benchmarks SET disk_size=17 WHERE id=?")) {
+					statement.setInt(1, benchmark); assertEquals(1, statement.executeUpdate());
+				}
+				assertEquals(input.toString(), Solvers.claimLegacyBuildRetirement(snapshot).orElseThrow());
+				assertEquals(original, Long.parseLong(read("SELECT disk_size FROM starexec.users WHERE id=?", userId)));
+				assertTrue(Solvers.claimLegacyBuildRetirement(snapshot).isEmpty());
+				assertEquals(original, Long.parseLong(read("SELECT disk_size FROM starexec.users WHERE id=?", userId)));
+				assertEquals("0", read("SELECT disk_size FROM starexec.benchmarks WHERE id=?", benchmark));
+				assertTrue(Files.exists(input));
+			} finally {
+				try (PreparedStatement statement = connection.prepareStatement("UPDATE starexec.users SET disk_size=? WHERE id=?")) {
+					statement.setLong(1, original); statement.setInt(2, userId); statement.executeUpdate();
+				}
+			}
+		}
+	}
+
+	@ParameterizedTest @ValueSource(strings = {"deleted-helper", "unknown-status"})
+	public void unavailableBuildInputsOrStatusCannotAcquireExecutionStorage(String condition) throws Exception {
+		int solver = insertSolver(source, UNBUILT); int benchmark = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE); FinishedSolverBuild snapshot = finishedBuildOf(solver);
+		try (Connection connection = directConnection()) {
+			String sql = condition.equals("deleted-helper") ? "UPDATE starexec.benchmarks SET deleted=true WHERE id=?"
+					: "UPDATE starexec.solvers SET build_status=NULL WHERE id=?";
+			try (PreparedStatement statement = connection.prepareStatement(sql)) {
+				statement.setInt(1, condition.equals("deleted-helper") ? benchmark : solver); statement.executeUpdate();
+			}
+			assertFalse(prepareMetadata(connection, snapshot, 1));
+			assertNull(SolverBuildArtifacts.find(connection, snapshot.getPairId(), 1).orElseThrow().executionToken());
+		}
+	}
+
 	// ---------------------------------------------------------------------------- fixture
 
 	/** A helper benchmark file where addBenchmarkFromText puts one; a kept sibling bounds the cleanup. */
@@ -437,8 +655,11 @@ public class SolverBuildRecordSqlTest extends Common {
 	}
 
 	/** The solver of a build job as getFinishedBuildsToRecord reads it, for the update to compare with. */
-	private static FinishedSolverBuild asRead(int solver, Path path, int buildStatus) {
-		return new FinishedSolverBuild(0, 0, StatusCode.STATUS_COMPLETE, 0, solver, path.toString(),
+	private FinishedSolverBuild asRead(int solver, Path path, int buildStatus) throws Exception {
+		int benchmark = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE);
+		FinishedSolverBuild actual = finishedBuildOf(solver);
+		return new FinishedSolverBuild(actual.getJobId(), actual.getPairId(), StatusCode.STATUS_COMPLETE, benchmark, solver, path.toString(),
 				SolverBuildStatusCode.toStatusCode(buildStatus), true);
 	}
 
