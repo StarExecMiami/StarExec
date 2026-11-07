@@ -14,6 +14,8 @@ artifact in that order. It checks ownership, source, build generation, successfu
 completion, deletion state and newer build jobs before switching the solver path
 and publication state in one database transaction. A retry of the current
 publication succeeds without replacing its timestamp.
+Missing pair or solver build status cannot authorize publication. The repeatable
+function definition preserves this refusal when upgrading an existing catalogue.
 
 Rebuilding resolves the original source independently of the published artifact
 path and advances the build generation before the replacement job exists. Failed
