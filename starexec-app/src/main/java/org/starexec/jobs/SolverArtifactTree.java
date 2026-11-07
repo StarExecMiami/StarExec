@@ -10,6 +10,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardOpenOption;
@@ -44,17 +45,50 @@ public final class SolverArtifactTree {
 
     /** Creates a new destination; an existing directory or link is never reused. */
     public static Snapshot copy(Path source, Path destination, long maxBytes, int maxEntries) throws IOException {
-        return copy(source, destination, maxBytes, maxEntries, false);
+        return copy(source, destination, maxBytes, maxEntries, false, true);
     }
 
     /** A durably reserved destination remains available for trusted recovery after a copy failure. */
     static Snapshot copyReserved(Path source, Path destination, long maxBytes, int maxEntries) throws IOException {
-        return copy(source, destination, maxBytes, maxEntries, true);
+        return copy(source, destination, maxBytes, maxEntries, true, true);
+    }
+
+    /** Copies only saved logs; positive absence is an empty, non-runnable snapshot. */
+    static Snapshot copyFailureLogs(Path staging, Path destination, long maxBytes, int maxEntries) throws IOException {
+        if (maxBytes < 0 || maxEntries < 1) throw new IllegalArgumentException("Invalid artifact limits");
+        try (DescriptorDirectory input = DescriptorDirectory.open(staging);
+             DescriptorDirectory parent = DescriptorDirectory.open(destination.getParent())) {
+            if (destination.toAbsolutePath().normalize().startsWith(staging.toRealPath())) {
+                throw new IOException("Artifact destination is inside its source");
+            }
+            Path logs = staging.resolve("logs");
+            boolean present;
+            try {
+                if (!Files.readAttributes(logs, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isDirectory()) {
+                    throw new IOException("Saved build logs require a separate directory");
+                }
+                present = true;
+            } catch (NoSuchFileException absent) {
+                // An unavailable staging directory is not evidence that optional logs are absent.
+                if (!Files.readAttributes(staging, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isDirectory()) {
+                    throw new IOException("Build staging is unavailable", absent);
+                }
+                present = false;
+            }
+            Files.createDirectory(destination, PosixFilePermissions.asFileAttribute(PRIVATE));
+            if (present) copy(logs, destination.resolve("logs"), maxBytes, maxEntries - 1, true, false);
+            Files.setPosixFilePermissions(destination, DIRECTORY);
+            try (FileChannel directory = FileChannel.open(destination, StandardOpenOption.READ)) { directory.force(true); }
+            Snapshot result = scan(destination.toRealPath(), null, maxBytes, maxEntries, false);
+            verifyFailureLogs(destination, result);
+            try (FileChannel directory = FileChannel.open(destination.getParent(), StandardOpenOption.READ)) { directory.force(true); }
+            return result;
+        }
     }
 
     private static Snapshot copy(Path source, Path destination, long maxBytes, int maxEntries,
-                                 boolean retainFailure) throws IOException {
-        if (maxBytes < 0 || maxEntries < 1) throw new IllegalArgumentException("Invalid artifact limits");
+                                 boolean retainFailure, boolean requireFile) throws IOException {
+        if (maxBytes < 0 || maxEntries < (requireFile ? 1 : 0)) throw new IllegalArgumentException("Invalid artifact limits");
         Path input = source.toAbsolutePath();
         Path output = destination.toAbsolutePath();
         boolean created = false;
@@ -67,8 +101,8 @@ public final class SolverArtifactTree {
                 Files.createDirectory(output, PosixFilePermissions.asFileAttribute(PRIVATE));
                 created = true;
             }
-            Snapshot result = scan(input, output, maxBytes, maxEntries);
-            verify(output, result);
+            Snapshot result = scan(input, output, maxBytes, maxEntries, requireFile);
+            verify(output, result, requireFile);
             try (FileChannel parent = FileChannel.open(output.getParent(), StandardOpenOption.READ)) {
                 parent.force(true);
             }
@@ -84,18 +118,26 @@ public final class SolverArtifactTree {
 
     /** Recomputes the tree; the digest is over the exact UTF-8 manifest payload. */
     public static void verify(Path directory, Snapshot expected) throws IOException {
+        verify(directory, expected, true);
+    }
+
+    static void verifyFailureLogs(Path directory, Snapshot expected) throws IOException {
+        verify(directory, expected, false);
+    }
+
+    private static void verify(Path directory, Snapshot expected, boolean requireFile) throws IOException {
         if (expected == null || expected.payload() == null || expected.sha256() == null
-                || expected.byteSize() < 0 || expected.entryCount() < 1) {
+                || expected.byteSize() < 0 || expected.entryCount() < (requireFile ? 1 : 0)) {
             throw new IOException("Artifact manifest is incomplete");
         }
         if (!digest(expected.payload()).equals(expected.sha256())) throw new IOException("Artifact manifest digest differs");
         try (DescriptorDirectory ignored = DescriptorDirectory.open(directory)) {
-            Snapshot actual = scan(directory.toRealPath(), null, expected.byteSize(), expected.entryCount());
+            Snapshot actual = scan(directory.toRealPath(), null, expected.byteSize(), expected.entryCount(), requireFile);
             if (!actual.equals(expected)) throw new IOException("Artifact tree differs from its validated manifest");
         }
     }
 
-    private static Snapshot scan(Path root, Path destination, long maxBytes, int maxEntries) throws IOException {
+    private static Snapshot scan(Path root, Path destination, long maxBytes, int maxEntries, boolean requireFile) throws IOException {
         List<Entry> entries = new ArrayList<>();
         List<Path> directories = new ArrayList<>();
         long[] bytes = {0};
@@ -172,7 +214,7 @@ public final class SolverArtifactTree {
                 return FileVisitResult.CONTINUE;
             }
         });
-        if (entries.stream().noneMatch(e -> e.kind().equals("file"))) throw new IOException("Artifact has no regular files");
+        if (requireFile && entries.stream().noneMatch(e -> e.kind().equals("file"))) throw new IOException("Artifact has no regular files");
         entries.sort(Comparator.comparing(Entry::path));
         if (destination != null) {
             // Check the recreated link graph, not merely its spelling in the input tree.

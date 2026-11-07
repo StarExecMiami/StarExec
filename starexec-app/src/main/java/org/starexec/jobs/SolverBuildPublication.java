@@ -26,6 +26,17 @@ public final class SolverBuildPublication {
      */
     public static boolean publish(Connection connection, BuildExecutionContext build, Path parent,
                                   long maxBytes, int maxEntries) throws SQLException, IOException {
+        return conserve(connection, build, parent, maxBytes, maxEntries, false);
+    }
+
+    /** Conserves unsuccessful build logs and records failure without replacing the original source. */
+    public static boolean recordFailure(Connection connection, BuildExecutionContext build, Path parent,
+                                        long maxBytes, int maxEntries) throws SQLException, IOException {
+        return conserve(connection, build, parent, maxBytes, maxEntries, true);
+    }
+
+    private static boolean conserve(Connection connection, BuildExecutionContext build, Path parent,
+                                    long maxBytes, int maxEntries, boolean failed) throws SQLException, IOException {
         if (!connection.getAutoCommit()) throw new SQLException("Output reservation must commit before copying");
         if (maxBytes < 0 || maxEntries < 1) throw new IllegalArgumentException("Invalid artifact limits");
         if (parent == null || !parent.isAbsolute() || parent.getParent() == null || !parent.equals(parent.normalize())) {
@@ -37,12 +48,13 @@ public final class SolverBuildPublication {
                 || !build.source().toString().equals(artifact.sourcePath())
                 || !build.staging().toString().equals(artifact.stagingPath()) || artifact.liveSolverId() == null
                 || artifact.engineIdentity() == null || artifact.stoppedAt() == null
-                || !Set.of("PLANNED", "STAGED", "VALIDATED", "PUBLISHED").contains(artifact.state())) return false;
+                || !(failed ? Set.of("PLANNED", "STAGED", "REJECTED")
+                            : Set.of("PLANNED", "STAGED", "VALIDATED", "PUBLISHED")).contains(artifact.state())) return false;
         var stored = SolverBuildArtifacts.findStopReceipt(connection, build.pairId(), build.attemptNo()).orElse(null);
         if (stored == null || !Set.of("podman", "kubernetes").contains(stored.receipt().backend())
                 || !artifact.engineIdentity().startsWith(stored.receipt().backend() + ":")
                 || !stored.receipt().matches(build.artifactId(), build.pairId(), build.attemptNo(), artifact.engineIdentity())
-                || stored.receipt().facts().has("disposition") || !completed(connection, build.pairId())) return false;
+                || stored.receipt().facts().has("disposition") || !eligiblePair(connection, build.pairId(), failed)) return false;
 
         Path root = parent.resolve("build-" + build.artifactId() + "-" + build.token());
         if (root.startsWith(build.staging().normalize()) || root.startsWith(build.source().normalize())) {
@@ -55,32 +67,52 @@ public final class SolverBuildPublication {
                 throw new IOException("Artifact parent requires owner-only permissions");
             }
             SolverArtifactTree.Snapshot snapshot;
-            if (artifact.state().equals("VALIDATED") || artifact.state().equals("PUBLISHED")) {
-                var manifest = SolverBuildArtifacts.findOutputManifest(connection, artifact.id())
+            var conserved = SolverBuildArtifacts.findOutputManifest(connection, artifact.id());
+            if (failed && artifact.state().equals("REJECTED") && conserved.isEmpty()) return false;
+            if (!failed && artifact.state().equals("STAGED") && conserved.isPresent()) return false;
+            if (failed && conserved.isPresent() || artifact.state().equals("VALIDATED") || artifact.state().equals("PUBLISHED")) {
+                var manifest = conserved
                         .orElseThrow(() -> new IOException("Validated artifact manifest is unavailable"));
                 snapshot = restore(manifest);
                 if (snapshot.byteSize() > maxBytes || snapshot.entryCount() > maxEntries) return false;
-                SolverArtifactTree.verify(root, snapshot);
-                requireLayout(root, snapshot);
+                if (failed) { SolverArtifactTree.verifyFailureLogs(root, snapshot); requireFailureLayout(snapshot); }
+                else { SolverArtifactTree.verify(root, snapshot); requireLayout(root, snapshot); }
             } else {
-                requireDirectories(build.staging());
+                if (!failed) requireDirectories(build.staging());
                 if (!SolverBuildArtifacts.reserveOutput(connection, build, artifact.engineIdentity(), stored.receipt().sha256(), root)) return false;
                 if (Files.exists(root, LinkOption.NOFOLLOW_LINKS)) {
                     throw new IOException("Unvalidated artifact destination already exists; recovery must preserve its ownership");
                 }
-                snapshot = SolverArtifactTree.copyReserved(build.staging(), root, maxBytes, maxEntries);
-                requireLayout(root, snapshot);
+                snapshot = failed ? SolverArtifactTree.copyFailureLogs(build.staging(), root, maxBytes, maxEntries)
+                        : SolverArtifactTree.copyReserved(build.staging(), root, maxBytes, maxEntries);
+                if (failed) requireFailureLayout(snapshot); else requireLayout(root, snapshot);
                 var manifest = new SolverBuildArtifacts.OutputManifest(snapshot.payload(), snapshot.sha256(), snapshot.byteSize());
-                if (!SolverBuildArtifacts.validateOutput(connection, build, artifact.engineIdentity(), stored.receipt().sha256(), root, manifest)) return false;
+                boolean saved = failed
+                        ? SolverBuildArtifacts.validateFailureLogs(connection, build, artifact.engineIdentity(), stored.receipt().sha256(), root, manifest)
+                        : SolverBuildArtifacts.validateOutput(connection, build, artifact.engineIdentity(), stored.receipt().sha256(), root, manifest);
+                if (!saved) return false;
             }
-            return SolverBuildArtifacts.publishOutput(connection, artifact.id());
+            return failed ? SolverBuildArtifacts.recordFailedOutput(connection, build, artifact.engineIdentity(), stored.receipt().sha256())
+                    : SolverBuildArtifacts.publishOutput(connection, artifact.id());
         }
     }
 
-    private static boolean completed(Connection connection, int pair) throws SQLException {
-        try (var statement = connection.prepareStatement("SELECT status_code=7 FROM starexec.job_pairs WHERE id=?")) {
+    private static boolean eligiblePair(Connection connection, int pair, boolean failed) throws SQLException {
+        String predicate = failed ? "starexec.IsTerminalPairStatus(status_code) AND status_code NOT IN (7,21)" : "status_code=7";
+        try (var statement = connection.prepareStatement("SELECT " + predicate + " FROM starexec.job_pairs WHERE id=?")) {
             statement.setInt(1, pair);
             try (var result = statement.executeQuery()) { return result.next() && result.getBoolean(1); }
+        }
+    }
+
+    private static void requireFailureLayout(SolverArtifactTree.Snapshot snapshot) throws IOException {
+        var entries = JsonParser.parseString(snapshot.payload()).getAsJsonObject().getAsJsonArray("entries");
+        for (var value : entries) {
+            var entry = value.getAsJsonObject();
+            String path = entry.get("path").getAsString();
+            if (!(path.equals("logs") && "directory".equals(entry.get("kind").getAsString()) || path.startsWith("logs/"))) {
+                throw new IOException("Failed output must contain only saved build logs");
+            }
         }
     }
 

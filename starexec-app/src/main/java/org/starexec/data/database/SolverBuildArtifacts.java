@@ -48,18 +48,29 @@ public final class SolverBuildArtifacts {
     /** Conserves exact verified bytes; publication still performs the current-owner checks. */
     public static boolean validateOutput(Connection connection, BuildExecutionContext build, String engine,
                                           String receiptDigest, Path root, OutputManifest manifest) throws SQLException {
-        String sql = "UPDATE starexec.solver_build_artifacts SET state='VALIDATED',byte_size=?,"
+        return storeVerifiedOutput(connection, build, engine, receiptDigest, root, manifest, "VALIDATED");
+    }
+
+    /** Freezes log bytes without making failed output eligible for solver publication. */
+    public static boolean validateFailureLogs(Connection connection, BuildExecutionContext build, String engine,
+                                               String receiptDigest, Path root, OutputManifest manifest) throws SQLException {
+        return storeVerifiedOutput(connection, build, engine, receiptDigest, root, manifest, "STAGED");
+    }
+
+    private static boolean storeVerifiedOutput(Connection connection, BuildExecutionContext build, String engine,
+                                                String receiptDigest, Path root, OutputManifest manifest, String state) throws SQLException {
+        String sql = "UPDATE starexec.solver_build_artifacts SET state=?,byte_size=?,"
                 + "manifest_payload=?,manifest_sha256=?,validated_at=clock_timestamp()"
                 + " WHERE id=? AND origin_pair_id=? AND attempt_no=? AND execution_token=?"
                 + " AND engine_identity=? AND execution_stopped_at IS NOT NULL AND execution_stop_receipt_sha256=?"
-                + " AND state='STAGED' AND storage_root=? AND artifact_path=?";
+                + " AND state='STAGED' AND validated_at IS NULL AND storage_root=? AND artifact_path=?";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setLong(1, manifest.byteSize()); statement.setString(2, manifest.payload());
-            statement.setString(3, manifest.sha256()); statement.setLong(4, build.artifactId());
-            statement.setInt(5, build.pairId()); statement.setInt(6, build.attemptNo());
-            statement.setObject(7, build.token()); statement.setString(8, engine);
-            statement.setString(9, receiptDigest); statement.setString(10, root.toString());
-            statement.setString(11, root.resolve("solver").toString());
+            statement.setString(1, state); statement.setLong(2, manifest.byteSize()); statement.setString(3, manifest.payload());
+            statement.setString(4, manifest.sha256()); statement.setLong(5, build.artifactId());
+            statement.setInt(6, build.pairId()); statement.setInt(7, build.attemptNo());
+            statement.setObject(8, build.token()); statement.setString(9, engine);
+            statement.setString(10, receiptDigest); statement.setString(11, root.toString());
+            statement.setString(12, root.resolve("solver").toString());
             return statement.executeUpdate() == 1;
         }
     }
@@ -77,6 +88,12 @@ public final class SolverBuildArtifacts {
 
     public static boolean publishOutput(Connection connection, long artifact) throws SQLException {
         return call(connection, "SELECT starexec.publish_solver_build_output(?)", artifact);
+    }
+
+    public static boolean recordFailedOutput(Connection connection, BuildExecutionContext build, String engine,
+                                             String receiptDigest) throws SQLException {
+        return call(connection, "SELECT starexec.record_failed_solver_build_output(?,?,?,?)",
+                build.artifactId(), build.token(), engine, receiptDigest);
     }
 
     public static Optional<StoredStopReceipt> findStopReceipt(int pairId, int attemptNo) throws SQLException {

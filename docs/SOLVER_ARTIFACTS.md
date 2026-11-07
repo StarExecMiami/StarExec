@@ -86,8 +86,22 @@ establish network-filesystem or power-loss durability.
 
 This coordinator does not activate dispatch, replace the legacy build recorder,
 enforce mount isolation or account filesystem quotas. Those integrations, failed-
-build log handling, source retention and cleanup remain required before enabling
+build log retrieval, source retention and cleanup remain required before enabling
 the complete execution-storage lifecycle.
+
+For a terminal unsuccessful build, `SolverBuildPublication.recordFailure` copies
+only saved logs and retains the uploaded source and solver path. It requires the
+same ordinary Podman or Kubernetes stop receipt; cancellation, non-execution,
+killed pairs and unknown dispositions cannot decide a scientific failure. Missing
+optional logs are conserved as an empty root; an empty log directory remains a
+directory in the manifest. Unavailable staging is an error, not missing logs.
+
+Verified failure manifests remain `STAGED` with immutable validation metadata,
+never `VALIDATED` executable output. `record_failed_solver_build_output` rechecks
+job, pair, attempt, solver owner, source and generation under the publication lock
+order, sets only the current solver's failure status, and rejects the artifact in
+one transaction. A retry verifies the existing log bytes without replacing their
+manifest or timestamps. A failed copy remains registered for trusted cleanup.
 
 `SolverBuildArtifacts` exposes parameterized JDBC operations for dispatch and
 engine adapters. Missing records and mismatched ownership return refusal; database
