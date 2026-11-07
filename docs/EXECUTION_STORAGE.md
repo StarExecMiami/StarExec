@@ -138,6 +138,39 @@ can substitute for that observation. An ambiguous start or release response must
 retain the same resource for reconciliation; never create or restart a replacement.
 The launcher alone does not connect these checks to backend dispatch or recovery.
 
+`BuildExecutionRuntime` captures expected device, filesystem root and inode
+coordinates from authorized host inputs and the reserved writable directories.
+Its trusted observation command reads only fixed procfs, cgroup and mount paths
+inside the exact held resource. The receiver requires a bounded, complete response,
+the expected launcher command, an active release handler,
+known unprivileged outer UID/GID mappings, separate namespaces, no capabilities,
+no privilege escalation and seccomp filtering. The process and observer must share
+the resource's mount and cgroup scope.
+It returns the process incarnation for independent comparison with provider identity.
+
+Effective memory and process limits must be finite and no greater than the booked
+policy. Effective CPU affinity must match both the declared CPU set and the
+process's allowed set; quota and period must match their explicit policy. This
+checks containment at observation time, not physical-core exclusivity or continued
+affinity after release. Process scheduling may change between procfs reads without
+changing process identity; a stopped or replaced launcher remains invalid.
+
+All private mounts must retain their expected device, root, inode, file type,
+access mode and private propagation. Additional mounts, including unknown read-only
+mounts, are refused. The image root must be read-only. Only specific virtual
+filesystems and verified standard character devices are allowed; writable device
+tmpfs mounts need finite aggregate bounds within the memory limit. Provider-managed
+host, hostname and DNS files are optional. When mounted, each requires a matching
+node observation, read-only access and a bounded regular file. An absent DNS file
+on a network-free container does not exempt any private mount or permit another
+mount in its place.
+
+Kernel validation does not establish provider ownership, image identity, source
+content integrity, physical storage capacity or current database admission. The
+controller must verify those independently and preserve the same owned resource
+through observation and release. Do not activate untrusted dispatch using this
+receiver alone.
+
 The leased admission operation reobserves the filesystem before committing the
 lease and existing engine-admission checks together. Resource registration cannot
 redirect an existing filesystem key, reuse an existing root under a second key or
@@ -226,6 +259,17 @@ Those process tests cover early execution, explicit release, unrelated signals,
 expiration, cancellation and inherited startup-file injection. They do not verify
 database admission or the physical capacity of a deployed provider resource.
 
+Run the kernel-observation contract separately:
+
+```sh
+mvn -B -pl starexec-app -Dtest=BuildExecutionRuntimeTest,BuildExecutionMountsTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+```
+
+The runtime tests exercise exact mount identity, input aliases, metadata omissions,
+changed namespace/user mappings, CPU widening, missing process limits, malformed
+responses and attempts to substitute an already executing jobscript for the hold.
+They do not launch a deployed application or establish a physical capacity bound.
+
 After applying the migrations to a disposable PostgreSQL database configured
 through `STAREXEC_DB_*`, run:
 
@@ -266,6 +310,12 @@ tests.
   describe total blocks and inodes.
 - [Linux mount information](https://man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html)
   describes namespace mount identities, roots and device numbers.
+- [Linux cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)
+  defines effective CPU sets and memory, CPU and process controller limits.
+- [OCI runtime configuration](https://github.com/opencontainers/runtime-spec/blob/main/config.md)
+  includes read-only proc subtrees; they must retain the same proc filesystem identity.
+- [Podman DNS configuration](https://docs.podman.io/en/v5.7.0/markdown/podman-run.1.html#dns-ipaddr)
+  permits disabling the provider-managed DNS file; observation follows actual mounts.
 - [ext4 capacity and full-option reporting](https://github.com/torvalds/linux/blob/v7.0/fs/ext4/super.c)
   distinguishes project-quota-filtered statistics from whole-filesystem counts.
 - [Podman volume quota requirements](https://docs.podman.io/en/v5.7.0/markdown/podman-volume-create.1.html#quotas)
