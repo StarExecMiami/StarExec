@@ -581,6 +581,31 @@ public class SolverBuildRecordSqlTest extends Common {
 	}
 
 	@Test
+	public void helperRetirementAndSolverDeletionDoNotDeadlock() throws Exception {
+		int solver = insertSolver(source, UNBUILT); Path input = benchmarkFile();
+		int benchmark = insertBenchmark("starexec_build", input); buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE);
+		FinishedSolverBuild snapshot = finishedBuildOf(solver); var executor = Executors.newFixedThreadPool(2);
+		try (Connection holder = directConnection(); Connection retiring = directConnection(); Connection deleting = directConnection()) {
+			holder.setAutoCommit(false);
+			try (PreparedStatement ps = holder.prepareStatement("SELECT id FROM starexec.solvers WHERE id=? FOR UPDATE")) {
+				ps.setInt(1, solver); try (ResultSet rs = ps.executeQuery()) { assertTrue(rs.next()); }
+			}
+			int retirementPid = backendPid(retiring); int deletionPid = backendPid(deleting);
+			var retirement = executor.submit(() -> finishLegacy(retiring, snapshot, false));
+			awaitLock(retirementPid);
+			var deletion = executor.submit(() -> {
+				try (PreparedStatement ps = deleting.prepareStatement("SELECT count(*) FROM starexec.request_solver_storage_deletion(?)")) {
+					ps.setInt(1, solver); try (ResultSet rs = ps.executeQuery()) { assertTrue(rs.next()); return rs.getInt(1); }
+				}
+			});
+			awaitLock(deletionPid); holder.commit();
+			assertEquals(input.toString(), retirement.get(10, TimeUnit.SECONDS));
+			assertEquals(1, deletion.get(10, TimeUnit.SECONDS));
+			assertTrue(deleted(benchmark)); assertTrue(Files.exists(input));
+		} finally { executor.shutdownNow(); assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS)); }
+	}
+
+	@Test
 	public void helperAccountingIsSettledExactlyOnceBeforeFileCleanup() throws Exception {
 		int solver = insertSolver(source, UNBUILT); Path input = benchmarkFile();
 		int benchmark = insertBenchmark("starexec_build", input); buildJob(solver, benchmark, StatusCode.STATUS_COMPLETE);

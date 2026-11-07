@@ -164,6 +164,224 @@ class SolverBuildPublicationSqlTest {
         assertEquals("build log é\n", Files.readString(build.staging().resolve("logs/starexec_build_log")));
     }
 
+    @ParameterizedTest @ValueSource(strings = {"source/direct", "source/recycled", "published/direct", "published/recycled", "failed/direct", "failed/recycled"})
+    void deletionRetainsManagedBuildBytesAndTheirExistingCharge(String scenario) throws Exception {
+        Common.initialize();
+        if (scenario.startsWith("published")) { stopped("podman", null); assertTrue(publish()); }
+        if (scenario.startsWith("failed")) { failedStop("podman"); assertTrue(recordFailure()); }
+        execute(connection, "UPDATE starexec.users SET disk_size=10020 WHERE id=?", user);
+        Path legacyLog = Files.createDirectory(files.resolve("legacy-log-directory")).resolve(R.SOLVER_BUILD_OUTPUT);
+        Files.writeString(legacyLog, "previous log");
+        boolean recycled = scenario.endsWith("recycled");
+        if (recycled) execute(connection, "UPDATE starexec.solvers SET recycled=true WHERE id=?", solver);
+        try (var solvers = mockStatic(Solvers.class, CALLS_REAL_METHODS)) {
+            solvers.when(() -> Solvers.getSolverBuildOutput(solver)).thenReturn(legacyLog.toFile());
+            assertTrue(recycled ? Solvers.setRecycledSolversToDeleted(user) : Solvers.delete(solver));
+        }
+        assertTrue(Files.isRegularFile(source.resolve("starexec_build")), "Managed source must survive logical deletion");
+        if (scenario.startsWith("published")) assertTrue(Files.isRegularFile(root().resolve("solver/program")), "Published executable must survive logical deletion");
+        if (!scenario.startsWith("source")) assertTrue(Files.isRegularFile(root().resolve("logs/" + R.SOLVER_BUILD_OUTPUT)), "Conserved log must survive logical deletion");
+        assertEquals("previous log", Files.readString(legacyLog));
+        assertEquals("true", text(connection, "SELECT deleted::text FROM starexec.solvers WHERE id=?", solver));
+        assertEquals(20, number(connection, "SELECT disk_size FROM starexec.solvers WHERE id=?", solver));
+        assertEquals(10020, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+        unchangedSource();
+    }
+
+    private int legacySolver(Path path) throws Exception {
+        return (int) number(connection, "INSERT INTO starexec.solvers(user_id,name,uploaded,path,disk_size,build_status)"
+                + " VALUES (?,'legacy-cleanup',now(),?,20,2) RETURNING id", user, path.toString());
+    }
+
+    private Path legacyLog(int id) throws Exception {
+        return Files.writeString(Files.createDirectory(files.resolve("legacy-log-" + id)).resolve(R.SOLVER_BUILD_OUTPUT), "legacy log");
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void catalogueRetainsDeletedBuildsAfterTheirStageReferenceIsGone(boolean recycled) throws Exception {
+        Common.initialize(); stopped("podman", null); assertTrue(publish());
+        execute(connection, "DELETE FROM starexec.jobpair_stage_data WHERE jobpair_id=?", pair);
+        execute(connection, "UPDATE starexec.users SET disk_size=10020 WHERE id=?", user);
+        if (recycled) execute(connection, "UPDATE starexec.solvers SET recycled=true WHERE id=?", solver);
+        assertTrue(recycled ? Solvers.setRecycledSolversToDeleted(user) : Solvers.delete(solver));
+        assertEquals("compiled binary \u03b1\n", Files.readString(root().resolve("solver/program")));
+        assertEquals("build log \u00e9\n", Files.readString(root().resolve("logs/" + R.SOLVER_BUILD_OUTPUT)));
+        assertEquals(10020, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+        unchangedSource();
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void unreferencedLegacyDeletionSettlesOnlyAfterFilesAreGoneAndOnlyOnce(boolean recycled) throws Exception {
+        Common.initialize();
+        Path programs = privateDirectory(files.resolve("ordinary-solver")); Files.writeString(programs.resolve("program"), "legacy program");
+        Path original = privateDirectory(files.resolve("ordinary-solver_src")); Files.writeString(original.resolve("source"), "legacy source");
+        int ordinary = legacySolver(programs); Path log = legacyLog(ordinary);
+        execute(connection, "UPDATE starexec.users SET disk_size=10040 WHERE id=?", user);
+        if (recycled) execute(connection, "UPDATE starexec.solvers SET recycled=true WHERE id=?", ordinary);
+        try (var solvers = mockStatic(Solvers.class, CALLS_REAL_METHODS)) {
+            solvers.when(() -> Solvers.getSolverBuildOutput(ordinary)).thenReturn(log.toFile());
+            assertTrue(recycled ? Solvers.setRecycledSolversToDeleted(user) : Solvers.delete(ordinary));
+            assertThrows(java.nio.file.NoSuchFileException.class, () -> Files.readAttributes(programs, BasicFileAttributes.class));
+            assertThrows(java.nio.file.NoSuchFileException.class, () -> Files.readAttributes(original, BasicFileAttributes.class));
+            assertThrows(java.nio.file.NoSuchFileException.class, () -> Files.readAttributes(log.getParent(), BasicFileAttributes.class));
+            assertEquals(0, number(connection, "SELECT disk_size FROM starexec.solvers WHERE id=?", ordinary));
+            assertEquals(10020, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+            assertTrue(recycled ? Solvers.setRecycledSolversToDeleted(user) : Solvers.delete(ordinary));
+            assertEquals(10020, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+            assertEquals(1, number(connection, "SELECT count(*) FROM starexec.solvers WHERE deleted"), "The cleanup fixture must own the sole deleted asset");
+            assertTrue(Solvers.cleanOrphanedDeletedSolvers());
+            assertEquals(0, number(connection, "SELECT count(*) FROM starexec.solvers WHERE id=?", ordinary));
+            assertEquals(10020, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+        }
+        unchangedSource();
+    }
+
+    @Test void failedLegacyCleanupRetainsItsChargeAndCanRetryFromTheTombstone() throws Exception {
+        Common.initialize();
+        Path programs = privateDirectory(files.resolve("retry-solver")); Files.writeString(programs.resolve("program"), "legacy program");
+        int ordinary = legacySolver(programs); Path log = legacyLog(ordinary);
+        execute(connection, "UPDATE starexec.users SET disk_size=10040 WHERE id=?", user);
+        try (var solvers = mockStatic(Solvers.class, CALLS_REAL_METHODS)) {
+            solvers.when(() -> Solvers.getSolverBuildOutput(ordinary)).thenReturn(log.toFile());
+            Files.setPosixFilePermissions(files, PosixFilePermissions.fromString("---------"));
+            try {
+                assertFalse(Solvers.delete(ordinary));
+            } finally { Files.setPosixFilePermissions(files, PosixFilePermissions.fromString("rwx------")); }
+            assertEquals("true", text(connection, "SELECT deleted::text FROM starexec.solvers WHERE id=?", ordinary));
+            assertEquals(20, number(connection, "SELECT disk_size FROM starexec.solvers WHERE id=?", ordinary));
+            assertEquals(10040, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+            assertEquals("legacy program", Files.readString(programs.resolve("program")));
+            assertTrue(Solvers.delete(ordinary));
+            assertEquals(10020, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+        }
+        unchangedSource();
+    }
+
+    @Test void recycledBatchSeparatesRetainedAndUnreferencedStorage() throws Exception {
+        Common.initialize(); stopped("podman", null); assertTrue(publish());
+        Path programs = privateDirectory(files.resolve("batch-ordinary")); Files.writeString(programs.resolve("program"), "legacy program");
+        int ordinary = legacySolver(programs); Path log = legacyLog(ordinary);
+        execute(connection, "UPDATE starexec.solvers SET recycled=true WHERE id IN (?,?)", solver, ordinary);
+        execute(connection, "UPDATE starexec.users SET disk_size=10040 WHERE id=?", user);
+        try (var solvers = mockStatic(Solvers.class, CALLS_REAL_METHODS)) {
+            solvers.when(() -> Solvers.getSolverBuildOutput(ordinary)).thenReturn(log.toFile());
+            assertTrue(Solvers.setRecycledSolversToDeleted(user));
+        }
+        assertEquals(2, number(connection, "SELECT count(*) FROM starexec.solvers WHERE user_id=? AND deleted", user));
+        assertEquals(20, number(connection, "SELECT disk_size FROM starexec.solvers WHERE id=?", solver));
+        assertEquals(0, number(connection, "SELECT disk_size FROM starexec.solvers WHERE id=?", ordinary));
+        assertEquals(10020, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+        assertEquals("compiled binary \u03b1\n", Files.readString(root().resolve("solver/program")));
+        unchangedSource();
+    }
+
+    @Test void anotherAssetCannotDeleteAConservedSourceThroughAPathAlias() throws Exception {
+        Common.initialize(); int alias = legacySolver(source); Path log = legacyLog(alias);
+        execute(connection, "UPDATE starexec.users SET disk_size=10040 WHERE id=?", user);
+        try (var solvers = mockStatic(Solvers.class, CALLS_REAL_METHODS)) {
+            solvers.when(() -> Solvers.getSolverBuildOutput(alias)).thenReturn(log.toFile());
+            assertTrue(Solvers.delete(alias));
+        }
+        unchangedSource();
+        assertEquals(10040, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"symbolic", "hard"})
+    void legacyPermissionRepairNeverMutatesLinkedConservedTrees(String kind) throws Exception {
+        Common.initialize(); stopped("podman", null); assertTrue(publish());
+        Path programs = privateDirectory(files.resolve("readonly-legacy")); Files.writeString(programs.resolve("program"), "legacy program");
+        if (kind.equals("symbolic")) Files.createSymbolicLink(programs.resolve("library"), root());
+        else Files.createLink(programs.resolve("library"), root().resolve("solver/program"));
+        Files.setPosixFilePermissions(programs, PosixFilePermissions.fromString("r-xr-xr-x"));
+        int ordinary = legacySolver(programs); Path log = legacyLog(ordinary);
+        var originalMode = Files.getPosixFilePermissions(root().resolve("solver/program"));
+        execute(connection, "UPDATE starexec.users SET disk_size=10040 WHERE id=?", user);
+        try (var solvers = mockStatic(Solvers.class, CALLS_REAL_METHODS)) {
+            solvers.when(() -> Solvers.getSolverBuildOutput(ordinary)).thenReturn(log.toFile());
+            assertTrue(Solvers.delete(ordinary));
+        }
+        assertEquals(originalMode, Files.getPosixFilePermissions(root().resolve("solver/program")), "Cleanup must not change a linked artifact's permissions");
+        assertTrue(publish());
+        unchangedSource();
+    }
+
+    @Test void stageReferencesRetainAnUploadedSolverWithoutAnyBuildCatalogueEntry() throws Exception {
+        Common.initialize();
+        Path programs = privateDirectory(files.resolve("referenced-upload")); Files.writeString(programs.resolve("program"), "uploaded program");
+        int ordinary = legacySolver(programs);
+        long job = number(connection, "INSERT INTO starexec.jobs(user_id,name,total_pairs,disk_size,buildjob) VALUES (?,'scientific',1,0,false) RETURNING id", user);
+        long scientificPair = number(connection, "INSERT INTO starexec.job_pairs(job_id,status_code,primary_jobpair_data) VALUES (?,7,1) RETURNING id", job);
+        execute(connection, "INSERT INTO starexec.jobpair_stage_data(jobpair_id,stage_number,status_code,solver_id,disk_size) VALUES (?,1,7,?,0)", scientificPair, ordinary);
+        execute(connection, "UPDATE starexec.users SET disk_size=10040 WHERE id=?", user);
+        assertEquals(0, number(connection, "SELECT count(*) FROM starexec.solver_build_artifacts WHERE origin_solver_id=?", ordinary));
+        assertTrue(Solvers.delete(ordinary));
+        assertEquals("uploaded program", Files.readString(programs.resolve("program")));
+        assertEquals(10040, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"owner", "path", "charge"})
+    void settlementRefusesAChangedDeletionSnapshot(String changed) throws Exception {
+        Path programs = privateDirectory(files.resolve("settlement-snapshot")); Files.writeString(programs.resolve("program"), "legacy program");
+        int ordinary = legacySolver(programs);
+        execute(connection, "UPDATE starexec.users SET disk_size=10040 WHERE id=?", user);
+        assertEquals(1, number(connection, "SELECT count(*) FROM starexec.request_solver_storage_deletion(?)", ordinary));
+        if (changed.equals("path")) execute(connection, "UPDATE starexec.solvers SET path=? WHERE id=?", files.resolve("different-path").toString(), ordinary);
+        if (changed.equals("charge")) execute(connection, "UPDATE starexec.solvers SET disk_size=21 WHERE id=?", ordinary);
+        if (changed.equals("owner")) {
+            otherUser = (int) number(connection, "INSERT INTO starexec.users(email,first_name,last_name,institution,created,password,"
+                    + "disk_quota,job_pair_quota,disk_size) VALUES (?,'Other','Owner','synthetic',now(),'synthetic',1000000,100,0) RETURNING id",
+                    "del-" + UUID.randomUUID() + "@example.invalid");
+            execute(connection, "UPDATE starexec.solvers SET user_id=? WHERE id=?", otherUser, ordinary);
+        }
+        assertEquals("false", text(connection, "SELECT starexec.settle_legacy_solver_deletion(?,?,?,?)::text", ordinary, user, programs.toString(), 20));
+        assertEquals(10040, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+        assertEquals("legacy program", Files.readString(programs.resolve("program")));
+    }
+
+    @Test void recycleAfterTheCommittedSelectionWaitsForTheNextPurge() throws Exception {
+        Common.initialize();
+        Path programs = privateDirectory(files.resolve("selected-ordinary")); Files.writeString(programs.resolve("program"), "selected program");
+        int ordinary = legacySolver(programs); Path log = legacyLog(ordinary);
+        Path latePrograms = privateDirectory(files.resolve("late-recycled")); Files.writeString(latePrograms.resolve("program"), "late program");
+        int late = legacySolver(latePrograms);
+        execute(connection, "UPDATE starexec.solvers SET recycled=true WHERE id=?", ordinary);
+        execute(connection, "UPDATE starexec.users SET disk_size=10060 WHERE id=?", user);
+        try (var solvers = mockStatic(Solvers.class, CALLS_REAL_METHODS);
+             var utility = mockStatic(org.starexec.util.Util.class, call -> {
+                 if (call.getMethod().getName().equals("safeDeleteDirectory") && programs.toString().equals(call.getArgument(0))) {
+                     execute(connection, "UPDATE starexec.solvers SET recycled=true WHERE id=?", late);
+                 }
+                 return call.callRealMethod();
+             })) {
+            solvers.when(() -> Solvers.getSolverBuildOutput(ordinary)).thenReturn(log.toFile());
+            assertEquals("selected program", Files.readString(programs.resolve("program")));
+            assertTrue(Solvers.setRecycledSolversToDeleted(user));
+        }
+        assertEquals("false", text(connection, "SELECT deleted::text FROM starexec.solvers WHERE id=?", late));
+        assertEquals("true", text(connection, "SELECT recycled::text FROM starexec.solvers WHERE id=?", late));
+        assertEquals("late program", Files.readString(latePrograms.resolve("program")));
+        assertEquals(10040, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+    }
+
+    @Test void permanentRemovalCannotDropRetainedCleanupMetadata() throws Exception {
+        Common.initialize(); execute(connection, "UPDATE starexec.users SET disk_size=10020 WHERE id=?", user);
+        assertTrue(Solvers.delete(solver));
+        assertFalse(Solvers.deleteAndRemoveSolver(solver));
+        assertEquals(1, number(connection, "SELECT count(*) FROM starexec.solvers WHERE id=?", solver));
+        assertEquals(20, number(connection, "SELECT disk_size FROM starexec.solvers WHERE id=?", solver));
+        unchangedSource();
+    }
+
+    @Test void orphanCleanupCannotEraseManagedStorageOrItsCharge() throws Exception {
+        Common.initialize(); execute(connection, "UPDATE starexec.users SET disk_size=10020 WHERE id=?", user);
+        assertTrue(Solvers.delete(solver));
+        assertEquals(1, number(connection, "SELECT count(*) FROM starexec.solvers WHERE deleted"), "The global cleanup fixture must own the sole deleted asset");
+        assertTrue(Solvers.cleanOrphanedDeletedSolvers());
+        assertEquals(1, number(connection, "SELECT count(*) FROM starexec.solvers WHERE id=?", solver));
+        assertEquals(20, number(connection, "SELECT disk_size FROM starexec.solvers WHERE id=?", solver));
+        unchangedSource();
+    }
+
     private String readRestBuildLog(int reader) throws Exception {
         return readRestBuildLog(reader, false);
     }
