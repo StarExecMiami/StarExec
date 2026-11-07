@@ -2829,6 +2829,8 @@ public class Solvers {
 				+ " JOIN starexec.benchmarks bm ON bm.id = b.bench_id"
 				+ " JOIN starexec.solvers s ON s.id = b.solver_id"
 				+ " WHERE starexec.IsTerminalPairStatus(b.status_code) AND bm.deleted IS NOT TRUE AND bm.name = ?"
+				+ " AND NOT EXISTS (SELECT 1 FROM starexec.solver_build_artifacts a"
+				+ " WHERE a.origin_pair_id=b.pair_id AND a.execution_token IS NOT NULL)"
 				+ " ORDER BY b.job_id";
 		List<FinishedSolverBuild> builds = new ArrayList<>();
 		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
@@ -2860,19 +2862,30 @@ public class Solvers {
 	 * @throws SQLException if the update fails
 	 */
 	public static boolean recordBuildOutcome(FinishedSolverBuild build, String builtPath) throws SQLException {
-		boolean built = builtPath != null;
-		final String sql = "UPDATE starexec.solvers s SET build_status = ?, path = ?"
-				+ " WHERE s.id = ? AND s.path = ? AND s.build_status = ?"
-				+ " AND NOT EXISTS (SELECT 1" + BUILD_JOB_PAIRS + " AND sd.solver_id = s.id AND j.id > ?)";
-		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
-			ps.setInt(1, built ? SolverBuildStatus.SolverBuildStatusCode.BUILT_BY_STAREXEC.getVal()
-					: SolverBuildStatus.SolverBuildStatusCode.BUILD_FAILED.getVal());
-			ps.setString(2, built ? builtPath : build.getSolverPath());
-			ps.setInt(3, build.getSolverId());
-			ps.setString(4, build.getSolverPath());
-			ps.setInt(5, build.getSolverBuildStatus().getVal());
-			ps.setInt(6, build.getJobId());
-			return ps.executeUpdate() == 1;
+		return finishLegacyBuild(build, builtPath, true).isPresent();
+	}
+
+	/** Claims one unbound helper for deletion, settling its accounting before returning its path. */
+	public static Optional<String> claimLegacyBuildRetirement(FinishedSolverBuild build) throws SQLException {
+		return finishLegacyBuild(build, null, false);
+	}
+
+	private static Optional<String> finishLegacyBuild(FinishedSolverBuild build, String builtPath,
+			boolean apply) throws SQLException {
+		try (Connection connection = Common.getConnection()) {
+			return Common.runTransactional(connection, transaction -> {
+				try (PreparedStatement statement = transaction.prepareStatement(
+						"SELECT starexec.finish_legacy_solver_build(?,?,?,?,?,?,?,?,?,?)")) {
+					statement.setInt(1, build.getJobId()); statement.setInt(2, build.getPairId());
+					statement.setInt(3, build.getBenchmarkId()); statement.setInt(4, build.getSolverId());
+					statement.setString(5, build.getSolverPath()); statement.setInt(6, build.getSolverBuildStatus().getVal());
+					statement.setInt(7, build.getPairStatus().getVal()); statement.setString(8, builtPath);
+					statement.setString(9, R.SOLVER_BUILD_SCRIPT); statement.setBoolean(10, apply);
+					try (ResultSet result = statement.executeQuery()) {
+						return result.next() ? Optional.ofNullable(result.getString(1)) : Optional.empty();
+					}
+				}
+			});
 		}
 	}
 

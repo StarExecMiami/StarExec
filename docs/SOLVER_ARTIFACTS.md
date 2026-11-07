@@ -91,6 +91,21 @@ enforce mount isolation or account filesystem quotas. Those integrations, failed
 build log retrieval, source retention and cleanup remain required before enabling
 the complete execution-storage lifecycle.
 
+The legacy recorder excludes pairs with any execution-bound attempt. Its SQL
+outcome and helper-retirement operations recheck that boundary under the normal
+identity locks, including when an execution is prepared after the initial read.
+An unbound legacy result rejects its empty catalogue reservation before updating
+the solver, preventing a late execution from claiming the same input. Preparation
+checks that durable rejection and the helper under a shared row lock; retirement
+holds an exclusive helper lock and refuses a helper referenced by another pair.
+
+Only a successful retirement claim returns the helper path after database
+deletion and accounting commit. Filesystem removal then uses the existing bounded
+deletion utility. A refused claim never removes files or applies execution-bound
+outcomes. Soft-deleted helper paths remain available for cleanup after filesystem
+failure. This preserves unbound legacy behavior; it does not supply physical-stop
+proof for legacy jobs or activate the isolated execution recorder.
+
 For a terminal unsuccessful build, `SolverBuildPublication.recordFailure` copies
 only saved logs and retains the uploaded source and solver path. It requires the
 same ordinary Podman or Kubernetes stop receipt; cancellation, non-execution,

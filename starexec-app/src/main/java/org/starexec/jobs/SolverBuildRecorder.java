@@ -1,11 +1,12 @@
 package org.starexec.jobs;
 
-import org.starexec.data.database.Benchmarks;
+import org.starexec.constants.R;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.to.FinishedSolverBuild;
 import org.starexec.data.to.SolverBuildStatus.SolverBuildStatusCode;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
+import org.starexec.util.Util;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -133,7 +134,9 @@ public final class SolverBuildRecorder {
 
 		// Last, so that a pass that fails before this applies the job again. That is safe: the solver is only
 		// changed while nothing its outcome was decided on has changed.
-		if (!Benchmarks.delete(build.getBenchmarkId())) {
+		var helper = Solvers.claimLegacyBuildRetirement(build);
+		if (helper.isEmpty()) return;
+		if (!Util.safeDeleteFileAndEmptyParents(helper.get(), R.getBenchmarkPath())) {
 			log.warn("recordFinishedBuilds", "the helper benchmark " + build.getBenchmarkId() + " of " + build
 					+ " could not be deleted completely");
 		}
