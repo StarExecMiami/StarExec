@@ -155,7 +155,7 @@ public final class DedicatedStorageResource {
         return result;
     }
 
-    private static List<Mount> mounts() throws IOException {
+    static List<Mount> mounts() throws IOException {
         try (var stream = Files.newInputStream(Path.of("/proc/self/mountinfo"))) {
             byte[] bytes = stream.readNBytes(1024 * 1024 + 1);
             if (bytes.length > 1024 * 1024) throw new IOException("Mount table exceeds its inspection limit");

@@ -82,6 +82,32 @@ must recheck the current attempt and ownership immediately before enabling execu
 Cancellation, contention and unavailable capacity refuse capture; rollback failures
 remain errors. Backend mount construction and runtime attestation remain required.
 
+`BuildExecutionMounts` constructs a private build layout from that leased snapshot.
+It observes bounded source bytes, the conserved helper and trusted control files;
+it rejects escaping links, hard links, special files, nested source mounts and
+read-only inputs that overlap writable storage. Input observation does not change
+permissions or relax immutable-output publication checks. Protected host ancestors
+and stable mount topology are prerequisites, including between observation and
+provider creation.
+
+The source and helper use fixed read-only input paths, and only the three trusted
+control files are exposed under the control directory. Work, home, monitor output,
+temporary and runtime scratch directories belong to the same leased resource.
+Explicit bindings cover `/tmp`, `/run` and `/var/tmp` so Podman's automatic
+read-only-root temporary mounts cannot introduce unreserved storage. Unknown or
+nonempty staging contents, replaced directories and changed input bytes refuse
+admission; failures preserve files and reservations for verified cleanup.
+
+Podman rendering starts with a new host configuration, preserves configured CPU
+and memory limits and excludes inherited data binds, volumes, devices and tmpfs.
+It requires a positive memory limit, a read-only root, private bind propagation,
+dropped capabilities, no privilege escalation and no automatic restart. Shared
+host, container and path-based network namespaces are refused. The created
+resource still needs independent mount, memory and user-namespace attestation;
+serialized flags alone do not establish those properties. Runtime device files
+must be distinguished from allocatable storage using their actual file type and
+device identity, without exempting unknown writable mounts.
+
 The leased admission operation reobserves the filesystem before committing the
 lease and existing engine-admission checks together. Resource registration cannot
 redirect an existing filesystem key, reuse an existing root under a second key or
@@ -136,13 +162,19 @@ or made safe by adding this observer.
 Run the capacity and mount-contract tests without a database:
 
 ```sh
-mvn -B -pl starexec-app -Dtest=DedicatedStorageResourceTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+mvn -B -pl starexec-app -Dtest=BuildExecutionMountsTest,SolverArtifactTreeTest,DedicatedStorageResourceTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
 ```
 
 These tests check parsing, overflow, aliases, subtrees, nested mounts, protected
 roots and refusal of an ordinary directory. They compare the installed statistics
 command with Java's capacity observation. Model checks do not demonstrate a real
 bounded filesystem under hostile writes.
+
+The layout tests verify exact read-only mappings, reserved runtime scratch,
+unchanged input bytes, authority revocation, permission/identity changes and safe
+directory retries. They also preserve strict immutable-output verification.
+Database authority and physical capacity are synthetic in these component tests;
+they do not verify dispatcher activation or a deployed application flow.
 
 After applying the migrations to a disposable PostgreSQL database configured
 through `STAREXEC_DB_*`, run:
@@ -174,6 +206,8 @@ tests.
 
 ## References
 
+- [Podman read-only temporary mounts](https://docs.podman.io/en/v5.7.0/markdown/podman-run.1.html#read-only-tmpfs)
+  describe writable runtime scratch defaults that must be overridden or bounded.
 - [Linux ext4 superblock fields](https://docs.kernel.org/filesystems/ext4/super.html)
   describe total blocks and inodes.
 - [Linux mount information](https://man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html)

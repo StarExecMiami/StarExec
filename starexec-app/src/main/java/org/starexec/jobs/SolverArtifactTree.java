@@ -46,6 +46,15 @@ public final class SolverArtifactTree {
 
     private SolverArtifactTree() { }
 
+    /** Observes confined input bytes without changing their original modes or authorizing publication. */
+    public static Snapshot inspectInputDirectory(Path directory, long maxBytes, int maxEntries) throws IOException {
+        if (maxBytes < 0 || maxEntries < 1) throw new IllegalArgumentException("Invalid input observation limits");
+        Path input = directory.toAbsolutePath();
+        try (DescriptorDirectory ignored = DescriptorDirectory.open(input)) {
+            return scan(input.toRealPath(), null, maxBytes, maxEntries, true, false);
+        }
+    }
+
     /** Creates a new destination; an existing directory or link is never reused. */
     public static Snapshot copy(Path source, Path destination, long maxBytes, int maxEntries) throws IOException {
         return copy(source, destination, maxBytes, maxEntries, false, true);
@@ -215,6 +224,11 @@ public final class SolverArtifactTree {
     }
 
     private static Snapshot scan(Path root, Path destination, long maxBytes, int maxEntries, boolean requireFile) throws IOException {
+        return scan(root, destination, maxBytes, maxEntries, requireFile, true);
+    }
+
+    private static Snapshot scan(Path root, Path destination, long maxBytes, int maxEntries,
+                                 boolean requireFile, boolean frozen) throws IOException {
         List<Entry> entries = new ArrayList<>();
         List<Path> directories = new ArrayList<>();
         long[] bytes = {0};
@@ -235,7 +249,7 @@ public final class SolverArtifactTree {
 
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attributes) throws IOException {
-                if (destination == null && !Files.getPosixFilePermissions(dir, LinkOption.NOFOLLOW_LINKS).equals(DIRECTORY)) {
+                if (destination == null && frozen && !Files.getPosixFilePermissions(dir, LinkOption.NOFOLLOW_LINKS).equals(DIRECTORY)) {
                     throw new IOException("Artifact directory permissions differ");
                 }
                 if (!dir.equals(root)) {
@@ -272,7 +286,7 @@ public final class SolverArtifactTree {
                     boolean executable = permissions.contains(PosixFilePermission.OWNER_EXECUTE)
                             || permissions.contains(PosixFilePermission.GROUP_EXECUTE)
                             || permissions.contains(PosixFilePermission.OTHERS_EXECUTE);
-                    if (destination == null && !permissions.equals(executable ? EXECUTABLE : FILE)) {
+                    if (destination == null && frozen && !permissions.equals(executable ? EXECUTABLE : FILE)) {
                         throw new IOException("Artifact file permissions differ");
                     }
                     MessageDigest hash = sha256();
