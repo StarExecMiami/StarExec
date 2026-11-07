@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.starexec.backend.BuildExecutionContext;
 import org.starexec.constants.R;
 import org.starexec.data.database.SolverBuildArtifacts;
 import org.starexec.data.to.SolverBuildStopReceipt;
@@ -712,6 +713,100 @@ public class SolverArtifactPublicationSqlTest {
             var stored = SolverBuildArtifacts.find(observer, pair, 1).orElseThrow();
             assertEquals("PLANNED", stored.state()); assertNull(stored.stoppedAt());
             assertTrue(SolverBuildArtifacts.findStopReceipt(observer, pair, 1).isEmpty());
+        }
+    }
+
+    private final class SingleConnectionPool implements AutoCloseable {
+        private final java.lang.reflect.Field field;
+        private final Object previous;
+        private final org.apache.tomcat.jdbc.pool.DataSource pool;
+
+        SingleConnectionPool() throws Exception {
+            var properties = new org.apache.tomcat.jdbc.pool.PoolProperties();
+            properties.setUrl(R.POSTGRES_URL + (R.POSTGRES_URL.contains("?") ? "&" : "?") + "currentSchema=starexec,public");
+            properties.setDriverClassName(R.POSTGRES_DRIVER);
+            properties.setUsername(R.POSTGRES_USERNAME); properties.setPassword(R.POSTGRES_PASSWORD);
+            properties.setDefaultAutoCommit(true); properties.setInitialSize(1);
+            properties.setMinIdle(1); properties.setMaxIdle(1); properties.setMaxActive(1);
+            properties.setMaxWait(2000); properties.setJmxEnabled(false);
+            pool = new org.apache.tomcat.jdbc.pool.DataSource(properties);
+            field = org.starexec.data.database.Common.class.getDeclaredField("dataPool"); field.setAccessible(true);
+            previous = field.get(null); field.set(null, pool);
+        }
+
+        @Override public void close() throws Exception {
+            try { field.set(null, previous); } finally { pool.close(); }
+        }
+    }
+
+    private BuildExecutionContext preparedAdmissionFixture() throws Exception {
+        Path staging = seedFilesystemBuild(); UUID token = UUID.randomUUID();
+        assertTrue(SolverBuildArtifacts.prepare(con, pair, 1, token, staging));
+        var row = SolverBuildArtifacts.find(con, pair, 1).orElseThrow();
+        return new BuildExecutionContext(row.id(), pair, 1, token, Path.of(row.sourcePath()), staging);
+    }
+
+    @Test void aStandaloneAdmissionReturnsAPooledConnectionReadyForItsReceipt() throws Exception {
+        var context = preparedAdmissionFixture();
+        try (var fixture = new SingleConnectionPool()) {
+            long pid;
+            try (Connection initial = fixture.pool.getConnection()) {
+                assertTrue(initial.getAutoCommit()); pid = number(initial, "SELECT pg_backend_pid()");
+            }
+            assertTrue(SolverBuildArtifacts.admitExecution(context, "engine-a"));
+            var receipt = cancelledReceipt(Instant.now());
+            assertTrue(SolverBuildArtifacts.recordCancelled(pair, 1, context.token(), "engine-a", receipt));
+            try (Connection recycled = fixture.pool.getConnection(); Connection observer = connect()) {
+                assertTrue(recycled.getAutoCommit()); assertEquals(pid, number(recycled, "SELECT pg_backend_pid()"));
+                assertEquals("REJECTED", SolverBuildArtifacts.find(observer, pair, 1).orElseThrow().state());
+                assertEquals(receipt.payload(), SolverBuildArtifacts.findStopReceipt(observer, pair, 1).orElseThrow().receipt().payload());
+            }
+        }
+    }
+
+    @Test void aRefusedStandaloneAdmissionRestoresTheBorrowedConnection() throws Exception {
+        var context = preparedAdmissionFixture();
+        var refused = new BuildExecutionContext(context.artifactId(), pair, 1, UUID.randomUUID(), context.source(), context.staging());
+        try (var fixture = new SingleConnectionPool()) {
+            assertFalse(SolverBuildArtifacts.admitExecution(refused, "engine-a"));
+            try (Connection recycled = fixture.pool.getConnection(); Connection observer = connect()) {
+                assertTrue(recycled.getAutoCommit()); assertNull(SolverBuildArtifacts.find(observer, pair, 1).orElseThrow().engineIdentity());
+            }
+        }
+    }
+
+    @Test void aFailedStandaloneAdmissionRestoresTheBorrowedConnection() throws Exception {
+        var context = preparedAdmissionFixture();
+        try (var fixture = new SingleConnectionPool()) {
+            try (Connection initial = fixture.pool.getConnection(); Statement statement = initial.createStatement()) {
+                statement.execute("SET lock_timeout='200ms'");
+            }
+            con.setAutoCommit(false);
+            try {
+                execute(con, "SELECT id FROM solver_build_artifacts WHERE id=" + artifact + " FOR UPDATE");
+                assertThrows(SQLException.class, () -> SolverBuildArtifacts.admitExecution(context, "engine-a"));
+            } finally { con.rollback(); con.setAutoCommit(true); }
+            try (Connection recycled = fixture.pool.getConnection(); Connection observer = connect()) {
+                assertTrue(recycled.getAutoCommit()); assertNull(SolverBuildArtifacts.find(observer, pair, 1).orElseThrow().engineIdentity());
+            }
+        }
+    }
+
+    @Test void standaloneAdmissionCannotCommitAnExistingTransaction() throws Exception {
+        var context = preparedAdmissionFixture(); String original = text(con, "SELECT institution FROM users WHERE id=" + user);
+        try (var fixture = new SingleConnectionPool()) {
+            try (Connection owner = fixture.pool.getConnection()) {
+                owner.setAutoCommit(false);
+                execute(owner, "UPDATE users SET institution='uncommitted-owner-prefix' WHERE id=" + user);
+            }
+            assertThrows(SQLException.class, () -> SolverBuildArtifacts.admitExecution(context, "engine-a"));
+            try (Connection owner = fixture.pool.getConnection(); Connection observer = connect()) {
+                assertFalse(owner.getAutoCommit());
+                assertEquals("uncommitted-owner-prefix", text(owner, "SELECT institution FROM users WHERE id=" + user));
+                assertEquals(original, text(observer, "SELECT institution FROM users WHERE id=" + user));
+                assertNull(SolverBuildArtifacts.find(observer, pair, 1).orElseThrow().engineIdentity());
+                owner.rollback();
+            }
         }
     }
 
