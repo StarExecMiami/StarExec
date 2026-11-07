@@ -138,11 +138,19 @@ public final class SolverBuildPublication {
 
     private static void requireLayout(Path root, SolverArtifactTree.Snapshot snapshot) throws IOException {
         requireDirectories(root);
+        Path executable = root.resolve("solver").toRealPath();
+        boolean regularSolverFile = false;
         var entries = JsonParser.parseString(snapshot.payload()).getAsJsonObject().getAsJsonArray("entries");
         for (var value : entries) {
             var entry = value.getAsJsonObject();
-            if ("file".equals(entry.get("kind").getAsString()) && entry.get("path").getAsString().startsWith("solver/")) return;
+            String path = entry.get("path").getAsString();
+            if (!path.startsWith("solver/")) continue;
+            String kind = entry.get("kind").getAsString();
+            if ("link".equals(kind) && !root.resolve(path).toRealPath().startsWith(executable)) {
+                throw new IOException("Executable link escapes the solver subtree");
+            }
+            if ("file".equals(kind)) regularSolverFile = true;
         }
-        throw new IOException("Build output has no regular solver files");
+        if (!regularSolverFile) throw new IOException("Build output has no regular solver files");
     }
 }

@@ -97,7 +97,7 @@ public class Download extends HttpServlet {
 	 */
 	private static boolean handleSolver(Solver s, HttpServletResponse response, boolean reupload) throws Exception {
 		String baseName = s.getName();
-		ArchiveUtil.createAndOutputZip(new File(s.getPath()), response.getOutputStream(), baseName, reupload);
+		SolverArchive.write(new File(s.getPath()).toPath(), response.getOutputStream(), baseName, reupload);
 		return true;
 	}
 
@@ -112,7 +112,7 @@ public class Download extends HttpServlet {
 	private static boolean handleSolverSource(Solver s, HttpServletResponse response) throws Exception {
 		String baseName = s.getName();
 		File source = Solvers.findSolverSource(s).orElseThrow(() -> new IOException("Solver source identity changed"));
-		SolverSourceArchive.write(source.toPath(), response.getOutputStream(), baseName);
+		SolverArchive.write(source.toPath(), response.getOutputStream(), baseName);
 		return true;
 	}
 

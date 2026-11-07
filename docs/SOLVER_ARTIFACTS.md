@@ -103,6 +103,15 @@ escaping or absolute links, hard links, special nodes and symbolic ancestors.
 Source contents and modes remain unchanged. Other download archive formats and
 the existing solver-download authorization checks are unchanged.
 
+Executable links must remain inside the published `solver/` subtree; the complete
+artifact root also holds private logs and is not the executable's link boundary.
+Promotion and validated replay check every executable link before publication.
+Solver binary and source downloads use the same confined ZIP writer, preserving
+the normal enclosing directory and the existing flat reupload layout. The reader
+also refuses cross-tree links in previously stored executables, independently of
+the publication checks. Confined library links remain links rather than expanded
+file copies. These checks do not change other archive/export operations.
+
 The legacy recorder excludes pairs with any execution-bound attempt. Its SQL
 outcome and helper-retirement operations recheck that boundary under the normal
 identity locks, including when an execution is prepared after the initial read.

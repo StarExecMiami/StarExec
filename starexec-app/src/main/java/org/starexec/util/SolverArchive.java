@@ -16,17 +16,22 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
-/** Streams source packages without following links or exposing files outside their source tree. */
-public final class SolverSourceArchive {
-    private SolverSourceArchive() { }
+/** Streams solver packages without expanding links or exposing files outside the requested tree. */
+public final class SolverArchive {
+    private SolverArchive() { }
 
     /** The caller authorizes the solver and protects the source and its ancestors from writers. */
     public static void write(Path source, OutputStream output, String name) throws IOException {
+        write(source, output, name, false);
+    }
+
+    /** Omits the enclosing name for the existing reupload layout. */
+    public static void write(Path source, OutputStream output, String name, boolean removeTopLevel) throws IOException {
         if (source == null || !source.isAbsolute() || source.getParent() == null || !source.equals(source.normalize())) {
             throw new IOException("Source must be an absolute normalized non-root directory");
         }
-        if (name == null || name.isBlank() || name.equals(".") || name.equals("..")
-                || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || name.indexOf('\0') >= 0) {
+        if (!removeTopLevel && (name == null || name.isBlank() || name.equals(".") || name.equals("..")
+                || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || name.indexOf('\0') >= 0)) {
             throw new IOException("Invalid source archive name");
         }
         try (DescriptorDirectory ignored = DescriptorDirectory.open(source);
@@ -39,7 +44,8 @@ public final class SolverSourceArchive {
                             || relative.toString().indexOf('\\') >= 0) {
                         throw new IOException("Source name is not portable UTF-8");
                     }
-                    return name + "/" + relative.toString().replace(file.getFileSystem().getSeparator(), "/");
+                    return (removeTopLevel ? "" : name + "/")
+                            + relative.toString().replace(file.getFileSystem().getSeparator(), "/");
                 }
 
                 private ZipArchiveEntry entry(Path file, BasicFileAttributes attributes, int type, long size) throws IOException {
