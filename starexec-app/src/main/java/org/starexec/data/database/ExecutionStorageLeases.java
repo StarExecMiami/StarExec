@@ -61,23 +61,32 @@ public final class ExecutionStorageLeases {
     private static Instant instant(Timestamp value) { return value == null ? null : value.toInstant(); }
 
     public static boolean register(Connection connection, DedicatedStorageResource resource) throws SQLException {
-        return transact(connection, tx -> {
-            resource.requireUnchanged();
-            return call(tx, "SELECT starexec.register_execution_storage_resource(?,?,?,?,?)",
-                    resource.filesystemKey(), resource.root().toString(), resource.identity(),
-                    resource.capacityBytes(), resource.inodeLimit());
-        });
+        return transact(connection, tx -> registerInTransaction(tx, resource));
+    }
+
+    /** The caller owns the transaction and must roll it back if registration is refused. */
+    public static boolean registerInTransaction(Connection connection, DedicatedStorageResource resource) throws SQLException, IOException {
+        if (connection.getAutoCommit()) throw new SQLException("Resource registration requires an explicit transaction");
+        resource.requireUnchanged();
+        return call(connection, "SELECT starexec.register_execution_storage_resource(?,?,?,?,?)",
+                resource.filesystemKey(), resource.root().toString(), resource.identity(),
+                resource.capacityBytes(), resource.inodeLimit());
     }
 
     /** Commits an exclusive lease; closing a connection never returns that lease to the pool. */
     public static boolean reserve(Connection connection, BuildExecutionContext build,
                                   DedicatedStorageResource resource) throws SQLException {
-        return transact(connection, tx -> {
-            resource.requireUnchanged();
-            return call(tx, "SELECT starexec.reserve_solver_build_storage_lease(?,?,?,?,?,?,?,?)",
-                    build.artifactId(), build.pairId(), build.attemptNo(), build.token(),
-                    build.source().toString(), build.staging().toString(), resource.filesystemKey(), resource.identity());
-        });
+        return transact(connection, tx -> reserveInTransaction(tx, build, resource));
+    }
+
+    /** Allows preparation to book its allowance and lease in one caller-owned transaction. */
+    public static boolean reserveInTransaction(Connection connection, BuildExecutionContext build,
+                                               DedicatedStorageResource resource) throws SQLException, IOException {
+        if (connection.getAutoCommit()) throw new SQLException("Storage reservation requires an explicit transaction");
+        resource.requireUnchanged();
+        return call(connection, "SELECT starexec.reserve_solver_build_storage_lease(?,?,?,?,?,?,?,?)",
+                build.artifactId(), build.pairId(), build.attemptNo(), build.token(),
+                build.source().toString(), build.staging().toString(), resource.filesystemKey(), resource.identity());
     }
 
     /** Capacity is reobserved before committing both the lease and exact engine admission. */
@@ -91,7 +100,7 @@ public final class ExecutionStorageLeases {
         });
     }
 
-    /** No resource is released until registered artifact cleanup and all accounting have completed. */
+    /** Requires settled registered cleanup and a positively empty reobserved resource. */
     public static boolean release(Connection connection, BuildExecutionContext build,
                                   DedicatedStorageResource resource) throws SQLException {
         return transact(connection, tx -> {

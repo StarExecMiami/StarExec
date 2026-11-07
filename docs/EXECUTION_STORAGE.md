@@ -62,6 +62,16 @@ contention refuses the operation without a partial engine binding. Standalone
 transactions restore connection state, and refused admission rolls back a newly
 inserted lease. A connection close or controller restart does not release it.
 
+`SolverBuildStaging.prepareLeased` commits resource registration, the exact
+positive staging allowance and the exclusive lease together before its first
+directory write. It refuses unknown contents and existing unleased directories;
+only an already conserved lease may retain its prepared files on retry. Directory,
+force or post-commit observation failures retain the reservation. A lost commit
+response must not create a second path or book the allowance again. Explicit
+transaction helpers keep their caller's commit ownership; standalone operations
+continue to refuse foreign transactions. The older path-based preparation methods
+remain registry utilities and do not establish a private runtime mount boundary.
+
 The leased admission operation reobserves the filesystem before committing the
 lease and existing engine-admission checks together. Resource registration cannot
 redirect an existing filesystem key, reuse an existing root under a second key or
@@ -128,13 +138,15 @@ After applying the migrations to a disposable PostgreSQL database configured
 through `STAREXEC_DB_*`, run:
 
 ```sh
-mvn -B -pl starexec-app -Dtest=SolverBuildStagingCleanupSqlTest,ExecutionStorageLeaseSqlTest,SolverBuildStorageQuotaSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+mvn -B -pl starexec-app -Dtest=SolverBuildLeasedStagingSqlTest,SolverArtifactPublicationSqlTest,SolverBuildStagingCleanupSqlTest,ExecutionStorageLeaseSqlTest,SolverBuildStorageQuotaSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
 ```
 
 The database tests use synthetic provider observations. They verify concurrent
 exclusivity, attempt and allowance fencing, refused/failed transaction recovery,
 cleanup settlement, residual-file refusal, immutable resource/lease history,
-staging reuse, conserved-output integrity and reference-registration races.
+staging reuse, conserved-output integrity and reference-registration races. Leased
+preparation checks committed visibility before the first directory write, competing
+preparations, failed and ambiguous commits, retained reservations and retry identity.
 They do not establish a real provider capacity limit or deployed acceptance.
 
 Before qualifying a deployment, verify block and inode exhaustion on an owned
@@ -158,3 +170,6 @@ tests.
   describes current snapshots and rejection of stale row-lock observations.
 - [PostgreSQL function volatility](https://www.postgresql.org/docs/16/xfunc-volatility.html)
   describes snapshot visibility inside constraint and registration functions.
+- [Java file existence checks](https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/nio/file/Files.html#exists(java.nio.file.Path,java.nio.file.LinkOption...))
+  can return false when existence is unknown; cleanup and preparation must distinguish
+  confirmed absence from a failed observation.
