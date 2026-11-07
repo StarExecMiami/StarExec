@@ -20,7 +20,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class SolverSourceArchiveTest {
+class SolverArchiveTest {
     @TempDir Path directory;
     private record Archived(String contents, int mode, boolean link) { }
 
@@ -43,7 +43,7 @@ class SolverSourceArchiveTest {
 
     private Map<String, Archived> write(Path source) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        SolverSourceArchive.write(source, bytes, "solver");
+        SolverArchive.write(source, bytes, "solver");
         return read(bytes.toByteArray());
     }
 
@@ -83,7 +83,7 @@ class SolverSourceArchiveTest {
         Path target = condition.equals("absolute-inside") ? inside : condition.equals("relative-outside") ? Path.of("../outside") : outside;
         Files.createSymbolicLink(source.resolve("escape"), target);
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        assertThrows(IOException.class, () -> SolverSourceArchive.write(source, bytes, "solver"));
+        assertThrows(IOException.class, () -> SolverArchive.write(source, bytes, "solver"));
         assertFalse(read(bytes.toByteArray()).containsKey("solver/escape"));
         assertEquals("EXTERNAL", Files.readString(outside));
     }
@@ -115,12 +115,25 @@ class SolverSourceArchiveTest {
     void refusesUnsafeArchiveRoots(String name) throws Exception {
         Path source = Files.createDirectory(directory.resolve("source"));
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        assertThrows(IOException.class, () -> SolverSourceArchive.write(source, bytes, name));
+        assertThrows(IOException.class, () -> SolverArchive.write(source, bytes, name));
         assertEquals(0, bytes.size());
     }
 
     @Test void refusesFilesystemRootAndRelativeSourceBeforeWalking() {
         assertThrows(IOException.class, () -> write(Path.of("/")));
         assertThrows(IOException.class, () -> write(Path.of("relative")));
+    }
+
+    @Test void reuploadLayoutOmitsOnlyTheEnclosingNameAndKeepsLinks() throws Exception {
+        Path source = Files.createDirectory(directory.resolve("source"));
+        Files.writeString(source.resolve("program"), "EXECUTABLE");
+        Files.createSymbolicLink(source.resolve("alias"), Path.of("program"));
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        SolverArchive.write(source, bytes, "ignored/name", true);
+        var entries = read(bytes.toByteArray());
+        assertEquals(2, entries.size());
+        assertEquals("EXECUTABLE", entries.get("program").contents());
+        assertTrue(entries.get("alias").link()); assertEquals("program", entries.get("alias").contents());
+        assertFalse(entries.keySet().stream().anyMatch(name -> name.startsWith("ignored/")));
     }
 }

@@ -17,6 +17,7 @@ import org.starexec.data.to.Solver;
 import org.starexec.data.to.SolverBuildStopReceipt;
 import org.starexec.jobs.SolverBuildPublication;
 import org.starexec.jobs.SolverBuildStaging;
+import org.starexec.jobs.SolverArtifactTree;
 import org.starexec.test.util.DatabaseTestSupport;
 import org.starexec.servlets.Download;
 import javax.servlet.ServletOutputStream;
@@ -456,6 +457,96 @@ class SolverBuildPublicationSqlTest {
             throw failure;
         }
         return bytes.toByteArray();
+    }
+
+    private byte[] archiveBinary(Solver snapshot, boolean reupload) throws Exception {
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        ServletOutputStream stream = new ServletOutputStream() {
+            @Override public boolean isReady() { return true; }
+            @Override public void setWriteListener(WriteListener listener) { }
+            @Override public void write(int value) { bytes.write(value); }
+        };
+        when(response.getOutputStream()).thenReturn(stream);
+        var method = Download.class.getDeclaredMethod("handleSolver", Solver.class, HttpServletResponse.class, boolean.class);
+        method.setAccessible(true);
+        try { assertEquals(true, method.invoke(null, snapshot, response, reupload)); }
+        catch (InvocationTargetException failure) {
+            if (failure.getCause() instanceof Exception cause) throw cause;
+            throw failure;
+        }
+        return bytes.toByteArray();
+    }
+
+    private Map<String, String> binaryEntries(Solver snapshot, boolean reupload) throws Exception {
+        Map<String, String> entries = new HashMap<>();
+        try (ZipInputStream archive = new ZipInputStream(new ByteArrayInputStream(archiveBinary(snapshot, reupload)))) {
+            for (var entry = archive.getNextEntry(); entry != null; entry = archive.getNextEntry()) {
+                if (!entry.isDirectory()) entries.put(entry.getName(), new String(archive.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+            }
+        }
+        return entries;
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"file", "directory"})
+    void publicationRefusesExecutableLinksIntoPrivateLogs(String kind) throws Exception {
+        stopped("podman", null);
+        Files.createSymbolicLink(build.staging().resolve("solver/z_log_link"),
+                Path.of(kind.equals("file") ? "../logs/starexec_build_log" : "../logs"));
+        assertThrows(IOException.class, this::publish);
+        assertEquals("STAGED", state());
+        assertEquals(0, number(connection, "SELECT build_status FROM starexec.solvers WHERE id=?", solver));
+        assertEquals(source.toString(), text(connection, "SELECT path FROM starexec.solvers WHERE id=?", solver));
+        unchangedSource();
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void binaryDownloadsRefusePrivateLogLinksInPreviouslyPublishedTrees(boolean reupload) throws Exception {
+        stopped("podman", null); assertTrue(publish());
+        Path programs = root().resolve("solver");
+        Files.setPosixFilePermissions(programs, PosixFilePermissions.fromString("rwx------"));
+        Files.createSymbolicLink(programs.resolve("z_log_link"), Path.of("../logs/starexec_build_log"));
+        Files.setPosixFilePermissions(programs, PosixFilePermissions.fromString("r-xr-xr-x"));
+        Map<String, String> contents;
+        try { contents = binaryEntries(sourceSnapshot(programs.toString()), reupload); }
+        catch (IOException refused) { unchangedSource(); return; }
+        fail("Binary ZIP must refuse private log links; private log bytes present: " + contents.containsValue("build log \u00e9\n"));
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void validBinaryDownloadsPreserveNormalAndReuploadLayouts(boolean reupload) throws Exception {
+        stopped("podman", null); assertTrue(publish());
+        var contents = binaryEntries(sourceSnapshot(root().resolve("solver").toString()), reupload);
+        assertEquals(Map.of(reupload ? "program" : "publication/program", "compiled binary \u03b1\n"), contents);
+        unchangedSource();
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void confinedLibraryLinksRemainValidInBothBinaryLayouts(boolean reupload) throws Exception {
+        stopped("podman", null);
+        Path programs = build.staging().resolve("solver");
+        Files.writeString(Files.createDirectory(programs.resolve("lib")).resolve("library"), "LIBRARY");
+        Files.createSymbolicLink(programs.resolve("lib64"), Path.of("lib"));
+        assertTrue(publish());
+        String prefix = reupload ? "" : "publication/";
+        assertEquals(Map.of(prefix + "program", "compiled binary \u03b1\n", prefix + "lib/library", "LIBRARY",
+                prefix + "lib64", "lib"), binaryEntries(sourceSnapshot(root().resolve("solver").toString()), reupload));
+        unchangedSource();
+    }
+
+    @Test void validatedLegacyOutputIsRecheckedAgainstTheExecutableBoundary() throws Exception {
+        stopped("podman", null);
+        Files.createSymbolicLink(build.staging().resolve("solver/z_log_link"), Path.of("../logs/starexec_build_log"));
+        var receipt = SolverBuildArtifacts.findStopReceipt(connection, pair, 1).orElseThrow().receipt();
+        assertTrue(SolverBuildArtifacts.reserveOutput(connection, build, engine("podman"), receipt.sha256(), root()));
+        var snapshot = SolverArtifactTree.copy(build.staging(), root(), 4096, 32);
+        assertTrue(SolverBuildArtifacts.validateOutput(connection, build, engine("podman"), receipt.sha256(), root(),
+                new SolverBuildArtifacts.OutputManifest(snapshot.payload(), snapshot.sha256(), snapshot.byteSize())));
+        String manifest = frozenManifest();
+        assertThrows(IOException.class, this::publish);
+        assertEquals("VALIDATED", state()); assertEquals(manifest, frozenManifest());
+        assertEquals(source.toString(), text(connection, "SELECT path FROM starexec.solvers WHERE id=?", solver));
+        unchangedSource();
     }
 
     @Test void sourceArchivesNeverFollowLinksOutsideTheSourceTree() throws Exception {

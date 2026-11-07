@@ -1,6 +1,8 @@
 package org.starexec.servlets;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
@@ -21,12 +23,14 @@ import static org.mockito.ArgumentMatchers.anyInt;
 
 public class DownloadTests {
 
-	@Test
-	public void sourceDownloadAuthorizationRunsBeforeResolvingOrReadingFiles() throws Exception {
+	private static String[] solverDownloadTypes() { return new String[] {R.SOLVER, R.SOLVER_SOURCE}; }
+
+	@ParameterizedTest @MethodSource("solverDownloadTypes")
+	public void solverDownloadAuthorizationRunsBeforeResolvingOrReadingFiles(String type) throws Exception {
 		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
 		HttpServletResponse response = Mockito.mock(HttpServletResponse.class);
 		User user = new User(); user.setId(7);
-		Mockito.when(request.getParameter("type")).thenReturn(R.SOLVER_SOURCE);
+		Mockito.when(request.getParameter("type")).thenReturn(type);
 		Mockito.when(request.getParameter("id")).thenReturn("9");
 		try (MockedStatic<SessionUtil> session = Mockito.mockStatic(SessionUtil.class);
 				MockedStatic<SolverSecurity> security = Mockito.mockStatic(SolverSecurity.class);
