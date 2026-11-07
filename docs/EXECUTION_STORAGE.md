@@ -72,6 +72,16 @@ transaction helpers keep their caller's commit ownership; standalone operations
 continue to refuse foreign transactions. The older path-based preparation methods
 remain registry utilities and do not establish a private runtime mount boundary.
 
+`ExecutionStorageLeases.findDispatchInputs` captures the exact source and retained
+helper only for a current, unbound attempt with a committed active lease. It checks
+the helper's original owner, path, booked bytes and retirement state under the
+existing build locks. Unknown historical helper identity is refused; a similarly
+named live benchmark cannot replace it. Capture neither launches an engine nor
+releases storage. A captured snapshot is not launch permission: leased admission
+must recheck the current attempt and ownership immediately before enabling execution.
+Cancellation, contention and unavailable capacity refuse capture; rollback failures
+remain errors. Backend mount construction and runtime attestation remain required.
+
 The leased admission operation reobserves the filesystem before committing the
 lease and existing engine-admission checks together. Resource registration cannot
 redirect an existing filesystem key, reuse an existing root under a second key or
@@ -148,6 +158,12 @@ staging reuse, conserved-output integrity and reference-registration races. Leas
 preparation checks committed visibility before the first directory write, competing
 preparations, failed and ambiguous commits, retained reservations and retry identity.
 They do not establish a real provider capacity limit or deployed acceptance.
+
+For the dispatch-input and helper-retirement boundary, run:
+
+```sh
+mvn -B -pl starexec-app -Dtest=SolverBuildDispatchInputsSqlTest,ExecutionStorageLeaseSqlTest,SolverBuildHelperCleanupSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+```
 
 Before qualifying a deployment, verify block and inode exhaustion on an owned
 provisioned resource without OOM or eviction, persistence after matching stop and

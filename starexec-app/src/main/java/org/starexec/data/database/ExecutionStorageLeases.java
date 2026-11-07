@@ -20,6 +20,45 @@ public final class ExecutionStorageLeases {
 
     public record StagingCleanup(UUID token, String stagingIdentity, Instant startedAt, Instant finishedAt, Instant releasedAt) { }
 
+    /** Input identity is a snapshot; engine admission must recheck the current execution. */
+    public record DispatchInputs(int ownerId, long generation, Path source, SolverBuildArtifacts.Helper helper) { }
+
+    public static Optional<DispatchInputs> findDispatchInputs(Connection connection, BuildExecutionContext build,
+                                                               DedicatedStorageResource resource) throws SQLException {
+        if (!connection.getAutoCommit()) throw new SQLException("Build input capture cannot use a foreign transaction");
+        try {
+            return Common.runTransactional(connection, transaction -> {
+                resource.requireUnchanged();
+                var lease = findStagingCleanup(transaction, build, resource).orElse(null);
+                if (lease == null || lease.releasedAt() != null || lease.token() != null
+                        || !reserveInTransaction(transaction, build, resource)) throw new Refused();
+                try (var statement = transaction.prepareStatement(
+                        "SELECT a.origin_owner_id,a.build_generation,h.benchmark_id,h.owner_id,h.path,h.byte_size"
+                        + " FROM starexec.solver_build_artifacts a"
+                        + " JOIN starexec.solver_build_helpers h ON h.benchmark_id=a.helper_benchmark_id"
+                        + " JOIN starexec.benchmarks b ON b.id=h.benchmark_id"
+                        + " WHERE a.id=? AND a.execution_token=? AND a.engine_identity IS NULL"
+                        + " AND a.execution_stopped_at IS NULL AND a.cleanup_token IS NULL"
+                        + " AND a.state IN ('PLANNED','STAGED') AND h.cleanup_token IS NULL"
+                        + " AND h.owner_id=a.origin_owner_id AND b.user_id=h.owner_id AND b.deleted IS NOT TRUE"
+                        + " AND b.name='starexec_build' AND b.path=h.path AND b.disk_size=h.byte_size")) {
+                    statement.setLong(1, build.artifactId()); statement.setObject(2, build.token());
+                    try (var result = statement.executeQuery()) {
+                        if (!result.next()) throw new Refused();
+                        var helper = new SolverBuildArtifacts.Helper(result.getInt(3),result.getInt(4),
+                                result.getString(5),result.getLong(6),null,null);
+                        DispatchInputs inputs = new DispatchInputs(result.getInt(1),result.getLong(2),build.source(),helper);
+                        resource.requireUnchanged();
+                        return Optional.of(inputs);
+                    }
+                }
+            });
+        } catch (Refused refused) {
+            if (refused.getSuppressed().length != 0) throw refused;
+            return Optional.empty();
+        }
+    }
+
     /** Matches the complete conserved context; detached live foreign keys do not erase its origin. */
     public static Optional<StagingCleanup> findStagingCleanup(Connection connection, BuildExecutionContext build,
                                                              DedicatedStorageResource resource) throws SQLException {
