@@ -20,9 +20,15 @@ import org.starexec.jobs.SolverBuildStaging;
 import org.starexec.jobs.SolverArtifactTree;
 import org.starexec.test.util.DatabaseTestSupport;
 import org.starexec.servlets.Download;
+import org.starexec.app.RESTServices;
+import org.starexec.data.security.GeneralSecurity;
+import org.starexec.data.security.SolverSecurity;
+import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.util.SessionUtil;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.WriteListener;
 import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpServletRequest;
 
 import java.io.IOException;
 import java.io.ByteArrayInputStream;
@@ -44,6 +50,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.zip.ZipInputStream;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.awaitility.Awaitility.await;
@@ -155,6 +162,169 @@ class SolverBuildPublicationSqlTest {
         assertEquals("original source", Files.readString(source.resolve("starexec_build")));
         assertEquals("compiled binary α\n", Files.readString(build.staging().resolve("solver/program")));
         assertEquals("build log é\n", Files.readString(build.staging().resolve("logs/starexec_build_log")));
+    }
+
+    private String readRestBuildLog(int reader) throws Exception {
+        return readRestBuildLog(reader, false);
+    }
+
+    private String readRestBuildLog(int reader, boolean administrator) throws Exception {
+        Common.initialize();
+        Path legacy = files.resolve("legacy-build-log");
+        if (!Files.exists(legacy)) Files.writeString(legacy, "stale legacy log");
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        try (var session = mockStatic(SessionUtil.class);
+             var security = mockStatic(SolverSecurity.class);
+             var admin = mockStatic(GeneralSecurity.class);
+             var solvers = mockStatic(Solvers.class, CALLS_REAL_METHODS)) {
+            session.when(() -> SessionUtil.getUserId(request)).thenReturn(reader);
+            admin.when(() -> GeneralSecurity.hasAdminReadPrivileges(reader)).thenReturn(administrator);
+            security.when(() -> SolverSecurity.canUserSeeBuildLog(solver, reader)).thenReturn(new ValidatorStatusCode(true));
+            solvers.when(() -> Solvers.getSolverBuildOutput(solver)).thenReturn(legacy.toFile());
+            return new RESTServices().getSolverBuildLog(solver, request);
+        }
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void appliedManagedBuildLogsReachExistingRestEndpoint(boolean failed) throws Exception {
+        if (failed) { failedStop("podman"); assertTrue(recordFailure()); }
+        else { stopped("podman", null); assertTrue(publish()); }
+        assertEquals(build.artifactId(), number(connection, "SELECT build_output_artifact_id FROM starexec.solvers WHERE id=?", solver));
+        assertEquals("build log \u00e9\n", readRestBuildLog(user));
+        unchangedSource();
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"bytes", "link", "hard-link"})
+    void appliedLogsRejectChangedBytesAndFileAliases(String condition) throws Exception {
+        stopped("podman", null); assertTrue(publish());
+        Path logs = root().resolve("logs");
+        Path file = logs.resolve(R.SOLVER_BUILD_OUTPUT);
+        Files.setPosixFilePermissions(logs, PosixFilePermissions.fromString("rwx------"));
+        if (condition.equals("bytes")) {
+            Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"));
+            Files.writeString(file, "Build log \u00e9\n");
+            Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("r--r--r--"));
+        } else {
+            Path outside = files.resolve("private-other-log");
+            Files.writeString(outside, "foreign private contents"); Files.delete(file);
+            if (condition.equals("link")) Files.createSymbolicLink(file, outside);
+            else Files.createLink(file, outside);
+        }
+        Files.setPosixFilePermissions(logs, PosixFilePermissions.fromString("r-xr-xr-x"));
+        assertThrows(javax.ws.rs.WebApplicationException.class, () -> readRestBuildLog(user));
+        unchangedSource();
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"path", "owner", "deleted", "pointer"})
+    void appliedLogsRefuseChangedSolverIdentityOrAnUnappliedReference(String condition) throws Exception {
+        stopped("podman", null); assertTrue(publish());
+        if (condition.equals("path")) execute(connection, "UPDATE starexec.solvers SET path=? WHERE id=?", source.toString(), solver);
+        if (condition.equals("owner")) {
+            otherUser = (int) number(connection, "INSERT INTO starexec.users(email,first_name,last_name,institution,created,password,"
+                    + "disk_quota,job_pair_quota,disk_size) VALUES (?,'Other','Owner','synthetic',now(),'synthetic',1000000,100,0) RETURNING id",
+                    "log-owner-" + UUID.randomUUID() + "@example.invalid");
+            execute(connection, "UPDATE starexec.solvers SET user_id=? WHERE id=?", otherUser, solver);
+        }
+        if (condition.equals("deleted")) execute(connection, "UPDATE starexec.solvers SET deleted=true WHERE id=?", solver);
+        if (condition.equals("pointer")) execute(connection, "UPDATE starexec.solvers SET build_output_artifact_id=NULL WHERE id=?", solver);
+        var refused = assertThrows(javax.ws.rs.WebApplicationException.class, () -> readRestBuildLog(user));
+        assertEquals("not available", refused.getResponse().getEntity());
+        unchangedSource();
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void failedLogsKeepEmptyAndAbsentOutcomesDistinct(boolean empty) throws Exception {
+        failedStop("podman");
+        Path log = build.staging().resolve("logs/" + R.SOLVER_BUILD_OUTPUT);
+        if (empty) Files.writeString(log, ""); else Files.delete(log);
+        assertTrue(recordFailure());
+        if (empty) assertEquals("", readRestBuildLog(user));
+        else assertThrows(javax.ws.rs.WebApplicationException.class, () -> readRestBuildLog(user));
+        assertEquals("original source", Files.readString(source.resolve("starexec_build")));
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void verifiedOutcomeReplayRestoresTheExplicitLogReference(boolean failed) throws Exception {
+        if (failed) { failedStop("podman"); assertTrue(recordFailure()); }
+        else { stopped("podman", null); assertTrue(publish()); }
+        String frozen = frozenManifest();
+        execute(connection, "UPDATE starexec.solvers SET build_output_artifact_id=NULL WHERE id=?", solver);
+        if (failed) assertTrue(recordFailure()); else assertTrue(publish());
+        assertEquals(build.artifactId(), number(connection, "SELECT build_output_artifact_id FROM starexec.solvers WHERE id=?", solver));
+        assertEquals(frozen, frozenManifest()); assertEquals("build log \u00e9\n", readRestBuildLog(user));
+        unchangedSource();
+    }
+
+    @Test void legacyLogReadbackKeepsTheExistingFileLocator() throws Exception {
+        Common.initialize();
+        int legacySolver = (int) number(connection, "INSERT INTO starexec.solvers(user_id,name,uploaded,path,disk_size,build_status)"
+                + " VALUES (?,'legacy-log',now(),?,0,2) RETURNING id", user, source.toString());
+        Path legacy = files.resolve("ordinary-legacy-log"); Files.writeString(legacy, "legacy log \u00e9\n");
+        try (var solvers = mockStatic(Solvers.class, CALLS_REAL_METHODS);
+             var admin = mockStatic(GeneralSecurity.class)) {
+            solvers.when(() -> Solvers.getSolverBuildOutput(legacySolver)).thenReturn(legacy.toFile());
+            assertEquals("legacy log \u00e9\n", Solvers.readSolverBuildLog(legacySolver, user).orElseThrow());
+            solvers.verify(() -> Solvers.getSolverBuildOutput(legacySolver));
+        }
+    }
+
+    @Test void appliedLogsRemainVisibleToAuthorizedAdministrators() throws Exception {
+        stopped("podman", null); assertTrue(publish());
+        assertEquals("build log \u00e9\n", readRestBuildLog(user + 1, true));
+        unchangedSource();
+    }
+
+    @Test void appliedOutputReferenceRollsBackWithItsSolverOutcome() throws Exception {
+        stopped("podman", null);
+        var receipt = SolverBuildArtifacts.findStopReceipt(connection, pair, 1).orElseThrow().receipt();
+        assertTrue(SolverBuildArtifacts.reserveOutput(connection, build, engine("podman"), receipt.sha256(), root()));
+        var snapshot = SolverArtifactTree.copy(build.staging(), root(), 4096, 32);
+        assertTrue(SolverBuildArtifacts.validateOutput(connection, build, engine("podman"), receipt.sha256(), root(),
+                new SolverBuildArtifacts.OutputManifest(snapshot.payload(), snapshot.sha256(), snapshot.byteSize())));
+        connection.setAutoCommit(false);
+        assertTrue(SolverBuildArtifacts.publishOutput(connection, build.artifactId()));
+        assertEquals(build.artifactId(), number(connection, "SELECT build_output_artifact_id FROM starexec.solvers WHERE id=?", solver));
+        try (Connection observer = connect()) {
+            assertEquals(0, number(observer, "SELECT COALESCE(build_output_artifact_id,0) FROM starexec.solvers WHERE id=?", solver));
+            assertEquals(0, number(observer, "SELECT build_status FROM starexec.solvers WHERE id=?", solver));
+        }
+        connection.rollback(); connection.setAutoCommit(true);
+        assertEquals(0, number(connection, "SELECT COALESCE(build_output_artifact_id,0) FROM starexec.solvers WHERE id=?", solver));
+        assertEquals("VALIDATED", state());
+        assertTrue(publish()); assertEquals("build log \u00e9\n", readRestBuildLog(user));
+        unchangedSource();
+    }
+
+    @Test void appliedLogReadPinsTheSolverRowUntilVerificationCompletes() throws Exception {
+        Common.initialize(); stopped("podman", null); assertTrue(publish());
+        CountDownLatch reading = new CountDownLatch(1); CountDownLatch finish = new CountDownLatch(1);
+        var workers = Executors.newSingleThreadExecutor();
+        try (Connection updater = connect()) {
+            int updatingPid = (int) number(updater, "SELECT pg_backend_pid()");
+            var read = workers.submit(() -> {
+                try (var tree = mockStatic(SolverArtifactTree.class, CALLS_REAL_METHODS);
+                     var admin = mockStatic(GeneralSecurity.class)) {
+                    tree.when(() -> SolverArtifactTree.readLog(any(), anyString(), anyString(), anyLong())).thenAnswer(call -> {
+                        reading.countDown(); assertTrue(finish.await(10, TimeUnit.SECONDS)); return call.callRealMethod();
+                    });
+                    return Solvers.readSolverBuildLog(solver, user).orElseThrow();
+                }
+            });
+            assertTrue(reading.await(10, TimeUnit.SECONDS));
+            var updateWorkers = Executors.newSingleThreadExecutor();
+            try {
+                var update = updateWorkers.submit(() -> {
+                    execute(updater, "UPDATE starexec.solvers SET description='changed during log read' WHERE id=?", solver);
+                    return true;
+                });
+                await().atMost(5, TimeUnit.SECONDS).until(() -> number(connection,
+                        "SELECT cardinality(pg_blocking_pids(?))", updatingPid) > 0);
+                assertFalse(update.isDone()); finish.countDown();
+                assertEquals("build log \u00e9\n", read.get(10, TimeUnit.SECONDS));
+                assertTrue(update.get(10, TimeUnit.SECONDS));
+            } finally { finish.countDown(); updateWorkers.shutdownNow(); assertTrue(updateWorkers.awaitTermination(10, TimeUnit.SECONDS)); }
+        } finally { finish.countDown(); workers.shutdownNow(); assertTrue(workers.awaitTermination(10, TimeUnit.SECONDS)); }
+        unchangedSource();
     }
 
     @Test void failedOutcomeRequiresVerifiedLogs() throws Exception {
