@@ -154,6 +154,16 @@ class SolverBuildPublicationSqlTest {
 
     private boolean publish() throws Exception { return SolverBuildPublication.publish(connection, build, parent, 4096, 32); }
 
+    @Test void deletingArtifactMetadataRequiresCompletedPhysicalCleanup() throws Exception {
+        failedStop("podman");
+        assertTrue(recordFailure());
+        assertThrows(SQLException.class, () -> execute(connection,
+                "UPDATE starexec.solver_build_artifacts SET state='DELETED' WHERE id=?", build.artifactId()));
+        assertEquals("REJECTED", state());
+        assertTrue(Files.isRegularFile(root().resolve("logs/" + R.SOLVER_BUILD_OUTPUT)));
+        unchangedSource();
+    }
+
     private String state() throws SQLException {
         return text(connection, "SELECT state FROM starexec.solver_build_artifacts WHERE id=?", build.artifactId());
     }
