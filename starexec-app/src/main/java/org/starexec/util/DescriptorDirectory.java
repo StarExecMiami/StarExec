@@ -1,15 +1,18 @@
 package org.starexec.util;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.Writer;
+import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.SeekableByteChannel;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.FileSystem;
-import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
@@ -23,13 +26,21 @@ import java.nio.file.StandardOpenOption;
 import java.util.Set;
 
 /**
- * File creation bound to an open directory, without following symbolic-link ancestors.
+ * File operations bound to an open directory, without following symbolic-link ancestors.
  * Later operations that use ordinary pathnames still require protected ancestors.
  */
 public final class DescriptorDirectory implements AutoCloseable {
     private final SecureDirectoryStream<Path> directory;
     private final FileSystem fileSystem;
     private final Path path;
+
+    public static final class InvalidFileException extends IOException {
+        private static final long serialVersionUID = 1L;
+        private final boolean directory;
+        public InvalidFileException(String message) { this(message,false); }
+        private InvalidFileException(String message,boolean directory) { super(message);this.directory=directory; }
+        public boolean isDirectory() { return directory; }
+    }
 
     private DescriptorDirectory(SecureDirectoryStream<Path> directory, FileSystem fileSystem, Path path) {
         this.directory = directory;
@@ -49,6 +60,10 @@ public final class DescriptorDirectory implements AutoCloseable {
                 throw new IOException("Filesystem does not support descriptor-relative directory access");
             }
             for (Path component : absolute) {
+                var view=current.getFileAttributeView(component,BasicFileAttributeView.class,LinkOption.NOFOLLOW_LINKS);
+                if (view==null || !view.readAttributes().isDirectory()) {
+                    throw new InvalidFileException("Directory component is not a non-symbolic directory");
+                }
                 SecureDirectoryStream<Path> next = current.newDirectoryStream(component, LinkOption.NOFOLLOW_LINKS);
                 try {
                     opened.close();
@@ -72,6 +87,49 @@ public final class DescriptorDirectory implements AutoCloseable {
             }
             throw e;
         }
+    }
+
+    /**
+     * Reads one regular UTF-8 file after complete writer termination. The caller must
+     * keep this private output quiescent; separate metadata/open calls do not provide
+     * a regular-file-only atomic open against a concurrently hostile leaf.
+     */
+    public String readQuiescentText(String name, int maxBytes) throws IOException {
+        if (name==null || name.isEmpty() || name.equals(".") || name.equals("..")
+                || name.indexOf('/')>=0 || name.indexOf('\\')>=0 || maxBytes<1 || maxBytes>16*1024*1024) {
+            throw new InvalidFileException("Read requires one file name and a bounded positive byte limit");
+        }
+        Path child;
+        try { child=fileSystem.getPath(name); }
+        catch (InvalidPathException invalid) { throw new InvalidFileException("Invalid read file name"); }
+        var view=directory.getFileAttributeView(child,BasicFileAttributeView.class,LinkOption.NOFOLLOW_LINKS);
+        if (view==null) throw new InvalidFileException("File identity is unavailable");
+        var before=view.readAttributes();
+        if (before.isDirectory()) throw new InvalidFileException("Output file is a directory",true);
+        if (!before.isRegularFile() || before.fileKey()==null || before.size()>maxBytes) {
+            throw new InvalidFileException("Output is not a bounded regular file");
+        }
+        ByteArrayOutputStream contents=new ByteArrayOutputStream(Math.min(maxBytes,8192));
+        try (SeekableByteChannel channel=directory.newByteChannel(child,Set.of(StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS))) {
+            if (channel.size()!=before.size()) throw new InvalidFileException("Output changed before read");
+            ByteBuffer buffer=ByteBuffer.allocate(8192);
+            int read;
+            while ((read=channel.read(buffer))!=-1) {
+                if (read==0) throw new IOException("Output read made no progress");
+                if (contents.size()>maxBytes-read) throw new InvalidFileException("Output exceeds its byte limit");
+                contents.write(buffer.array(),0,read);buffer.clear();
+            }
+            var after=view.readAttributes();
+            if (!after.isRegularFile() || !before.fileKey().equals(after.fileKey())
+                    || before.size()!=after.size() || after.size()!=contents.size()
+                    || !before.lastModifiedTime().equals(after.lastModifiedTime()) || channel.size()!=contents.size()) {
+                throw new InvalidFileException("Output identity or content changed during read");
+            }
+        }
+        try {
+            return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(contents.toByteArray())).toString();
+        } catch (CharacterCodingException invalid) { throw new InvalidFileException("Output is not valid UTF-8"); }
     }
 
     /** Creates a fresh UTF-8 file; neither an existing file nor a link is replaced. */

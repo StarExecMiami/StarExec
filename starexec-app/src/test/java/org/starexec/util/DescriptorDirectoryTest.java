@@ -83,4 +83,80 @@ public class DescriptorDirectoryTest {
             assertTrue(failure.getMessage().contains("does not support descriptor-relative"));
         }
     }
+
+    @Test
+    public void quiescentReadsUseUtf8ByteBoundsAndPreserveEmptyFiles() throws Exception {
+        String text="value \u00e9\n";
+        Files.writeString(temporary.resolve("record"),text);
+        Files.createFile(temporary.resolve("empty"));
+        int bytes=text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        try (DescriptorDirectory directory=DescriptorDirectory.open(temporary)) {
+            assertEquals(text,directory.readQuiescentText("record",bytes));
+            assertThrows(DescriptorDirectory.InvalidFileException.class,()->directory.readQuiescentText("record",bytes-1));
+            assertEquals("",directory.readQuiescentText("empty",1));
+        }
+    }
+
+    @Test
+    public void replacementAfterOpenCannotRedirectARead() throws Exception {
+        Path original=Files.createDirectory(temporary.resolve("original"));
+        Files.writeString(original.resolve("record"),"owned");
+        Path outside=Files.createDirectory(temporary.resolve("outside"));
+        Files.writeString(outside.resolve("record"),"foreign");
+        try (DescriptorDirectory directory=DescriptorDirectory.open(original)) {
+            Files.move(original,temporary.resolve("retained"));
+            Files.createSymbolicLink(original,outside);
+            assertEquals("owned",directory.readQuiescentText("record",32));
+        }
+        assertEquals("foreign",Files.readString(outside.resolve("record")));
+    }
+
+    @Test
+    public void linkedOrNonregularLeavesAreRefusedBeforeRead() throws Exception {
+        Path original=Files.writeString(temporary.resolve("original"),"owned");
+        Files.createSymbolicLink(temporary.resolve("alias"),original);
+        Files.createDirectory(temporary.resolve("directory"));
+        try (DescriptorDirectory directory=DescriptorDirectory.open(temporary)) {
+            assertThrows(DescriptorDirectory.InvalidFileException.class,()->directory.readQuiescentText("alias",32));
+            assertThrows(DescriptorDirectory.InvalidFileException.class,()->directory.readQuiescentText("directory",32));
+        }
+    }
+
+    @Test
+    public void readsDoNotRequireWritePermissions() throws Exception {
+        Path record=Files.writeString(temporary.resolve("record"),"owned");
+        var permissions=java.nio.file.attribute.PosixFilePermissions.fromString("r--------");
+        Files.setPosixFilePermissions(record,permissions);
+        try (DescriptorDirectory directory=DescriptorDirectory.open(temporary)) {
+            assertEquals("owned",directory.readQuiescentText("record",32));
+            assertEquals(permissions,Files.getPosixFilePermissions(record));
+        }
+    }
+
+    @Test
+    public void malformedUtf8IsRefusedWithoutReplacementCharacters() throws Exception {
+        Files.write(temporary.resolve("record"),new byte[]{(byte)0xc3,(byte)0x28});
+        try (DescriptorDirectory directory=DescriptorDirectory.open(temporary)) {
+            assertThrows(DescriptorDirectory.InvalidFileException.class,()->directory.readQuiescentText("record",32));
+        }
+    }
+
+    @Test
+    public void readNamesAndLimitsCannotEscapeOrAllocateUnboundedBuffers() throws Exception {
+        try (DescriptorDirectory directory=DescriptorDirectory.open(temporary)) {
+            for (String name:List.of("", ".", "..", "../escape", "nested/name", "nested\\name", "nul\0name")) {
+                assertThrows(IOException.class,()->directory.readQuiescentText(name,32));
+            }
+            assertThrows(IOException.class,()->directory.readQuiescentText(null,32));
+            assertThrows(IOException.class,()->directory.readQuiescentText("record",0));
+            assertThrows(IOException.class,()->directory.readQuiescentText("record",Integer.MAX_VALUE));
+        }
+    }
+
+    @Test
+    public void missingReadsRemainDistinguishableFromUntrustedFiles() throws Exception {
+        try (DescriptorDirectory directory=DescriptorDirectory.open(temporary)) {
+            assertThrows(java.nio.file.NoSuchFileException.class,()->directory.readQuiescentText("missing",32));
+        }
+    }
 }
