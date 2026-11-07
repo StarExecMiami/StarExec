@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.starexec.backend.BuildExecutionContext;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.SolverBuildArtifacts;
@@ -31,6 +33,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+/** Admission and accounting with synthetic provider observations. */
 class SolverBuildStorageQuotaSqlTest extends Common {
     @TempDir Path files;
     private Connection connection;
@@ -105,6 +108,118 @@ class SolverBuildStorageQuotaSqlTest extends Common {
 
     private boolean publish(long bytes) throws Exception {
         return SolverBuildPublication.publish(connection,build,outputs,bytes,32);
+    }
+
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void launchAdmissionRequiresAPositiveStagingAllowance(boolean zeroBudget) throws Exception {
+        if (zeroBudget) prepare(0);
+        else build=SolverBuildStaging.prepare(connection,pair,1,staging);
+        boolean admitted=Common.runTransactional(connection,
+                tx->SolverBuildArtifacts.admitExecution(tx,build,"podman:7:owned-quota-build"));
+        assertAll(() -> assertFalse(admitted),
+                () -> assertEquals(0,number(connection,"SELECT count(*) FROM starexec.solver_build_artifacts WHERE id=? AND engine_identity IS NOT NULL",build.artifactId())),
+                () -> assertEquals(1020,usage()));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"local","podman","kubernetes"})
+    void matchingBudgetAdmitsOnlyItsEngineWithoutBookingMoreBytes(String backend) throws Exception {
+        prepare(100); String engine=backend+":7:owned-quota-build";
+        assertTrue(SolverBuildArtifacts.admitExecution(build,engine));
+        assertTrue(SolverBuildArtifacts.admitExecution(build,engine));
+        assertFalse(SolverBuildArtifacts.admitExecution(build,engine+"-other"));
+        assertEquals(1120,usage());
+        assertEquals(1,number(connection,"SELECT count(*) FROM starexec.solver_build_artifacts WHERE id=? AND engine_identity=?",build.artifactId(),engine));
+        assertEquals(1,number(connection,"SELECT count(*) FROM starexec.solver_build_storage_charges WHERE artifact_id=? AND storage_kind='STAGING' AND limit_bytes=100 AND released_at IS NULL",build.artifactId()));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"artifact","pair","attempt","token","source","staging","blank-engine","null-engine"})
+    void directSqlAdmissionCannotBorrowAnAllowancesIdentity(String changed) throws Exception {
+        prepare(100);
+        Object[] args={build.artifactId(),pair,1,build.token(),build.source().toString(),build.staging().toString(),"podman:7:owned-quota-build"};
+        switch (changed) {
+            case "artifact" -> args[0]=build.artifactId()+1;
+            case "pair" -> args[1]=pair+1;
+            case "attempt" -> args[2]=2;
+            case "token" -> args[3]=UUID.randomUUID();
+            case "source" -> args[4]=files.resolve("other-source").toString();
+            case "staging" -> args[5]=files.resolve("other-staging").toString();
+            case "blank-engine" -> args[6]="   ";
+            case "null-engine" -> args[6]=null;
+            default -> throw new AssertionError(changed);
+        }
+        boolean admitted=Common.runTransactional(connection,tx->number(tx,
+                "SELECT starexec.admit_solver_build_execution(?,?,?,?,?,?,?)::integer",args)==1);
+        assertFalse(admitted); assertEquals(1120,usage());
+        assertEquals(0,number(connection,"SELECT count(*) FROM starexec.solver_build_artifacts WHERE id=? AND engine_identity IS NOT NULL",build.artifactId()));
+    }
+
+    @Test void aNewAttemptCannotReuseTheOldStagingAllowance() throws Exception {
+        prepare(100); BuildExecutionContext older=build;
+        execute(connection,"UPDATE starexec.job_pair_attempts SET current_attempt_no=2 WHERE pair_id=?",pair);
+        build=SolverBuildStaging.prepare(connection,pair,2,staging);
+        assertFalse(SolverBuildArtifacts.admitExecution(older,"podman:7:older-quota-build"));
+        assertFalse(SolverBuildArtifacts.admitExecution(build,"podman:8:new-quota-build"));
+        assertEquals(1120,usage());
+        assertEquals(0,number(connection,"SELECT count(*) FROM starexec.solver_build_artifacts WHERE origin_pair_id=? AND engine_identity IS NOT NULL",pair));
+    }
+
+    @Test void admissionRefusesAChargeNoLongerCoveredByOwnerUsage() throws Exception {
+        prepare(100); long booked=usage();
+        execute(connection,"UPDATE starexec.users SET disk_size=99 WHERE id=?",user);
+        assertFalse(SolverBuildArtifacts.admitExecution(build,"podman:7:owned-quota-build"));
+        assertEquals(99,usage());
+        assertEquals(0,number(connection,"SELECT count(*) FROM starexec.solver_build_artifacts WHERE id=? AND engine_identity IS NOT NULL",build.artifactId()));
+        execute(connection,"UPDATE starexec.users SET disk_size=? WHERE id=?",booked,user);
+        assertTrue(SolverBuildArtifacts.admitExecution(build,"podman:7:owned-quota-build"));
+        assertEquals(booked,usage());
+    }
+
+    @Test void admissionOwnerContentionCannotBindOrLoseItsAllowance() throws Exception {
+        prepare(100);
+        try (Connection competing=Common.getConnection()) {
+            competing.setAutoCommit(false);
+            try {
+                number(competing,"SELECT id FROM starexec.users WHERE id=? FOR UPDATE",user);
+                SQLException refused=assertThrows(SQLException.class,
+                        ()->SolverBuildArtifacts.admitExecution(build,"podman:7:owned-quota-build"));
+                assertEquals("55P03",refused.getSQLState()); assertEquals(1120,usage());
+                assertEquals(0,number(connection,"SELECT count(*) FROM starexec.solver_build_artifacts WHERE id=? AND engine_identity IS NOT NULL",build.artifactId()));
+            } finally { competing.rollback(); competing.setAutoCommit(true); }
+        }
+        assertTrue(SolverBuildArtifacts.admitExecution(build,"podman:7:owned-quota-build"));
+        assertEquals(1120,usage());
+    }
+
+    @Test void failedAdmissionCommitRollsBackBindingWithoutReleasingItsBudget() throws Exception {
+        prepare(100);
+        String trigger="admission_fail_"+UUID.randomUUID().toString().replace("-","");
+        execute(connection,"CREATE FUNCTION starexec."+trigger+"() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'INJECTED ADMISSION COMMIT FAILURE'; END; $$ LANGUAGE plpgsql");
+        execute(connection,"CREATE CONSTRAINT TRIGGER "+trigger+" AFTER UPDATE ON starexec.solver_build_artifacts DEFERRABLE INITIALLY DEFERRED FOR EACH ROW"
+                +" WHEN (NEW.id="+build.artifactId()+" AND NEW.engine_identity IS NOT NULL) EXECUTE FUNCTION starexec."+trigger+"()");
+        try {
+            assertThrows(SQLException.class,()->SolverBuildArtifacts.admitExecution(build,"podman:7:owned-quota-build"));
+            assertEquals(1120,usage());
+            assertEquals(0,number(connection,"SELECT count(*) FROM starexec.solver_build_artifacts WHERE id=? AND engine_identity IS NOT NULL",build.artifactId()));
+        } finally {
+            execute(connection,"DROP TRIGGER "+trigger+" ON starexec.solver_build_artifacts");
+            execute(connection,"DROP FUNCTION starexec."+trigger+"()");
+        }
+        assertTrue(SolverBuildArtifacts.admitExecution(build,"podman:7:owned-quota-build"));
+        assertEquals(1120,usage());
+    }
+
+    @Test void refusedUnbudgetedLaunchStillAllowsItsLateNonExecutionReceipt() throws Exception {
+        build=SolverBuildStaging.prepare(connection,pair,1,staging);
+        String engine="kubernetes:7:owned-quota-build";
+        assertFalse(SolverBuildArtifacts.admitExecution(build,engine));
+        assertTrue(SolverBuildArtifacts.bindExecution(connection,pair,1,build.token(),engine));
+        JsonObject facts=new JsonObject(); facts.addProperty("disposition","never_started");
+        facts.addProperty("suspended",true); facts.addProperty("pod_count",0);
+        var receipt=SolverBuildStopReceipt.observed("kubernetes",build.artifactId(),pair,1,engine,"owned-quota-build",Instant.now(),facts);
+        assertTrue(SolverBuildArtifacts.recordUnstarted(connection,pair,1,build.token(),engine,receipt));
+        assertEquals("REJECTED",SolverBuildArtifacts.find(connection,pair,1).orElseThrow().state());
+        assertEquals(receipt.payload(),SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt().payload());
+        assertFalse(SolverBuildArtifacts.admitExecution(build,engine)); assertEquals(1020,usage());
     }
 
     private boolean purge() throws SQLException {
