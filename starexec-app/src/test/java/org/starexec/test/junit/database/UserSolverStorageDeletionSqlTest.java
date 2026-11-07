@@ -130,7 +130,10 @@ class UserSolverStorageDeletionSqlTest extends Common {
     }
 
     private void retained() throws Exception {
-        assertEquals(20, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+        long copied = build == null ? 0 : number(connection,
+                "SELECT COALESCE(sum(charged_bytes),0) FROM starexec.solver_build_storage_charges"
+                        + " WHERE artifact_id=? AND released_at IS NULL", build.artifactId());
+        assertEquals(20 + copied, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
         assertEquals(20, number(connection, "SELECT disk_size FROM starexec.solvers WHERE id=?", solver));
         assertEquals("original source", Files.readString(source.resolve("starexec_build")));
         assertEquals(1, number(connection, "SELECT count(*) FROM starexec.jobs WHERE id=?", job));

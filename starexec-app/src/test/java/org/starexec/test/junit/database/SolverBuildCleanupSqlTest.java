@@ -127,9 +127,14 @@ class SolverBuildCleanupSqlTest extends Common {
     }
 
     private void charged() throws Exception {
-        assertEquals(10020, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+        assertEquals(10020 + buildCharge(), number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
         assertEquals(20, number(connection, "SELECT disk_size FROM starexec.solvers WHERE id=?", solver));
         assertEquals(0, number(connection, "SELECT count(*) FROM starexec.solver_build_artifacts WHERE id=? AND cleanup_finished_at IS NOT NULL", build.artifactId()));
+    }
+
+    private long buildCharge() throws SQLException {
+        return number(connection, "SELECT COALESCE(sum(charged_bytes),0) FROM starexec.solver_build_storage_charges"
+                + " WHERE artifact_id=? AND released_at IS NULL", build.artifactId());
     }
 
     private void settled() throws Exception {
@@ -172,7 +177,7 @@ class SolverBuildCleanupSqlTest extends Common {
         }
         assertFalse(purge(100));
         assertTrue(Files.isDirectory(source)); assertTrue(Files.isDirectory(build.staging()));
-        assertEquals(10020, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+        assertEquals(10020 + buildCharge(), number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
         assertEquals(0, number(connection, "SELECT count(*) FROM starexec.solver_build_artifacts WHERE id=? AND cleanup_token IS NOT NULL", build.artifactId()));
     }
 
