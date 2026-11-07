@@ -175,7 +175,7 @@ public class SolverArtifactPublicationSqlTest {
 
     @Test void launchAdmissionCommitsItsMatchingEngineIdentity() throws Exception {
         Path parent = seedFilesystemBuild();
-        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent, 100);
         con.setAutoCommit(false);
         assertTrue(SolverBuildArtifacts.admitExecution(con, context, "podman:owned-container"));
         try (Connection observer = connect()) {
@@ -191,7 +191,7 @@ public class SolverArtifactPublicationSqlTest {
 
     @Test void launchAdmissionRefusesAnUnpreparedOrMismatchedIdentity() throws Exception {
         Path parent = seedFilesystemBuild();
-        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent, 100);
         var wrong = new org.starexec.backend.BuildExecutionContext(context.artifactId(), pair, 1,
                 UUID.randomUUID(), context.source(), context.staging());
         con.setAutoCommit(false);
@@ -201,7 +201,7 @@ public class SolverArtifactPublicationSqlTest {
 
     @Test void launchAdmissionRefusesAStoppedExecution() throws Exception {
         Path parent = seedFilesystemBuild();
-        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent, 100);
         assertTrue(SolverBuildArtifacts.bindExecution(con, pair, 1, context.token(), "podman:stopped"));
         assertTrue(SolverBuildArtifacts.recordStopped(con, pair, 1, context.token(), "podman:stopped"));
         con.setAutoCommit(false);
@@ -210,7 +210,7 @@ public class SolverArtifactPublicationSqlTest {
 
     @Test void lateCleanupBindingDoesNotAuthorizeLaunchingADeletedSolver() throws Exception {
         Path parent = seedFilesystemBuild();
-        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent, 100);
         execute(con, "DELETE FROM solvers WHERE id=" + solver);
         assertTrue(SolverBuildArtifacts.bindExecution(con, pair, 1, context.token(), "podman:late"));
         con.setAutoCommit(false);
@@ -220,7 +220,7 @@ public class SolverArtifactPublicationSqlTest {
 
     @Test void aRebuildRequestRevokesAnOlderPreparedLaunch() throws Exception {
         Path parent = seedFilesystemBuild();
-        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent, 100);
         execute(con, "UPDATE solvers SET build_generation=build_generation+1 WHERE id=" + solver);
         con.setAutoCommit(false);
         assertFalse(SolverBuildArtifacts.admitExecution(con, context, "podman:older-build"));
@@ -229,7 +229,7 @@ public class SolverArtifactPublicationSqlTest {
 
     @Test void launchAdmissionRefusesAutocommitSoLocksSurviveUntilTheDecision() throws Exception {
         Path parent = seedFilesystemBuild();
-        var context = SolverBuildStaging.prepare(con, pair, 1, parent);
+        var context = SolverBuildStaging.prepare(con, pair, 1, parent, 100);
         assertThrows(SQLException.class, () -> SolverBuildArtifacts.admitExecution(con, context, "podman:wrong"));
         assertNull(SolverBuildArtifacts.find(con, pair, 1).orElseThrow().engineIdentity());
     }
@@ -760,10 +760,8 @@ public class SolverArtifactPublicationSqlTest {
     }
 
     private BuildExecutionContext preparedAdmissionFixture() throws Exception {
-        Path staging = seedFilesystemBuild(); UUID token = UUID.randomUUID();
-        assertTrue(SolverBuildArtifacts.prepare(con, pair, 1, token, staging));
-        var row = SolverBuildArtifacts.find(con, pair, 1).orElseThrow();
-        return new BuildExecutionContext(row.id(), pair, 1, token, Path.of(row.sourcePath()), staging);
+        Path parent = seedFilesystemBuild();
+        return SolverBuildStaging.prepare(con, pair, 1, parent, 100);
     }
 
     @Test void aStandaloneAdmissionReturnsAPooledConnectionReadyForItsReceipt() throws Exception {
