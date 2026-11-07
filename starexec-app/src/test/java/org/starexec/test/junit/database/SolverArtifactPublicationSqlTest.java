@@ -562,19 +562,27 @@ public class SolverArtifactPublicationSqlTest {
     }
 
     private SolverBuildStopReceipt neverStartedReceipt(Instant observed) {
+        return neverStartedReceipt(observed, "engine-a");
+    }
+
+    private SolverBuildStopReceipt neverStartedReceipt(Instant observed, String engine) {
         JsonObject facts = new JsonObject(); facts.addProperty("disposition", "never_started");
         facts.addProperty("namespace", "starexec"); facts.addProperty("job_name", "build-job");
         facts.addProperty("job_uid", "job-uid"); facts.addProperty("job_generation", 1);
         facts.addProperty("job_resource_version", "18"); facts.addProperty("suspended", true);
         facts.addProperty("fenced_resource_version", "17"); facts.addProperty("pod_count", 0);
-        return SolverBuildStopReceipt.observed("kubernetes", artifact, pair, 1, "engine-a",
+        return SolverBuildStopReceipt.observed("kubernetes", artifact, pair, 1, engine,
                 "job-uid", observed, facts);
     }
 
     private SolverBuildStopReceipt cancelledReceipt(Instant observed) {
+        return cancelledReceipt(observed, "engine-a");
+    }
+
+    private SolverBuildStopReceipt cancelledReceipt(Instant observed, String engine) {
         JsonObject facts = new JsonObject(); facts.addProperty("disposition", "cancelled");
         facts.addProperty("status", "exited");
-        return SolverBuildStopReceipt.observed("podman", artifact, pair, 1, "engine-a",
+        return SolverBuildStopReceipt.observed("podman", artifact, pair, 1, engine,
                 "owned-container", observed, facts);
     }
 
@@ -618,14 +626,15 @@ public class SolverArtifactPublicationSqlTest {
     }
 
     @Test void cancellationReplayPreservesItsFirstBytesAndTimestampAfterDeletion() throws Exception {
-        UUID token = boundReceiptFixture(); Instant observed = Instant.now(); var receipt = cancelledReceipt(observed);
-        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", receipt));
+        String engine = "podman:7:owned-replay";
+        UUID token = boundCleanupReceiptFixture(engine); Instant observed = Instant.now(); var receipt = cancelledReceipt(observed, engine);
+        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, engine, receipt));
         String recorded = field("execution_stop_receipt_recorded_at::text");
         String stopped = field("execution_stopped_at::text");
-        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", receipt));
-        assertFalse(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", cancelledReceipt(observed.plusSeconds(1))));
-        execute(con, "UPDATE solver_build_artifacts SET state='DELETED' WHERE id=" + artifact);
-        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, "engine-a", receipt));
+        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, engine, receipt));
+        assertFalse(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, engine, cancelledReceipt(observed.plusSeconds(1), engine)));
+        completeReceiptFixtureCleanup();
+        assertTrue(SolverBuildArtifacts.recordCancelled(con, pair, 1, token, engine, receipt));
         assertEquals("DELETED", field("state")); assertEquals(recorded, field("execution_stop_receipt_recorded_at::text"));
         assertEquals(stopped, field("execution_stopped_at::text")); assertEquals(receipt.payload(), field("execution_stop_receipt_payload"));
     }
@@ -882,15 +891,16 @@ public class SolverArtifactPublicationSqlTest {
     }
 
     @Test void nonExecutionRetryCannotReplaceItsFirstReceiptOrTimestamp() throws Exception {
-        UUID token = boundReceiptFixture(); Instant observed = Instant.now(); var receipt = neverStartedReceipt(observed);
-        assertTrue(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, "engine-a", receipt));
+        String engine = "kubernetes:7:owned-replay";
+        UUID token = boundCleanupReceiptFixture(engine); Instant observed = Instant.now(); var receipt = neverStartedReceipt(observed, engine);
+        assertTrue(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, engine, receipt));
         String recorded = field("execution_stop_receipt_recorded_at::text");
         String stopped = field("execution_stopped_at::text");
-        assertTrue(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, "engine-a", receipt));
-        assertFalse(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, "engine-a",
-                neverStartedReceipt(observed.plusSeconds(1))));
-        execute(con, "UPDATE solver_build_artifacts SET state='DELETED' WHERE id=" + artifact);
-        assertTrue(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, "engine-a", receipt));
+        assertTrue(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, engine, receipt));
+        assertFalse(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, engine,
+                neverStartedReceipt(observed.plusSeconds(1), engine)));
+        completeReceiptFixtureCleanup();
+        assertTrue(SolverBuildArtifacts.recordUnstarted(con, pair, 1, token, engine, receipt));
         assertEquals("DELETED", field("state"));
         assertEquals(recorded, field("execution_stop_receipt_recorded_at::text"));
         assertEquals(stopped, field("execution_stopped_at::text"));
@@ -992,6 +1002,26 @@ public class SolverArtifactPublicationSqlTest {
         assertEquals("t", text(con, prepare(token)));
         assertTrue(SolverBuildArtifacts.bindExecution(con, pair, 1, token, "engine-a"));
         return token;
+    }
+
+    private UUID boundCleanupReceiptFixture(String engine) throws Exception {
+        UUID token = UUID.randomUUID();
+        Path staging = Files.createDirectory(files.resolve("receipt-staging")).resolve("build-" + token);
+        assertTrue(SolverBuildArtifacts.prepare(con, pair, 1, token, staging));
+        assertTrue(SolverBuildArtifacts.bindExecution(con, pair, 1, token, engine));
+        return token;
+    }
+
+    private void completeReceiptFixtureCleanup() throws Exception {
+        // This provider-free SQL fixture has never allocated its private staging child.
+        Path staging = Path.of(field("staging_path"));
+        assertThrows(java.nio.file.NoSuchFileException.class,
+                () -> Files.readAttributes(staging, BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS));
+        refused("UPDATE solver_build_artifacts SET state='DELETED' WHERE id=" + artifact);
+        execute(con, "DELETE FROM jobpair_stage_data WHERE jobpair_id=" + pair);
+        UUID token = UUID.randomUUID();
+        assertTrue(SolverBuildArtifacts.claimCleanup(con, artifact, token));
+        assertTrue(SolverBuildArtifacts.finishCleanup(con, artifact, token));
     }
 
     private static String receiptDigest(String payload) throws Exception {
