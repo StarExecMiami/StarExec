@@ -9,8 +9,11 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -24,7 +27,8 @@ public final class DedicatedStorageResource {
         }
     }
 
-    record Mount(long id, String device, Path root, Path point, String type, List<String> options) { }
+    record Mount(long id, String device, Path root, Path point, String type,
+                 List<String> options, List<String> superOptions) { }
     record Capacity(long bytes, long inodes, String filesystemId) { }
 
     private final Path root;
@@ -33,15 +37,17 @@ public final class DedicatedStorageResource {
     private final Mount mount;
     private final Capacity capacity;
     private final Object fileKey;
+    private final String filesystemOptions;
 
     private DedicatedStorageResource(Path root, Limits limits, List<Path> protectedRoots,
-                                     Mount mount, Capacity capacity, Object fileKey) {
+                                     Mount mount, Capacity capacity, Object fileKey, String filesystemOptions) {
         this.root = root;
         this.limits = limits;
         this.protectedRoots = protectedRoots;
         this.mount = mount;
         this.capacity = capacity;
         this.fileKey = fileKey;
+        this.filesystemOptions = filesystemOptions;
     }
 
     /**
@@ -79,23 +85,27 @@ public final class DedicatedStorageResource {
                     }
                 }
             }
+            String filesystemOptions = fullOptions(mount.device());
+            requireUnfilteredCounters(filesystemOptions);
             Capacity capacity = capacity(stat(root), limits);
             var store = Files.getFileStore(root);
             if (store.isReadOnly() || !store.type().equals("ext4") || store.getTotalSpace() != capacity.bytes()) {
                 throw new IOException("Execution storage capacity observations disagree");
             }
             if (!before.fileKey().equals(attributes(root).fileKey())
-                    || !mount.equals(dedicatedMount(mounts(), root))) {
+                    || !mount.equals(dedicatedMount(mounts(), root))
+                    || !filesystemOptions.equals(fullOptions(mount.device()))) {
                 throw new IOException("Execution storage changed during inspection");
             }
-            return new DedicatedStorageResource(root, limits, protectedCopy, mount, capacity, before.fileKey());
+            return new DedicatedStorageResource(root, limits, protectedCopy, mount, capacity, before.fileKey(), filesystemOptions);
         }
     }
 
     /** Repeat immediately before admission and trusted output reads; an old observation is insufficient. */
     public void requireUnchanged() throws IOException {
         DedicatedStorageResource current = inspect(root, limits, protectedRoots);
-        if (!mount.equals(current.mount) || !capacity.equals(current.capacity) || !fileKey.equals(current.fileKey)) {
+        if (!mount.equals(current.mount) || !capacity.equals(current.capacity) || !fileKey.equals(current.fileKey)
+                || !filesystemOptions.equals(current.filesystemOptions)) {
             throw new IOException("Execution storage no longer matches its conserved identity and capacity");
         }
     }
@@ -104,9 +114,29 @@ public final class DedicatedStorageResource {
     public long capacityBytes() { return capacity.bytes(); }
     public long inodeLimit() { return capacity.inodes(); }
 
+    /** Stable across a mount incarnation; aliases must compete for the same resource. */
+    public String filesystemKey() { return capacity.filesystemId(); }
+
     /** Includes the mount incarnation so an unmount/remount requires explicit recovery. */
     public String identity() {
-        return mount.device() + ":" + mount.id() + ":" + capacity.filesystemId() + ":" + fileKey;
+        return identity(root, mount, capacity, fileKey, filesystemOptions);
+    }
+
+    static String identity(Path root, Mount mount, Capacity capacity, Object fileKey, String filesystemOptions) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            digest.update(root.toString().getBytes(StandardCharsets.UTF_8));
+            digest.update((byte) 0);
+            digest.update(String.join(",", mount.options()).getBytes(StandardCharsets.UTF_8));
+            digest.update((byte) 0);
+            digest.update(String.join(",", mount.superOptions()).getBytes(StandardCharsets.UTF_8));
+            digest.update((byte) 0);
+            String optionsDigest = HexFormat.of().formatHex(digest.digest(filesystemOptions.getBytes(StandardCharsets.UTF_8)));
+            return mount.device() + ":" + mount.id() + ":" + capacity.filesystemId()
+                    + ":" + capacity.bytes() + ":" + capacity.inodes() + ":" + fileKey + ":" + optionsDigest;
+        } catch (NoSuchAlgorithmException unavailable) {
+            throw new IllegalStateException("Required storage identity digest is unavailable", unavailable);
+        }
     }
 
     @Override public String toString() {
@@ -152,7 +182,7 @@ public final class DedicatedStorageResource {
                     throw new IllegalArgumentException("Invalid mount identity");
                 }
                 result.add(new Mount(id, fields[2], root, point, type,
-                        List.of(fields[5].split(","))));
+                        List.of(fields[5].split(",")), List.of(fields[separator + 3].split(","))));
             } catch (IllegalArgumentException invalid) {
                 throw new IOException("Invalid kernel mount identity", invalid);
             }
@@ -185,7 +215,7 @@ public final class DedicatedStorageResource {
         Mount selected = matching.get(0);
         if (!selected.type().equals("ext4") || !selected.root().equals(root.getRoot())
                 || !selected.options().containsAll(List.of("rw", "nodev", "nosuid"))
-                || selected.options().contains("ro")) {
+                || selected.options().contains("ro") || quotaMode(selected.options()) || quotaMode(selected.superOptions())) {
             throw new IOException("Execution storage requires a writable dedicated ext4 root with nodev and nosuid");
         }
         for (Mount mount : mounts) {
@@ -195,6 +225,32 @@ public final class DedicatedStorageResource {
             }
         }
         return selected;
+    }
+
+    private static boolean quotaMode(List<String> options) {
+        return options.stream().anyMatch(option -> List.of("quota", "usrquota", "grpquota", "prjquota", "pquota").contains(option)
+                || option.startsWith("usrjquota=") || option.startsWith("grpjquota=") || option.startsWith("jqfmt="));
+    }
+
+    /** ext4 can clip statfs counters to a project soft limit; inspect options including defaults. */
+    static void requireUnfilteredCounters(String options) throws IOException {
+        List<String> tokens = List.of(options.strip().split("[,\\s]+"));
+        if (!tokens.get(0).equals("rw")
+                || tokens.stream().noneMatch(t -> List.of("data=ordered", "data=writeback", "data=journal").contains(t))
+                || quotaMode(tokens)) {
+            throw new IOException("Whole-filesystem capacity requires unfiltered writable ext4 counters");
+        }
+    }
+
+    static String fullOptions(String device) throws IOException {
+        if (!device.matches("[0-9]+:[0-9]+")) throw new IOException("Invalid block device identity");
+        String kernelName = Path.of("/sys/dev/block", device).toRealPath().getFileName().toString();
+        if (!kernelName.matches("[A-Za-z0-9_.!-]+")) throw new IOException("Unsupported kernel block device name");
+        try (var stream = Files.newInputStream(Path.of("/proc/fs/ext4", kernelName, "options"))) {
+            byte[] bytes = stream.readNBytes(65537);
+            if (bytes.length > 65536) throw new IOException("Filesystem options exceed their inspection limit");
+            return new String(bytes, StandardCharsets.UTF_8);
+        }
     }
 
     static Capacity capacity(String observation, Limits limits) throws IOException {

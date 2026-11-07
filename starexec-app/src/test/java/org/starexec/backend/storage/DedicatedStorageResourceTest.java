@@ -57,6 +57,48 @@ class DedicatedStorageResourceTest {
         assertEquals(ROOT, mount.point());
     }
 
+    @Test void projectQuotaCountersCannotQualifyAsWholeFilesystemCapacity() throws Exception {
+        var mounts = DedicatedStorageResource.parseMounts(MOUNT.replace("loop1 rw", "loop1 rw,prjquota"));
+        assertThrows(IOException.class, () -> DedicatedStorageResource.dedicatedMount(mounts, ROOT));
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"quota", "usrquota", "grpquota", "prjquota", "pquota",
+            "usrjquota=aquota.user", "grpjquota=aquota.group", "jqfmt=vfsv1"})
+    void quotaModesAreRefusedInBothMountAndFullKernelOptions(String mode) throws Exception {
+        for (String observed : java.util.List.of(MOUNT.replace("loop1 rw", "loop1 rw," + mode),
+                MOUNT.replace("rw,nodev,nosuid", "rw,nodev,nosuid," + mode))) {
+            var mounts = DedicatedStorageResource.parseMounts(observed);
+            assertThrows(IOException.class, () -> DedicatedStorageResource.dedicatedMount(mounts, ROOT));
+        }
+        assertThrows(IOException.class, () -> DedicatedStorageResource.requireUnfilteredCounters("rw\ndata=ordered\n" + mode));
+        assertThrows(IOException.class, () -> DedicatedStorageResource.requireUnfilteredCounters("rw\ndata=ordered," + mode));
+    }
+
+    @Test void unfilteredKernelOptionsMustIncludeWritableStateAndTheDataMode() throws Exception {
+        assertDoesNotThrow(() -> DedicatedStorageResource.requireUnfilteredCounters("rw\nnoquota\ndata=ordered\n"));
+        for (String incomplete : java.util.List.of("", "rw", "rw\nprjquota", "ro\ndata=ordered", "data=ordered\nrw", "rw\ndata=unknown")) {
+            assertThrows(IOException.class, () -> DedicatedStorageResource.requireUnfilteredCounters(incomplete));
+        }
+        assertThrows(IOException.class, () -> DedicatedStorageResource.fullOptions("../other"));
+    }
+
+    @Test void conservedIdentityIncludesTheRootAndFullFilesystemOptions() throws Exception {
+        var mount = DedicatedStorageResource.dedicatedMount(DedicatedStorageResource.parseMounts(MOUNT), ROOT);
+        var capacity = DedicatedStorageResource.capacity("4096:16:32:ab12", LIMITS);
+        String identity = DedicatedStorageResource.identity(ROOT, mount, capacity, "root-inode", "rw\ndata=ordered\n");
+        assertEquals(identity, DedicatedStorageResource.identity(ROOT, mount, capacity, "root-inode", "rw\ndata=ordered\n"));
+        assertNotEquals(identity, DedicatedStorageResource.identity(ROOT.resolveSibling("moved"), mount, capacity, "root-inode", "rw\ndata=ordered\n"));
+        assertNotEquals(identity, DedicatedStorageResource.identity(ROOT, mount, capacity, "root-inode", "rw\ndata=writeback\n"));
+        assertNotEquals(identity, DedicatedStorageResource.identity(ROOT, mount, capacity, "different-inode", "rw\ndata=ordered\n"));
+        assertNotEquals(identity, DedicatedStorageResource.identity(ROOT, mount,
+                new DedicatedStorageResource.Capacity(131072, 32, "ab12"), "root-inode", "rw\ndata=ordered\n"));
+        assertNotEquals(identity, DedicatedStorageResource.identity(ROOT, mount,
+                new DedicatedStorageResource.Capacity(65536, 64, "ab12"), "root-inode", "rw\ndata=ordered\n"));
+        var changedMount = DedicatedStorageResource.dedicatedMount(DedicatedStorageResource.parseMounts(
+                MOUNT.replace("rw,nodev,nosuid", "rw,nodev,nosuid,noexec")), ROOT);
+        assertNotEquals(identity, DedicatedStorageResource.identity(ROOT, changedMount, capacity, "root-inode", "rw\ndata=ordered\n"));
+    }
+
     @ParameterizedTest @ValueSource(strings = {"tmpfs", "overlay", "btrfs", "xfs", "nfs", "fuse.ext4"})
     void anUnimplementedCapacityProviderCannotUseExt4Assumptions(String type) throws Exception {
         var mounts = DedicatedStorageResource.parseMounts(MOUNT.replace("- ext4 ", "- " + type + " "));
