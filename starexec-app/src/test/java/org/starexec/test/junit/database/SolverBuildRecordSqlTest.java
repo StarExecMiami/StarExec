@@ -42,6 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.Mockito.*;
 
 /**
  * {@link SolverBuildRecorder#recordFinishedBuilds} against the real tables: a finished build job sets its
@@ -136,6 +137,36 @@ public class SolverBuildRecordSqlTest extends Common {
 		assertEquals(BUILD_FAILED, buildStatus(solver));
 		assertEquals(source.toString(), path(solver), "a rebuild starts from the uploaded source");
 		assertTrue(deleted(bench));
+	}
+
+	@ParameterizedTest @ValueSource(booleans = {false, true})
+	public void aLegacyLogRemainsReadableAfterHistoricalManagedAttempts(boolean failed) throws Exception {
+		Files.writeString(built.resolve("probe-solver"), "BUILT");
+		int solver = insertSolver(source, UNBUILT);
+		int historical = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, historical, StatusCode.ERROR_RUNSCRIPT);
+		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(
+				"UPDATE starexec.solver_build_artifacts SET state='REJECTED',execution_token=?,staging_path=?"
+				+ " WHERE pair_id IN (SELECT id FROM starexec.job_pairs WHERE job_id=?)")) {
+			ps.setObject(1, UUID.randomUUID()); ps.setString(2, folder.toPath().resolve("historical-staging").toString());
+			ps.setInt(3, jobs.get(jobs.size()-1)); assertEquals(1, ps.executeUpdate());
+		}
+		int bench = insertBenchmark("starexec_build", benchmarkFile());
+		buildJob(solver, bench, failed ? StatusCode.ERROR_RUNSCRIPT : StatusCode.STATUS_COMPLETE);
+		SolverBuildRecorder.recordFinishedBuilds();
+		assertEquals(failed ? BUILD_FAILED : BUILT_BY_STAREXEC, buildStatus(solver));
+		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(
+				"SELECT a.execution_token IS NULL AND a.state='REJECTED' AND a.origin_pair_id IN"
+				+ " (SELECT id FROM starexec.job_pairs WHERE job_id=?) FROM starexec.solvers s"
+				+ " JOIN starexec.solver_build_artifacts a ON a.id=s.build_output_artifact_id WHERE s.id=?")) {
+			ps.setInt(1, jobs.get(jobs.size()-1)); ps.setInt(2, solver);
+			try (ResultSet rs = ps.executeQuery()) { assertTrue(rs.next()); assertTrue(rs.getBoolean(1)); }
+		}
+		Path legacy = folder.toPath().resolve("legacy-log"); Files.writeString(legacy, "completed legacy log");
+		try (var solvers = mockStatic(Solvers.class, CALLS_REAL_METHODS)) {
+			solvers.when(() -> Solvers.getSolverBuildOutput(solver)).thenReturn(legacy.toFile());
+			assertEquals("completed legacy log", Solvers.readSolverBuildLog(solver, userId).orElseThrow());
+		}
 	}
 
 	/** Recorded before the copy-back moved ahead of COMPLETE, or a copy of nothing: not a usable solver. */
