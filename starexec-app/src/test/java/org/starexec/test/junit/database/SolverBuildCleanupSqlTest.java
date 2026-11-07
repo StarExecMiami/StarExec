@@ -150,7 +150,7 @@ class SolverBuildCleanupSqlTest extends Common {
             assertTrue(SolverBuildPublication.recordFailure(connection, build, outputs, 4096, 32));
         } else {
             var receipt = SolverBuildArtifacts.findStopReceipt(connection, pair, 1).orElseThrow();
-            assertTrue(SolverBuildArtifacts.reserveOutput(connection, build, "podman:7:owned-resource", receipt.receipt().sha256(), output()));
+            assertTrue(SolverBuildArtifacts.reserveOutput(connection, build, "podman:7:owned-resource", receipt.receipt().sha256(), output(), 4096));
             Files.writeString(directory(output()).resolve("partial"), "incomplete copy");
         }
         Path sibling = Files.writeString(outputs.resolve("unregistered"), "keep");

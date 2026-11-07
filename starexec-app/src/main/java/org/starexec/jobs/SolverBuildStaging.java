@@ -1,6 +1,7 @@
 package org.starexec.jobs;
 
 import org.starexec.backend.BuildExecutionContext;
+import org.starexec.data.database.Common;
 import org.starexec.data.database.SolverBuildArtifacts;
 import org.starexec.util.DescriptorDirectory;
 
@@ -27,6 +28,18 @@ public final class SolverBuildStaging {
      */
     public static BuildExecutionContext prepare(Connection con, int pairId, int attemptNo, Path parent)
             throws SQLException, IOException {
+        return prepare(con, pairId, attemptNo, parent, null);
+    }
+
+    /** Books a bounded private staging allowance before creating its directory. */
+    public static BuildExecutionContext prepare(Connection con, int pairId, int attemptNo, Path parent, long maxBytes)
+            throws SQLException, IOException {
+        if (maxBytes < 0) throw new IllegalArgumentException("Invalid staging byte budget");
+        return prepare(con, pairId, attemptNo, parent, Long.valueOf(maxBytes));
+    }
+
+    private static BuildExecutionContext prepare(Connection con, int pairId, int attemptNo, Path parent, Long maxBytes)
+            throws SQLException, IOException {
         if (!con.getAutoCommit()) throw new SQLException("Staging registration must commit before execution");
         if (parent == null || !parent.isAbsolute() || parent.getParent() == null || !parent.equals(parent.normalize())) {
             throw new IOException("Staging parent must be an absolute normalized non-root directory");
@@ -46,9 +59,15 @@ public final class SolverBuildStaging {
             BuildExecutionContext context = new BuildExecutionContext(artifact.id(), pairId, attemptNo,
                     token, Path.of(artifact.sourcePath()), staging);
             // This statement commits before any filesystem allocation or backend execution.
-            if (!SolverBuildArtifacts.prepare(con, pairId, attemptNo, token, staging)) {
-                throw new SQLException("Build ownership changed before staging registration");
-            }
+            Common.runTransactional(con, transaction -> {
+                if (!SolverBuildArtifacts.prepare(transaction, pairId, attemptNo, token, staging)) {
+                    throw new SQLException("Build ownership changed before staging registration");
+                }
+                if (maxBytes != null && !SolverBuildArtifacts.reserveStorageBytes(transaction, context, "STAGING", staging, maxBytes)) {
+                    throw new SQLException("Build staging byte budget was refused");
+                }
+                return true;
+            });
             try {
                 Files.createDirectory(staging, PosixFilePermissions.asFileAttribute(PRIVATE));
             } catch (FileAlreadyExistsException e) {

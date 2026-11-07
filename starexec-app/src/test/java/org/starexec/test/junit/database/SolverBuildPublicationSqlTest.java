@@ -505,7 +505,7 @@ class SolverBuildPublicationSqlTest {
     @Test void appliedOutputReferenceRollsBackWithItsSolverOutcome() throws Exception {
         stopped("podman", null);
         var receipt = SolverBuildArtifacts.findStopReceipt(connection, pair, 1).orElseThrow().receipt();
-        assertTrue(SolverBuildArtifacts.reserveOutput(connection, build, engine("podman"), receipt.sha256(), root()));
+        assertTrue(SolverBuildArtifacts.reserveOutput(connection, build, engine("podman"), receipt.sha256(), root(), 4096));
         var snapshot = SolverArtifactTree.copy(build.staging(), root(), 4096, 32);
         assertTrue(SolverBuildArtifacts.validateOutput(connection, build, engine("podman"), receipt.sha256(), root(),
                 new SolverBuildArtifacts.OutputManifest(snapshot.payload(), snapshot.sha256(), snapshot.byteSize())));
@@ -936,7 +936,7 @@ class SolverBuildPublicationSqlTest {
         stopped("podman", null);
         Files.createSymbolicLink(build.staging().resolve("solver/z_log_link"), Path.of("../logs/starexec_build_log"));
         var receipt = SolverBuildArtifacts.findStopReceipt(connection, pair, 1).orElseThrow().receipt();
-        assertTrue(SolverBuildArtifacts.reserveOutput(connection, build, engine("podman"), receipt.sha256(), root()));
+        assertTrue(SolverBuildArtifacts.reserveOutput(connection, build, engine("podman"), receipt.sha256(), root(), 4096));
         var snapshot = SolverArtifactTree.copy(build.staging(), root(), 4096, 32);
         assertTrue(SolverBuildArtifacts.validateOutput(connection, build, engine("podman"), receipt.sha256(), root(),
                 new SolverBuildArtifacts.OutputManifest(snapshot.payload(), snapshot.sha256(), snapshot.byteSize())));

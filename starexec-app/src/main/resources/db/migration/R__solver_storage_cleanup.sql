@@ -98,6 +98,7 @@ BEGIN
             AND user_id=_a.origin_owner_id AND deleted IS TRUE AND disk_size=_a.cleanup_solver_bytes;
         IF NOT FOUND THEN RAISE EXCEPTION 'Solver cleanup accounting identity changed'; END IF;
     END IF;
+    PERFORM starexec.release_solver_build_storage_bytes(_artifact,_token);
     RETURN TRUE;
 END;
 $$ LANGUAGE plpgsql;

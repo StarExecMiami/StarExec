@@ -84,7 +84,38 @@ public final class SolverBuildArtifacts {
 
     /** Reserves immutable output without authorizing publication or replacing an earlier destination. */
     public static boolean reserveOutput(Connection connection, BuildExecutionContext build, String engine,
-                                         String receiptDigest, Path root) throws SQLException {
+                                         String receiptDigest, Path root, long maxBytes) throws SQLException {
+        if (!connection.getAutoCommit()) throw new SQLException("Output byte reservation must own its transaction");
+        try {
+            return Common.runTransactional(connection, transaction -> {
+                if (!reserveStorageBytes(transaction, build, "OUTPUT", root, maxBytes)
+                        || !reserveOutputPath(transaction, build, engine, receiptDigest, root)) {
+                    throw new StorageReservationRefused();
+                }
+                return true;
+            });
+        } catch (StorageReservationRefused refused) {
+            if (refused.getSuppressed().length != 0) throw refused;
+            return false;
+        }
+    }
+
+    /** The caller commits the reservation before enabling any writes to the registered path. */
+    public static boolean reserveStorageBytes(Connection connection, BuildExecutionContext build, String kind,
+                                               Path path, long maxBytes) throws SQLException {
+        if (connection.getAutoCommit()) throw new SQLException("Byte reservation requires an explicit transaction");
+        if (path == null || maxBytes < 0) throw new IllegalArgumentException("Invalid build storage budget");
+        return call(connection, "SELECT starexec.reserve_solver_build_storage_bytes(?,?,?,?,?)",
+                build.artifactId(), build.token(), kind, path.toString(), maxBytes);
+    }
+
+    private static final class StorageReservationRefused extends SQLException {
+        private static final long serialVersionUID = 1L;
+        private StorageReservationRefused() { super("Build storage reservation was refused"); }
+    }
+
+    private static boolean reserveOutputPath(Connection connection, BuildExecutionContext build, String engine,
+                                              String receiptDigest, Path root) throws SQLException {
         String sql = "UPDATE starexec.solver_build_artifacts SET state='STAGED',storage_root=?,artifact_path=?"
                 + " WHERE id=? AND origin_pair_id=? AND attempt_no=? AND execution_token=?"
                 + " AND engine_identity=? AND execution_stopped_at IS NOT NULL AND execution_stop_receipt_sha256=?"
@@ -113,6 +144,29 @@ public final class SolverBuildArtifacts {
     }
 
     private static boolean storeVerifiedOutput(Connection connection, BuildExecutionContext build, String engine,
+                                                String receiptDigest, Path root, OutputManifest manifest, String state) throws SQLException {
+        if (!connection.getAutoCommit()) throw new SQLException("Output verification must own its transaction");
+        try {
+            return Common.runTransactional(connection, transaction -> {
+                // Keep the accounting owner ahead of the artifact in the lock order.
+                try (PreparedStatement lock = transaction.prepareStatement("SELECT id FROM starexec.users WHERE id="
+                        + "(SELECT origin_owner_id FROM starexec.solver_build_artifacts WHERE id=?) FOR UPDATE NOWAIT")) {
+                    lock.setLong(1, build.artifactId());
+                    try (ResultSet result = lock.executeQuery()) { if (!result.next()) throw new StorageReservationRefused(); }
+                }
+                if (!storeOutputManifest(transaction, build, engine, receiptDigest, root, manifest, state)
+                        || !call(transaction, "SELECT starexec.reconcile_solver_build_output_bytes(?)", build.artifactId())) {
+                    throw new StorageReservationRefused();
+                }
+                return true;
+            });
+        } catch (StorageReservationRefused refused) {
+            if (refused.getSuppressed().length != 0) throw refused;
+            return false;
+        }
+    }
+
+    private static boolean storeOutputManifest(Connection connection, BuildExecutionContext build, String engine,
                                                 String receiptDigest, Path root, OutputManifest manifest, String state) throws SQLException {
         String sql = "UPDATE starexec.solver_build_artifacts SET state=?,byte_size=?,"
                 + "manifest_payload=?,manifest_sha256=?,validated_at=clock_timestamp()"

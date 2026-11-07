@@ -163,9 +163,9 @@ are preserved. Cancellation and non-execution receipts can authorize cleanup but
 never solver publication. Local cleanup remains refused without complete physical
 termination proof. Engine identity and exact receipt bytes survive settlement.
 
-This operation settles an existing solver charge; reservation/accounting for every
-new staging and immutable-output byte, helper recovery, mounted isolation and the
-runtime integration remain required before enabling the complete lifecycle. The
+This operation settles the existing solver charge and any separately booked build
+storage charges. Mounted isolation, mandatory bounded staging admission and runtime
+integration remain required before enabling the complete lifecycle. The
 storage provider must support the directory-forcing semantics being relied on;
 these component tests do not establish power-loss behavior on a deployed volume.
 
@@ -233,12 +233,37 @@ engine adapters. Missing records and mismatched ownership return refusal; databa
 errors propagate for infrastructure retry. It does not allocate directories or
 observe processes, and callers must supply an absolute staging directory.
 
+Build storage budgets and user disk quotas are expressed in bytes. The trusted
+publisher books its entire bounded copy allowance in `users.disk_size` before
+creating output. Reservations retain the artifact, owner, kind and exact path;
+the uploaded source charge is separate. Concurrent reservations serialize on the
+account row and refuse lock contention. The quota check uses remaining capacity
+without overflowing a signed 64-bit counter. Refused reservations roll back the
+path and charge together. Retrying the same budget does not charge it again, and
+an existing reservation cannot be enlarged or redirected.
+
+Only conserved, verified output bytes reduce a successful copy's unused allowance.
+Manifest storage and this reconciliation commit together. A failed or incomplete
+copy keeps its entire booked allowance until registered cleanup confirms every
+captured path absent. That cleanup releases each booked charge once in the same
+transaction as its completion; a failed commit retains the identity and charge
+even when files are already gone. The history remains after settlement.
+
+The bounded staging overload books its allowance before directory creation and
+retains it until verified cleanup. The registry-only staging overload is retained
+for existing preparation callers; it is not permission to run an unbudgeted build.
+Mandatory budget enforcement at engine admission and writable-volume capacity
+enforcement remain prerequisites for activation. Byte and entry limits describe
+logical content rather than filesystem block, inode or metadata consumption;
+database accounting alone cannot enforce a storage provider's physical capacity.
+
 Use a disposable PostgreSQL database configured through the documented
 `STAREXEC_DB_*` variables and apply the migrations before running:
 
 ```sh
 mvn -B -pl starexec-app -Dtest=SolverArtifactPublicationSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
 mvn -B -pl starexec-app -Dtest=SolverBuildPublicationSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+mvn -B -pl starexec-app -Dtest=SolverBuildStorageQuotaSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
 ```
 
 These database tests cover ownership changes, stale jobs and attempts, rollback,

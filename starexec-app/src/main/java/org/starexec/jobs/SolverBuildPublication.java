@@ -79,10 +79,11 @@ public final class SolverBuildPublication {
                 else { SolverArtifactTree.verify(root, snapshot); requireLayout(root, snapshot); }
             } else {
                 if (!failed) requireDirectories(build.staging());
-                if (!SolverBuildArtifacts.reserveOutput(connection, build, artifact.engineIdentity(), stored.receipt().sha256(), root)) return false;
+                boolean reserved = SolverBuildArtifacts.reserveOutput(connection, build, artifact.engineIdentity(), stored.receipt().sha256(), root, maxBytes);
                 if (Files.exists(root, LinkOption.NOFOLLOW_LINKS)) {
                     throw new IOException("Unvalidated artifact destination already exists; recovery must preserve its ownership");
                 }
+                if (!reserved) return false;
                 snapshot = failed ? SolverArtifactTree.copyFailureLogs(build.staging(), root, maxBytes, maxEntries)
                         : SolverArtifactTree.copyReserved(build.staging(), root, maxBytes, maxEntries);
                 if (failed) requireFailureLayout(snapshot); else requireLayout(root, snapshot);
