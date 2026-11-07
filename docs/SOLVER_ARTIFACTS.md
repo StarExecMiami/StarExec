@@ -269,6 +269,10 @@ database accounting alone cannot enforce a storage provider's physical capacity.
 The dedicated-filesystem observer described in [Bounded execution storage](EXECUTION_STORAGE.md)
 checks actual mount identity and finite data-block/inode capacity. It does not
 replace the durable resource lease or authorize an execution on its own.
+`ExecutionStorageLeases` couples that observation to an exclusive database lease
+and existing build admission, while preserving separate engine-observation
+callbacks. Its conservative full-cleanup release still needs independent staging
+reclamation and backend/dispatcher integration before pool activation.
 
 Use a disposable PostgreSQL database configured through the documented
 `STAREXEC_DB_*` variables and apply the migrations before running:
