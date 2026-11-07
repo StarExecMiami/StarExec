@@ -227,6 +227,18 @@ a substitute for the backend's isolation and positive-stop guarantees. Exact
 provider/host path binding and all per-stage readers must satisfy the same boundary
 before enabling the complete untrusted execution profile.
 
+The legacy Podman data-root translator compares path components rather than text
+prefixes. An enabled mapping requires normalized absolute source/container/host
+paths; dot segments and relative paths are refused. Exact roots and trailing
+separators map consistently, while sibling directory names do not acquire the data
+mapping. Log directories outside the data root keep their separate bind even if
+their names share a prefix.
+
+Disabled translation and undeclared legacy paths retain their existing behavior.
+This helper is lexical mapping, not physical mount attestation or discovery of a
+private resource's daemon path. A leased private filesystem needs an explicit
+verified mapping and the existing kernel identity checks before dispatch.
+
 `SolverBuildStagingCleanup` reclaims staging independently of immutable executable
 retention. Its durable claim binds the execution, resource, cleanup token and
 original directory identity or positive absence. It requires a matching conserved

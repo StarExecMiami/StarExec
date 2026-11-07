@@ -1833,6 +1833,8 @@ public class PodmanBackend implements Backend {
      *
      * @param containerPath Path inside the StarExec container (e.g., /app/data/jobin/job_1)
      * @return Corresponding host path, or the original path if translation is disabled
+     *         or the path is outside the declared legacy data mapping
+     * @throws IllegalArgumentException if an enabled mapping contains relative or dot-segment paths
      */
     private String translateToHostPath(String containerPath) {
         if (
@@ -1843,11 +1845,19 @@ public class PodmanBackend implements Backend {
             return containerPath;
         }
 
-        if (containerPath.startsWith(containerDataPath)) {
-            String relativePath = containerPath.substring(
-                containerDataPath.length()
-            );
-            String hostPath = hostDataPath + relativePath;
+        if (containerPath == null || containerDataPath.isEmpty()) {
+            throw new IllegalArgumentException("Data path translation requires explicit paths");
+        }
+        Path source = Paths.get(containerPath);
+        Path containerRoot = Paths.get(containerDataPath);
+        Path hostRoot = Paths.get(hostDataPath);
+        if (!source.isAbsolute() || !containerRoot.isAbsolute() || !hostRoot.isAbsolute()
+            || !source.equals(source.normalize()) || !containerRoot.equals(containerRoot.normalize())
+            || !hostRoot.equals(hostRoot.normalize())) {
+            throw new IllegalArgumentException("Data path translation requires normalized absolute paths");
+        }
+        if (source.startsWith(containerRoot)) {
+            String hostPath = hostRoot.resolve(containerRoot.relativize(source)).toString();
             log.debug(
                 "DooD path translation: " + containerPath + " -> " + hostPath
             );
@@ -2255,8 +2265,8 @@ public class PodmanBackend implements Backend {
     ) {
         List<Bind> binds = new ArrayList<>();
 
-        // Translate paths for DooD scenarios
-        String hostLogPath = translateToHostPath(logPath);
+        // Validate the full log path before translating its parent below.
+        translateToHostPath(logPath);
 
         // Mount the entire data directory so job scripts have access to all artifacts
         // (Solvers, Benchmarks, jobin scripts, etc.)
@@ -2274,7 +2284,7 @@ public class PodmanBackend implements Backend {
         // Note: logPath is a file path, we mount its parent directory
         Path logDir = Paths.get(logPath).getParent();
         String hostLogDir = translateToHostPath(logDir.toString());
-        if (!hostLogDir.startsWith(hostDataPath)) {
+        if (!Paths.get(hostLogDir).normalize().startsWith(Paths.get(hostDataPath).normalize())) {
             // Only add separate mount if logs are outside data directory
             Volume outputVolume = new Volume(logDir.toString());
             binds.add(new Bind(hostLogDir, outputVolume));

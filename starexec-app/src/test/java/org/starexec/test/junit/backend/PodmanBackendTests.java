@@ -388,6 +388,64 @@ public class PodmanBackendTests {
         field.set(backend, value);
     }
 
+    private String translatedPath(String path) throws Exception {
+        Method method=PodmanBackend.class.getDeclaredMethod("translateToHostPath",String.class);
+        method.setAccessible(true);
+        return (String)method.invoke(backend,path);
+    }
+
+    @Test
+    public void doodTranslationDoesNotBorrowSiblingPrefixes() throws Exception {
+        setBackendField("containerDataPath","/app/data");setBackendField("hostDataPath","/host/data");
+        for (String path:List.of("/app/database/solver","/app/data-archive/job","/different/job")) {
+            assertEquals(path,translatedPath(path),"A sibling path must not acquire the data mount translation");
+        }
+    }
+
+    @Test
+    public void doodTranslationRefusesTraversalAndRelativePaths() throws Exception {
+        setBackendField("containerDataPath","/app/data");setBackendField("hostDataPath","/host/data");
+        for (String path:List.of("/app/data/../escape","/app/data/./job","relative/job")) {
+            var failure=org.junit.jupiter.api.Assertions.assertThrows(java.lang.reflect.InvocationTargetException.class,()->translatedPath(path));
+            assertTrue(failure.getCause() instanceof IllegalArgumentException);
+        }
+    }
+
+    @Test
+    public void doodTranslationPreservesRootsAndNestedComponents() throws Exception {
+        setBackendField("containerDataPath","/app/data/");setBackendField("hostDataPath","/host/data/");
+        assertEquals("/host/data",translatedPath("/app/data"));
+        assertEquals("/host/data/jobin/job_1",translatedPath("/app/data/jobin/job_1"));
+    }
+
+    @Test
+    public void disabledDoodTranslationPreservesExistingHostPaths() throws Exception {
+        setBackendField("containerDataPath","/app/data");setBackendField("hostDataPath","");
+        assertEquals("/host/private/job",translatedPath("/host/private/job"));
+    }
+
+    @Test
+    public void enabledDoodMappingRequiresNormalizedAbsoluteRoots() throws Exception {
+        for (String[] roots:new String[][] {
+            {"/app/data","relative-host"},{"relative-data","/host/data"},
+            {"/app/data","/host/../escaped"},{"/app/data/..","/host/data"},{"","/host/data"}
+        }) {
+            setBackendField("containerDataPath",roots[0]);setBackendField("hostDataPath",roots[1]);
+            var failure=org.junit.jupiter.api.Assertions.assertThrows(java.lang.reflect.InvocationTargetException.class,
+                    ()->translatedPath("/app/data/job"));
+            assertTrue(failure.getCause() instanceof IllegalArgumentException);
+        }
+    }
+
+    @Test
+    public void aSiblingLogDirectoryKeepsItsSeparateMount() throws Exception {
+        configureBackendForSubmitScript();setBackendField("containerDataPath","/host/data");
+        HostConfig sibling=createHostConfig("/host/data/solver","/host/database/pair.log",null);
+        assertEquals(2,sibling.getBinds().length,"A text prefix is not containment of the log directory");
+        HostConfig nested=createHostConfig("/host/data/solver","/host/data/logs/pair.log",null);
+        assertEquals(1,nested.getBinds().length);
+    }
+
     private void configureBackendForSubmitScript() throws Exception {
         setBackendField("usePrebuiltImage", true);
         setBackendField(
