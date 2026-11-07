@@ -7,6 +7,8 @@ import org.starexec.constants.R;
 import org.starexec.data.database.AnonymousLinks;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.database.Permissions;
+import org.starexec.data.database.Solvers;
+import org.starexec.data.security.SolverSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.User;
 import org.starexec.util.SessionUtil;
@@ -18,6 +20,26 @@ import java.util.Optional;
 import static org.mockito.ArgumentMatchers.anyInt;
 
 public class DownloadTests {
+
+	@Test
+	public void sourceDownloadAuthorizationRunsBeforeResolvingOrReadingFiles() throws Exception {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		HttpServletResponse response = Mockito.mock(HttpServletResponse.class);
+		User user = new User(); user.setId(7);
+		Mockito.when(request.getParameter("type")).thenReturn(R.SOLVER_SOURCE);
+		Mockito.when(request.getParameter("id")).thenReturn("9");
+		try (MockedStatic<SessionUtil> session = Mockito.mockStatic(SessionUtil.class);
+				MockedStatic<SolverSecurity> security = Mockito.mockStatic(SolverSecurity.class);
+				MockedStatic<Solvers> solvers = Mockito.mockStatic(Solvers.class)) {
+			session.when(() -> SessionUtil.getUser(request)).thenReturn(user);
+			session.when(() -> SessionUtil.getUserId(request)).thenReturn(7);
+			security.when(() -> SolverSecurity.canUserDownloadSolver(9, 7))
+					.thenReturn(new ValidatorStatusCode(false, "No source permission", HttpServletResponse.SC_FORBIDDEN));
+			new Download().doGet(request, response);
+			Mockito.verify(response).sendError(HttpServletResponse.SC_FORBIDDEN, "No source permission");
+			solvers.verifyNoInteractions(); Mockito.verify(response, Mockito.never()).getOutputStream();
+		}
+	}
 
 	@Test
 	public void doGetSendsHttp500WhenJobDownloadFailsBeforeResponseCommit() throws Exception {

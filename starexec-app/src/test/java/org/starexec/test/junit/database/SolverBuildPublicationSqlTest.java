@@ -11,12 +11,22 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.starexec.backend.BuildExecutionContext;
 import org.starexec.constants.R;
 import org.starexec.data.database.SolverBuildArtifacts;
+import org.starexec.data.database.Common;
+import org.starexec.data.database.Solvers;
+import org.starexec.data.to.Solver;
 import org.starexec.data.to.SolverBuildStopReceipt;
 import org.starexec.jobs.SolverBuildPublication;
 import org.starexec.jobs.SolverBuildStaging;
 import org.starexec.test.util.DatabaseTestSupport;
+import org.starexec.servlets.Download;
+import javax.servlet.ServletOutputStream;
+import javax.servlet.WriteListener;
+import javax.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.lang.reflect.InvocationTargetException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,11 +39,15 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.zip.ZipInputStream;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /** Actual catalogue and filesystem coordination; provider observations are synthetic fixtures. */
 class SolverBuildPublicationSqlTest {
@@ -402,6 +416,98 @@ class SolverBuildPublicationSqlTest {
         assertNotEquals(Files.getAttribute(build.staging().resolve("solver/program"), "unix:ino"),
                 Files.getAttribute(root().resolve("solver/program"), "unix:ino"));
         assertEquals(PosixFilePermissions.fromString("r-xr-xr-x"), Files.getPosixFilePermissions(root().resolve("solver/program")));
+        unchangedSource();
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void sourceArchiveUsesTheOriginalSourceBeforeAndAfterPublication(boolean published) throws Exception {
+        Common.initialize();
+        if (published) { stopped("podman", null); assertTrue(publish()); }
+        Solver snapshot = sourceSnapshot(text(connection, "SELECT path FROM starexec.solvers WHERE id=?", solver));
+        Map<String, String> entries = new HashMap<>();
+        try (ZipInputStream archive = new ZipInputStream(new ByteArrayInputStream(archiveSource(snapshot)))) {
+            for (var entry = archive.getNextEntry(); entry != null; entry = archive.getNextEntry()) {
+                if (!entry.isDirectory()) entries.put(entry.getName(), new String(archive.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+            }
+        }
+        assertEquals(Map.of("publication/starexec_build", "original source"), entries);
+        unchangedSource();
+    }
+
+    private Solver sourceSnapshot(String path) {
+        Solver snapshot = new Solver(); snapshot.setId(solver); snapshot.setUserId(user); snapshot.setName("publication");
+        snapshot.setPath(path); return snapshot;
+    }
+
+    private byte[] archiveSource(Solver snapshot) throws Exception {
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        ServletOutputStream stream = new ServletOutputStream() {
+            @Override public boolean isReady() { return true; }
+            @Override public void setWriteListener(WriteListener listener) { }
+            @Override public void write(int value) { bytes.write(value); }
+        };
+        when(response.getOutputStream()).thenReturn(stream);
+        var method = Download.class.getDeclaredMethod("handleSolverSource", Solver.class, HttpServletResponse.class);
+        method.setAccessible(true);
+        try { assertEquals(true, method.invoke(null, snapshot, response)); }
+        catch (InvocationTargetException failure) {
+            if (failure.getCause() instanceof Exception cause) throw cause;
+            throw failure;
+        }
+        return bytes.toByteArray();
+    }
+
+    @Test void sourceArchivesNeverFollowLinksOutsideTheSourceTree() throws Exception {
+        Common.initialize();
+        String legacyPath = source.toString().substring(0, source.toString().length() - 4);
+        execute(connection, "UPDATE starexec.solvers SET path=?,build_status=2 WHERE id=?", legacyPath, solver);
+        Path outside = Files.writeString(files.resolve("outside-source"), "must not be archived");
+        Files.createSymbolicLink(source.resolve("escape"), outside);
+        assertThrows(IOException.class, () -> archiveSource(sourceSnapshot(legacyPath)));
+        assertEquals("must not be archived", Files.readString(outside));
+    }
+
+    @Test void legacyBuiltSourceRemainsAvailableWithoutCataloguePublication() throws Exception {
+        Common.initialize();
+        String legacy = source.toString().substring(0, source.toString().length() - 4);
+        execute(connection, "UPDATE starexec.solvers SET path=?,build_status=2 WHERE id=?", legacy, solver);
+        assertEquals(source.toFile(), Solvers.findSolverSource(sourceSnapshot(legacy)).orElseThrow());
+        try (ZipInputStream archive = new ZipInputStream(new ByteArrayInputStream(archiveSource(sourceSnapshot(legacy))))) {
+            assertEquals("publication/starexec_build", archive.getNextEntry().getName());
+            assertEquals("original source", new String(archive.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"owner", "path", "deleted"})
+    void sourceResolutionRefusesChangedAssetSnapshots(String changed) throws Exception {
+        Common.initialize(); Solver snapshot = sourceSnapshot(source.toString());
+        if (changed.equals("owner")) snapshot.setUserId(user + 1);
+        else if (changed.equals("path")) snapshot.setPath(files.resolve("different-source_src").toString());
+        else execute(connection, "UPDATE starexec.solvers SET deleted=true WHERE id=?", solver);
+        assertTrue(Solvers.findSolverSource(snapshot).isEmpty());
+        assertThrows(IOException.class, () -> archiveSource(snapshot)); unchangedSource();
+    }
+
+    @Test void publishedCatalogueRecoversTheOriginalSourceWithoutASeparateHint() throws Exception {
+        Common.initialize(); stopped("podman", null); assertTrue(publish());
+        execute(connection, "UPDATE starexec.solvers SET build_source_path=NULL WHERE id=?", solver);
+        assertEquals(source.toFile(), Solvers.findSolverSource(sourceSnapshot(root().resolve("solver").toString())).orElseThrow());
+    }
+
+    @Test void inconsistentPublishedSourceHintsAreNeverGuessed() throws Exception {
+        Common.initialize(); stopped("podman", null); assertTrue(publish());
+        execute(connection, "UPDATE starexec.solvers SET build_source_path=? WHERE id=?", files.resolve("other-source_src").toString(), solver);
+        Solver snapshot = sourceSnapshot(root().resolve("solver").toString());
+        assertThrows(SQLException.class, () -> Solvers.findSolverSource(snapshot));
+        assertThrows(SQLException.class, () -> archiveSource(snapshot)); unchangedSource();
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"", "/", "relative", "/solver/../source"})
+    void invalidSourceMetadataCannotBecomeAnArchiveRoot(String path) throws Exception {
+        Common.initialize();
+        execute(connection, "UPDATE starexec.solvers SET build_source_path=? WHERE id=?", path, solver);
+        assertThrows(SQLException.class, () -> Solvers.findSolverSource(sourceSnapshot(source.toString())));
         unchangedSource();
     }
 
