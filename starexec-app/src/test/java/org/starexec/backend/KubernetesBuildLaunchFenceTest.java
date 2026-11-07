@@ -196,6 +196,8 @@ class KubernetesBuildLaunchFenceTest {
     @Test void cancellationWinningTheVersionRaceInvalidatesAnAlreadyAdmittedResume() throws Exception {
         try (Api api = new Api(); KubernetesClient client = api.client()) {
             Job created = initialJob();
+            created.getSpec().getTemplate().getMetadata().setFinalizers(List.of(KubernetesBuildPodRetention.FINALIZER));
+            api.current = new JobBuilder(created).build();
             var observation = KubernetesBuildLaunchFence.preventStart(client, "starexec", identity(), created);
             assertEquals("18", observation.job().getMetadata().getResourceVersion());
             assertEquals(1L, observation.job().getMetadata().getGeneration());
@@ -203,9 +205,12 @@ class KubernetesBuildLaunchFenceTest {
             assertEquals("41", observation.pods().getMetadata().getResourceVersion());
             assertEquals("17", created.getMetadata().getResourceVersion());
             assertFalse(KubernetesBuildLaunchFence.isFenced(created));
-            KubernetesClientException conflict = assertThrows(KubernetesClientException.class, () -> resume(client, created));
-            assertEquals(409, conflict.getCode()); assertEquals(2, api.writes.get());
-            assertEquals(List.of("17", "17"), api.writeVersions, "both requests must retain the original version despite preparatory reads");
+            IllegalStateException refused = assertThrows(IllegalStateException.class, () -> resume(client, created));
+            assertEquals("Build initial observation cannot authorize launch", refused.getMessage());
+            assertEquals(1, api.writes.get(), "a freshly observed launch fence must prevent the resume PUT");
+            assertEquals(List.of("17"), api.writeVersions, "only the original fence request may write");
+            assertEquals("18", api.current.getMetadata().getResourceVersion());
+            assertEquals("17", api.current.getMetadata().getAnnotations().get(KubernetesBuildLaunchFence.ANNOTATION));
             assertTrue(api.writePaths.stream().allMatch(path -> path.equals("/apis/batch/v1/namespaces/starexec/jobs/build-job")));
             assertTrue(api.current.getSpec().getSuspend());
             assertTrue(api.selector.contains("batch.kubernetes.io/controller-uid=job-uid"));
@@ -215,6 +220,8 @@ class KubernetesBuildLaunchFenceTest {
     @Test void aResumeWinningFirstCannotBeReclassifiedAsNeverStartedByAnEmptyCensus() throws Exception {
         try (Api api = new Api(); KubernetesClient client = api.client()) {
             Job created = initialJob();
+            created.getSpec().getTemplate().getMetadata().setFinalizers(List.of(KubernetesBuildPodRetention.FINALIZER));
+            api.current = new JobBuilder(created).build();
             resume(client, created);
             assertFalse(api.current.getSpec().getSuspend()); assertEquals(2L, api.current.getMetadata().getGeneration());
             KubernetesClientException conflict = assertThrows(KubernetesClientException.class,
