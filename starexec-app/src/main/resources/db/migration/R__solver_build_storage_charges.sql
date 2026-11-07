@@ -45,6 +45,40 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Observation binding remains available for late cleanup; only admission permits launch.
+CREATE OR REPLACE FUNCTION starexec.admit_solver_build_execution(
+    _artifact BIGINT, _pair INTEGER, _attempt INTEGER, _token UUID,
+    _source TEXT, _staging TEXT, _engine TEXT) RETURNS BOOLEAN AS $$
+DECLARE
+    _a starexec.solver_build_artifacts%ROWTYPE;
+    _r starexec.solver_build_storage_charges%ROWTYPE;
+    _usage BIGINT;
+BEGIN
+    IF _token IS NULL OR _source IS NULL OR _staging IS NULL
+        OR _engine IS NULL OR btrim(_engine)='' THEN RETURN FALSE; END IF;
+    SELECT * INTO _a FROM starexec.solver_build_artifacts WHERE id=_artifact;
+    IF NOT FOUND OR _a.origin_pair_id IS DISTINCT FROM _pair OR _a.attempt_no IS DISTINCT FROM _attempt
+        OR _a.execution_token IS DISTINCT FROM _token OR _a.source_path IS DISTINCT FROM _source
+        OR _a.staging_path IS DISTINCT FROM _staging THEN RETURN FALSE; END IF;
+    IF NOT starexec.prepare_solver_build_storage(_pair,_attempt,_token,_staging) THEN RETURN FALSE; END IF;
+    SELECT * INTO _a FROM starexec.solver_build_artifacts WHERE id=_artifact FOR UPDATE;
+    IF _a.execution_stopped_at IS NOT NULL OR _a.cleanup_token IS NOT NULL
+        OR _a.state NOT IN ('PLANNED','STAGED') THEN RETURN FALSE; END IF;
+    -- The existing preparation order owns the job and solver; never wait for a reversed owner lock.
+    SELECT disk_size INTO _usage FROM starexec.users WHERE id=_a.origin_owner_id FOR SHARE NOWAIT;
+    IF NOT FOUND OR _usage IS NULL OR _usage<0 THEN RETURN FALSE; END IF;
+    SELECT * INTO _r FROM starexec.solver_build_storage_charges
+        WHERE artifact_id=_artifact AND storage_kind='STAGING' FOR SHARE NOWAIT;
+    IF NOT FOUND OR _r.owner_id IS DISTINCT FROM _a.origin_owner_id
+        OR _r.path IS DISTINCT FROM _staging OR _r.limit_bytes<=0
+        OR _r.charged_bytes IS DISTINCT FROM _r.limit_bytes
+        OR _r.verified_at IS NOT NULL OR _r.released_at IS NOT NULL THEN RETURN FALSE; END IF;
+    IF _usage<(SELECT COALESCE(sum(charged_bytes),0) FROM starexec.solver_build_storage_charges
+        WHERE owner_id=_a.origin_owner_id AND released_at IS NULL) THEN RETURN FALSE; END IF;
+    RETURN starexec.bind_solver_build_execution(_pair,_attempt,_token,_engine);
+END;
+$$ LANGUAGE plpgsql;
+
 -- Release only unused copy capacity after exact output bytes have been conserved.
 CREATE OR REPLACE FUNCTION starexec.reconcile_solver_build_output_bytes(_artifact BIGINT)
 RETURNS BOOLEAN AS $$

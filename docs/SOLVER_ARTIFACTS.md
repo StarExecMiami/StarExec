@@ -164,7 +164,7 @@ never solver publication. Local cleanup remains refused without complete physica
 termination proof. Engine identity and exact receipt bytes survive settlement.
 
 This operation settles the existing solver charge and any separately booked build
-storage charges. Mounted isolation, mandatory bounded staging admission and runtime
+storage charges. Mounted isolation, provider capacity enforcement and runtime
 integration remain required before enabling the complete lifecycle. The
 storage provider must support the directory-forcing semantics being relied on;
 these component tests do not establish power-loss behavior on a deployed volume.
@@ -251,9 +251,18 @@ even when files are already gone. The history remains after settlement.
 
 The bounded staging overload books its allowance before directory creation and
 retains it until verified cleanup. The registry-only staging overload is retained
-for existing preparation callers; it is not permission to run an unbudgeted build.
-Mandatory budget enforcement at engine admission and writable-volume capacity
-enforcement remain prerequisites for activation. Byte and entry limits describe
+for existing preparation callers, but cannot pass launch admission without an
+explicit positive staging allowance. Admission checks the exact artifact, pair,
+current attempt, token, source, staging path and accounting owner in one transaction.
+The allowance must remain unreleased and covered by the owner's recorded usage;
+admission does not invent or enlarge a budget. Owner contention refuses rather
+than waits with a reversed lock order. A failed admission commit rolls back engine
+binding while retaining the already booked allowance.
+
+Raw engine binding remains available for late callbacks and cleanup observations;
+it never grants permission to launch. Cancellation and non-execution keep their
+existing receipt contracts. Provider writable-volume capacity enforcement and
+dispatcher integration remain prerequisites for activation. Byte and entry limits describe
 logical content rather than filesystem block, inode or metadata consumption;
 database accounting alone cannot enforce a storage provider's physical capacity.
 

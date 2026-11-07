@@ -358,16 +358,9 @@ public final class SolverBuildArtifacts {
     public static boolean admitExecution(Connection connection, BuildExecutionContext build,
                                          String engineIdentity) throws SQLException {
         if (connection.getAutoCommit()) throw new SQLException("Build admission requires an explicit transaction");
-        Artifact artifact = find(connection, build.pairId(), build.attemptNo()).orElse(null);
-        if (artifact == null || artifact.id() != build.artifactId()
-                || !build.token().equals(artifact.executionToken())
-                || !build.staging().toString().equals(artifact.stagingPath())
-                || !build.source().toString().equals(artifact.sourcePath())) return false;
-        // The prepare routine locks job, pair, attempt, solver and artifact until commit.
-        if (!prepare(connection, build.pairId(), build.attemptNo(), build.token(), build.staging())) return false;
-        artifact = find(connection, build.pairId(), build.attemptNo()).orElseThrow();
-        if (artifact.stoppedAt() != null) return false;
-        return bindExecution(connection, build.pairId(), build.attemptNo(), build.token(), engineIdentity);
+        return call(connection, "SELECT starexec.admit_solver_build_execution(?,?,?,?,?,?,?)",
+                build.artifactId(), build.pairId(), build.attemptNo(), build.token(),
+                build.source().toString(), build.staging().toString(), engineIdentity);
     }
 
     public static boolean bindExecution(Connection con, int pairId, int attemptNo, UUID token,
