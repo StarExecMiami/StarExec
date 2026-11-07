@@ -91,6 +91,18 @@ enforce mount isolation or account filesystem quotas. Those integrations, failed
 build log retrieval, source retention and cleanup remain required before enabling
 the complete execution-storage lifecycle.
 
+Source downloads resolve the recorded original directory against the authorized
+solver's ID, owner and current path. A matching published catalogue supplies the
+source when the separate hint is absent; contradictory hints, changed snapshots
+and invalid roots are refused. Legacy built paths and paths already ending in
+`_src` remain supported without deriving source from an immutable executable path.
+
+The source ZIP writer streams regular files and preserves confined relative links
+as Unix ZIP symlinks, including directory links without following them. It refuses
+escaping or absolute links, hard links, special nodes and symbolic ancestors.
+Source contents and modes remain unchanged. Other download archive formats and
+the existing solver-download authorization checks are unchanged.
+
 The legacy recorder excludes pairs with any execution-bound attempt. Its SQL
 outcome and helper-retirement operations recheck that boundary under the normal
 identity locks, including when an execution is prepared after the initial read.

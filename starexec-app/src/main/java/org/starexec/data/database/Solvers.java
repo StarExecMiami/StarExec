@@ -2633,6 +2633,35 @@ public class Solvers {
 		}
 	}
 
+	/** Resolves original source for an already authorized snapshot, refusing a changed asset identity. */
+	public static Optional<File> findSolverSource(Solver snapshot) throws SQLException {
+		if (snapshot == null || snapshot.getPath() == null) return Optional.empty();
+		String sql = "SELECT s.build_source_path,a.source_path AS artifact_source FROM starexec.solvers s"
+				+ " LEFT JOIN starexec.solver_build_artifacts a ON a.solver_id=s.id"
+				+ " AND a.state='PUBLISHED' AND a.artifact_path=s.path"
+				+ " WHERE s.id=? AND s.user_id=? AND s.path=? AND s.deleted IS NOT TRUE";
+		try (Connection connection = Common.getConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
+			statement.setInt(1, snapshot.getId()); statement.setInt(2, snapshot.getUserId()); statement.setString(3, snapshot.getPath());
+			try (ResultSet result = statement.executeQuery()) {
+				if (!result.next()) return Optional.empty();
+				String hint = result.getString("build_source_path");
+				String recorded = result.getString("artifact_source");
+				if (hint != null && recorded != null && !hint.equals(recorded)) {
+					throw new SQLException("Solver source metadata disagrees with its published artifact");
+				}
+				String source = hint != null ? hint : recorded;
+				if (source == null) source = snapshot.getPath().endsWith("_src") ? snapshot.getPath() : snapshot.getPath() + "_src";
+				try {
+					Path path = Path.of(source);
+					if (!path.isAbsolute() || path.getParent() == null || !path.equals(path.normalize())) {
+						throw new SQLException("Solver source must be an absolute normalized non-root directory");
+					}
+					return Optional.of(path.toFile());
+				} catch (java.nio.file.InvalidPathException invalid) { throw new SQLException("Invalid solver source path", invalid); }
+			}
+		}
+	}
+
 	/**
 	 * Gets the ID of every orphaned solver the given user owns
 	 *
