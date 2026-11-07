@@ -1,5 +1,6 @@
 package org.starexec.test.junit.database;
 
+import com.google.gson.JsonObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,11 +13,13 @@ import org.starexec.data.database.Solvers;
 import org.starexec.data.database.SolverBuildArtifacts;
 import org.starexec.constants.R;
 import org.starexec.data.to.FinishedSolverBuild;
+import org.starexec.data.to.SolverBuildStopReceipt;
 import org.starexec.data.to.Solver;
 import org.starexec.data.to.SolverBuildStatus.SolverBuildStatusCode;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.jobs.SolverBuildRecorder;
 import org.starexec.jobs.SolverBuildStaging;
+import org.starexec.jobs.SolverBuildHelperCleanup;
 import org.starexec.test.util.DatabaseTestSupport;
 
 import java.io.File;
@@ -29,6 +32,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -102,12 +106,36 @@ public class SolverBuildRecordSqlTest extends Common {
 				delete(con, "DELETE FROM starexec.jobs WHERE id = ?", job);
 			}
 			for (int bench : benchmarks) {
+				retireManagedFixtureHelper(con, bench);
 				delete(con, "DELETE FROM starexec.benchmarks WHERE id = ?", bench);
 			}
 			for (int solver : solvers) {
 				delete(con, "DELETE FROM starexec.solvers WHERE id = ?", solver);
 			}
 		}
+	}
+
+	private void retireManagedFixtureHelper(Connection con, int benchmark) throws SQLException {
+		var helper = SolverBuildArtifacts.findHelper(con, benchmark);
+		if (helper.isEmpty() || helper.get().finishedAt() != null) return;
+		List<int[]> readers = new ArrayList<>();
+		try (PreparedStatement ps = con.prepareStatement("SELECT origin_pair_id,attempt_no FROM starexec.solver_build_artifacts"
+				+ " WHERE helper_benchmark_id=? AND execution_token IS NOT NULL")) {
+			ps.setInt(1, benchmark);
+			try (ResultSet rs = ps.executeQuery()) { while (rs.next()) readers.add(new int[]{rs.getInt(1),rs.getInt(2)}); }
+		}
+		if (readers.isEmpty()) return;
+		// These fixtures prepare metadata but never launch a provider execution.
+		for (int[] reader : readers) {
+			var artifact = SolverBuildArtifacts.find(con, reader[0], reader[1]).orElseThrow();
+			if (SolverBuildArtifacts.findStopReceipt(con, reader[0], reader[1]).isPresent()) continue;
+			String engine = "kubernetes:7:fixture-never-started-" + artifact.id();
+			JsonObject facts = new JsonObject(); facts.addProperty("status", "absent"); facts.addProperty("disposition", "never_started");
+			var receipt = SolverBuildStopReceipt.observed("kubernetes", artifact.id(), reader[0], reader[1], engine,
+					"fixture-resource-" + artifact.id(), Instant.now(), facts);
+			assertTrue(SolverBuildArtifacts.recordUnstarted(con, reader[0], reader[1], artifact.executionToken(), engine, receipt));
+		}
+		assertTrue(SolverBuildHelperCleanup.purge(con, benchmark, folder.toPath().resolve("Benchmarks")));
 	}
 
 	@Test
