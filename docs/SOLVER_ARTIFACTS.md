@@ -131,8 +131,16 @@ Unreferenced legacy directories are removed only after the committed request;
 their captured charge is released after confirmed absence. Failed cleanup keeps
 the charge and supports retry without releasing it twice. Recycle purge consumes
 the actual committed selection rather than independently enumerating files and
-then changing a different set of solver rows. Managed physical purge and user-wide
-parent-directory cleanup require their own retention and accounting checks.
+then changing a different set of solver rows. User deletion refuses a cascade
+while managed bytes, current applied output or another user's stage references
+still require the account, charge or solver data. It also checks the actual parent
+directories and other cleanup paths against conserved and other users' solver
+paths before committing. Contended build identities produce a retryable refusal
+after the normal job-stop sweep, rather than waiting with conflicting lock order.
+Job cleanup uses the directory captured before that commit rather than resolving
+a different migration-mode location after its database identity is gone.
+Ordinary legacy users can still delete their own historical stages. Registered
+managed physical purge remains required before retained accounts can be removed.
 Orphan sweeps reuse that deletion protocol and retire metadata only after charge
 settlement and reference checks. Explicit permanent removal also refuses retained
 or unsettled storage. Permission repair skips symbolic links and shared file

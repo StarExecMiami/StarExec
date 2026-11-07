@@ -5483,6 +5483,10 @@ public class RESTServices {
 	 * structured fields only. No part of the underlying cause reaches the client.
 	 */
 	private static String describeDeletionBlocker(UserDeletionBlockedException e) {
+		if (UserDeletionBlockedException.SOLVER_STORAGE_IN_USE.equals(e.getReasonCode())) {
+			return "Cannot delete this user yet: solver files or build records are still retained or in use. "
+					+ "Complete their cleanup or retry after the current storage operation.";
+		}
 		if (UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED.equals(e.getReasonCode())) {
 			return "Cannot delete this user yet: one or more active jobs could not be safely stopped and retired. "
 					+ "Resolve the backend state and retry the deletion.";

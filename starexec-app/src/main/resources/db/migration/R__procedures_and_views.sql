@@ -9767,6 +9767,8 @@ RETURNS VOID AS $$
 DECLARE
     _permIds INT[];
 BEGIN
+    PERFORM starexec.assert_user_solver_storage_deletable(_userId);
+
     -- Capture the permission ids before user_assoc cascades away with the user.
     SELECT array_agg(ua.permission) INTO _permIds
     FROM starexec.user_assoc ua
