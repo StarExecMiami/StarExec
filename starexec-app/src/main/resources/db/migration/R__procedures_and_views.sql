@@ -7041,45 +7041,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Deletes a solver given that solver's id
--- Author: Todd Elvers + Eric Burns
-DROP FUNCTION IF EXISTS starexec.SetSolverToDeletedById CASCADE;
-CREATE OR REPLACE FUNCTION starexec.SetSolverToDeletedById(_solverId INT)
-RETURNS TEXT AS $$
-DECLARE
-    _path TEXT;
-BEGIN
-        -- Postgres doesn't support UPDATE ... JOIN syntax; use UPDATE ... FROM starexec.... WHERE
-        UPDATE users
-        SET disk_size = users.disk_size - solvers.disk_size
-        FROM starexec.solvers
-        WHERE solvers.user_id = users.id
-            AND solvers.id = _solverId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Solver %s not found when updating owner disk usage', _solverId);
-    END IF;
-
-    SELECT s.path INTO _path FROM starexec.solvers s WHERE s.id = _solverId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Solver %s not found', _solverId);
-    END IF;
-    UPDATE solvers
-    SET deleted = true, disk_size = 0
-    WHERE id = _solverId;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Solver %s not found', _solverId);
-    END IF;
-    RETURN _path;
-END;
-$$ LANGUAGE plpgsql;
-
 -- Gets the IDs of all the spaces associated with the given solver
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetAssociatedSpaceIdsBySolver CASCADE;
@@ -7495,21 +7456,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Sets all the solvers the user has in the database to "deleted"
--- Author: Eric Burns
-DROP FUNCTION IF EXISTS starexec.SetRecycledSolversToDeleted CASCADE;
-CREATE OR REPLACE FUNCTION starexec.SetRecycledSolversToDeleted(_userId INT)
-RETURNS VOID AS $$
-BEGIN
-    UPDATE users
-    SET disk_size = users.disk_size - (SELECT COALESCE(SUM(s.disk_size), 0) FROM starexec.solvers s WHERE s.user_id = _userId AND s.recycled = true AND s.deleted = false)
-    WHERE users.id = _userId;
-    UPDATE solvers
-    SET deleted = true, disk_size = 0
-    WHERE user_id = _userId AND recycled = true AND deleted = false;
-END;
-$$ LANGUAGE plpgsql;
-
 -- Gets all recycled solver ids a user has in the database
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetRecycledSolverIds CASCADE;
@@ -7519,22 +7465,6 @@ BEGIN
     RETURN QUERY
     SELECT s.id FROM starexec.solvers s
     WHERE s.user_id = _userId AND s.recycled = true;
-END;
-$$ LANGUAGE plpgsql;
-
--- Permanently removes a solver from the database
--- Author: Eric Burns
-DROP FUNCTION IF EXISTS starexec.RemoveSolverFromDatabase CASCADE;
-CREATE OR REPLACE FUNCTION starexec.RemoveSolverFromDatabase(_id INT)
-RETURNS VOID AS $$
-BEGIN
-    DELETE FROM starexec.solvers
-    WHERE id = _id;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Solver %s not found', _id);
-    END IF;
 END;
 $$ LANGUAGE plpgsql;
 

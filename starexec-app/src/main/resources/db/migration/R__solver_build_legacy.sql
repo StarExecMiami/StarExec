@@ -19,6 +19,8 @@ BEGIN
         OR _p.status_code IS DISTINCT FROM _pair_status THEN RETURN NULL; END IF;
     SELECT current_attempt_no INTO _attempt FROM starexec.job_pair_attempts WHERE pair_id=_pair FOR UPDATE;
     IF NOT FOUND THEN RETURN NULL; END IF;
+    -- Deletion and quota settlement lock the accounting owner before the solver.
+    IF NOT _apply THEN PERFORM id FROM starexec.users WHERE id=_owner FOR UPDATE; END IF;
     SELECT * INTO _s FROM starexec.solvers WHERE id=_solver FOR UPDATE;
     IF NOT FOUND OR NOT EXISTS (SELECT 1 FROM starexec.jobpair_stage_data
         WHERE jobpair_id=_pair AND stage_number=_p.primary_jobpair_data AND solver_id=_solver) THEN RETURN NULL; END IF;
@@ -30,8 +32,6 @@ BEGIN
         OR _a.origin_owner_id IS DISTINCT FROM _owner OR _a.state NOT IN ('PLANNED','REJECTED')
         OR _a.staging_path IS NOT NULL OR _a.storage_root IS NOT NULL OR _a.manifest_payload IS NOT NULL
         THEN RETURN NULL; END IF;
-    -- The existing benchmark deletion function locks its accounting owner first.
-    IF NOT _apply THEN PERFORM id FROM starexec.users WHERE id=_owner FOR UPDATE; END IF;
     SELECT * INTO _b FROM starexec.benchmarks WHERE id=_benchmark FOR UPDATE;
     IF NOT FOUND OR _b.user_id IS DISTINCT FROM _owner OR _b.name IS DISTINCT FROM _helper_name
         OR _b.path IS NULL OR length(_b.path)=0 OR _b.deleted IS TRUE

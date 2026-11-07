@@ -13,6 +13,7 @@ import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
 import org.starexec.jobs.SolverArtifactTree;
 import org.starexec.util.DataTablesQuery;
+import org.starexec.util.DescriptorDirectory;
 import org.starexec.util.NamedParameterStatement;
 import org.starexec.util.PaginationQueryBuilder;
 import org.starexec.util.Util;
@@ -23,7 +24,10 @@ import org.postgresql.util.PSQLException;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
@@ -419,62 +423,30 @@ public class Solvers {
 	 * @return True on success, false on error
 	 */
 	public static boolean cleanOrphanedDeletedSolvers() {
-		final String methodName = "cleanOrphanedDeletedSolvers";
-		Connection con = null;
-		PreparedStatement ps = null;
-		PreparedStatement stmt = null;
-		ResultSet results = null;
-
-		//will contain the id of every solver that is associated with either a space or a pair
-		HashSet<Integer> parentedSolvers = new HashSet<>();
 		try {
-			con = Common.getConnection();
-			// call the function with parentheses to ensure Postgres treats it as a function call
-			ps = con.prepareStatement("SELECT * FROM starexec.GetSolversAssociatedWithSpaces()");
-			results = ps.executeQuery();
-			while (results.next()) {
-				parentedSolvers.add(results.getInt("id"));
+			List<Integer> candidates = new ArrayList<>();
+			try (Connection connection = Common.getConnection(); PreparedStatement statement = connection.prepareStatement(
+					"SELECT s.id FROM starexec.solvers s WHERE s.deleted IS TRUE"
+					+ " AND NOT starexec.solver_storage_requires_retention(s.id,s.path)"
+					+ " AND (s.disk_size>0 OR NOT EXISTS (SELECT 1 FROM starexec.solver_assoc sa WHERE sa.solver_id=s.id))"
+					+ " ORDER BY s.id"); ResultSet result = statement.executeQuery()) {
+				while (result.next()) candidates.add(result.getInt(1));
 			}
-			Common.safeClose(ps);
-			Common.safeClose(results);
-
-			ps = con.prepareStatement("SELECT * FROM starexec.GetSolversAssociatedWithPairs()");
-			results = ps.executeQuery();
-			while (results.next()) {
-				parentedSolvers.add(results.getInt("id"));
-			}
-
-			Common.safeClose(ps);
-			Common.safeClose(results);
-
-			stmt = con.prepareStatement("SELECT * FROM GetDeletedSolvers()");
-			results = stmt.executeQuery();
-			while (results.next()) {
-				Solver s = resultSetToSolver(results);
-				if (new File(s.getPath()).exists()) {
-					log.warn("a deleted solver still has an on-disk directory! ID = " + s.getId());
-					if (!FileUtils.deleteQuietly(new File(s.getPath()))) {
-						log.warn("failed to delete solver on disk! Not removing solver from database.");
-						continue;
+			boolean success = true;
+			for (int id : candidates) {
+				if (!delete(id)) { success = false; continue; }
+				Common.inTransaction(connection -> {
+					try (PreparedStatement statement = connection.prepareStatement("SELECT starexec.remove_deleted_solver_metadata(?)")) {
+						statement.setInt(1, id);
+						try (ResultSet result = statement.executeQuery()) { return result.next() && result.getBoolean(1); }
 					}
-				}
-				// the solver has been deleted AND it is not associated with any spaces or job pairs
-				if (!parentedSolvers.contains(s.getId())) {
-					removeSolverFromDatabase(s.getId(), con);
-				}
+				});
 			}
-			return true;
-		} catch (StarExecDatabaseException e) {
-			log.error(methodName, e.getMessage(), e);
+			return success;
 		} catch (Exception e) {
-			log.error(methodName, e.getMessage(), e);
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(ps);
-			Common.safeClose(stmt);
-			Common.safeClose(results);
+			log.error("cleanOrphanedDeletedSolvers", "Deleted solver cleanup failed", e);
+			return false;
 		}
-		return false;
 	}
 
 	/**
@@ -593,56 +565,77 @@ public class Solvers {
 		}
 	}
 
-	/**
-	 * Sets the deleted flag of a solver and removes it from disk (cascading deletes handle all dependencies)
-	 *
-	 * @param id the id of the solver to delete
-	 * @return True if the operation was a success, false otherwise
-	 * @author Todd Elvers
-	 */
+	/** Logically deletes a solver before legacy cleanup; referenced storage retains its existing charge. */
 	public static boolean delete(int id) {
-		final String methodName = "delete";
-		log.trace("Solvers.delete() called on solver with id = " + id);
-		Connection con = null;
-		PreparedStatement stmt = null;
-		ResultSet rs = null;
 		try {
-			File buildOutput = Solvers.getSolverBuildOutput(id);
-			if (buildOutput.exists()) {
-				Util.safeDeleteDirectory(buildOutput.getParent());
-			}
-			con = Common.getConnection();
-
-			stmt = con.prepareStatement("SELECT SetSolverToDeletedById(?)");
-			stmt.setInt(1, id);
-			rs = stmt.executeQuery();
-			rs.next();
-
-			String sourcePath = rs.getString(1) + "_src";
-			log.trace("Deleting solver source from disk, path: " + sourcePath);
-			Util.safeDeleteDirectory(sourcePath);
-			File srcFile = new File(sourcePath);
-			if (srcFile.getParentFile().exists()) {
-				srcFile.getParentFile().delete();
-			}
-
-			// Delete solver file from disk, and the parent directory if it's empty
-			Util.safeDeleteDirectory(rs.getString(1));
-			File file = new File(rs.getString(1));
-			if (file.getParentFile().exists()) {
-				file.getParentFile().delete();
-			}
-
-			return true;
+			List<SolverDeletion> requests = Common.inTransaction(connection ->
+					requestSolverDeletions(connection, "SELECT * FROM starexec.request_solver_storage_deletion(?)", id));
+			return finishSolverDeletions(requests);
 		} catch (Exception e) {
-			String message = String.format("Deletion of solver [id=%d] failed.", id);
-			log.error(methodName, message, e);
+			log.error("delete", "Solver deletion failed", e);
 			return false;
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(rs);
-			Common.safeClose(stmt);
 		}
+	}
+
+	private record SolverDeletion(int id, int ownerId, String path, long chargedBytes) { }
+
+	private static List<SolverDeletion> requestSolverDeletions(Connection connection, String sql, int id) throws SQLException {
+		List<SolverDeletion> requests = new ArrayList<>();
+		try (PreparedStatement statement = connection.prepareStatement(sql)) {
+			statement.setInt(1, id);
+			try (ResultSet result = statement.executeQuery()) {
+				while (result.next()) {
+					long bytes = result.getLong("charged_bytes");
+					if (result.wasNull() || bytes < 0) throw new SQLException("Solver cleanup charge is unavailable");
+					requests.add(new SolverDeletion(result.getInt("solver_id"), result.getInt("owner_id"), result.getString("legacy_path"), bytes));
+				}
+			}
+		}
+		return requests;
+	}
+
+	private static boolean finishSolverDeletions(List<SolverDeletion> requests) throws SQLException, IOException {
+		for (SolverDeletion request : requests) {
+			if (request.path() == null) continue;
+			if (!deleteLegacySolverFiles(request.id(), request.path())) return false;
+			boolean settled = Common.inTransaction(connection -> {
+				try (PreparedStatement statement = connection.prepareStatement("SELECT starexec.settle_legacy_solver_deletion(?,?,?,?)")) {
+					statement.setInt(1, request.id()); statement.setInt(2, request.ownerId());
+					statement.setString(3, request.path()); statement.setLong(4, request.chargedBytes());
+					try (ResultSet result = statement.executeQuery()) { return result.next() && result.getBoolean(1); }
+				}
+			});
+			if (!settled) return false;
+		}
+		return true;
+	}
+
+	private static boolean deleteLegacySolverFiles(int solverId, String path) throws IOException {
+		File buildLog = getSolverBuildOutput(solverId);
+		if (buildLog == null || buildLog.getParentFile() == null) throw new IOException("Legacy build log location is unavailable");
+		Set<Path> roots = new LinkedHashSet<>();
+		roots.add(Path.of(path));
+		roots.add(Path.of(path.endsWith("_src") ? path : path + "_src"));
+		roots.add(buildLog.getParentFile().toPath());
+		for (Path root : roots) {
+			if (!root.isAbsolute() || root.getParent() == null || !root.equals(root.normalize())) {
+				throw new IOException("Legacy cleanup requires an absolute normalized non-root path");
+			}
+			try {
+				if (!Files.readAttributes(root, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isDirectory()) {
+					throw new IOException("Legacy cleanup root is not a directory");
+				}
+				try (DescriptorDirectory ignored = DescriptorDirectory.open(root)) { }
+			} catch (NoSuchFileException absent) { }
+		}
+		for (Path root : roots) {
+			if (!Util.safeDeleteDirectory(root.toString())) return false;
+			try {
+				Files.readAttributes(root, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+				throw new IOException("Legacy solver files remain after cleanup");
+			} catch (NoSuchFileException absent) { }
+		}
+		return true;
 	}
 
 	/**
@@ -2297,46 +2290,15 @@ public class Solvers {
 		}
 	}
 
-	/**
-	 * Deletes all solvers a user has from disk and sets their "deleted" flag to true. Solvers should NOT be deleted
-	 * from the database, as they still may be associated with spaces
-	 *
-	 * @param userId The userId in question
-	 * @return True on success, false otherwise
-	 * @author Eric Burns
-	 */
+	/** Deletes the committed recycled selection, retaining referenced storage and unsettled charges. */
 	public static boolean setRecycledSolversToDeleted(int userId) {
-		final String methodName = "setRecycledSolversToDeleted";
-		Connection con = null;
-		PreparedStatement ps = null;
-		ResultSet results = null;
 		try {
-			con = Common.getConnection();
-			ps = con.prepareStatement("SELECT * FROM starexec.GetRecycledSolverPaths(?)");
-			ps.setInt(1, userId);
-			results = ps.executeQuery();
-
-			while (results.next()) {
-				Util.safeDeleteDirectory(results.getString("path"));
-				Util.safeDeleteDirectory(results.getString("path") + "_src");
-				File buildOutput = Solvers.getSolverBuildOutput(results.getInt("id"));
-				if (buildOutput.exists()) {
-					Util.safeDeleteDirectory(buildOutput.getParent());
-				}
-			}
-			Common.safeClose(ps);
-			ps = con.prepareStatement("SELECT starexec.SetRecycledSolversToDeleted(?)");
-			ps.setInt(1, userId);
-			ps.execute();
-
-			return true;
+			List<SolverDeletion> requests = Common.inTransaction(connection ->
+					requestSolverDeletions(connection, "SELECT * FROM starexec.request_recycled_solver_deletions(?)", userId));
+			return finishSolverDeletions(requests);
 		} catch (Exception e) {
-			log.error(methodName, e.getMessage(), e);
+			log.error("setRecycledSolversToDeleted", "Recycled solver deletion failed", e);
 			return false;
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(ps);
-			Common.safeClose(results);
 		}
 	}
 

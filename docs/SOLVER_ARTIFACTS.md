@@ -123,6 +123,21 @@ their previous log location, including after earlier managed attempts. Managed
 output never falls back to that file. Existing managed rows have no guessed migration backfill:
 trusted outcome replay must verify the artifact before recording its reference.
 
+Solver deletion commits a tombstone before touching files. Existing stage
+references, conserved build input/output and overlapping managed paths retain
+their bytes and their existing solver charge for registered cleanup. A deleted
+flag is not proof of physical termination or permission to purge those trees.
+Unreferenced legacy directories are removed only after the committed request;
+their captured charge is released after confirmed absence. Failed cleanup keeps
+the charge and supports retry without releasing it twice. Recycle purge consumes
+the actual committed selection rather than independently enumerating files and
+then changing a different set of solver rows. Managed physical purge and user-wide
+parent-directory cleanup require their own retention and accounting checks.
+Orphan sweeps reuse that deletion protocol and retire metadata only after charge
+settlement and reference checks. Explicit permanent removal also refuses retained
+or unsettled storage. Permission repair skips symbolic links and shared file
+inodes, so cleaning a legacy directory does not chmod a conserved link target.
+
 The legacy recorder excludes pairs with any execution-bound attempt. Its SQL
 outcome and helper-retirement operations recheck that boundary under the normal
 identity locks, including when an execution is prepared after the initial read.
