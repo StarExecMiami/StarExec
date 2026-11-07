@@ -154,6 +154,27 @@ class SolverBuildPublicationSqlTest {
 
     private boolean publish() throws Exception { return SolverBuildPublication.publish(connection, build, parent, 4096, 32); }
 
+    @Test void quotaRefusalPrecedesAnyImmutableCopy() throws Exception {
+        stopped("podman", null);
+        execute(connection, "UPDATE starexec.users SET disk_size=999000 WHERE id=?", user);
+        boolean published = publish();
+        assertAll(() -> assertFalse(published),
+                () -> assertFalse(Files.exists(root())),
+                () -> assertEquals(999000, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user)));
+    }
+
+    @Test void immutableCopyAddsItsVerifiedBytesWithoutReplacingTheSourceCharge() throws Exception {
+        stopped("podman", null);
+        execute(connection, "UPDATE starexec.users SET disk_size=20 WHERE id=?", user);
+        assertTrue(publish());
+        long copied = number(connection, "SELECT byte_size FROM starexec.solver_build_artifacts WHERE id=?", build.artifactId());
+        assertTrue(copied > 0);
+        assertEquals(20 + copied, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+        assertEquals(20, number(connection, "SELECT disk_size FROM starexec.solvers WHERE id=?", solver));
+        assertTrue(publish());
+        assertEquals(20 + copied, number(connection, "SELECT disk_size FROM starexec.users WHERE id=?", user));
+    }
+
     @Test void deletingArtifactMetadataRequiresCompletedPhysicalCleanup() throws Exception {
         failedStop("podman");
         assertTrue(recordFailure());
