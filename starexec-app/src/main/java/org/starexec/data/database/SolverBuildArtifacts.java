@@ -25,6 +25,60 @@ public final class SolverBuildArtifacts {
 
     public record StoredStopReceipt(SolverBuildStopReceipt receipt, Instant recordedAt) { }
 
+    public record OutputManifest(String payload, String sha256, long byteSize) { }
+
+    /** Reserves immutable output without authorizing publication or replacing an earlier destination. */
+    public static boolean reserveOutput(Connection connection, BuildExecutionContext build, String engine,
+                                         String receiptDigest, Path root) throws SQLException {
+        String sql = "UPDATE starexec.solver_build_artifacts SET state='STAGED',storage_root=?,artifact_path=?"
+                + " WHERE id=? AND origin_pair_id=? AND attempt_no=? AND execution_token=?"
+                + " AND engine_identity=? AND execution_stopped_at IS NOT NULL AND execution_stop_receipt_sha256=?"
+                + " AND state IN ('PLANNED','STAGED')"
+                + " AND (storage_root IS NULL AND artifact_path IS NULL OR storage_root=? AND artifact_path=?)";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, root.toString()); statement.setString(2, root.resolve("solver").toString());
+            statement.setLong(3, build.artifactId()); statement.setInt(4, build.pairId());
+            statement.setInt(5, build.attemptNo()); statement.setObject(6, build.token());
+            statement.setString(7, engine); statement.setString(8, receiptDigest);
+            statement.setString(9, root.toString()); statement.setString(10, root.resolve("solver").toString());
+            return statement.executeUpdate() == 1;
+        }
+    }
+
+    /** Conserves exact verified bytes; publication still performs the current-owner checks. */
+    public static boolean validateOutput(Connection connection, BuildExecutionContext build, String engine,
+                                          String receiptDigest, Path root, OutputManifest manifest) throws SQLException {
+        String sql = "UPDATE starexec.solver_build_artifacts SET state='VALIDATED',byte_size=?,"
+                + "manifest_payload=?,manifest_sha256=?,validated_at=clock_timestamp()"
+                + " WHERE id=? AND origin_pair_id=? AND attempt_no=? AND execution_token=?"
+                + " AND engine_identity=? AND execution_stopped_at IS NOT NULL AND execution_stop_receipt_sha256=?"
+                + " AND state='STAGED' AND storage_root=? AND artifact_path=?";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, manifest.byteSize()); statement.setString(2, manifest.payload());
+            statement.setString(3, manifest.sha256()); statement.setLong(4, build.artifactId());
+            statement.setInt(5, build.pairId()); statement.setInt(6, build.attemptNo());
+            statement.setObject(7, build.token()); statement.setString(8, engine);
+            statement.setString(9, receiptDigest); statement.setString(10, root.toString());
+            statement.setString(11, root.resolve("solver").toString());
+            return statement.executeUpdate() == 1;
+        }
+    }
+
+    public static Optional<OutputManifest> findOutputManifest(Connection connection, long artifact) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT manifest_payload,manifest_sha256,byte_size"
+                + " FROM starexec.solver_build_artifacts WHERE id=? AND validated_at IS NOT NULL")) {
+            statement.setLong(1, artifact);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return Optional.empty();
+                return Optional.of(new OutputManifest(result.getString(1), result.getString(2), result.getLong(3)));
+            }
+        }
+    }
+
+    public static boolean publishOutput(Connection connection, long artifact) throws SQLException {
+        return call(connection, "SELECT starexec.publish_solver_build_output(?)", artifact);
+    }
+
     public static Optional<StoredStopReceipt> findStopReceipt(int pairId, int attemptNo) throws SQLException {
         try (Connection connection = Common.getConnection()) { return findStopReceipt(connection, pairId, attemptNo); }
     }

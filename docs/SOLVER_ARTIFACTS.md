@@ -58,9 +58,36 @@ prepared execution.
 
 Runtime callers use `publish_solver_build_output`, which requires that execution
 binding, a recorded stop and an immutable storage root before the metadata
-transaction can publish. The root contains `solver/` and `logs/`; only its solver
-directory becomes the solver's execution path. The lower-level metadata function
+transaction can publish. The root contains `solver/` and any saved `logs/`; only
+its solver directory becomes the solver's execution path. A missing optional log
+does not turn a successful build into a failure. The lower-level metadata function
 does not establish stopped writers, validate files or enforce filesystem quotas.
+
+`SolverBuildPublication` coordinates successful, execution-bound output. It
+requires a complete pair and a conserved ordinary Podman or Kubernetes stop
+receipt, reserves its destination durably, copies into distinct immutable files,
+stores the exact verified manifest, and calls the current-owner publication
+operation. The caller supplies an auto-commit connection, a private destination
+parent excluded from runner writes, and explicit byte and entry limits. It does
+not modify uploaded sources or execution staging. Local process snapshots cannot
+substitute for a complete build-stop receipt.
+
+A retry verifies validated output against its existing manifest before attempting
+metadata publication; it preserves original validation and publication times.
+An unvalidated destination left by a failed or interrupted copy is retained with
+its catalogue reservation. A retry never overwrites, adopts or deletes that
+destination. Trusted cleanup must resolve it separately. The general-purpose tree
+copy still removes only its own failed copy; publication uses the variant that
+retains already registered paths.
+
+File forcing follows the guarantees of the configured storage provider. Validate
+crash recovery on the deployment volume; database and copy tests alone do not
+establish network-filesystem or power-loss durability.
+
+This coordinator does not activate dispatch, replace the legacy build recorder,
+enforce mount isolation or account filesystem quotas. Those integrations, failed-
+build log handling, source retention and cleanup remain required before enabling
+the complete execution-storage lifecycle.
 
 `SolverBuildArtifacts` exposes parameterized JDBC operations for dispatch and
 engine adapters. Missing records and mismatched ownership return refusal; database
@@ -72,6 +99,7 @@ Use a disposable PostgreSQL database configured through the documented
 
 ```sh
 mvn -B -pl starexec-app -Dtest=SolverArtifactPublicationSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+mvn -B -pl starexec-app -Dtest=SolverBuildPublicationSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
 ```
 
 These database tests cover ownership changes, stale jobs and attempts, rollback,

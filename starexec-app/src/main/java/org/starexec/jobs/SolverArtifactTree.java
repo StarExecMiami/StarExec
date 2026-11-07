@@ -44,6 +44,16 @@ public final class SolverArtifactTree {
 
     /** Creates a new destination; an existing directory or link is never reused. */
     public static Snapshot copy(Path source, Path destination, long maxBytes, int maxEntries) throws IOException {
+        return copy(source, destination, maxBytes, maxEntries, false);
+    }
+
+    /** A durably reserved destination remains available for trusted recovery after a copy failure. */
+    static Snapshot copyReserved(Path source, Path destination, long maxBytes, int maxEntries) throws IOException {
+        return copy(source, destination, maxBytes, maxEntries, true);
+    }
+
+    private static Snapshot copy(Path source, Path destination, long maxBytes, int maxEntries,
+                                 boolean retainFailure) throws IOException {
         if (maxBytes < 0 || maxEntries < 1) throw new IllegalArgumentException("Invalid artifact limits");
         Path input = source.toAbsolutePath();
         Path output = destination.toAbsolutePath();
@@ -64,7 +74,7 @@ public final class SolverArtifactTree {
             }
             return result;
         } catch (IOException | RuntimeException e) {
-            if (created) {
+            if (created && !retainFailure) {
                 try { removeOwnedCopy(output); }
                 catch (IOException cleanup) { e.addSuppressed(cleanup); }
             }
