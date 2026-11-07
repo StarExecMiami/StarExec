@@ -178,6 +178,34 @@ change capacity after registration. An old mount observation cannot authorize a
 replacement mount. Existing raw engine-observation callbacks remain distinct
 from launch admission.
 
+`ExecutionStorageLeases.claimRelease` adds a durable consumption decision after
+trusted held-resource validation. It requires an already bound engine and an
+existing exclusive lease; it cannot create either. Existing job, current-attempt,
+solver, owner, allowance, resource and cancellation checks are repeated under their
+established locks. Capacity is reobserved before and after the claim transaction.
+
+One append-only decision per artifact conserves the execution/request token,
+resource and engine identities, exact versioned runtime-observation bytes, their
+digest and the request time. Receipt shape is bounded to 8 KiB and validated, but
+the receipt itself cannot establish kernel or transport authenticity. The trusted
+adapter must obtain it from actual validation of that exact held resource.
+
+Only a new committed insert returns permission. Both a repeated request token and
+a new token for the same artifact are refused. Historical readback, connection
+close and controller restart never grant another signal. A failed or ambiguous
+commit gives no permission, even if later readback discovers the committed record.
+Reconcile and positively stop the retained resource instead of retrying release.
+If commit is confirmed but connection restoration fails, the existing transaction
+helper discards that connection and preserves its known committed result.
+
+Cancellation that wins before the decision refuses it. Later cancellation still
+requires an owned provider stop; the database and provider signal do not form one
+atomic operation. A release decision is neither delivery acknowledgement nor
+physical termination proof, and does not permit publication or cleanup by itself.
+Backend integration must commit this decision before its one release request and
+retain the exact resource after a lost response. These database methods do not
+activate dispatch on their own.
+
 `SolverBuildStagingCleanup` reclaims staging independently of immutable executable
 retention. Its durable claim binds the execution, resource, cleanup token and
 original directory identity or positive absence. It requires a matching conserved
@@ -290,6 +318,12 @@ For the dispatch-input and helper-retirement boundary, run:
 ```sh
 mvn -B -pl starexec-app -Dtest=SolverBuildDispatchInputsSqlTest,ExecutionStorageLeaseSqlTest,SolverBuildHelperCleanupSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
 ```
+
+The lease tests also exercise durable release consumption, competing controllers,
+revoked admission, malformed runtime receipts, lost commit responses and immutable
+decision history. Apply migrations to a disposable database for both fresh and
+upgrade checks. Their capacity and provider observations remain synthetic; no
+provider signal or deployed application is exercised by those database cases.
 
 Before qualifying a deployment, verify block and inode exhaustion on an owned
 provisioned resource without OOM or eviction, persistence after matching stop and

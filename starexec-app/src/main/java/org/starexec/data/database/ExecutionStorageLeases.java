@@ -1,6 +1,8 @@
 package org.starexec.data.database;
 
+import com.google.gson.Gson;
 import org.starexec.backend.BuildExecutionContext;
+import org.starexec.backend.storage.BuildExecutionRuntime;
 import org.starexec.backend.storage.DedicatedStorageResource;
 import org.starexec.util.DescriptorDirectory;
 
@@ -11,17 +13,55 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 /** Durable resource exclusivity; capacity and physical cleanup remain independently observed. */
 public final class ExecutionStorageLeases {
+    private static final Gson JSON = new Gson();
     private ExecutionStorageLeases() { }
 
     public record StagingCleanup(UUID token, String stagingIdentity, Instant startedAt, Instant finishedAt, Instant releasedAt) { }
 
     /** Input identity is a snapshot; engine admission must recheck the current execution. */
     public record DispatchInputs(int ownerId, long generation, Path source, SolverBuildArtifacts.Helper helper) { }
+
+    public record ReleaseDecision(UUID requestToken, String engineIdentity, String runtimePayload,
+                                  String runtimeSha256, Instant requestedAt) { }
+
+    /** Call only after trusted kernel validation. A committed existing decision never grants another release. */
+    public static boolean claimRelease(Connection connection, BuildExecutionContext build,
+                                        DedicatedStorageResource resource, String engine, UUID request,
+                                        BuildExecutionRuntime.Observation observation) throws SQLException {
+        if (request == null || observation == null) return false;
+        return transact(connection, tx -> {
+            resource.requireUnchanged();
+            boolean claimed = call(tx,"SELECT starexec.claim_solver_build_release(?,?,?,?,?,?,?,?,?,?,?)",
+                    build.artifactId(),build.pairId(),build.attemptNo(),build.token(),
+                    build.source().toString(),build.staging().toString(),resource.filesystemKey(),resource.identity(),
+                    engine,request,JSON.toJson(Map.of("version",1,"observation",observation)));
+            resource.requireUnchanged();
+            return claimed;
+        });
+    }
+
+    /** Historical reconciliation only; this observation must never authorize provider I/O. */
+    public static Optional<ReleaseDecision> findReleaseDecision(Connection connection, BuildExecutionContext build,
+                                                                DedicatedStorageResource resource) throws SQLException {
+        if (findStagingCleanup(connection,build,resource).isEmpty()) return Optional.empty();
+        try (var statement = connection.prepareStatement("SELECT request_token,engine_identity,runtime_payload,runtime_sha256,requested_at"
+                + " FROM starexec.solver_build_release_decisions WHERE artifact_id=? AND execution_token=?"
+                + " AND resource_key=? AND resource_identity=?")) {
+            statement.setLong(1,build.artifactId()); statement.setObject(2,build.token());
+            statement.setString(3,resource.filesystemKey()); statement.setString(4,resource.identity());
+            try (var result = statement.executeQuery()) {
+                if (!result.next()) return Optional.empty();
+                return Optional.of(new ReleaseDecision(result.getObject(1,UUID.class),result.getString(2),result.getString(3),
+                        result.getString(4),instant(result.getTimestamp(5))));
+            }
+        }
+    }
 
     public static Optional<DispatchInputs> findDispatchInputs(Connection connection, BuildExecutionContext build,
                                                                DedicatedStorageResource resource) throws SQLException {

@@ -1,5 +1,6 @@
 package org.starexec.test.junit.database;
 
+import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -8,7 +9,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.AdditionalAnswers;
 import org.starexec.backend.BuildExecutionContext;
+import org.starexec.backend.storage.BuildExecutionRuntime;
 import org.starexec.backend.storage.DedicatedStorageResource;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.ExecutionStorageLeases;
@@ -25,6 +28,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -112,6 +117,271 @@ class ExecutionStorageLeaseSqlTest extends Common {
     }
 
     private String engine() { return "podman:7:owned-storage-build"; }
+
+    private BuildExecutionRuntime.Observation runtime() {
+        Map<String,String> namespaces=new LinkedHashMap<>();
+        for (String name:java.util.List.of("pid","ipc","net","mnt","user","cgroup")) namespaces.put(name,name+":[123]");
+        return new BuildExecutionRuntime.Observation(456,64,16,"0",namespaces);
+    }
+
+    private String runtimePayload() {
+        return new Gson().toJson(Map.of("version",1,"observation",runtime()));
+    }
+
+    private boolean claimRelease(Connection con, BuildExecutionContext context, UUID request, String payload) throws SQLException {
+        return number(con,"SELECT starexec.claim_solver_build_release(?,?,?,?,?,?,?,?,?,?,?)::integer",
+                context.artifactId(),context.pairId(),context.attemptNo(),context.token(),context.source().toString(),
+                context.staging().toString(),key,resource.identity(),engine(),request,payload)==1;
+    }
+
+    @Test void heldBuildReleaseCanBeConsumedOnlyOnce() throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        UUID request=UUID.randomUUID();
+        assertTrue(claimRelease(connection,build,request,runtimePayload()));
+        assertFalse(claimRelease(connection,build,request,runtimePayload()));
+        assertFalse(claimRelease(connection,build,UUID.randomUUID(),runtimePayload()));
+    }
+
+    private long decisions() throws SQLException {
+        return number(connection,"SELECT count(*) FROM starexec.solver_build_release_decisions WHERE artifact_id=?",build.artifactId());
+    }
+
+    @Test void aCommittedDecisionSurvivesConnectionCloseWithoutGrantingAnotherPermit() throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        UUID request=UUID.randomUUID();
+        assertTrue(ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),request,runtime()));
+        assertTrue(connection.getAutoCommit());
+        try (Connection observer=Common.getConnection()) {
+            var receipt=ExecutionStorageLeases.findReleaseDecision(observer,build,resource).orElseThrow();
+            assertEquals(request,receipt.requestToken());assertEquals(engine(),receipt.engineIdentity());
+            assertEquals(runtimePayload(),receipt.runtimePayload());
+            assertEquals(java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(receipt.runtimePayload().getBytes(java.nio.charset.StandardCharsets.UTF_8))),receipt.runtimeSha256());
+            assertFalse(ExecutionStorageLeases.claimRelease(observer,build,resource,engine(),request,runtime()));
+        }
+        assertEquals(1,decisions());assertEquals(1,leases());
+        assertFalse(ExecutionStorageLeases.release(connection,build,resource));
+    }
+
+    @Test void releaseCannotManufactureALeaseOrAnEngineBinding() throws Exception {
+        assertFalse(claimRelease(connection,build,UUID.randomUUID(),runtimePayload()));
+        assertEquals(0,leases());
+        assertTrue(SolverBuildArtifacts.bindExecution(connection,build.pairId(),1,build.token(),engine()));
+        assertFalse(claimRelease(connection,build,UUID.randomUUID(),runtimePayload()));
+        assertEquals(0,leases());assertEquals(0,decisions());
+    }
+
+    @Test void anUnboundLeaseCannotBeMadeExecutableByAReleaseClaim() throws Exception {
+        assertTrue(ExecutionStorageLeases.reserve(connection,build,resource));
+        assertFalse(ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),UUID.randomUUID(),runtime()));
+        assertNull(SolverBuildArtifacts.find(connection,build.pairId(),1).orElseThrow().engineIdentity());
+        assertEquals(0,decisions());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"artifact","pair","attempt","token","source","staging"})
+    void aReleaseDecisionCannotBorrowAnotherExecutionContext(String changed) throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        var context=new BuildExecutionContext(changed.equals("artifact")?build.artifactId()+1:build.artifactId(),
+                changed.equals("pair")?build.pairId()+1:build.pairId(),changed.equals("attempt")?2:1,
+                changed.equals("token")?UUID.randomUUID():build.token(),
+                changed.equals("source")?files.resolve("other_src"):build.source(),
+                changed.equals("staging")?slot.resolve("other"):build.staging());
+        assertFalse(ExecutionStorageLeases.claimRelease(connection,context,resource,engine(),UUID.randomUUID(),runtime()));
+        assertTrue(ExecutionStorageLeases.findReleaseDecision(connection,context,resource).isEmpty());
+        assertEquals(0,decisions());assertTrue(connection.getAutoCommit());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"cancelled","deleted-job","deleted-solver","recycled","generation","attempt","stopped"})
+    void revokedAdmissionCannotAcquireAReleaseDecision(String changed) throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        switch (changed) {
+            case "cancelled" -> execute(connection,"UPDATE starexec.jobs SET killed=true WHERE id=(SELECT job_id FROM starexec.job_pairs WHERE id=?)",build.pairId());
+            case "deleted-job" -> execute(connection,"UPDATE starexec.jobs SET deleted=true WHERE id=(SELECT job_id FROM starexec.job_pairs WHERE id=?)",build.pairId());
+            case "deleted-solver" -> execute(connection,"UPDATE starexec.solvers SET deleted=true WHERE id=(SELECT solver_id FROM starexec.solver_build_artifacts WHERE id=?)",build.artifactId());
+            case "recycled" -> execute(connection,"UPDATE starexec.solvers SET recycled=true WHERE id=(SELECT solver_id FROM starexec.solver_build_artifacts WHERE id=?)",build.artifactId());
+            case "generation" -> execute(connection,"UPDATE starexec.solvers SET build_generation=build_generation+1 WHERE id=(SELECT solver_id FROM starexec.solver_build_artifacts WHERE id=?)",build.artifactId());
+            case "attempt" -> execute(connection,"UPDATE starexec.job_pair_attempts SET current_attempt_no=2 WHERE pair_id=?",build.pairId());
+            case "stopped" -> assertTrue(SolverBuildArtifacts.recordStopped(connection,build.pairId(),1,build.token(),engine()));
+        }
+        assertFalse(ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),UUID.randomUUID(),runtime()));
+        assertEquals(0,decisions());assertEquals(1,leases());assertTrue(connection.getAutoCommit());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"null","json","extra","duplicate","version","ticks","coerced","cpu","namespace","large"})
+    void malformedRuntimeReceiptsCannotConsumeRelease(String changed) throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        JsonObject object=new Gson().fromJson(runtimePayload(),JsonObject.class);
+        JsonObject observed=object.getAsJsonObject("observation");
+        String payload=null;
+        switch (changed) {
+            case "null" -> { }
+            case "json" -> payload="[]";
+            case "extra" -> object.addProperty("foreign",1);
+            case "duplicate" -> payload=runtimePayload().substring(0,runtimePayload().length()-1)+",\"version\":1}";
+            case "version" -> object.addProperty("version",2);
+            case "ticks" -> observed.addProperty("startTicks",-1);
+            case "coerced" -> observed.addProperty("pids","16");
+            case "cpu" -> observed.addProperty("cpus","0,0");
+            case "namespace" -> observed.getAsJsonObject("namespaces").addProperty("pid","mnt:[123]");
+            case "large" -> payload=" ".repeat(8193);
+        }
+        if (payload==null && !changed.equals("null")) payload=object.toString();
+        assertFalse(claimRelease(connection,build,UUID.randomUUID(),payload));
+        assertEquals(0,decisions());
+        assertTrue(ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),UUID.randomUUID(),runtime()));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"podman:7:foreign","local:7:unisolated",""})
+    void releaseCannotSubstituteAnotherOrUnisolatedEngine(String engine) throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        assertFalse(ExecutionStorageLeases.claimRelease(connection,build,resource,engine,UUID.randomUUID(),runtime()));
+        assertEquals(0,decisions());
+    }
+
+    @Test void twoControllersHaveOnlyOneCommittedReleaseWinner() throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        var pool=Executors.newFixedThreadPool(2);var ready=new CountDownLatch(2);var go=new CountDownLatch(1);
+        try {
+            var tasks=java.util.stream.IntStream.range(0,2).mapToObj(i->pool.submit(()->{
+                try (Connection observer=Common.getConnection()) {
+                    ready.countDown();assertTrue(go.await(5,TimeUnit.SECONDS));
+                    try { return ExecutionStorageLeases.claimRelease(observer,build,resource,engine(),UUID.randomUUID(),runtime()); }
+                    catch (SQLException busy) { assertEquals("55P03",busy.getSQLState());return false; }
+                }
+            })).toList();
+            assertTrue(ready.await(5,TimeUnit.SECONDS));go.countDown();
+            int winners=0;for (var task:tasks) if (task.get(10,TimeUnit.SECONDS)) winners++;
+            assertEquals(1,winners);assertEquals(1,decisions());
+        } finally { go.countDown();pool.shutdownNow();assertTrue(pool.awaitTermination(5,TimeUnit.SECONDS)); }
+    }
+
+    @Test void capacityChangeAfterInsertRollsBackTheReleaseDecision() throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        doNothing().doThrow(new IOException("INJECTED POST-CLAIM CAPACITY CHANGE")).when(resource).requireUnchanged();
+        assertThrows(SQLException.class,()->ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),UUID.randomUUID(),runtime()));
+        assertEquals(0,decisions());assertEquals(1,leases());assertTrue(connection.getAutoCommit());
+    }
+
+    @Test void aFailedReleaseCommitDoesNotConsumeItsPermit() throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        String trigger="release_commit_failure_"+UUID.randomUUID().toString().replace("-","");
+        execute(connection,"CREATE FUNCTION starexec."+trigger+"() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'INJECTED RELEASE COMMIT FAILURE'; END; $$ LANGUAGE plpgsql");
+        execute(connection,"CREATE CONSTRAINT TRIGGER "+trigger+" AFTER INSERT ON starexec.solver_build_release_decisions DEFERRABLE INITIALLY DEFERRED FOR EACH ROW"
+                +" WHEN (NEW.artifact_id="+build.artifactId()+") EXECUTE FUNCTION starexec."+trigger+"()");
+        UUID request=UUID.randomUUID();
+        try {
+            SQLException failure=assertThrows(SQLException.class,()->ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),request,runtime()));
+            assertTrue(failure.getMessage().contains("INJECTED RELEASE COMMIT FAILURE"));
+            assertEquals(0,decisions());assertTrue(connection.getAutoCommit());
+        } finally {
+            execute(connection,"DROP TRIGGER "+trigger+" ON starexec.solver_build_release_decisions");
+            execute(connection,"DROP FUNCTION starexec."+trigger+"()");
+        }
+        assertTrue(ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),request,runtime()));
+    }
+
+    @Test void aLostCommitReplyCannotGrantAnotherReleaseAfterRecovery() throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        Connection fault=mock(Connection.class,AdditionalAnswers.delegatesTo(connection));
+        doAnswer(call->{connection.commit();throw new SQLException("INJECTED LOST COMMIT REPLY");}).when(fault).commit();
+        UUID request=UUID.randomUUID();
+        SQLException failure=assertThrows(SQLException.class,()->ExecutionStorageLeases.claimRelease(fault,build,resource,engine(),request,runtime()));
+        assertTrue(failure.getMessage().contains("INJECTED LOST COMMIT REPLY"));assertEquals(1,decisions());
+        assertTrue(connection.getAutoCommit());
+        try (Connection observer=Common.getConnection()) {
+            assertEquals(request,ExecutionStorageLeases.findReleaseDecision(observer,build,resource).orElseThrow().requestToken());
+            assertFalse(ExecutionStorageLeases.claimRelease(observer,build,resource,engine(),request,runtime()));
+            assertFalse(ExecutionStorageLeases.claimRelease(observer,build,resource,engine(),UUID.randomUUID(),runtime()));
+        }
+    }
+
+    @Test void refusedReleaseDoesNotHideARollbackFailure() throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        Connection fault=mock(Connection.class,AdditionalAnswers.delegatesTo(connection));
+        doAnswer(call->{connection.rollback();throw new SQLException("INJECTED RELEASE ROLLBACK FAILURE");}).when(fault).rollback();
+        SQLException failure=assertThrows(SQLException.class,()->ExecutionStorageLeases.claimRelease(fault,build,resource,"local:7:refused",UUID.randomUUID(),runtime()));
+        assertTrue(java.util.Arrays.stream(failure.getSuppressed()).anyMatch(e->e.getMessage().contains("INJECTED RELEASE ROLLBACK FAILURE")));
+        assertEquals(0,decisions());assertTrue(connection.getAutoCommit());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"delete","token","engine","runtime","time"})
+    void releaseConsumptionHistoryCannotBeErasedOrRedirected(String operation) throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        assertTrue(ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),UUID.randomUUID(),runtime()));
+        String sql=switch (operation) {
+            case "delete" -> "DELETE FROM starexec.solver_build_release_decisions WHERE artifact_id=?";
+            case "token" -> "UPDATE starexec.solver_build_release_decisions SET request_token='00000000-0000-0000-0000-000000000001' WHERE artifact_id=?";
+            case "engine" -> "UPDATE starexec.solver_build_release_decisions SET engine_identity='podman:7:other' WHERE artifact_id=?";
+            case "runtime" -> "UPDATE starexec.solver_build_release_decisions SET runtime_payload='{}' WHERE artifact_id=?";
+            default -> "UPDATE starexec.solver_build_release_decisions SET requested_at=requested_at+interval '1 second' WHERE artifact_id=?";
+        };
+        assertThrows(SQLException.class,()->execute(connection,sql,build.artifactId()));
+        assertEquals(1,decisions());
+    }
+
+    @Test void aReleaseCannotCommitOrRollbackAForeignTransaction() throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        connection.setAutoCommit(false);
+        try {
+            assertThrows(SQLException.class,()->ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),UUID.randomUUID(),runtime()));
+            assertEquals(0,decisions());assertFalse(connection.getAutoCommit());
+        } finally { connection.rollback();connection.setAutoCommit(true); }
+    }
+
+    @Test void aConfirmedCommitKeepsItsOnePermitWhenTheConnectionIsDiscarded() throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        Connection fault=mock(Connection.class,AdditionalAnswers.delegatesTo(connection));
+        doAnswer(call->{connection.setAutoCommit(true);throw new SQLException("INJECTED RELEASE RESTORE FAILURE");})
+                .when(fault).setAutoCommit(true);
+        doThrow(new SQLException("SYNTHETIC POOL WRAPPER")).when(fault).unwrap(org.apache.tomcat.jdbc.pool.PooledConnection.class);
+        doNothing().when(fault).abort(any());
+        UUID request=UUID.randomUUID();
+        assertTrue(ExecutionStorageLeases.claimRelease(fault,build,resource,engine(),request,runtime()));
+        verify(fault).abort(any());assertEquals(1,decisions());
+        assertFalse(ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),request,runtime()));
+        assertEquals(request,ExecutionStorageLeases.findReleaseDecision(connection,build,resource).orElseThrow().requestToken());
+    }
+
+    @Test void theSameRequestTokenCannotAuthorizeAnotherResource() throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        UUID request=UUID.randomUUID();
+        assertTrue(ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),request,runtime()));
+        Path otherRoot=directory("second-slot");
+        var otherResource=mock(DedicatedStorageResource.class);
+        when(otherResource.root()).thenReturn(otherRoot);
+        when(otherResource.filesystemKey()).thenReturn(UUID.randomUUID().toString().replace("-",""));
+        when(otherResource.identity()).thenReturn("other-private-resource");
+        when(otherResource.capacityBytes()).thenReturn(64L);when(otherResource.inodeLimit()).thenReturn(16L);
+        var other=plan("second",otherRoot,128);
+        assertTrue(ExecutionStorageLeases.register(connection,otherResource));
+        assertTrue(ExecutionStorageLeases.admit(connection,other,otherResource,engine()));
+        assertFalse(ExecutionStorageLeases.claimRelease(connection,other,otherResource,engine(),request,runtime()));
+        assertTrue(ExecutionStorageLeases.findReleaseDecision(connection,other,otherResource).isEmpty());
+        assertTrue(ExecutionStorageLeases.claimRelease(connection,other,otherResource,engine(),UUID.randomUUID(),runtime()));
+        assertEquals(1,decisions());
+    }
+
+    @Test void settledCleanupAndALaterLeaseCannotResurrectAnOldRelease() throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        UUID request=UUID.randomUUID();
+        assertTrue(ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),request,runtime()));
+        cleaned();assertTrue(ExecutionStorageLeases.release(connection,build,resource));
+        var later=plan("later",slot,128);
+        assertTrue(ExecutionStorageLeases.reserve(connection,later,resource));
+        assertFalse(ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),UUID.randomUUID(),runtime()));
+        assertEquals(1,decisions());assertEquals(1,leases());
+        assertEquals(request,ExecutionStorageLeases.findReleaseDecision(connection,build,resource).orElseThrow().requestToken());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"request","observation","key","identity"})
+    void anIncompleteOrChangedResourceCannotAcquireRelease(String changed) throws Exception {
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine()));
+        if (changed.equals("key")) when(resource.filesystemKey()).thenReturn(UUID.randomUUID().toString().replace("-",""));
+        if (changed.equals("identity")) when(resource.identity()).thenReturn("changed-physical-resource");
+        assertFalse(ExecutionStorageLeases.claimRelease(connection,build,resource,engine(),
+                changed.equals("request")?null:UUID.randomUUID(),changed.equals("observation")?null:runtime()));
+        assertEquals(0,decisions());assertTrue(connection.getAutoCommit());
+    }
 
     private void stopped() throws Exception {
         assertTrue(ExecutionStorageLeases.admit(connection, build, resource, engine()));
