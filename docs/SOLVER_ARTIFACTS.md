@@ -168,6 +168,32 @@ new staging and immutable-output byte, helper recovery, mounted isolation and th
 runtime integration remain required before enabling the complete lifecycle. The
 storage provider must support the directory-forcing semantics being relied on;
 these component tests do not establish power-loss behavior on a deployed volume.
+
+Build helpers have a separate shared registry because several attempts may read
+one dummy benchmark. Planning captures its original ID, owner, path and booked
+bytes while the pair and benchmark still exist. Execution preparation rechecks
+that snapshot and refuses changed, missing or retiring input. Historical bindings
+are never guessed after metadata disappears; drain or explicitly resolve older
+unregistered executions before enabling the complete lifecycle.
+
+Ordinary benchmark deletion, metadata removal and account deletion cannot discard
+an unsettled managed helper or its charge. Recycle cleanup calls each guarded
+deletion before touching its file; it no longer removes protected paths before SQL.
+Earlier successful entries can remain deleted if a later selected entry is refused.
+Unbound legacy helpers retain their existing recorder/retirement behavior.
+
+`SolverBuildHelperCleanup` requires matching stop evidence for every registered
+reader and refuses unrelated or active consumers. A single durable claim covers
+the shared helper, including after pair/solver metadata detaches. It unlinks only
+the exact registered file through its trusted benchmark parent, forces that parent
+and settles its captured charge once. Parent directories and unrelated siblings
+are left alone. New consumer admission serializes with the claim and refuses
+retiring or removed helper input; it leaves ordinary benchmark insertion unchanged.
+Partial failure, failed commit and reappeared files use
+the same retry/refusal policy as registered build-tree cleanup. Local process
+snapshots cannot authorize it, and helper settlement does not alter receipt kind
+or publish scientific output. Full byte reservations and runtime wiring remain
+separate requirements.
 Orphan sweeps reuse that deletion protocol and retire metadata only after charge
 settlement and reference checks. Explicit permanent removal also refuses retained
 or unsettled storage. Permission repair skips symbolic links and shared file

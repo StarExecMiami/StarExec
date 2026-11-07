@@ -27,6 +27,30 @@ public final class SolverBuildArtifacts {
 
     public record OutputManifest(String payload, String sha256, long byteSize) { }
 
+    public record Helper(int benchmarkId, int ownerId, String path, long byteSize, UUID token, Instant finishedAt) { }
+
+    public static Optional<Helper> findHelper(Connection connection, int benchmark) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT owner_id,path,byte_size,cleanup_token,cleanup_finished_at FROM starexec.solver_build_helpers WHERE benchmark_id=?")) {
+            statement.setInt(1, benchmark);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return Optional.empty();
+                Timestamp finished = result.getTimestamp(5);
+                return Optional.of(new Helper(benchmark, result.getInt(1), result.getString(2), result.getLong(3),
+                        result.getObject(4, UUID.class), finished == null ? null : finished.toInstant()));
+            }
+        }
+    }
+
+    public static boolean claimHelperCleanup(Connection connection, int benchmark, UUID token) throws SQLException {
+        return call(connection, "SELECT starexec.claim_solver_build_helper_cleanup(?,?)", benchmark, token);
+    }
+
+    /** Trusted callers must confirm the captured file absent before requesting settlement. */
+    public static boolean finishHelperCleanup(Connection connection, int benchmark, UUID token) throws SQLException {
+        return call(connection, "SELECT starexec.finish_solver_build_helper_cleanup(?,?)", benchmark, token);
+    }
+
     public record Cleanup(long artifactId, int pairId, int attemptNo, UUID executionToken,
                           String sourcePath, String stagingPath, String storageRoot, UUID token,
                           String removedSourcePath, long solverBytes, Instant finishedAt) { }

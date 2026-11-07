@@ -23,6 +23,11 @@ DECLARE
     _paths TEXT[];
 BEGIN
     PERFORM starexec.lock_user_solver_storage_for_deletion(_user);
+    IF EXISTS (SELECT 1 FROM starexec.solver_build_helpers h WHERE h.owner_id=_user AND h.cleanup_finished_at IS NULL
+        AND EXISTS (SELECT 1 FROM starexec.solver_build_artifacts a
+            WHERE a.helper_benchmark_id=h.benchmark_id AND a.execution_token IS NOT NULL)) THEN
+        RAISE EXCEPTION 'Managed build helper cleanup is unsettled' USING ERRCODE='55006';
+    END IF;
     _paths := COALESCE(_roots,ARRAY[]::TEXT[]) || ARRAY(
         SELECT p FROM starexec.solvers s,
             unnest(ARRAY[s.path,s.build_source_path,
@@ -31,6 +36,13 @@ BEGIN
     IF EXISTS (SELECT 1 FROM unnest(_paths) p WHERE p IS NULL OR left(p,1)<>'/' OR p='/'
         OR p ~ '(^|/)[.]{1,2}(/|$)' OR strpos(p,'//')>0 OR right(p,1)='/') THEN
         RAISE EXCEPTION 'User cleanup requires absolute normalized non-root paths' USING ERRCODE='55006';
+    END IF;
+    IF EXISTS (SELECT 1 FROM starexec.solver_build_helpers h WHERE h.cleanup_finished_at IS NULL
+        AND EXISTS (SELECT 1 FROM starexec.solver_build_artifacts a
+            WHERE a.helper_benchmark_id=h.benchmark_id AND a.execution_token IS NOT NULL)
+        AND EXISTS (SELECT 1 FROM unnest(_paths) candidate WHERE h.path=candidate
+            OR starts_with(h.path,candidate || '/') OR starts_with(candidate,h.path || '/'))) THEN
+        RAISE EXCEPTION 'Managed build helper cleanup is unsettled' USING ERRCODE='55006';
     END IF;
     IF EXISTS (
         SELECT 1 FROM starexec.solver_build_artifacts a

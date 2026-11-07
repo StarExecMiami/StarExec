@@ -86,6 +86,10 @@ BEGIN
     IF _benchmark IS NOT NULL THEN
         SELECT deleted INTO _helper_deleted FROM starexec.benchmarks WHERE id=_benchmark FOR SHARE;
         IF NOT FOUND OR _helper_deleted IS TRUE THEN RETURN FALSE; END IF;
+        IF _a.helper_benchmark_id IS DISTINCT FROM _benchmark OR NOT EXISTS (
+            SELECT 1 FROM starexec.solver_build_helpers h JOIN starexec.benchmarks b ON b.id=h.benchmark_id
+            WHERE h.benchmark_id=_benchmark AND h.owner_id=_owner AND h.path=b.path AND h.byte_size=b.disk_size
+                AND b.user_id=_owner AND b.name='starexec_build' AND h.cleanup_token IS NULL) THEN RETURN FALSE; END IF;
     END IF;
     IF EXISTS (SELECT 1 FROM starexec.solver_build_artifacts retired
         WHERE retired.execution_token IS NULL AND retired.state IN ('REJECTED','DELETED')

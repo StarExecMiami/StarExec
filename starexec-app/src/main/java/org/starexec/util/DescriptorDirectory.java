@@ -113,6 +113,19 @@ public final class DescriptorDirectory implements AutoCloseable {
         } catch (NoSuchFileException absent) { }
     }
 
+    /** Unlinks one registered file without following it or removing its parent. */
+    public void deleteFile(String name) throws IOException {
+        if (name == null || name.isEmpty() || name.equals(".") || name.equals("..")
+                || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) throw new IOException("Cleanup requires one file name");
+        Path child = fileSystem.getPath(name);
+        try {
+            if (directory.getFileAttributeView(child, BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).readAttributes().isDirectory()) {
+                throw new IOException("Registered helper input is not a file");
+            }
+        } catch (NoSuchFileException absent) { return; }
+        directory.deleteFile(child);
+    }
+
     private static void remove(SecureDirectoryStream<Path> parent, Path name, int[] remaining, int depth)
             throws IOException {
         if (--remaining[0] < 0 || depth > 256) throw new IOException("Cleanup tree exceeds its traversal limit");
