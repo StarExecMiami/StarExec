@@ -1924,11 +1924,7 @@ public class RESTServices {
 			throw RESTException.FORBIDDEN;
 		}
 		try {
-			File output = Solvers.getSolverBuildOutput(id);
-			if (!output.exists()) {
-				throw RESTException.NOT_FOUND;
-			}
-			return FileUtils.readFileToString(output, StandardCharsets.UTF_8);
+			return Solvers.readSolverBuildLog(id, userId).orElseThrow(() -> RESTException.NOT_FOUND);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			throw RESTException.INTERNAL_SERVER_ERROR;

@@ -63,8 +63,8 @@ BEGIN
         e->>'path' = 'logs' AND e->>'kind' = 'directory'
         OR e->>'path' LIKE 'logs/%' AND e->>'kind' IN ('directory', 'file', 'link'), FALSE)) THEN RETURN FALSE; END IF;
 
-    IF _a.state = 'REJECTED' THEN RETURN _s.build_status = 3; END IF;
-    UPDATE starexec.solvers SET build_status = 3 WHERE id = _s.id;
+    IF _a.state = 'REJECTED' AND _s.build_status IS DISTINCT FROM 3 THEN RETURN FALSE; END IF;
+    UPDATE starexec.solvers SET build_status = 3, build_output_artifact_id = _a.id WHERE id = _s.id;
     UPDATE starexec.solver_build_artifacts SET state = 'REJECTED' WHERE id = _artifact;
     RETURN TRUE;
 EXCEPTION WHEN invalid_text_representation THEN

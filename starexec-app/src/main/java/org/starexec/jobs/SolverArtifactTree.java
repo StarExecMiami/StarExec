@@ -2,8 +2,10 @@ package org.starexec.jobs;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import org.starexec.constants.R;
 import org.starexec.util.DescriptorDirectory;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -23,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -123,6 +126,80 @@ public final class SolverArtifactTree {
 
     static void verifyFailureLogs(Path directory, Snapshot expected) throws IOException {
         verify(directory, expected, false);
+    }
+
+    /** Reads only a conserved regular log; the caller pins its applied identity and protects ancestors. */
+    public static Optional<String> readLog(Path root, String payload, String expectedDigest, long byteSize) throws IOException {
+        if (root == null || !root.isAbsolute() || root.getParent() == null || !root.equals(root.normalize())
+                || payload == null || expectedDigest == null || byteSize < 0 || !digest(payload).equals(expectedDigest)) {
+            throw new IOException("Saved build log manifest is incomplete or changed");
+        }
+        Manifest manifest;
+        Entry log = null;
+        boolean logsDirectory = false;
+        try {
+            manifest = JSON.fromJson(payload, Manifest.class);
+            if (manifest == null || manifest.version() != 1 || manifest.entries() == null) {
+                throw new IOException("Unsupported build log manifest");
+            }
+            for (Entry entry : manifest.entries()) {
+                if (entry == null || entry.path() == null) throw new IOException("Invalid build log entry");
+                if (entry.path().equals("logs")) {
+                    if (logsDirectory || !"directory".equals(entry.kind())) throw new IOException("Invalid saved log directory");
+                    logsDirectory = true;
+                }
+                if (entry.path().equals("logs/" + R.SOLVER_BUILD_OUTPUT)) {
+                    if (log != null || !"file".equals(entry.kind()) || entry.sha256() == null
+                            || entry.size() < 0 || entry.size() > byteSize || entry.size() > Integer.MAX_VALUE) {
+                        throw new IOException("Saved build log is not a bounded regular file");
+                    }
+                    log = entry;
+                }
+            }
+        } catch (RuntimeException invalid) { throw new IOException("Invalid saved build log manifest", invalid); }
+        if (log != null && !logsDirectory) throw new IOException("Saved log directory is not recorded");
+        try (DescriptorDirectory ignored = DescriptorDirectory.open(root)) {
+            Path directory = root.resolve("logs");
+            try {
+                if (!Files.readAttributes(directory, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isDirectory()
+                        || !logsDirectory) throw new IOException("Saved log directory differs from its manifest");
+            } catch (NoSuchFileException absent) {
+                if (logsDirectory || log != null) throw absent;
+                return Optional.empty();
+            }
+            try (DescriptorDirectory logs = DescriptorDirectory.open(directory)) {
+                Path file = directory.resolve(R.SOLVER_BUILD_OUTPUT);
+                BasicFileAttributes before;
+                try { before = Files.readAttributes(file, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS); }
+                catch (NoSuchFileException absent) {
+                    if (log != null) throw absent;
+                    return Optional.empty();
+                }
+                if (log == null || !before.isRegularFile() || before.size() != log.size()
+                        || ((Number) Files.getAttribute(file, "unix:nlink", LinkOption.NOFOLLOW_LINKS)).longValue() != 1
+                        || !Files.getPosixFilePermissions(file, LinkOption.NOFOLLOW_LINKS).equals(log.executable() ? EXECUTABLE : FILE)) {
+                    throw new IOException("Saved build log differs from its manifest");
+                }
+                MessageDigest hash = sha256();
+                ByteArrayOutputStream contents = new ByteArrayOutputStream();
+                long count = 0;
+                try (FileChannel input = FileChannel.open(file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+                    ByteBuffer buffer = ByteBuffer.allocate(65536);
+                    for (int read; (read = input.read(buffer)) != -1; buffer.clear()) {
+                        if (read > log.size() - count) throw new IOException("Saved build log grew during reading");
+                        hash.update(buffer.array(), 0, read); contents.write(buffer.array(), 0, read); count += read;
+                    }
+                }
+                BasicFileAttributes after = Files.readAttributes(file, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                if (!after.isRegularFile() || count != log.size() || after.size() != count
+                        || !before.lastModifiedTime().equals(after.lastModifiedTime())
+                        || !java.util.Objects.equals(before.fileKey(), after.fileKey())
+                        || !HexFormat.of().formatHex(hash.digest()).equals(log.sha256())) {
+                    throw new IOException("Saved build log bytes failed verification");
+                }
+                return Optional.of(contents.toString(java.nio.charset.StandardCharsets.UTF_8));
+            }
+        }
     }
 
     private static void verify(Path directory, Snapshot expected, boolean requireFile) throws IOException {

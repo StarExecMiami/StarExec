@@ -8,8 +8,10 @@ import org.starexec.constants.R;
 import org.starexec.data.to.*;
 import org.starexec.data.to.Solver.ExecutableType;
 import org.starexec.data.to.compare.SolverComparator;
+import org.starexec.data.security.GeneralSecurity;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
+import org.starexec.jobs.SolverArtifactTree;
 import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
 import org.starexec.util.PaginationQueryBuilder;
@@ -22,6 +24,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -2631,6 +2634,45 @@ public class Solvers {
 			log.error(methodName, e.getMessage(), e);
 			return null;
 		}
+	}
+
+	/** Reads the explicitly applied log; cleanup continues to use the legacy file locator. */
+	public static Optional<String> readSolverBuildLog(int solverId, int userId) throws SQLException {
+		boolean admin = GeneralSecurity.hasAdminReadPrivileges(userId);
+		return Common.inTransaction(connection -> {
+			String sql = "SELECT s.path,s.build_status,s.user_id,s.build_output_artifact_id,"
+					+ "a.solver_id,a.origin_owner_id,a.state,a.source_path,a.storage_root,a.artifact_path,"
+					+ "a.manifest_payload,a.manifest_sha256,a.byte_size,"
+					+ "EXISTS(SELECT 1 FROM starexec.solver_build_artifacts m"
+					+ " WHERE m.origin_solver_id=s.id AND m.execution_token IS NOT NULL) AS managed"
+					+ " FROM starexec.solvers s LEFT JOIN starexec.solver_build_artifacts a ON a.id=s.build_output_artifact_id"
+					+ " WHERE s.id=? AND s.deleted IS NOT TRUE AND s.recycled IS NOT TRUE AND (s.user_id=? OR ?) FOR SHARE OF s";
+			try (PreparedStatement statement = connection.prepareStatement(sql)) {
+				statement.setInt(1, solverId); statement.setInt(2, userId); statement.setBoolean(3, admin);
+				try (ResultSet result = statement.executeQuery()) {
+					if (!result.next()) return Optional.empty();
+					if (result.getObject("build_output_artifact_id") == null) {
+						if (result.getBoolean("managed")) throw new IOException("Managed build output has not been applied");
+						File legacy = getSolverBuildOutput(solverId);
+						return legacy != null && legacy.exists()
+								? Optional.of(FileUtils.readFileToString(legacy, StandardCharsets.UTF_8)) : Optional.empty();
+					}
+					String state = result.getString("state");
+					String path = result.getString("path");
+					Integer status = (Integer) result.getObject("build_status");
+					String storage = result.getString("storage_root");
+					if (result.getInt("solver_id") != solverId || result.getInt("origin_owner_id") != result.getInt("user_id")
+							|| !("PUBLISHED".equals(state) && Integer.valueOf(2).equals(status) && path.equals(result.getString("artifact_path"))
+							|| "REJECTED".equals(state) && Integer.valueOf(3).equals(status) && path.equals(result.getString("source_path")))
+							|| storage == null || !Path.of(storage).resolve("solver").toString().equals(result.getString("artifact_path"))
+							|| result.getObject("byte_size") == null) {
+						throw new IOException("Applied build output identity differs from its solver");
+					}
+					return SolverArtifactTree.readLog(Path.of(storage), result.getString("manifest_payload"),
+							result.getString("manifest_sha256"), result.getLong("byte_size"));
+				}
+			}
+		});
 	}
 
 	/** Resolves original source for an already authorized snapshot, refusing a changed asset identity. */

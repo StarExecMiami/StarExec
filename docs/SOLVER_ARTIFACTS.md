@@ -112,6 +112,16 @@ also refuses cross-tree links in previously stored executables, independently of
 the publication checks. Confined library links remain links rather than expanded
 file copies. These checks do not change other archive/export operations.
 
+The applied build outcome records its artifact reference in the same transaction
+as the solver status/path update. Log reads use that reference, not the newest
+catalogue row, and hold the solver row stable while verifying the exact manifest
+payload and regular log bytes. Symbolic/hard links and changed bytes are refused.
+An empty log remains distinct from an absent log. Existing owner/admin permissions
+and REST error responses remain unchanged, as does the legacy cleanup locator.
+Genuinely legacy builds keep their previous log location; managed output never
+falls back to that file. Existing managed rows have no guessed migration backfill:
+trusted outcome replay must verify the artifact before recording its reference.
+
 The legacy recorder excludes pairs with any execution-bound attempt. Its SQL
 outcome and helper-retirement operations recheck that boundary under the normal
 identity locks, including when an execution is prepared after the initial read.

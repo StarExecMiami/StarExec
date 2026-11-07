@@ -41,7 +41,9 @@ BEGIN
         RETURN FALSE;
     END IF;
     IF _a.state = 'PUBLISHED' THEN
-        RETURN _s.path = _a.artifact_path AND _s.build_status IS NOT DISTINCT FROM 2;
+        IF _s.path IS DISTINCT FROM _a.artifact_path OR _s.build_status IS DISTINCT FROM 2 THEN RETURN FALSE; END IF;
+        UPDATE starexec.solvers SET build_output_artifact_id = _a.id WHERE id = _s.id;
+        RETURN TRUE;
     END IF;
     IF _a.state <> 'VALIDATED' OR NOT COALESCE(_s.build_status IN (0, 3), FALSE)
         OR _s.path <> _a.source_path THEN RETURN FALSE; END IF;
@@ -49,7 +51,7 @@ BEGIN
     UPDATE starexec.solver_build_artifacts SET state = 'RETIRED'
         WHERE origin_solver_id = _s.id AND state = 'PUBLISHED';
     UPDATE starexec.solvers SET path = _a.artifact_path, build_status = 2,
-        build_source_path = _a.source_path WHERE id = _s.id;
+        build_source_path = _a.source_path, build_output_artifact_id = _a.id WHERE id = _s.id;
     UPDATE starexec.solver_build_artifacts SET state = 'PUBLISHED', published_at = CURRENT_TIMESTAMP
         WHERE id = _artifact;
     RETURN TRUE;
