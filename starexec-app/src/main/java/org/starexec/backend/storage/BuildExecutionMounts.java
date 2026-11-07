@@ -209,6 +209,7 @@ public final class BuildExecutionMounts {
                 .withCpuPeriod(limits.getCpuPeriod()).withCpuQuota(limits.getCpuQuota()).withCpuShares(limits.getCpuShares())
                 .withNanoCPUs(limits.getNanoCPUs()).withCpuCount(limits.getCpuCount()).withCpuPercent(limits.getCpuPercent())
                 .withCpuRealtimePeriod(limits.getCpuRealtimePeriod()).withCpuRealtimeRuntime(limits.getCpuRealtimeRuntime())
+                .withPidsLimit(limits.getPidsLimit())
                 .withNetworkMode(network).withReadonlyRootfs(true).withPrivileged(false)
                 .withCapDrop(Capability.ALL).withSecurityOpts(List.of("no-new-privileges"))
                 .withRestartPolicy(RestartPolicy.noRestart()).withAutoRemove(false)

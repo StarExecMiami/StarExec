@@ -194,6 +194,13 @@ class BuildExecutionMountsTest {
         }
     }
 
+    @Test void requestedProcessLimitMustSurvivePrivateRendering() throws Exception {
+        try (var guard=authorization()) {
+            var actual=prepare().toPodmanHostConfig(limits().withPidsLimit(64L));
+            assertEquals(64L,actual.getPidsLimit(),"Private rendering dropped the configured process bound");
+        }
+    }
+
     @ParameterizedTest @ValueSource(strings={"host","container:other","ns:/run/other-network"})
     void sharedNetworkNamespacesAreRefused(String network) throws Exception {
         try (var guard=authorization()) {
