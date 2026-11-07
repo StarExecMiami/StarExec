@@ -29,7 +29,10 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** Actual catalogue and filesystem coordination; provider observations are synthetic fixtures. */
@@ -37,6 +40,7 @@ class SolverBuildPublicationSqlTest {
     @TempDir Path files;
     private Connection connection;
     private int user;
+    private int otherUser;
     private int solver;
     private int pair;
     private Path source;
@@ -102,6 +106,7 @@ class SolverBuildPublicationSqlTest {
                 if (!connection.getAutoCommit()) connection.rollback();
                 connection.setAutoCommit(true);
                 execute(connection, "DELETE FROM starexec.users WHERE id=?", user);
+                if (otherUser != 0) execute(connection, "DELETE FROM starexec.users WHERE id=?", otherUser);
             } finally { connection.close(); }
         }
         Files.walkFileTree(files, new SimpleFileVisitor<>() {
@@ -135,6 +140,252 @@ class SolverBuildPublicationSqlTest {
         assertEquals("original source", Files.readString(source.resolve("starexec_build")));
         assertEquals("compiled binary α\n", Files.readString(build.staging().resolve("solver/program")));
         assertEquals("build log é\n", Files.readString(build.staging().resolve("logs/starexec_build_log")));
+    }
+
+    @Test void failedOutcomeRequiresVerifiedLogs() throws Exception {
+        stopped("podman", null);
+        execute(connection, "UPDATE starexec.job_pairs SET status_code=11 WHERE id=?", pair);
+        var receipt = SolverBuildArtifacts.findStopReceipt(connection, pair, 1).orElseThrow();
+        assertEquals("false", text(connection,
+                "SELECT starexec.record_failed_solver_build_output(?,?,?,?)::text", build.artifactId(),
+                build.token(), engine("podman"), receipt.receipt().sha256()));
+        assertEquals("PLANNED", state());
+        assertEquals(source.toString(), text(connection, "SELECT path FROM starexec.solvers WHERE id=?", solver));
+        assertEquals(0, number(connection, "SELECT build_status FROM starexec.solvers WHERE id=?", solver));
+        unchangedSource();
+    }
+
+    private void failedStop(String backend) throws Exception {
+        stopped(backend, null);
+        execute(connection, "UPDATE starexec.job_pairs SET status_code=11 WHERE id=?", pair);
+    }
+
+    private boolean recordFailure() throws Exception {
+        return SolverBuildPublication.recordFailure(connection, build, parent, 4096, 32);
+    }
+
+    private boolean recordFailureMetadata() throws SQLException {
+        var receipt = SolverBuildArtifacts.findStopReceipt(connection, pair, 1).orElseThrow();
+        return SolverBuildArtifacts.recordFailedOutput(connection, build, engine(receipt.receipt().backend()), receipt.receipt().sha256());
+    }
+
+    private String frozenManifest() throws SQLException {
+        return text(connection, "SELECT row(manifest_payload,manifest_sha256,byte_size,validated_at,published_at)::text"
+                + " FROM starexec.solver_build_artifacts WHERE id=?", build.artifactId());
+    }
+
+    private void freezeFailureBeforeMetadata() throws Exception {
+        try (Connection blocker = connect()) {
+            blocker.setAutoCommit(false);
+            number(blocker, "SELECT id FROM starexec.solvers WHERE id=? FOR UPDATE", solver);
+            execute(connection, "SET lock_timeout='200ms'");
+            assertEquals("55P03", assertThrows(SQLException.class, this::recordFailure).getSQLState());
+            assertEquals("STAGED", state());
+            assertNotNull(SolverBuildArtifacts.findOutputManifest(connection, build.artifactId()).orElseThrow().payload());
+            assertEquals(0, number(connection, "SELECT build_status FROM starexec.solvers WHERE id=?", solver));
+            blocker.rollback();
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"podman", "kubernetes"})
+    void failedBuildsConserveOnlyLogsAndKeepTheOriginalSource(String backend) throws Exception {
+        failedStop(backend);
+        assertTrue(recordFailure());
+        assertEquals("REJECTED", state());
+        assertEquals(3, number(connection, "SELECT build_status FROM starexec.solvers WHERE id=?", solver));
+        assertEquals(source.toString(), text(connection, "SELECT path FROM starexec.solvers WHERE id=?", solver));
+        assertEquals("build log \u00e9\n", Files.readString(root().resolve("logs/starexec_build_log")));
+        assertFalse(Files.exists(root().resolve("solver")));
+        assertNotEquals(Files.getAttribute(build.staging().resolve("logs/starexec_build_log"), "unix:ino"),
+                Files.getAttribute(root().resolve("logs/starexec_build_log"), "unix:ino"));
+        assertEquals(PosixFilePermissions.fromString("r--r--r--"), Files.getPosixFilePermissions(root().resolve("logs/starexec_build_log")));
+        assertNull(text(connection, "SELECT published_at::text FROM starexec.solver_build_artifacts WHERE id=?", build.artifactId()));
+        assertFalse(SolverBuildArtifacts.publishOutput(connection, build.artifactId()));
+        unchangedSource();
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"empty", "absent"})
+    void positivelyMissingOrEmptyLogsRemainEmptyWithoutInventedContent(String condition) throws Exception {
+        failedStop("podman");
+        Files.delete(build.staging().resolve("logs/starexec_build_log"));
+        if (condition.equals("absent")) Files.delete(build.staging().resolve("logs"));
+        assertTrue(recordFailure());
+        assertEquals(0, number(connection, "SELECT byte_size FROM starexec.solver_build_artifacts WHERE id=?", build.artifactId()));
+        assertEquals(condition.equals("empty"), Files.exists(root().resolve("logs")));
+        try (var entries = Files.walk(root())) { assertTrue(entries.noneMatch(Files::isRegularFile)); }
+        assertTrue(recordFailure());
+        assertFalse(Files.exists(root().resolve("solver")));
+    }
+
+    @Test void unavailableStagingCannotBeMisreportedAsAbsentLogs() throws Exception {
+        failedStop("podman");
+        Files.move(build.staging(), files.resolve("unavailable-staging"));
+        assertThrows(IOException.class, this::recordFailure);
+        assertEquals("STAGED", state()); assertFalse(Files.exists(root()));
+        assertEquals(0, number(connection, "SELECT build_status FROM starexec.solvers WHERE id=?", solver));
+    }
+
+    @Test void failedPartialSolverBytesAreNeverCopiedOrPublished() throws Exception {
+        failedStop("podman");
+        Files.createSymbolicLink(build.staging().resolve("solver/unsafe"), source);
+        assertTrue(recordFailure());
+        assertFalse(Files.exists(root().resolve("solver")));
+        assertTrue(Files.isSymbolicLink(build.staging().resolve("solver/unsafe")));
+        unchangedSource();
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"file", "link", "escape", "hardlink"})
+    void unsafeLogTreesCannotDecideBuildFailure(String condition) throws Exception {
+        failedStop("podman");
+        Path logs = build.staging().resolve("logs");
+        if (condition.equals("file") || condition.equals("link")) {
+            Files.delete(logs.resolve("starexec_build_log")); Files.delete(logs);
+            if (condition.equals("file")) Files.writeString(logs, "not a directory");
+            else Files.createSymbolicLink(logs, source);
+        } else if (condition.equals("escape")) Files.createSymbolicLink(logs.resolve("escape"), source.resolve("starexec_build"));
+        else Files.createLink(logs.resolve("hardlink"), source.resolve("starexec_build"));
+        assertThrows(IOException.class, this::recordFailure);
+        assertEquals("STAGED", state());
+        assertEquals(0, number(connection, "SELECT build_status FROM starexec.solvers WHERE id=?", solver));
+        assertTrue(SolverBuildArtifacts.findOutputManifest(connection, build.artifactId()).isEmpty());
+        assertEquals("original source", Files.readString(source.resolve("starexec_build")));
+    }
+
+    @ParameterizedTest @ValueSource(ints = {1, 4, 7, 19, 20, 21, 22})
+    void unfinishedSuccessfulOrCancelledPairsCannotBeRecordedAsFailure(int status) throws Exception {
+        stopped("podman", null);
+        execute(connection, "UPDATE starexec.job_pairs SET status_code=? WHERE id=?", status, pair);
+        assertFalse(recordFailure()); assertFalse(Files.exists(root())); assertEquals("PLANNED", state());
+        assertEquals(0, number(connection, "SELECT build_status FROM starexec.solvers WHERE id=?", solver));
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"cancelled", "never_started", "unknown"})
+    void interventionReceiptsDoNotAuthorizeScientificFailure(String disposition) throws Exception {
+        stopped("kubernetes", disposition);
+        execute(connection, "UPDATE starexec.job_pairs SET status_code=11 WHERE id=?", pair);
+        assertFalse(recordFailure()); assertFalse(Files.exists(root())); assertEquals("PLANNED", state());
+    }
+
+    @Test void failedStatusWithoutStopEvidenceCannotCreateOutput() throws Exception {
+        execute(connection, "UPDATE starexec.job_pairs SET status_code=11 WHERE id=?", pair);
+        assertFalse(recordFailure()); assertFalse(Files.exists(root())); assertEquals("PLANNED", state());
+    }
+
+    @Test void aLocalReceiptCannotDecideAnExecutionBoundBuildFailure() throws Exception {
+        failedStop("local"); assertFalse(recordFailure()); assertFalse(Files.exists(root()));
+    }
+
+    @Test void failureMetadataCanRetryWithoutReadingMutableExecutionLogs() throws Exception {
+        failedStop("podman"); freezeFailureBeforeMetadata();
+        String manifest = frozenManifest();
+        Files.delete(build.staging().resolve("logs/starexec_build_log")); Files.delete(build.staging().resolve("logs"));
+        assertTrue(recordFailure()); assertTrue(recordFailure());
+        assertEquals(manifest, frozenManifest());
+        assertEquals("build log \u00e9\n", Files.readString(root().resolve("logs/starexec_build_log")));
+        assertEquals("REJECTED", state());
+    }
+
+    @Test void frozenFailureLogsCannotBecomeValidatedSolverOutput() throws Exception {
+        failedStop("podman"); freezeFailureBeforeMetadata();
+        String manifest = frozenManifest();
+        var receipt = SolverBuildArtifacts.findStopReceipt(connection, pair, 1).orElseThrow();
+        var stored = SolverBuildArtifacts.findOutputManifest(connection, build.artifactId()).orElseThrow();
+        assertFalse(SolverBuildArtifacts.validateOutput(connection, build, engine("podman"), receipt.receipt().sha256(), root(), stored));
+        execute(connection, "UPDATE starexec.job_pairs SET status_code=7 WHERE id=?", pair);
+        assertFalse(publish()); assertFalse(SolverBuildArtifacts.publishOutput(connection, build.artifactId()));
+        assertEquals("STAGED", state()); assertEquals(manifest, frozenManifest());
+        assertEquals(source.toString(), text(connection, "SELECT path FROM starexec.solvers WHERE id=?", solver));
+    }
+
+    @Test void corruptionOfRejectedLogsCannotBeHiddenByAnIdempotentRetry() throws Exception {
+        failedStop("podman"); assertTrue(recordFailure());
+        String manifest = frozenManifest(); Path log = root().resolve("logs/starexec_build_log");
+        Files.setPosixFilePermissions(log, PosixFilePermissions.fromString("rw-------"));
+        Files.writeString(log, "corrupted");
+        Files.setPosixFilePermissions(log, PosixFilePermissions.fromString("r--r--r--"));
+        assertThrows(IOException.class, this::recordFailure);
+        assertEquals(manifest, frozenManifest()); assertEquals("REJECTED", state());
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"generation", "owner", "job-owner", "job-deleted", "job-killed",
+            "deleted", "recycled", "newer-job", "attempt", "primary-solver"})
+    void failureMetadataRefusesRevokedOwnershipOrExecution(String condition) throws Exception {
+        failedStop("podman"); freezeFailureBeforeMetadata(); String manifest = frozenManifest();
+        if (condition.equals("owner") || condition.equals("job-owner")) {
+            otherUser = (int) number(connection, "INSERT INTO starexec.users(email,first_name,last_name,institution,created,password,"
+                    + "disk_quota,job_pair_quota,disk_size) VALUES (?,'Other','Owner','synthetic',now(),'synthetic',1000000,100,0) RETURNING id",
+                    "owner-" + UUID.randomUUID() + "@example.invalid");
+            if (condition.equals("owner")) execute(connection, "UPDATE starexec.solvers SET user_id=? WHERE id=?", otherUser, solver);
+            else execute(connection, "UPDATE starexec.jobs SET user_id=? WHERE id=(SELECT job_id FROM starexec.job_pairs WHERE id=?)", otherUser, pair);
+        } else if (condition.equals("generation")) execute(connection, "UPDATE starexec.solvers SET build_generation=build_generation+1 WHERE id=?", solver);
+        else if (condition.startsWith("job-")) execute(connection, "UPDATE starexec.jobs SET "
+                + (condition.equals("job-deleted") ? "deleted" : "killed") + "=true WHERE id=(SELECT job_id FROM starexec.job_pairs WHERE id=?)", pair);
+        else if (condition.equals("deleted") || condition.equals("recycled")) execute(connection,
+                "UPDATE starexec.solvers SET " + condition + "=true WHERE id=?", solver);
+        else if (condition.equals("attempt")) execute(connection, "UPDATE starexec.job_pair_attempts SET current_attempt_no=current_attempt_no+1 WHERE pair_id=?", pair);
+        else if (condition.equals("primary-solver")) execute(connection, "UPDATE starexec.job_pairs SET primary_jobpair_data=2 WHERE id=?", pair);
+        else {
+            long generation = number(connection, "SELECT build_generation FROM starexec.solvers WHERE id=?", solver);
+            long job = number(connection, "INSERT INTO starexec.jobs(user_id,name,total_pairs,disk_size,buildjob) VALUES (?,'newer',1,0,true) RETURNING id", user);
+            long newerPair = number(connection, "INSERT INTO starexec.job_pairs(job_id,status_code,primary_jobpair_data) VALUES (?,7,1) RETURNING id", job);
+            execute(connection, "INSERT INTO starexec.jobpair_stage_data(jobpair_id,stage_number,status_code,solver_id,disk_size) VALUES (?,1,7,?,0)", newerPair, solver);
+            execute(connection, "UPDATE starexec.solvers SET build_generation=? WHERE id=?", generation, solver);
+        }
+        assertFalse(recordFailureMetadata()); assertEquals("STAGED", state());
+        assertEquals(0, number(connection, "SELECT build_status FROM starexec.solvers WHERE id=?", solver));
+        assertEquals(source.toString(), text(connection, "SELECT path FROM starexec.solvers WHERE id=?", solver));
+        assertEquals(manifest, frozenManifest()); unchangedSource();
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"pair", "solver"})
+    void failureMetadataRefusesMissingStatuses(String condition) throws Exception {
+        failedStop("podman"); freezeFailureBeforeMetadata();
+        if (condition.equals("pair")) execute(connection, "UPDATE starexec.job_pairs SET status_code=NULL WHERE id=?", pair);
+        else execute(connection, "UPDATE starexec.solvers SET build_status=NULL WHERE id=?", solver);
+        assertFalse(recordFailureMetadata()); assertEquals("STAGED", state());
+        assertEquals(source.toString(), text(connection, "SELECT path FROM starexec.solvers WHERE id=?", solver));
+    }
+
+    @Test void wrongFailureReceiptOrTokenCannotRecordTheOutcome() throws Exception {
+        failedStop("podman"); freezeFailureBeforeMetadata();
+        var receipt = SolverBuildArtifacts.findStopReceipt(connection, pair, 1).orElseThrow();
+        var other = new BuildExecutionContext(build.artifactId(), pair, 1, UUID.randomUUID(), source, build.staging());
+        assertFalse(SolverBuildArtifacts.recordFailedOutput(connection, other, engine("podman"), receipt.receipt().sha256()));
+        assertFalse(SolverBuildArtifacts.recordFailedOutput(connection, build, engine("kubernetes"), receipt.receipt().sha256()));
+        assertFalse(SolverBuildArtifacts.recordFailedOutput(connection, build, engine("podman"), "0".repeat(64)));
+        assertEquals("STAGED", state());
+    }
+
+    @Test void aConcurrentNewBuildCannotBeMarkedFailedByOlderOutput() throws Exception {
+        failedStop("podman"); freezeFailureBeforeMetadata();
+        var receipt = SolverBuildArtifacts.findStopReceipt(connection, pair, 1).orElseThrow();
+        var executor = Executors.newSingleThreadExecutor();
+        try (Connection newer = connect(); Connection recording = connect()) {
+            newer.setAutoCommit(false); recording.setAutoCommit(false);
+            long pid = number(recording, "SELECT pg_backend_pid()");
+            long job = number(newer, "INSERT INTO starexec.jobs(user_id,name,total_pairs,disk_size,buildjob) VALUES (?,'concurrent',1,0,true) RETURNING id", user);
+            long newerPair = number(newer, "INSERT INTO starexec.job_pairs(job_id,status_code,primary_jobpair_data) VALUES (?,7,1) RETURNING id", job);
+            execute(newer, "INSERT INTO starexec.jobpair_stage_data(jobpair_id,stage_number,status_code,solver_id,disk_size) VALUES (?,1,7,?,0)", newerPair, solver);
+            var result = executor.submit(() -> SolverBuildArtifacts.recordFailedOutput(recording, build, engine("podman"), receipt.receipt().sha256()));
+            await().atMost(5, TimeUnit.SECONDS).until(() -> number(connection,
+                    "SELECT count(*) FROM pg_stat_activity WHERE pid=? AND wait_event_type='Lock'", pid) == 1);
+            newer.commit();
+            assertFalse(result.get(5, TimeUnit.SECONDS)); recording.rollback();
+            assertEquals(0, number(connection, "SELECT build_status FROM starexec.solvers WHERE id=?", solver));
+            assertEquals(source.toString(), text(connection, "SELECT path FROM starexec.solvers WHERE id=?", solver));
+            assertEquals("STAGED", state());
+        } finally {
+            executor.shutdownNow(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test void failureCopyBudgetErrorsRemainRegisteredForCleanup() throws Exception {
+        failedStop("podman");
+        assertThrows(IOException.class, () -> SolverBuildPublication.recordFailure(connection, build, parent, 0, 32));
+        assertEquals("STAGED", state()); assertTrue(Files.isDirectory(root()));
+        assertTrue(SolverBuildArtifacts.findOutputManifest(connection, build.artifactId()).isEmpty());
+        assertThrows(IOException.class, this::recordFailure);
+        unchangedSource();
     }
 
     @ParameterizedTest @ValueSource(strings = {"podman", "kubernetes"})
