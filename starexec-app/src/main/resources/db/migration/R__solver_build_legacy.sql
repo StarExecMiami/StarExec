@@ -49,7 +49,7 @@ BEGIN
                 JOIN starexec.jobpair_stage_data sd ON sd.jobpair_id=jp.id AND sd.stage_number=jp.primary_jobpair_data
                 WHERE j.buildjob AND sd.solver_id=_solver AND j.id>_job) THEN RETURN NULL; END IF;
         UPDATE starexec.solvers SET build_status=CASE WHEN _built_path IS NULL THEN 3 ELSE 2 END,
-            path=COALESCE(_built_path,_source), build_output_artifact_id=NULL WHERE id=_solver;
+            path=COALESCE(_built_path,_source), build_output_artifact_id=_a.id WHERE id=_solver;
     END IF;
     UPDATE starexec.solver_build_artifacts SET state='REJECTED' WHERE id=_a.id;
     IF _apply THEN RETURN _b.path; END IF;

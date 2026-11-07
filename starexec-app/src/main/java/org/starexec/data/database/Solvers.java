@@ -2641,7 +2641,7 @@ public class Solvers {
 		boolean admin = GeneralSecurity.hasAdminReadPrivileges(userId);
 		return Common.inTransaction(connection -> {
 			String sql = "SELECT s.path,s.build_status,s.user_id,s.build_output_artifact_id,"
-					+ "a.solver_id,a.origin_owner_id,a.state,a.source_path,a.storage_root,a.artifact_path,"
+					+ "a.solver_id,a.origin_owner_id,a.state,a.source_path,a.storage_root,a.artifact_path,a.execution_token,"
 					+ "a.manifest_payload,a.manifest_sha256,a.byte_size,"
 					+ "EXISTS(SELECT 1 FROM starexec.solver_build_artifacts m"
 					+ " WHERE m.origin_solver_id=s.id AND m.execution_token IS NOT NULL) AS managed"
@@ -2653,16 +2653,26 @@ public class Solvers {
 					if (!result.next()) return Optional.empty();
 					if (result.getObject("build_output_artifact_id") == null) {
 						if (result.getBoolean("managed")) throw new IOException("Managed build output has not been applied");
-						File legacy = getSolverBuildOutput(solverId);
-						return legacy != null && legacy.exists()
-								? Optional.of(FileUtils.readFileToString(legacy, StandardCharsets.UTF_8)) : Optional.empty();
+						return readLegacyBuildLog(solverId);
 					}
 					String state = result.getString("state");
 					String path = result.getString("path");
 					Integer status = (Integer) result.getObject("build_status");
 					String storage = result.getString("storage_root");
-					if (result.getInt("solver_id") != solverId || result.getInt("origin_owner_id") != result.getInt("user_id")
-							|| !("PUBLISHED".equals(state) && Integer.valueOf(2).equals(status) && path.equals(result.getString("artifact_path"))
+					if (result.getInt("solver_id") != solverId || result.getInt("origin_owner_id") != result.getInt("user_id")) {
+						throw new IOException("Applied build output owner differs from its solver");
+					}
+					if (result.getObject("execution_token") == null) {
+						String source = result.getString("source_path");
+						if (!"REJECTED".equals(state) || storage != null || result.getString("manifest_payload") != null
+								|| !(Integer.valueOf(3).equals(status) && path.equals(source)
+								|| Integer.valueOf(2).equals(status) && source != null && source.length() > 4 && source.endsWith("_src")
+								&& path.equals(source.substring(0, source.length()-4)))) {
+							throw new IOException("Applied legacy output identity differs from its solver");
+						}
+						return readLegacyBuildLog(solverId);
+					}
+					if (!("PUBLISHED".equals(state) && Integer.valueOf(2).equals(status) && path.equals(result.getString("artifact_path"))
 							|| "REJECTED".equals(state) && Integer.valueOf(3).equals(status) && path.equals(result.getString("source_path")))
 							|| storage == null || !Path.of(storage).resolve("solver").toString().equals(result.getString("artifact_path"))
 							|| result.getObject("byte_size") == null) {
@@ -2673,6 +2683,12 @@ public class Solvers {
 				}
 			}
 		});
+	}
+
+	private static Optional<String> readLegacyBuildLog(int solverId) throws IOException {
+		File legacy = getSolverBuildOutput(solverId);
+		return legacy != null && legacy.exists()
+				? Optional.of(FileUtils.readFileToString(legacy, StandardCharsets.UTF_8)) : Optional.empty();
 	}
 
 	/** Resolves original source for an already authorized snapshot, refusing a changed asset identity. */

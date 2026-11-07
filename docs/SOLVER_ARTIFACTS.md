@@ -118,8 +118,9 @@ catalogue row, and hold the solver row stable while verifying the exact manifest
 payload and regular log bytes. Symbolic/hard links and changed bytes are refused.
 An empty log remains distinct from an absent log. Existing owner/admin permissions
 and REST error responses remain unchanged, as does the legacy cleanup locator.
-Genuinely legacy builds keep their previous log location; managed output never
-falls back to that file. Existing managed rows have no guessed migration backfill:
+Legacy outcomes record their own applied unbound catalogue identity and keep
+their previous log location, including after earlier managed attempts. Managed
+output never falls back to that file. Existing managed rows have no guessed migration backfill:
 trusted outcome replay must verify the artifact before recording its reference.
 
 The legacy recorder excludes pairs with any execution-bound attempt. Its SQL
