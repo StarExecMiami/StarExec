@@ -2209,7 +2209,20 @@ public class KubernetesNativeBackend implements Backend {
         if (!org.starexec.data.database.SolverBuildArtifacts.admitExecution(build, identity)) {
             throw new IllegalStateException("Build execution admission was refused; Job remains suspended");
         }
-        Job resume = new JobBuilder(created).editSpec().withSuspend(false).endSpec().build();
+        // The controller can update suspension status after create returns. Observe
+        // the initial Job before this first write; never refresh after a failed write.
+        Job observed = kubernetesClient.batch().v1().jobs().inNamespace(namespace)
+            .withName(execution.jobName()).get();
+        var expected = new KubernetesBuildStopObserver.Identity(build.artifactId(), build.pairId(),
+            build.attemptNo(), execution);
+        KubernetesBuildLaunchFence.validate(namespace, expected, observed);
+        if (KubernetesBuildLaunchFence.isFenced(observed)
+                || KubernetesBuildCancellation.isRequested(observed)
+                || !KubernetesBuildPodRetention.isRetained(observed)) {
+            throw new IllegalStateException("Build initial observation cannot authorize launch");
+        }
+        version = observed.getMetadata().getResourceVersion();
+        Job resume = new JobBuilder(observed).editSpec().withSuspend(false).endSpec().build();
         Job updated = kubernetesClient.batch().v1().jobs().inNamespace(namespace)
             .resource(resume).lockResourceVersion(version).replace();
         if (!execution.equals(ExecutionRef.fromJob(execution.execId(), updated))

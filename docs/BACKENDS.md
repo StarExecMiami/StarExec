@@ -418,6 +418,12 @@ start operation. Kubernetes creates build Jobs suspended, admits their returned
 UID in the database, and resumes the exact observed UID and resource version.
 An uncertain engine response retains execution tracking and capacity.
 
+After admission commits, Kubernetes reads the initial suspended Job once before
+resuming it. The read must still identify the registered build and initial
+generation, retain Pod evidence, and have no launch-fence or cancellation marker.
+The single resume write uses that observed resource version; a conflicting or
+ambiguous write is not retried against a newer version.
+
 Resuming a build requires `update` on Jobs in the application's namespace Role.
 The Helm chart grants this to the application account. Runner Pods explicitly
 disable service-account token mounting, including when a custom account is used.
