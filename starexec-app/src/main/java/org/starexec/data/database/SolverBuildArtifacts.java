@@ -155,17 +155,23 @@ public final class SolverBuildArtifacts {
     /** Revalidates the prepared attempt and commits its engine identity before launch. */
     public static boolean admitExecution(BuildExecutionContext build, String engineIdentity) throws SQLException {
         try (Connection connection = Common.getConnection()) {
-            connection.setAutoCommit(false);
             try {
-                boolean admitted = admitExecution(connection, build, engineIdentity);
-                if (admitted) connection.commit(); else connection.rollback();
-                return admitted;
-            } catch (SQLException | RuntimeException failure) {
-                try { connection.rollback(); }
-                catch (SQLException rollback) { failure.addSuppressed(rollback); }
-                throw failure;
+                return Common.runTransactional(connection, transaction -> {
+                    if (!admitExecution(transaction, build, engineIdentity)) throw new AdmissionRefused();
+                    return true;
+                });
+            } catch (AdmissionRefused refused) {
+                if (refused.getSuppressed().length != 0) throw refused;
+                return false;
             }
         }
+    }
+
+    /** Rolls back refused admission without hiding rollback or connection-restoration failures. */
+    private static final class AdmissionRefused extends SQLException {
+        private static final long serialVersionUID = 1L;
+
+        private AdmissionRefused() { super("Build execution admission was refused"); }
     }
 
     /** The caller must commit this transaction before starting the engine resource. */
