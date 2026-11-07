@@ -206,6 +206,27 @@ Backend integration must commit this decision before its one release request and
 retain the exact resource after a lost response. These database methods do not
 activate dispatch on their own.
 
+Completed pair metadata is read relative to an open directory through
+`DescriptorDirectory.readQuiescentText`. Each file must be regular, have stable
+identity and size, and contain valid UTF-8. The byte bound is enforced during the
+read as well as before it. Pair status, timing, watcher and attribute files use
+the existing 1 MiB result-file limit. Symbolic links in any ancestor or leaf are
+refused; replacing a directory after it opens cannot redirect the read.
+
+The monitor keeps Gson and its established field/status semantics. Unsafe links,
+excessive bytes and invalid text cause deterministic refusal before result writes.
+Missing optional formats remain optional. A present directory in place of a status
+file retains the existing unreadable-file retry contract; ordinary filesystem I/O
+remains distinct from invalid content.
+
+These reads require complete writer termination, a private leased output and
+serialized trusted reclamation. Java's directory-relative operations do not make
+the separate regular-file check and open atomic against a concurrently hostile
+leaf. Do not read active untrusted output using this API or treat the reader as
+a substitute for the backend's isolation and positive-stop guarantees. Exact
+provider/host path binding and all per-stage readers must satisfy the same boundary
+before enabling the complete untrusted execution profile.
+
 `SolverBuildStagingCleanup` reclaims staging independently of immutable executable
 retention. Its durable claim binds the execution, resource, cleanup token and
 original directory identity or positive absence. It requires a matching conserved
@@ -298,6 +319,17 @@ changed namespace/user mappings, CPU widening, missing process limits, malformed
 responses and attempts to substitute an already executing jobscript for the hold.
 They do not launch a deployed application or establish a physical capacity bound.
 
+For pair metadata and descriptor-relative readback:
+
+```sh
+mvn -B -pl starexec-app -Dtest=ContainerJobMonitorTests,DescriptorDirectoryTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+```
+
+These tests cover linked files/ancestors, byte limits, strict UTF-8, read-only file
+permissions, retained directory handles, missing output, unreadable-status retry
+and unchanged parser behavior. They use owned fixtures without a provider writer;
+they do not prove stop or writer exclusion in a deployed stack.
+
 After applying the migrations to a disposable PostgreSQL database configured
 through `STAREXEC_DB_*`, run:
 
@@ -361,3 +393,7 @@ tests.
 - [Java file existence checks](https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/nio/file/Files.html#exists(java.nio.file.Path,java.nio.file.LinkOption...))
   can return false when existence is unknown; cleanup and preparation must distinguish
   confirmed absence from a failed observation.
+- [Java 17 directory-relative operations](https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/nio/file/SecureDirectoryStream.html)
+  bind file access to an open directory and support refusing symbolic links.
+- [Linux FIFO behavior](https://man7.org/linux/man-pages/man7/fifo.7.html)
+  explains why a regular-file check must not be raced by an active hostile writer.
