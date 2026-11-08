@@ -153,6 +153,62 @@ class SolverBuildCompletionSqlTest extends Common {
         assertFalse(Files.exists(build.staging()));
     }
 
+    @ParameterizedTest @ValueSource(strings={"pair","job"})
+    void cancellationAfterOrdinaryStopConservesLogsWithoutRewritingReceipt(String scope) throws Exception {
+        stopped(true,21);
+        var receipt=SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt();
+        assertFalse(receipt.facts().has("disposition"));
+        if(scope.equals("job")) number(connection,"UPDATE starexec.jobs SET killed=true WHERE id="
+                +"(SELECT job_id FROM starexec.job_pairs WHERE id=?) RETURNING id",pair);
+        record(store);record(store);
+        var artifact=SolverBuildArtifacts.find(connection,pair,1).orElseThrow();
+        assertEquals("REJECTED",artifact.state());
+        assertEquals(receipt.payload(),SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt().payload());
+        assertEquals(receipt.sha256(),SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt().sha256());
+        assertTrue(Files.isRegularFile(output().resolve("logs/"+R.SOLVER_BUILD_OUTPUT)));
+        assertEquals("build log\n",Files.readString(output().resolve("logs/"+R.SOLVER_BUILD_OUTPUT)));
+        assertFalse(Files.exists(output().resolve("solver")));assertFalse(Files.exists(build.staging()));
+        assertEquals(0,activeLeases());assertEquals(originalBytes+"build log\n".getBytes(java.nio.charset.StandardCharsets.UTF_8).length,usage());
+        assertEquals(21,number(connection,"SELECT status_code FROM starexec.job_pairs WHERE id=?",pair));
+        assertEquals(0,number(connection,"SELECT count(*) FROM starexec.solver_build_artifacts WHERE id=? AND published_at IS NOT NULL",build.artifactId()));
+        assertEquals("original source\n",Files.readString(source.resolve("starexec_build")));
+        assertEquals(source.toString(),artifact.sourcePath());
+        assertEquals(0,number(connection,"SELECT build_status FROM starexec.solvers WHERE id=?",solver));
+        assertEquals("build log\n",Solvers.readSolverBuildLog(solver,owner).orElseThrow());
+        int other=(int)number(connection,"INSERT INTO starexec.users(email,first_name,last_name,institution,created,password,disk_quota,job_pair_quota,disk_size)"
+                +" VALUES (?,'Other','Reader','synthetic',now(),'synthetic',16777216,100,0) RETURNING id",
+                "other-"+UUID.randomUUID()+"@example.invalid");
+        assertTrue(Solvers.readSolverBuildLog(solver,other).isEmpty());
+        assertTrue(PublishedSolverInputs.forPair(consumer(),1).isEmpty());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"job-killed-failed","job-killed-success","unreleased-killed"})
+    void cancellationCannotBypassReleaseOrCreateAnotherTerminalOutcome(String condition) throws Exception {
+        stopped(!condition.equals("unreleased-killed"),condition.equals("job-killed-success")?7
+                :condition.equals("job-killed-failed")?11:21);
+        number(connection,"UPDATE starexec.jobs SET killed=true WHERE id="
+                +"(SELECT job_id FROM starexec.job_pairs WHERE id=?) RETURNING id",pair);
+        var receipt=SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt();long before=usage();
+        record(store);
+        assertEquals("PLANNED",SolverBuildArtifacts.find(connection,pair,1).orElseThrow().state());
+        assertEquals(receipt.payload(),SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt().payload());
+        assertEquals(before,usage());assertEquals(1,activeLeases());assertTrue(Files.exists(build.staging()));
+        assertFalse(Files.exists(output()));
+        assertEquals("original source\n",Files.readString(source.resolve("starexec_build")));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"status","attempt"})
+    void cancelledLogReadRequiresTheCurrentCancelledAttempt(String change) throws Exception {
+        stopped(true,21);record(store);
+        assertEquals("build log\n",Solvers.readSolverBuildLog(solver,owner).orElseThrow());
+        if(change.equals("status")) number(connection,"UPDATE starexec.job_pairs SET status_code=7 WHERE id=? RETURNING id",pair);
+        else try(var statement=connection.prepareStatement("SELECT starexec.RerunJobPairsBatchCore(ARRAY[?]::INTEGER[])")) {
+            statement.setInt(1,pair);Common.executeAndDrain(statement);
+        }
+        assertThrows(SQLException.class,()->Solvers.readSolverBuildLog(solver,owner));
+        assertEquals("original source\n",Files.readString(source.resolve("starexec_build")));
+    }
+
     private int consumer() throws Exception {
         int bench=(int)number(connection,"SELECT bench_id FROM starexec.job_pairs WHERE id=?",pair);
         int job=(int)number(connection,"INSERT INTO starexec.jobs(user_id,name,total_pairs,disk_size,buildjob) VALUES (?,'consumer',1,0,false) RETURNING id",owner);

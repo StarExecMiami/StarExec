@@ -35,13 +35,19 @@ public final class SolverBuildPublication {
      */
     public static boolean publish(Connection connection, BuildExecutionContext build, Path parent,
                                   long maxBytes, int maxEntries) throws SQLException, IOException {
-        return conserve(connection, build, parent, maxBytes, maxEntries, false);
+        return conserve(connection, build, parent, maxBytes, maxEntries, false, false);
     }
 
     /** Conserves unsuccessful build logs and records failure without replacing the original source. */
     public static boolean recordFailure(Connection connection, BuildExecutionContext build, Path parent,
                                         long maxBytes, int maxEntries) throws SQLException, IOException {
-        return conserve(connection, build, parent, maxBytes, maxEntries, true);
+        return conserve(connection, build, parent, maxBytes, maxEntries, true, false);
+    }
+
+    /** Keeps diagnostics when cancellation follows a conserved ordinary stop; it does not record solver failure. */
+    public static boolean recordCancelledLogs(Connection connection, BuildExecutionContext build, Path parent,
+                                              long maxBytes, int maxEntries) throws SQLException, IOException {
+        return conserve(connection,build,parent,maxBytes,maxEntries,true,true);
     }
 
     /** Read back the conserved copy before its stopped execution staging is discarded. */
@@ -54,7 +60,7 @@ public final class SolverBuildPublication {
     }
 
     private static boolean conserve(Connection connection, BuildExecutionContext build, Path parent,
-                                    long maxBytes, int maxEntries, boolean failed) throws SQLException, IOException {
+                                    long maxBytes, int maxEntries, boolean failed,boolean cancelled) throws SQLException, IOException {
         if (!connection.getAutoCommit()) throw new SQLException("Output reservation must commit before copying");
         if (maxBytes < 0 || maxEntries < 1) throw new IllegalArgumentException("Invalid artifact limits");
         if (parent == null || !parent.isAbsolute() || parent.getParent() == null || !parent.equals(parent.normalize())) {
@@ -72,7 +78,7 @@ public final class SolverBuildPublication {
         if (stored == null || !Set.of("podman", "kubernetes").contains(stored.receipt().backend())
                 || !artifact.engineIdentity().startsWith(stored.receipt().backend() + ":")
                 || !stored.receipt().matches(build.artifactId(), build.pairId(), build.attemptNo(), artifact.engineIdentity())
-                || stored.receipt().facts().has("disposition") || !eligiblePair(connection, build.pairId(), failed)) return false;
+                || stored.receipt().facts().has("disposition") || !eligiblePair(connection, build.pairId(), failed,cancelled)) return false;
 
         Path root = parent.resolve("build-" + build.artifactId() + "-" + build.token());
         if (root.startsWith(build.staging().normalize()) || root.startsWith(build.source().normalize())) {
@@ -111,14 +117,19 @@ public final class SolverBuildPublication {
                         : SolverBuildArtifacts.validateOutput(connection, build, artifact.engineIdentity(), stored.receipt().sha256(), root, manifest);
                 if (!saved) return false;
             }
-            return failed ? SolverBuildArtifacts.recordFailedOutput(connection, build, artifact.engineIdentity(), stored.receipt().sha256())
+            return cancelled?SolverBuildArtifacts.recordCancelledLogs(connection,build,artifact.engineIdentity(),stored.receipt().sha256())
+                    :failed ? SolverBuildArtifacts.recordFailedOutput(connection, build, artifact.engineIdentity(), stored.receipt().sha256())
                     : SolverBuildArtifacts.publishOutput(connection, artifact.id());
         }
     }
 
-    private static boolean eligiblePair(Connection connection, int pair, boolean failed) throws SQLException {
-        String predicate = failed ? "starexec.IsTerminalPairStatus(status_code) AND status_code NOT IN (7,21)" : "status_code=7";
-        try (var statement = connection.prepareStatement("SELECT " + predicate + " FROM starexec.job_pairs WHERE id=?")) {
+    private static boolean eligiblePair(Connection connection, int pair, boolean failed,boolean cancelled) throws SQLException {
+        String predicate=cancelled?"p.status_code=21":failed
+                ?"starexec.IsTerminalPairStatus(p.status_code) AND p.status_code NOT IN (7,21)":"p.status_code=7";
+        try (var statement = connection.prepareStatement("SELECT " + predicate
+                +" FROM starexec.job_pairs p JOIN starexec.jobs j ON j.id=p.job_id"
+                +" WHERE p.id=? AND j.buildjob AND j.deleted IS NOT TRUE"
+                +(cancelled?"":" AND j.killed IS NOT TRUE"))) {
             statement.setInt(1, pair);
             try (var result = statement.executeQuery()) { return result.next() && result.getBoolean(1); }
         }

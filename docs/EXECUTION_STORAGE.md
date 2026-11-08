@@ -363,6 +363,14 @@ either outcome. The conserved stop receipt, release decision, resource lease and
 exact current artifact must agree. Publication and staging accounting are separate;
 unavailable storage, quota or verification retains the unresolved staging allowance.
 
+When an ordinary stop receipt precedes cancellation, keep that receipt unchanged.
+The cancelled pair can conserve diagnostic logs and settle its stopped staging
+through a separate cancellation path; it must not publish executables or record a
+solver failure. The solver's source and build status remain unchanged. Its owner
+can read the conserved logs only while the same current attempt remains cancelled.
+The failure-recording API continues to reject cancelled pairs. Both paths recheck
+ownership, current attempt and the exact positive stop before committing output.
+
 Ordinary Podman jobs obtain published inputs from the catalog for their current
 attempt. Repeated stage references share one exact read-only solver bind; build
 logs and the parent store are not exposed. The prebuilt image is fixed by its

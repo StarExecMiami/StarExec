@@ -207,6 +207,12 @@ public final class SolverBuildArtifacts {
                 build.artifactId(), build.token(), engine, receiptDigest);
     }
 
+    public static boolean recordCancelledLogs(Connection connection,BuildExecutionContext build,String engine,
+                                              String receiptDigest) throws SQLException {
+        return call(connection,"SELECT starexec.record_cancelled_solver_build_logs(?,?,?,?)",
+                build.artifactId(),build.token(),engine,receiptDigest);
+    }
+
     public static Optional<StoredStopReceipt> findStopReceipt(int pairId, int attemptNo) throws SQLException {
         try (Connection connection = Common.getConnection()) { return findStopReceipt(connection, pairId, attemptNo); }
     }

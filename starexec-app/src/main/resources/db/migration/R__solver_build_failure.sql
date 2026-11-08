@@ -1,22 +1,24 @@
--- Failed build logs never become executable solver artifacts. Recheck the same
--- current-owner fences as publication before deciding a solver's failure status.
-CREATE OR REPLACE FUNCTION starexec.record_failed_solver_build_output(
-    _artifact BIGINT, _token UUID, _engine TEXT, _receipt_digest TEXT) RETURNS BOOLEAN AS $$
+-- Stopped diagnostic logs never become executable solver artifacts. Cancellation
+-- preserves solver status and ordinary stop bytes instead of inventing failure.
+CREATE OR REPLACE FUNCTION starexec.record_solver_build_diagnostic_output(
+    _artifact BIGINT, _token UUID, _engine TEXT, _receipt_digest TEXT, _cancelled BOOLEAN) RETURNS BOOLEAN AS $$
 DECLARE
     _a starexec.solver_build_artifacts%ROWTYPE;
     _s starexec.solvers%ROWTYPE;
     _job INTEGER;
     _owner INTEGER;
+    _job_killed BOOLEAN;
     _status INTEGER;
     _attempt INTEGER;
     _manifest JSONB;
     _backend TEXT;
 BEGIN
+    IF _cancelled IS NULL THEN RETURN FALSE; END IF;
     SELECT * INTO _a FROM starexec.solver_build_artifacts WHERE id = _artifact;
     IF NOT FOUND OR _a.solver_id IS NULL OR _a.pair_id IS NULL THEN RETURN FALSE; END IF;
     SELECT job_id INTO _job FROM starexec.job_pairs WHERE id = _a.pair_id;
-    SELECT user_id INTO _owner FROM starexec.jobs
-        WHERE id = _job AND buildjob AND deleted IS NOT TRUE AND killed IS NOT TRUE FOR UPDATE;
+    SELECT user_id, killed INTO _owner, _job_killed FROM starexec.jobs
+        WHERE id = _job AND buildjob AND deleted IS NOT TRUE FOR UPDATE;
     IF NOT FOUND THEN RETURN FALSE; END IF;
     SELECT status_code INTO _status FROM starexec.job_pairs
         WHERE id = _a.pair_id AND job_id = _job FOR UPDATE;
@@ -33,7 +35,9 @@ BEGIN
         OR _a.pair_id IS NULL OR _attempt IS DISTINCT FROM _a.attempt_no
         OR _s.build_generation IS DISTINCT FROM _a.build_generation
         OR _s.path IS DISTINCT FROM _a.source_path OR NOT COALESCE(_s.build_status IN (0, 3), FALSE)
-        OR NOT COALESCE(starexec.IsTerminalPairStatus(_status) AND _status NOT IN (7, 21), FALSE)
+        OR NOT COALESCE(CASE WHEN _cancelled THEN _status=21
+            ELSE starexec.IsTerminalPairStatus(_status) AND _status NOT IN (7,21) END,FALSE)
+        OR _job_killed IS TRUE AND NOT _cancelled
         OR NOT EXISTS (
             SELECT 1 FROM starexec.jobpair_stage_data sd
             JOIN starexec.job_pairs jp ON jp.id = sd.jobpair_id
@@ -63,11 +67,27 @@ BEGIN
         e->>'path' = 'logs' AND e->>'kind' = 'directory'
         OR e->>'path' LIKE 'logs/%' AND e->>'kind' IN ('directory', 'file', 'link'), FALSE)) THEN RETURN FALSE; END IF;
 
-    IF _a.state = 'REJECTED' AND _s.build_status IS DISTINCT FROM 3 THEN RETURN FALSE; END IF;
-    UPDATE starexec.solvers SET build_status = 3, build_output_artifact_id = _a.id WHERE id = _s.id;
+    IF _a.state = 'REJECTED' AND (
+        _cancelled AND _s.build_output_artifact_id IS DISTINCT FROM _a.id
+        OR NOT _cancelled AND _s.build_status IS DISTINCT FROM 3) THEN RETURN FALSE; END IF;
+    IF _cancelled THEN
+        UPDATE starexec.solvers SET build_output_artifact_id=_a.id WHERE id=_s.id;
+    ELSE
+        UPDATE starexec.solvers SET build_status=3,build_output_artifact_id=_a.id WHERE id=_s.id;
+    END IF;
     UPDATE starexec.solver_build_artifacts SET state = 'REJECTED' WHERE id = _artifact;
     RETURN TRUE;
 EXCEPTION WHEN invalid_text_representation THEN
     RETURN FALSE;
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION starexec.record_failed_solver_build_output(
+    _artifact BIGINT, _token UUID, _engine TEXT, _receipt_digest TEXT) RETURNS BOOLEAN AS $$
+    SELECT starexec.record_solver_build_diagnostic_output(_artifact,_token,_engine,_receipt_digest,FALSE);
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION starexec.record_cancelled_solver_build_logs(
+    _artifact BIGINT, _token UUID, _engine TEXT, _receipt_digest TEXT) RETURNS BOOLEAN AS $$
+    SELECT starexec.record_solver_build_diagnostic_output(_artifact,_token,_engine,_receipt_digest,TRUE);
+$$ LANGUAGE SQL;

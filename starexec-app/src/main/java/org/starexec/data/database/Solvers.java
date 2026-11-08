@@ -2605,6 +2605,12 @@ public class Solvers {
 			String sql = "SELECT s.path,s.build_status,s.user_id,s.build_output_artifact_id,"
 					+ "a.solver_id,a.origin_owner_id,a.state,a.source_path,a.storage_root,a.artifact_path,a.execution_token,"
 					+ "a.manifest_payload,a.manifest_sha256,a.byte_size,"
+					+ "EXISTS(SELECT 1 FROM starexec.job_pairs p JOIN starexec.job_pair_attempts t ON t.pair_id=p.id"
+					+ " WHERE p.id=a.origin_pair_id AND p.status_code=21 AND t.current_attempt_no=a.attempt_no"
+					+ " AND a.execution_stopped_at IS NOT NULL AND a.execution_stop_receipt_payload IS NOT NULL"
+					+ " AND a.execution_stop_receipt_payload::jsonb #> '{facts,disposition}' IS NULL"
+					+ " AND starexec.solver_build_stop_receipt_matches(a.execution_stop_receipt_payload,"
+					+ "a.execution_stop_receipt_sha256,a.id,a.origin_pair_id,a.attempt_no,a.engine_identity)) AS cancelled_logs,"
 					+ "EXISTS(SELECT 1 FROM starexec.solver_build_artifacts m"
 					+ " WHERE m.origin_solver_id=s.id AND m.execution_token IS NOT NULL) AS managed"
 					+ " FROM starexec.solvers s LEFT JOIN starexec.solver_build_artifacts a ON a.id=s.build_output_artifact_id"
@@ -2635,7 +2641,9 @@ public class Solvers {
 						return readLegacyBuildLog(solverId);
 					}
 					if (!("PUBLISHED".equals(state) && Integer.valueOf(2).equals(status) && path.equals(result.getString("artifact_path"))
-							|| "REJECTED".equals(state) && Integer.valueOf(3).equals(status) && path.equals(result.getString("source_path")))
+							|| "REJECTED".equals(state) && (Integer.valueOf(3).equals(status)
+								|| Integer.valueOf(0).equals(status) && result.getBoolean("cancelled_logs"))
+								&& path.equals(result.getString("source_path")))
 							|| storage == null || !Path.of(storage).resolve("solver").toString().equals(result.getString("artifact_path"))
 							|| result.getObject("byte_size") == null) {
 						throw new IOException("Applied build output identity differs from its solver");

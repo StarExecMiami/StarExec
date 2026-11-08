@@ -62,16 +62,19 @@ public final class ExecutionStorageLeases {
             var release=findReleaseDecision(connection,build,resource).orElse(null);
             if (release==null || !current.engineIdentity().equals(release.engineIdentity())) return false;
             boolean success;
+            boolean cancelled;
             try (var query=connection.prepareStatement("SELECT status_code=7,starexec.IsTerminalPairStatus(status_code)"
-                    +" AND status_code NOT IN (7,21) FROM starexec.job_pairs WHERE id=?")) {
+                    +" AND status_code NOT IN (7,21),status_code=21 FROM starexec.job_pairs WHERE id=?")) {
                 query.setInt(1,build.pairId());
                 try (var row=query.executeQuery()) {
-                    if (!row.next() || !row.getBoolean(1) && !row.getBoolean(2)) return false;
+                    if (!row.next() || !row.getBoolean(1) && !row.getBoolean(2) && !row.getBoolean(3)) return false;
                     success=row.getBoolean(1);
+                    cancelled=row.getBoolean(3);
                 }
             }
             store.requireUnchanged();
-            boolean conserved=success?SolverBuildPublication.publish(connection,build,store.root(),resource.capacityBytes(),entries)
+            boolean conserved=cancelled?SolverBuildPublication.recordCancelledLogs(connection,build,store.root(),resource.capacityBytes(),entries)
+                    :success?SolverBuildPublication.publish(connection,build,store.root(),resource.capacityBytes(),entries)
                     :SolverBuildPublication.recordFailure(connection,build,store.root(),resource.capacityBytes(),entries);
             if (!conserved) return false;
             store.requireUnchanged();
