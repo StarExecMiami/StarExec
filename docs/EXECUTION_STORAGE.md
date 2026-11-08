@@ -227,6 +227,14 @@ a substitute for the backend's isolation and positive-stop guarantees. Exact
 provider/host path binding and all per-stage readers must satisfy the same boundary
 before enabling the complete untrusted execution profile.
 
+Shared per-stage metadata readers also bind listing and reads to open directories,
+refuse symbolic-link ancestors and leaves, and enforce byte bounds while reading.
+The status reader retains its bounded entry count and Gson validation. Trusted
+Local helpers may publish complete files by atomic replacement while the pair
+runs; replacement during a read remains retryable I/O. This publication contract
+does not authorize concurrent hostile writers. Untrusted output still requires
+private storage and positive complete termination before ingestion.
+
 The legacy Podman data-root translator compares path components rather than text
 prefixes. An enabled mapping requires normalized absolute source/container/host
 paths; dot segments and relative paths are refused. Exact roots and trailing

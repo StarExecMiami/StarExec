@@ -11,6 +11,7 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
+import java.nio.file.DirectoryIteratorException;
 import java.nio.file.Files;
 import java.nio.file.FileSystem;
 import java.nio.file.InvalidPathException;
@@ -23,6 +24,8 @@ import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.SecureDirectoryStream;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -95,6 +98,36 @@ public final class DescriptorDirectory implements AutoCloseable {
      * a regular-file-only atomic open against a concurrently hostile leaf.
      */
     public String readQuiescentText(String name, int maxBytes) throws IOException {
+        return readText(name, maxBytes, true);
+    }
+
+    /**
+     * Reads a bounded file published by a trusted producer using atomic replacement.
+     * A concurrent replacement or malformed encoding remains an I/O failure for retry.
+     * Untrusted producers still require complete writer termination and private storage.
+     */
+    public String readPublishedText(String name, int maxBytes) throws IOException {
+        return readText(name, maxBytes, false);
+    }
+
+    /** Lists at most the supplied number of entry names through this handle, once per handle. */
+    public List<String> childNames(int maxEntries) throws IOException {
+        if (maxEntries < 1) throw new InvalidFileException("Directory entry limit must be positive");
+        List<String> names = new ArrayList<>();
+        try {
+            for (Path entry : directory) {
+                if (names.size() == maxEntries) {
+                    throw new InvalidFileException("Directory holds more than " + maxEntries + " entries");
+                }
+                names.add(entry.getFileName().toString());
+            }
+        } catch (DirectoryIteratorException failure) {
+            throw failure.getCause();
+        }
+        return List.copyOf(names);
+    }
+
+    private String readText(String name, int maxBytes, boolean quiescent) throws IOException {
         if (name==null || name.isEmpty() || name.equals(".") || name.equals("..")
                 || name.indexOf('/')>=0 || name.indexOf('\\')>=0 || maxBytes<1 || maxBytes>16*1024*1024) {
             throw new InvalidFileException("Read requires one file name and a bounded positive byte limit");
@@ -111,7 +144,7 @@ public final class DescriptorDirectory implements AutoCloseable {
         }
         ByteArrayOutputStream contents=new ByteArrayOutputStream(Math.min(maxBytes,8192));
         try (SeekableByteChannel channel=directory.newByteChannel(child,Set.of(StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS))) {
-            if (channel.size()!=before.size()) throw new InvalidFileException("Output changed before read");
+            if (channel.size()!=before.size()) throw changed(quiescent,"Output changed before read");
             ByteBuffer buffer=ByteBuffer.allocate(8192);
             int read;
             while ((read=channel.read(buffer))!=-1) {
@@ -123,13 +156,20 @@ public final class DescriptorDirectory implements AutoCloseable {
             if (!after.isRegularFile() || !before.fileKey().equals(after.fileKey())
                     || before.size()!=after.size() || after.size()!=contents.size()
                     || !before.lastModifiedTime().equals(after.lastModifiedTime()) || channel.size()!=contents.size()) {
-                throw new InvalidFileException("Output identity or content changed during read");
+                throw changed(quiescent,"Output identity or content changed during read");
             }
         }
         try {
             return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(contents.toByteArray())).toString();
-        } catch (CharacterCodingException invalid) { throw new InvalidFileException("Output is not valid UTF-8"); }
+        } catch (CharacterCodingException invalid) {
+            if (!quiescent) throw invalid;
+            throw new InvalidFileException("Output is not valid UTF-8");
+        }
+    }
+
+    private static IOException changed(boolean quiescent, String message) {
+        return quiescent ? new InvalidFileException(message) : new IOException(message);
     }
 
     /** Creates a fresh UTF-8 file; neither an existing file nor a link is replaced. */

@@ -159,4 +159,58 @@ public class DescriptorDirectoryTest {
             assertThrows(java.nio.file.NoSuchFileException.class,()->directory.readQuiescentText("missing",32));
         }
     }
+
+    @Test
+    public void publishedReadsAcceptAtomicReplacementBetweenPolls() throws Exception {
+        Path record = Files.writeString(temporary.resolve("record"), "first");
+        try (DescriptorDirectory directory = DescriptorDirectory.open(temporary)) {
+            assertEquals("first", directory.readPublishedText("record", 32));
+            Path next = Files.writeString(temporary.resolve("next"), "second");
+            Files.move(next, record, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            assertEquals("second", directory.readPublishedText("record", 32));
+        }
+    }
+
+    @Test
+    public void publishedReadsKeepByteAndLinkGuardsAndEncodingRetries() throws Exception {
+        Path record = Files.writeString(temporary.resolve("record"), "owned");
+        Files.createSymbolicLink(temporary.resolve("alias"), record);
+        Files.write(temporary.resolve("malformed"), new byte[]{(byte) 0xc3, (byte) 0x28});
+        try (DescriptorDirectory directory = DescriptorDirectory.open(temporary)) {
+            assertThrows(DescriptorDirectory.InvalidFileException.class,
+                    () -> directory.readPublishedText("record", 4));
+            assertThrows(DescriptorDirectory.InvalidFileException.class,
+                    () -> directory.readPublishedText("alias", 32));
+            IOException malformed = assertThrows(IOException.class,
+                    () -> directory.readPublishedText("malformed", 32));
+            assertFalse(malformed instanceof DescriptorDirectory.InvalidFileException);
+        }
+    }
+
+    @Test
+    public void listingAndPublishedReadsRemainBoundToTheOpenedDirectory() throws Exception {
+        Path original = Files.createDirectory(temporary.resolve("original"));
+        Files.writeString(original.resolve("owned"), "owned");
+        Path outside = Files.createDirectory(temporary.resolve("outside"));
+        Files.writeString(outside.resolve("foreign"), "foreign");
+        try (DescriptorDirectory directory = DescriptorDirectory.open(original)) {
+            Files.move(original, temporary.resolve("retained"));
+            Files.createSymbolicLink(original, outside);
+            assertEquals(List.of("owned"), directory.childNames(1));
+            assertEquals("owned", directory.readPublishedText("owned", 32));
+        }
+    }
+
+    @Test
+    public void directoryListingCountsAllNamesAgainstItsLimit() throws Exception {
+        Files.createFile(temporary.resolve("record"));
+        Files.createFile(temporary.resolve("record.tmp"));
+        try (DescriptorDirectory directory = DescriptorDirectory.open(temporary)) {
+            assertThrows(DescriptorDirectory.InvalidFileException.class,
+                    () -> directory.childNames(0));
+            assertThrows(DescriptorDirectory.InvalidFileException.class,
+                    () -> directory.childNames(1));
+        }
+    }
 }
