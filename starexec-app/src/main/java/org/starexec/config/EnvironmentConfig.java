@@ -476,6 +476,11 @@ public class EnvironmentConfig {
         return getEnv("STAREXEC_CONFIG_PATH", "/config");
     }
 
+    /** Explicit controller-owned immutable output storage; absence must never select shared data. */
+    public static String getBuildArtifactDirectory() {
+        return getEnv("STAREXEC_BUILD_ARTIFACT_DIR", "");
+    }
+
     public static String getRunsolverPath() {
         return getEnv("STAREXEC_RUNSOLVER_PATH", "/usr/local/bin/runsolver");
     }

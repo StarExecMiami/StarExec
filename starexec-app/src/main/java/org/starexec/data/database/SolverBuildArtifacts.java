@@ -9,6 +9,8 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.List;
+import java.util.ArrayList;
 import java.io.IOException;
 import org.starexec.backend.BuildExecutionContext;
 import org.starexec.jobs.SolverBuildStaging;
@@ -315,16 +317,33 @@ public final class SolverBuildArtifacts {
             ps.setInt(1, pairId); ps.setInt(2, attemptNo);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return Optional.empty();
-                int solver = rs.getInt("solver_id");
-                Integer liveSolver = rs.wasNull() ? null : solver;
-                Timestamp stopped = rs.getTimestamp("execution_stopped_at");
-                return Optional.of(new Artifact(rs.getLong("id"), rs.getInt("origin_pair_id"),
-                        rs.getInt("attempt_no"), rs.getInt("origin_solver_id"), liveSolver,
-                        rs.getInt("origin_owner_id"), rs.getLong("build_generation"),
-                        rs.getString("source_path"), rs.getString("staging_path"), rs.getString("storage_root"),
-                        rs.getString("artifact_path"), rs.getObject("execution_token", UUID.class),
-                        rs.getString("engine_identity"), stopped == null ? null : stopped.toInstant(), rs.getString("state")));
+                return Optional.of(artifact(rs));
             }
+        }
+    }
+
+    static Artifact artifact(ResultSet rs) throws SQLException {
+        int solver=rs.getInt("solver_id");
+        Integer liveSolver=rs.wasNull()?null:solver;
+        Timestamp stopped=rs.getTimestamp("execution_stopped_at");
+        return new Artifact(rs.getLong("id"),rs.getInt("origin_pair_id"),rs.getInt("attempt_no"),
+                rs.getInt("origin_solver_id"),liveSolver,rs.getInt("origin_owner_id"),rs.getLong("build_generation"),
+                rs.getString("source_path"),rs.getString("staging_path"),rs.getString("storage_root"),
+                rs.getString("artifact_path"),rs.getObject("execution_token",UUID.class),rs.getString("engine_identity"),
+                stopped==null?null:stopped.toInstant(),rs.getString("state"));
+    }
+
+    /** Candidates only; output and cleanup authorization are rechecked under their existing locks. */
+    public static List<Artifact> stoppedLeasedBuilds() throws SQLException {
+        try (Connection connection=Common.getConnection();var query=connection.prepareStatement(
+                "SELECT a.* FROM starexec.solver_build_artifacts a"
+                +" JOIN starexec.solver_build_storage_leases l ON l.artifact_id=a.id"
+                +" WHERE l.released_at IS NULL AND a.execution_token=l.execution_token"
+                +" AND a.execution_stopped_at IS NOT NULL AND a.execution_stop_receipt_payload IS NOT NULL"
+                +" ORDER BY a.id")) {
+            List<Artifact> artifacts=new ArrayList<>();
+            try (var rows=query.executeQuery()) { while (rows.next()) artifacts.add(artifact(rows)); }
+            return List.copyOf(artifacts);
         }
     }
 

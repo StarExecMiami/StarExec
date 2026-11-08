@@ -72,6 +72,7 @@ public final class SolverBuildRecorder {
 
 	/** Applies every finished build job that has not been applied yet, oldest first. */
 	public static void recordFinishedBuilds() {
+		SolverBuildCompletion.recordFinishedBuilds();
 		List<FinishedSolverBuild> builds;
 		try {
 			builds = Solvers.getFinishedBuildsToRecord();

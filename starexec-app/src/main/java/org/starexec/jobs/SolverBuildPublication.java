@@ -18,6 +18,15 @@ import java.util.Set;
 public final class SolverBuildPublication {
     private SolverBuildPublication() { }
 
+    /** The caller must conserve the catalog identity and keep this store excluded from runner writes. */
+    public static void verifyPublishedInput(SolverBuildArtifacts.Artifact artifact,
+                                             SolverBuildArtifacts.OutputManifest manifest) throws IOException {
+        if (artifact==null || !"PUBLISHED".equals(artifact.state()) || artifact.storageRoot()==null || manifest==null) {
+            throw new IOException("Published input has no conserved immutable output");
+        }
+        verifyConservedOutput(Path.of(artifact.storageRoot()),manifest,false,Integer.MAX_VALUE);
+    }
+
     /**
      * The application must exclude the destination and its ancestors from runner writes.
      * A conserved provider receipt must establish stopped writers. This operation never

@@ -4,6 +4,9 @@ import com.google.gson.Gson;
 import org.starexec.backend.BuildExecutionContext;
 import org.starexec.backend.storage.BuildExecutionRuntime;
 import org.starexec.backend.storage.BuildExecutionMounts;
+import org.starexec.backend.storage.BuildArtifactStore;
+import org.starexec.jobs.SolverBuildPublication;
+import org.starexec.jobs.SolverBuildStagingCleanup;
 import org.starexec.backend.storage.DedicatedStorageResource;
 import org.starexec.util.DescriptorDirectory;
 
@@ -24,6 +27,57 @@ import java.util.UUID;
 public final class ExecutionStorageLeases {
     private static final Gson JSON = new Gson();
     private ExecutionStorageLeases() { }
+
+    public static List<Path> registeredRootPaths() throws SQLException {
+        try (Connection connection=Common.getConnection();var query=connection.prepareStatement(
+                "SELECT root_path FROM starexec.execution_storage_resources ORDER BY resource_key")) {
+            List<Path> paths=new ArrayList<>();
+            try (var rows=query.executeQuery()) { while (rows.next()) paths.add(Path.of(rows.getString(1))); }
+            return List.copyOf(paths);
+        }
+    }
+
+    /** Conserves a released stopped outcome before independently settling its staging lease. */
+    public static boolean recordBuildOutcomeAndClean(SolverBuildArtifacts.Artifact expected, BuildArtifactStore store,
+                                                     List<Path> protectedRoots) throws SQLException, IOException {
+        try (Connection connection=Common.getConnection()) {
+            var current=SolverBuildArtifacts.find(connection,expected.pairId(),expected.attemptNo()).orElse(null);
+            if (!expected.equals(current) || current.executionToken()==null || current.stoppedAt()==null
+                    || current.sourcePath()==null || current.stagingPath()==null || current.engineIdentity()==null) return false;
+            var build=new BuildExecutionContext(current.id(),current.pairId(),current.attemptNo(),current.executionToken(),
+                    Path.of(current.sourcePath()),Path.of(current.stagingPath()));
+            var registration=registeredResource(connection,build).orElse(null);
+            if (registration==null) return false;
+            var excluded=new ArrayList<>(protectedRoots);excluded.add(store.root());
+            var resource=registration.inspect(excluded);
+            int entries=(int)Math.min(Integer.MAX_VALUE,resource.inodeLimit());
+            var stopped=SolverBuildArtifacts.findStopReceipt(connection,build.pairId(),build.attemptNo()).orElse(null);
+            if (stopped==null || !stopped.receipt().matches(build.artifactId(),build.pairId(),build.attemptNo(),current.engineIdentity())) return false;
+            var disposition=stopped.receipt().facts().get("disposition");
+            if ("DELETED".equals(current.state()) || "REJECTED".equals(current.state()) && disposition!=null
+                    && java.util.Set.of("cancelled","never_started").contains(disposition.getAsString())) {
+                return SolverBuildStagingCleanup.purge(connection,build,resource,entries);
+            }
+            if (disposition!=null) return false;
+            var release=findReleaseDecision(connection,build,resource).orElse(null);
+            if (release==null || !current.engineIdentity().equals(release.engineIdentity())) return false;
+            boolean success;
+            try (var query=connection.prepareStatement("SELECT status_code=7,starexec.IsTerminalPairStatus(status_code)"
+                    +" AND status_code NOT IN (7,21) FROM starexec.job_pairs WHERE id=?")) {
+                query.setInt(1,build.pairId());
+                try (var row=query.executeQuery()) {
+                    if (!row.next() || !row.getBoolean(1) && !row.getBoolean(2)) return false;
+                    success=row.getBoolean(1);
+                }
+            }
+            store.requireUnchanged();
+            boolean conserved=success?SolverBuildPublication.publish(connection,build,store.root(),resource.capacityBytes(),entries)
+                    :SolverBuildPublication.recordFailure(connection,build,store.root(),resource.capacityBytes(),entries);
+            if (!conserved) return false;
+            store.requireUnchanged();
+            return SolverBuildStagingCleanup.purge(connection,build,resource,entries);
+        }
+    }
 
     /** Owns the standalone connection; preparation commits its reservation before writing files. */
     public static BuildExecutionContext prepareRegistered(int pairId, List<Path> protectedRoots)
