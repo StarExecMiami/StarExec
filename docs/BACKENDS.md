@@ -51,8 +51,8 @@ backend:
 
 ### Default startup policy (`make start`)
 
-`make start` defaults to the Podman deployment path for better production parity and
-safer execution of untrusted solver binaries.
+`make start` defaults to the Podman deployment path for container runtime parity.
+This default does not establish isolation of shared application data from solvers.
 
 - **Default**: Podman backend (container isolation)
 - **Fallback (explicit opt-in)**: Local backend for trusted-only debugging workflows
@@ -115,9 +115,20 @@ or backend mismatch incidents across releases).
 | Resource limits     | ⚠️    | ✅     | ✅                                         | ✅   | ✅   |
 | Job persistence     | ❌    | ✅     | ✅                                         | ✅   | ✅   |
 | Horizontal scaling  | ❌    | ❌     | Limited by current implementation maturity | ✅   | ✅   |
-| Untrusted code safe | ❌    | ✅     | ✅                                         | ⚠️   | ⚠️   |
+| Untrusted code safe | ❌    | ⚠️     | ⚠️                                         | ⚠️   | ⚠️   |
 | Setup complexity    | Low   | Medium | High                                       | High | High |
 | Maintenance         | Low   | Medium | High                                       | High | High |
+
+Podman and Kubernetes ordinary jobs currently mount shared application data with
+write access. Container namespaces and CPU/memory limits do not restrict writes
+through those mounts. Read-only published solver inputs protect those inputs;
+they do not isolate the remaining job data or enforce a per-execution disk limit.
+See [Bounded execution storage](EXECUTION_STORAGE.md) for the required private
+input/output boundary. Until that boundary is enforced for every execution path,
+use trusted workloads and do not treat either backend as safe for hostile code.
+Mount access semantics are documented by
+[Podman](https://docs.podman.io/en/stable/markdown/podman-run.1.html#volume-v-source-volume-host-dir-container-dir-options)
+and [Kubernetes](https://kubernetes.io/docs/concepts/storage/volumes/).
 
 ### Performance Comparison
 
@@ -230,9 +241,11 @@ reserve SMT siblings.
 
 ### Overview
 
-The Podman Backend executes jobs in isolated containers. It provides strong isolation, enforced resource limits, and database-backed job persistence.
+The Podman Backend executes jobs in containers with CPU/memory limits and
+database-backed job persistence. Mounted data remains subject to the shared
+storage limitations described above.
 
-**Best for:** Production single-node deployments, untrusted code
+**Best for:** Single-node container deployments with trusted workloads
 
 **Not for:** Multi-node scaling (use Kubernetes instead)
 
@@ -1034,21 +1047,25 @@ Jobs run as the application user with full host access.
 
 ### Podman Backend
 
-Recommended for untrusted code
+Container controls do not establish isolation of shared writable application data.
 
-- Container isolation via namespaces
-- Resource limits enforced by cgroups
-- Rootless mode for additional security
-- No host access from containers
+- Namespaces restrict process scope; mounted host paths remain accessible.
+- Cgroups enforce configured CPU/memory limits, not per-execution disk capacity.
+- Rootless mode reduces host privileges but does not prevent writes allowed to the
+  application user through shared mounts.
+- Published solver inputs are read-only; ordinary job output still requires the
+  private storage boundary described in [Bounded execution storage](EXECUTION_STORAGE.md).
 
 ### Kubernetes Backend
 
-Safe for untrusted code
+Shared writable data volumes remain accessible to job pods. Kubernetes controls
+must be configured and verified together with per-execution storage isolation.
 
-- Pod security policies
-- NetworkPolicies for isolation
-- Resource quotas
-- RBAC for access control
+- Pod security settings limit privileges and host integration.
+- NetworkPolicies govern network traffic, not mounted filesystem access.
+- Resource quotas govern admitted resources; they do not establish a hard write
+  limit on a shared persistent volume.
+- RBAC controls Kubernetes API access, not files exposed by a volume mount.
 
 ### HPC Backends (SGE/OAR)
 
