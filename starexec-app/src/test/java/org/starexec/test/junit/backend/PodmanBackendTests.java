@@ -254,7 +254,8 @@ public class PodmanBackendTests {
         throws Exception {
         String containerId = "reconcile-uninspectable";
 
-        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class)) {
+        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class);
+             var artifacts=mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
             invokeProcessReconciledContainer(4242, containerId);
 
             jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
@@ -269,7 +270,8 @@ public class PodmanBackendTests {
         throws Exception {
         int pairId = 4242;
 
-        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class)) {
+        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class);
+             var artifacts=mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
             jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
                     StatusCode.STATUS_ENQUEUED.getVal()))
                 .thenReturn(Collections.emptyList());
@@ -337,7 +339,8 @@ public class PodmanBackendTests {
 
         setJobMonitor(new ContainerJobMonitor(backend));
 
-        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class)) {
+        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class);
+             var artifacts=mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
             jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
                     StatusCode.STATUS_ENQUEUED.getVal()))
                 .thenReturn(Collections.emptyList());
@@ -2200,7 +2203,8 @@ public class PodmanBackendTests {
         when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
         when(mockContainerState.getRunning()).thenReturn(true);
 
-        try (MockedStatic<JobPairs> jobPairsMock = mockStatic(JobPairs.class)) {
+        try (MockedStatic<JobPairs> jobPairsMock = mockStatic(JobPairs.class);
+             var artifacts=mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
             JobPairs.PairStatusLookupResult lookup =
                 mock(JobPairs.PairStatusLookupResult.class);
             when(lookup.isMissing()).thenReturn(false);

@@ -347,6 +347,113 @@ public final class SolverBuildArtifacts {
         }
     }
 
+    /** Cancellation history survives staging settlement and a lost provider-removal response. */
+    public static List<Artifact> refusedPodmanCreations() throws SQLException {
+        try (Connection connection=Common.getConnection();var query=connection.prepareStatement(
+                "SELECT * FROM starexec.solver_build_artifacts WHERE state IN ('REJECTED','DELETED')"
+                +" AND execution_stopped_at IS NOT NULL AND engine_identity LIKE 'podman:%'"
+                +" AND execution_stop_receipt_payload::jsonb->'facts'->>'reason'='admission_refused' ORDER BY id")) {
+            List<Artifact> artifacts=new ArrayList<>();
+            try (var rows=query.executeQuery()) { while (rows.next()) artifacts.add(artifact(rows)); }
+            return List.copyOf(artifacts);
+        }
+    }
+
+    /** Call only after exact provider absence and a safe execution census; no payload ever started. */
+    public static JobPairs.NeverStartedRetryResult retryRefusedPodmanCreation(BuildExecutionContext build,
+            int execution,String container,SolverBuildStopReceipt receipt) throws SQLException {
+        try (Connection connection=Common.getConnection()) {
+            return retryRefusedPodmanCreation(connection,build,execution,container,receipt);
+        }
+    }
+
+    /** Reuses the bounded retry lifecycle while fencing the immutable non-execution and current attempt. */
+    public static JobPairs.NeverStartedRetryResult retryRefusedPodmanCreation(Connection connection,
+            BuildExecutionContext build,int execution,String container,SolverBuildStopReceipt receipt) throws SQLException {
+        if (!ExecutionStorageLeases.isRefusedPodmanCreation(build,execution,container,receipt)) {
+            throw new SQLException("Refused build retry requires exact non-execution facts");
+        }
+        return Common.runTransactional(connection,transaction->{
+            int job;
+            try (var lock=transaction.prepareStatement("SELECT j.id FROM starexec.jobs j"
+                    +" JOIN starexec.job_pairs p ON p.job_id=j.id WHERE p.id=? AND j.buildjob"
+                    +" AND j.deleted IS NOT TRUE AND j.killed IS NOT TRUE FOR UPDATE OF j NOWAIT")) {
+                lock.setInt(1,build.pairId());
+                try (var rows=lock.executeQuery()) {
+                    if (!rows.next()) return JobPairs.NeverStartedRetryResult.STALE;
+                    job=rows.getInt(1);
+                }
+            }
+            int status;
+            try (var lock=transaction.prepareStatement("SELECT status_code,job_id FROM starexec.job_pairs WHERE id=? FOR UPDATE NOWAIT")) {
+                lock.setInt(1,build.pairId());
+                try (var rows=lock.executeQuery()) {
+                    if (!rows.next() || rows.getInt(2)!=job) return JobPairs.NeverStartedRetryResult.STALE;
+                    status=rows.getInt(1);
+                    if (status!=1 && status!=2) return JobPairs.NeverStartedRetryResult.STALE;
+                }
+            }
+            try (var lock=transaction.prepareStatement("SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=? FOR UPDATE NOWAIT")) {
+                lock.setInt(1,build.pairId());
+                try (var rows=lock.executeQuery()) {
+                    if (!rows.next() || rows.getInt(1)!=build.attemptNo()) return JobPairs.NeverStartedRetryResult.STALE;
+                }
+            }
+            var observed=find(transaction,build.pairId(),build.attemptNo()).orElseThrow(
+                    ()->new SQLException("Cancelled build history is unavailable"));
+            try (var lock=transaction.prepareStatement("SELECT id FROM starexec.users WHERE id=? FOR UPDATE NOWAIT")) {
+                lock.setInt(1,observed.ownerId());
+                try (var rows=lock.executeQuery()) { if (!rows.next()) throw new SQLException("Build owner is unavailable"); }
+            }
+            try (var lock=transaction.prepareStatement("SELECT deleted,recycled,user_id,path,build_generation FROM starexec.solvers WHERE id=? FOR UPDATE NOWAIT")) {
+                lock.setInt(1,observed.solverId());
+                try (var rows=lock.executeQuery()) {
+                    if (!rows.next() || rows.getBoolean(1) || rows.getBoolean(2) || rows.getInt(3)!=observed.ownerId()
+                            || !observed.sourcePath().equals(rows.getString(4)) || rows.getLong(5)!=observed.generation()) {
+                        return JobPairs.NeverStartedRetryResult.STALE;
+                    }
+                }
+            }
+            try (var lock=transaction.prepareStatement("SELECT a.id FROM starexec.solver_build_artifacts a"
+                    +" JOIN starexec.job_pairs p ON p.id=a.pair_id JOIN starexec.jobs j ON j.id=p.job_id"
+                    +" JOIN starexec.solvers s ON s.id=a.solver_id JOIN starexec.benchmarks b ON b.id=p.bench_id"
+                    +" WHERE a.id=? AND a.origin_pair_id=? AND a.pair_id=a.origin_pair_id AND a.attempt_no=? AND a.execution_token=?"
+                    +" AND a.source_path=? AND a.staging_path=? AND a.engine_identity=? AND a.state='REJECTED'"
+                    +" AND a.execution_stopped_at IS NOT NULL AND a.execution_stop_receipt_payload=? AND a.execution_stop_receipt_sha256=?"
+                    +" AND s.user_id=a.origin_owner_id AND j.user_id=a.origin_owner_id AND s.deleted IS NOT TRUE AND s.recycled IS NOT TRUE"
+                    +" AND s.path=a.source_path AND s.build_generation=a.build_generation AND s.build_status IN (0,3)"
+                    +" AND b.id=a.helper_benchmark_id AND b.deleted IS NOT TRUE"
+                    +" AND NOT EXISTS (SELECT 1 FROM starexec.solver_build_release_decisions d WHERE d.artifact_id=a.id)"
+                    +" AND NOT EXISTS (SELECT 1 FROM starexec.jobpair_stage_data sd WHERE sd.jobpair_id=p.id"
+                    +" AND (sd.status_code NOT IN (1,2) OR sd.disk_size IS DISTINCT FROM 0))"
+                    +" AND NOT EXISTS (SELECT 1 FROM starexec.jobs newer JOIN starexec.job_pairs np ON np.job_id=newer.id"
+                    +" JOIN starexec.jobpair_stage_data ns ON ns.jobpair_id=np.id AND ns.stage_number=np.primary_jobpair_data"
+                    +" WHERE newer.buildjob AND ns.solver_id=s.id AND newer.id>j.id) FOR UPDATE OF a NOWAIT")) {
+                Object[] values={build.artifactId(),build.pairId(),build.attemptNo(),build.token(),build.source().toString(),
+                        build.staging().toString(),"podman:"+execution+":"+container,receipt.payload(),receipt.sha256()};
+                for (int i=0;i<values.length;i++) lock.setObject(i+1,values[i]);
+                try (var rows=lock.executeQuery()) { if (!rows.next()) throw new SQLException("Cancelled build retry ownership changed"); }
+            }
+            boolean spent;
+            try (var marker=transaction.prepareStatement("SELECT pair_id FROM starexec.pairs_rerun WHERE pair_id=?")) {
+                marker.setInt(1,build.pairId());try (var rows=marker.executeQuery()) { spent=rows.next(); }
+            }
+            if (spent) {
+                try (var finish=transaction.prepareStatement("SELECT starexec.SetBrokenPairStatus(?,?,9)")) {
+                    finish.setInt(1,build.pairId());finish.setInt(2,status);Common.executeAndDrain(finish);
+                }
+                return JobPairs.NeverStartedRetryResult.FILED;
+            }
+            try (var retry=transaction.prepareStatement("SELECT starexec.RerunJobPairsBatchCore(ARRAY[?]::INTEGER[])")) {
+                retry.setInt(1,build.pairId());Common.executeAndDrain(retry);
+            }
+            try (var marker=transaction.prepareStatement("INSERT INTO starexec.pairs_rerun(pair_id) VALUES (?)")) {
+                marker.setInt(1,build.pairId());marker.executeUpdate();
+            }
+            return JobPairs.NeverStartedRetryResult.REQUEUED;
+        });
+    }
+
     public static boolean prepare(int pairId, int attemptNo, UUID token, Path staging) throws SQLException {
         try (Connection con = Common.getConnection()) { return prepare(con, pairId, attemptNo, token, staging); }
     }

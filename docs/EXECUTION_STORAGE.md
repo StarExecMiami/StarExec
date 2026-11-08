@@ -277,10 +277,23 @@ authorize launch, and reactivation of the job cannot admit the rejected artifact
 Only an acknowledged cancellation permits removal without force. An unknown
 commit retains the provider and capacity; an exact repeat acknowledges the saved
 receipt without another binding write or allowance reservation. After confirmed
-removal, the pair is deferred rather than assigned a terminal solver failure.
+removal and a safe execution census, recovery advances only the same current
+attempt through the bounded automatic retry lifecycle. The rejected artifact and
+receipt remain immutable; the new attempt receives a separate planned artifact.
+A killed, deleted, terminal or newer attempt is never reset. The existing single
+automatic retry limit still applies; no solver result or measurement is invented.
 Periodic cancellation cleanup independently settles staging without publication.
 
-Unknown creation outcomes, controller-restart reconciliation and cancellation
+Startup also recovers cancelled created resources from conserved catalog history,
+including a lost cancellation or removal response after staging was purged. It
+rechecks the exact engine identity, receipt and never-started physical state before
+no-force removal, then positively verifies absence and the execution census. A
+changed or uncertain resource is retained and excluded from completion ingestion.
+This readback never reserves storage again. Only matching in-memory execution
+ownership can release a held submission slot; repeated cold recovery creates none.
+Registered builds without this proof cannot use the ordinary missing-container reset.
+
+Unknown creation outcomes, uncertain start/release, and cancellation
 racing an already conserved ordinary completion receipt still require compatible
 recovery handling. Retain their resource ownership and charges; do not substitute
 a Kubernetes non-execution receipt or infer settlement from a terminal pair status.

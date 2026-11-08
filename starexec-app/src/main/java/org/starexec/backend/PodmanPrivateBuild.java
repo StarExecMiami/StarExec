@@ -222,6 +222,15 @@ public final class PodmanPrivateBuild {
         return ExecutionStorageLeases.cancelRefusedPodmanCreation(build,resource,execution,container,receipt);
     }
 
+    /** Provider absence must precede retrying the same catalogued non-execution. */
+    public void retryRefusedCreation(String container,int execution) throws SQLException,IOException {
+        var artifact=org.starexec.data.database.SolverBuildArtifacts.find(build.pairId(),build.attemptNo()).orElseThrow(
+                ()->new SQLException("Cancelled build history is unavailable"));
+        var restored=PodmanBuildStopObserver.restoreRefusedCreation(artifact);
+        require(restored.execution()==execution && restored.container().equals(container),"Refused build recovery identity differs");
+        org.starexec.data.database.SolverBuildArtifacts.retryRefusedPodmanCreation(build,execution,container,restored.receipt());
+    }
+
     /** Execute only against the exact verified held resource; zero swap is independently required. */
     public static List<String> observationCommand() {
         List<String> command=new ArrayList<>(BuildExecutionRuntime.observationCommand());

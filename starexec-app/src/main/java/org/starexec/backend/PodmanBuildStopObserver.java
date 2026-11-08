@@ -18,6 +18,37 @@ final class PodmanBuildStopObserver {
 
     private PodmanBuildStopObserver() { }
 
+    record RefusedCreation(SolverBuildArtifacts.Artifact artifact, int execution, SolverBuildStopReceipt receipt) {
+        String container() { return receipt.resourceId(); }
+        BuildExecutionContext build() {
+            return new BuildExecutionContext(artifact.id(),artifact.pairId(),artifact.attemptNo(),artifact.executionToken(),
+                    java.nio.file.Path.of(artifact.sourcePath()),java.nio.file.Path.of(artifact.stagingPath()));
+        }
+    }
+
+    /** Restores immutable cancellation history even after staging has been settled or purged. */
+    static RefusedCreation restoreRefusedCreation(SolverBuildArtifacts.Artifact artifact) throws SQLException {
+        require(artifact!=null && artifact.executionToken()!=null && artifact.stoppedAt()!=null
+                && ("REJECTED".equals(artifact.state()) || "DELETED".equals(artifact.state())),
+                "Build has no conserved created cancellation");
+        var receipt=SolverBuildArtifacts.findStopReceipt(artifact.pairId(),artifact.attemptNo()).orElseThrow(
+                ()->new IllegalStateException("Created cancellation receipt is unavailable")).receipt();
+        String[] engine=artifact.engineIdentity()==null?new String[0]:artifact.engineIdentity().split(":",-1);
+        require(engine.length==3 && "podman".equals(engine[0]) && receipt.resourceId().equals(engine[2]),
+                "Created cancellation engine identity differs");
+        int execution=Integer.parseInt(engine[1]);
+        var restored=new RefusedCreation(artifact,execution,receipt);
+        require(org.starexec.data.database.ExecutionStorageLeases.isRefusedPodmanCreation(
+                restored.build(),execution,receipt.resourceId(),receipt),"Created cancellation facts are invalid");
+        return restored;
+    }
+
+    /** A stored cancellation is not authority to remove a resource whose physical facts changed. */
+    static void requireRefusedCreation(InspectContainerResponse inspection, RefusedCreation restored) throws SQLException {
+        var receipt=cancelledCreationReceipt(inspection,restored.container(),restored.build(),restored.execution());
+        require(restored.receipt().payload().equals(receipt.payload()),"Recovered cancellation receipt changed");
+    }
+
     static boolean isBuild(InspectContainerResponse inspection) {
         require(inspection != null && inspection.getConfig() != null, "Container ownership inspection is unavailable");
         return inspection.getConfig().getLabels() != null

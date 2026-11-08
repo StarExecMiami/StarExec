@@ -1811,6 +1811,12 @@ public class PodmanBackend implements Backend {
                 + "; cleanup is unresolved, so its container and capacity remain tracked");
             return false;
         }
+        try {
+            privateBuild.retryRefusedCreation(containerId,execId);
+        } catch (Exception unknown) {
+            log.warn("Refused build retry is unresolved; execution remains tracked",unknown);
+            return false;
+        }
         execIdToContainerId.remove(execId, containerId);
         containerIdToPairId.invalidate(containerId);
         throw new SubmissionDeferredException("Build admission was refused; its cancelled resource was conserved and removed");
@@ -2742,9 +2748,51 @@ public class PodmanBackend implements Backend {
      *   <tr><td>RUNNING</td><td>none / legacy label</td><td>leave unresolved for intervention</td></tr>
      * </table>
      */
+    private int reconcileRefusedBuildCreations(Set<String> excluded,Set<Integer> registeredPairs) throws java.sql.SQLException {
+        int highestExecution=0;
+        for (var artifact:org.starexec.data.database.SolverBuildArtifacts.refusedPodmanCreations()) {
+            registeredPairs.add(artifact.pairId());
+            String[] engine=artifact.engineIdentity()==null?new String[0]:artifact.engineIdentity().split(":",-1);
+            if (engine.length==3 && engine[2].matches("[0-9a-f]{64}")) excluded.add(engine[2]);
+            try {
+                var restored=PodmanBuildStopObserver.restoreRefusedCreation(artifact);
+                String container=restored.container();int execution=restored.execution();
+                highestExecution=Math.max(highestExecution,execution);
+                try {
+                    var inspection=dockerClient.inspectContainerCmd(container).exec();
+                    PodmanBuildStopObserver.requireRefusedCreation(inspection,restored);
+                    deleteContainerArtifacts(container,false);
+                } catch (NotFoundException absent) {
+                    // A lost removal response can leave only immutable cancellation history.
+                }
+                try {
+                    dockerClient.inspectContainerCmd(container).exec();
+                    throw new IllegalStateException("Refused build resource is still present");
+                } catch (NotFoundException absent) {
+                    if (observeExecutionSafety(execution)!=KillOutcome.CONFIRMED_SAFE) {
+                        throw new IllegalStateException("Refused execution census is unresolved");
+                    }
+                }
+                org.starexec.data.database.SolverBuildArtifacts.retryRefusedPodmanCreation(
+                        restored.build(),execution,container,restored.receipt());
+                buildExecutions.remove(execution,container);
+                if (execIdToContainerId.remove(execution,container)) {
+                    containerIdToPairId.invalidate(container);
+                    releaseSubmissionSlot(execution,"recovered refused build creation");
+                }
+            } catch (Exception unresolved) {
+                log.warn("Created build cancellation recovery remains unresolved for pair "+artifact.pairId(),unresolved);
+            }
+        }
+        return highestExecution;
+    }
+
     private void reconcileOrphanedPairs() {
         try {
             log.info("Starting orphaned-pair reconciliation...");
+            Set<String> retainedContainerIds = new HashSet<>();
+            Set<Integer> registeredCancelledPairs = new HashSet<>();
+            int maxRecoveredExecId = reconcileRefusedBuildCreations(retainedContainerIds,registeredCancelledPairs);
 
             // ---- Step 1: build container→pairId maps from V2 labels only ----
             Map<Integer, String> pairIdToRunningContainer = new HashMap<>();
@@ -2761,6 +2809,7 @@ public class PodmanBackend implements Backend {
                 .exec();
 
             for (Container container : allContainers) {
+                if (retainedContainerIds.contains(container.getId())) continue;
                 String kindLabel = container.getLabels().get(LABEL_KIND);
                 if (KIND_MAINTENANCE.equals(kindLabel)) {
                     maintenanceContainers++;
@@ -2825,8 +2874,6 @@ public class PodmanBackend implements Backend {
 
             int enqueuedReset = 0, enqueuedProcessed = 0, enqueuedRebuilt = 0;
             int runningUnresolved = 0, runningProcessed = 0, runningRebuilt = 0;
-            int maxRecoveredExecId = 0;
-            Set<String> retainedContainerIds = new HashSet<>();
 
             // ---- Step 3a: reconcile ENQUEUED pairs ----
             for (int pairId : enqueuedIds) {
@@ -2850,6 +2897,11 @@ public class PodmanBackend implements Backend {
                         retainedContainerIds.add(containerId);
                     }
                 } else {
+                    if (registeredCancelledPairs.contains(pairId)
+                            || org.starexec.data.database.SolverBuildArtifacts.hasManagedHistory(pairId)) {
+                        log.warn("Registered build pair "+pairId+" requires its conserved recovery outcome; no legacy reset applied");
+                        continue;
+                    }
                     JobPairs.ConditionalPairUpdateResult result =
                         JobPairs.tryResetEnqueuedToPending(pairId);
                     if (result == JobPairs.ConditionalPairUpdateResult.UPDATED) {

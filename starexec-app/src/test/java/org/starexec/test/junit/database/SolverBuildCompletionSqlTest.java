@@ -14,6 +14,7 @@ import org.starexec.backend.storage.DedicatedStorageResource;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
+import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.ExecutionStorageLeases;
 import org.starexec.data.database.SolverBuildArtifacts;
 import org.starexec.data.database.Solvers;
@@ -273,6 +274,135 @@ class SolverBuildCompletionSqlTest extends Common {
         record(store);assertEquals(originalBytes,usage());assertEquals(0,activeLeases());
         assertFalse(ExecutionStorageLeases.cancelRefusedPodmanCreation(connection,build,resource,1001,container,receipt));
         assertEquals(originalBytes,usage());assertEquals(0,activeLeases());
+    }
+
+    private SolverBuildStopReceipt conserveRefusedCreation() throws Exception {
+        String container="c".repeat(64);var receipt=createdReceipt(container,createdFacts());
+        assertTrue(ExecutionStorageLeases.cancelRefusedPodmanCreation(connection,build,resource,1001,container,receipt));
+        return receipt;
+    }
+
+    private JobPairs.NeverStartedRetryResult retryRefused(SolverBuildStopReceipt receipt) throws Exception {
+        return SolverBuildArtifacts.retryRefusedPodmanCreation(connection,build,1001,"c".repeat(64),receipt);
+    }
+
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void refusedRecoveryCreatesOneFreshAttemptWithoutReacquiringOldStorage(boolean alreadyPurged) throws Exception {
+        var receipt=conserveRefusedCreation();
+        number(connection,"UPDATE starexec.jobs SET paused=true WHERE id=(SELECT job_id FROM starexec.job_pairs WHERE id=?) RETURNING id",pair);
+        if (alreadyPurged) record(store);
+        long before=usage();
+        assertEquals(JobPairs.NeverStartedRetryResult.REQUEUED,retryRefused(receipt));
+        var successor=SolverBuildArtifacts.findCurrent(connection,pair).orElseThrow();
+        assertNotEquals(build.artifactId(),successor.id());assertEquals(2,successor.attemptNo());
+        assertEquals("PLANNED",successor.state());assertNull(successor.executionToken());assertNull(successor.stagingPath());
+        assertEquals(1,number(connection,"SELECT status_code FROM starexec.job_pairs WHERE id=?",pair));
+        assertEquals(1,number(connection,"SELECT count(*) FROM starexec.pairs_rerun WHERE pair_id=?",pair));
+        assertEquals(before,usage());
+        assertEquals(JobPairs.NeverStartedRetryResult.STALE,retryRefused(receipt));
+        assertEquals(2,SolverBuildArtifacts.findCurrent(connection,pair).orElseThrow().attemptNo());
+        assertEquals(receipt.payload(),SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt().payload());
+        record(store);record(store);
+        assertEquals(originalBytes,usage());assertEquals(0,activeLeases());assertFalse(Files.exists(build.staging()));
+        assertTrue(SolverBuildArtifacts.findOutputManifest(connection,build.artifactId()).isEmpty());
+        assertTrue(ExecutionStorageLeases.findReleaseDecision(connection,build,resource).isEmpty());
+        assertEquals("original source\n",Files.readString(source.resolve("starexec_build")));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"killed","deleted","terminal","running","rerun","solver-deleted","solver-recycled"})
+    void refusedRecoveryCannotResurrectARevokedOrNewerAttempt(String changed) throws Exception {
+        var receipt=conserveRefusedCreation();
+        switch(changed) {
+            case "killed","deleted" -> number(connection,"UPDATE starexec.jobs SET "+changed+"=true WHERE id=(SELECT job_id FROM starexec.job_pairs WHERE id=?) RETURNING id",pair);
+            case "terminal" -> number(connection,"UPDATE starexec.job_pairs SET status_code=21 WHERE id=? RETURNING id",pair);
+            case "running" -> number(connection,"UPDATE starexec.job_pairs SET status_code=4 WHERE id=? RETURNING id",pair);
+            case "solver-deleted","solver-recycled" -> number(connection,"UPDATE starexec.solvers SET "+changed.substring(7)+"=true WHERE id=? RETURNING id",solver);
+            case "rerun" -> { try(var query=connection.prepareStatement("SELECT starexec.RerunJobPairsBatchCore(ARRAY[?]::INTEGER[])")) {
+                query.setInt(1,pair);Common.executeAndDrain(query);
+            } }
+            default -> throw new AssertionError(changed);
+        }
+        long attempt=number(connection,"SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",pair);
+        long status=number(connection,"SELECT status_code FROM starexec.job_pairs WHERE id=?",pair);
+        long before=usage();
+        assertEquals(JobPairs.NeverStartedRetryResult.STALE,retryRefused(receipt));
+        assertEquals(attempt,number(connection,"SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",pair));
+        assertEquals(status,number(connection,"SELECT status_code FROM starexec.job_pairs WHERE id=?",pair));
+        assertEquals(0,number(connection,"SELECT count(*) FROM starexec.pairs_rerun WHERE pair_id=?",pair));
+        assertEquals(before,usage());
+    }
+
+    @Test void refusedRecoveryCannotSubstituteAReceiptOrRetryWithoutCancellation() throws Exception {
+        var uncommitted=createdReceipt("c".repeat(64),createdFacts());
+        assertThrows(SQLException.class,()->retryRefused(uncommitted));
+        var receipt=conserveRefusedCreation();var changed=receipt.facts();changed.addProperty("image_id","sha256:"+"e".repeat(64));
+        var foreign=createdReceipt("c".repeat(64),changed);
+        assertThrows(SQLException.class,()->retryRefused(foreign));
+        assertEquals(1,number(connection,"SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",pair));
+        assertEquals(0,number(connection,"SELECT count(*) FROM starexec.pairs_rerun WHERE pair_id=?",pair));
+    }
+
+    @Test void alreadyDeferredRecoveryCannotAdoptOrSettleTheNextAttemptsLease() throws Exception {
+        var receipt=conserveRefusedCreation();record(store);
+        assertEquals(0,activeLeases());
+        number(connection,"UPDATE starexec.job_pairs SET status_code=1 WHERE id=? RETURNING id",pair);
+        assertEquals(JobPairs.NeverStartedRetryResult.REQUEUED,retryRefused(receipt));
+        var successor=SolverBuildStaging.prepareLeased(connection,pair,2,resource,resource.capacityBytes());
+        assertNotEquals(build.token(),successor.token());assertNotEquals(build.staging(),successor.staging());
+        long before=usage();
+        assertEquals(JobPairs.NeverStartedRetryResult.STALE,retryRefused(receipt));record(store);
+        assertEquals(before,usage());assertTrue(Files.isDirectory(successor.staging()));
+        assertEquals(1,number(connection,"SELECT count(*) FROM starexec.solver_build_storage_leases WHERE artifact_id=? AND released_at IS NULL",successor.artifactId()));
+        assertEquals(0,activeLeases());assertFalse(Files.exists(build.staging()));
+        assertEquals(receipt.payload(),SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt().payload());
+    }
+
+    @Test void refusedRecoveryUsesTheExistingSingleAutomaticRetryLimit() throws Exception {
+        var receipt=conserveRefusedCreation();
+        number(connection,"INSERT INTO starexec.pairs_rerun(pair_id) VALUES (?) RETURNING pair_id",pair);
+        assertEquals(JobPairs.NeverStartedRetryResult.FILED,retryRefused(receipt));
+        assertEquals(9,number(connection,"SELECT status_code FROM starexec.job_pairs WHERE id=?",pair));
+        assertEquals(1,number(connection,"SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",pair));
+        assertTrue(SolverBuildArtifacts.findOutputManifest(connection,build.artifactId()).isEmpty());
+    }
+
+    @Test void refusedRecoveryRollbackDoesNotSpendItsRetryOrAdvanceTheArtifact() throws Exception {
+        var receipt=conserveRefusedCreation();long before=usage();var failing=spy(connection);
+        doThrow(new SQLException("Synthetic retry marker write failure")).when(failing).prepareStatement("INSERT INTO starexec.pairs_rerun(pair_id) VALUES (?)");
+        assertThrows(SQLException.class,()->SolverBuildArtifacts.retryRefusedPodmanCreation(failing,build,1001,"c".repeat(64),receipt));
+        assertTrue(connection.getAutoCommit());assertEquals(before,usage());
+        assertEquals(1,number(connection,"SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",pair));
+        assertEquals(0,number(connection,"SELECT count(*) FROM starexec.pairs_rerun WHERE pair_id=?",pair));
+        assertEquals(JobPairs.NeverStartedRetryResult.REQUEUED,retryRefused(receipt));
+    }
+
+    @Test void refusedRecoveryReadbackCannotRepeatACommitWhoseResponseWasLost() throws Exception {
+        var receipt=conserveRefusedCreation();var uncertain=spy(connection);
+        doAnswer(call->{call.callRealMethod();throw new SQLException("Synthetic lost retry commit response");}).when(uncertain).commit();
+        assertThrows(SQLException.class,()->SolverBuildArtifacts.retryRefusedPodmanCreation(uncertain,build,1001,"c".repeat(64),receipt));
+        assertTrue(connection.getAutoCommit());
+        assertEquals(JobPairs.NeverStartedRetryResult.STALE,retryRefused(receipt));
+        assertEquals(2,number(connection,"SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",pair));
+        assertEquals(1,number(connection,"SELECT count(*) FROM starexec.pairs_rerun WHERE pair_id=?",pair));
+    }
+
+    @Test void refusedRecoveryCannotApplyTheOriginalJobDecisionToAConcurrentlyMovedPair() throws Exception {
+        var receipt=conserveRefusedCreation();var interleaved=spy(connection);
+        int replacement=(int)number(connection,"INSERT INTO starexec.jobs(user_id,name,total_pairs,disk_size,buildjob,killed)"
+                +" VALUES (?,'revoked replacement',1,0,true,true) RETURNING id",owner);
+        doAnswer(call->{
+            try(var other=Common.getConnection()) {
+                number(other,"UPDATE starexec.job_pairs SET job_id=? WHERE id=? RETURNING id",replacement,pair);
+            }
+            return call.callRealMethod();
+        }).when(interleaved).prepareStatement("SELECT status_code,job_id FROM starexec.job_pairs WHERE id=? FOR UPDATE NOWAIT");
+        long before=usage();
+        assertEquals(JobPairs.NeverStartedRetryResult.STALE,
+                SolverBuildArtifacts.retryRefusedPodmanCreation(interleaved,build,1001,"c".repeat(64),receipt));
+        assertEquals(replacement,number(connection,"SELECT job_id FROM starexec.job_pairs WHERE id=?",pair));
+        assertEquals(1,number(connection,"SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",pair));
+        assertEquals(0,number(connection,"SELECT count(*) FROM starexec.pairs_rerun WHERE pair_id=?",pair));
+        assertEquals(before,usage());
     }
 
     @ParameterizedTest @ValueSource(strings={"cancelled","never_started"})

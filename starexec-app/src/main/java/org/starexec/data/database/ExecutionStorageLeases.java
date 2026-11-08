@@ -145,7 +145,7 @@ public final class ExecutionStorageLeases {
                                                        DedicatedStorageResource resource, int execution, String container,
                                                        org.starexec.data.to.SolverBuildStopReceipt receipt) throws SQLException {
         if (execution<1 || container==null || !container.matches("[0-9a-f]{64}")
-                || !createdCancellation(build,execution,container,receipt)) return false;
+                || !isRefusedPodmanCreation(build,execution,container,receipt)) return false;
         String engine="podman:"+execution+":"+container;
         return transact(connection,transaction->{
             resource.requireUnchanged();
@@ -197,9 +197,11 @@ public final class ExecutionStorageLeases {
         }
     }
 
-    private static boolean createdCancellation(BuildExecutionContext build,int execution,String container,
+    /** Validates conserved non-execution facts without reserving or inspecting mutable storage. */
+    public static boolean isRefusedPodmanCreation(BuildExecutionContext build,int execution,String container,
                                                  org.starexec.data.to.SolverBuildStopReceipt receipt) {
-        if (receipt==null || !"podman".equals(receipt.backend()) || !container.equals(receipt.resourceId())
+        if (build==null || execution<1 || container==null || !container.matches("[0-9a-f]{64}")
+                || receipt==null || !"podman".equals(receipt.backend()) || !container.equals(receipt.resourceId())
                 || !receipt.matches(build.artifactId(),build.pairId(),build.attemptNo(),"podman:"+execution+":"+container)) return false;
         try {
             var facts=receipt.facts();
