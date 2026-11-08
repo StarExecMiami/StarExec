@@ -250,9 +250,38 @@ equivalent to the requested termination signal; unrelated signals are refused.
 Completed private output is located through the versioned layout, exact admitted
 execution, stop receipt, active lease and conserved release decision. Runner
 environment and broad legacy mounts cannot redirect that locator. Unsupported
-build layouts remain unresolved. This connection does not replace immutable output
-publication, positive process termination or independent staging reclamation;
-those remain required before enabling the complete untrusted lifecycle.
+build layouts remain unresolved. The periodic build recorder applies conserved
+managed outcomes and reclaims staging only after immutable output readback.
+Positive process termination and independent staging reclamation remain required.
+
+### Immutable publication and Podman consumers
+
+Set `STAREXEC_BUILD_ARTIFACT_DIR` to an existing application-owned directory with
+mode `0700`. The controller checks ancestors, symlinks, kernel mount identity and
+physical overlap with shared data, job directories and registered execution roots.
+It never creates this root, changes its permissions or substitutes shared storage.
+The controller and local rootless provider must resolve the same paths; translated
+or remote storage mappings require a separately verified provider implementation.
+
+`SolverBuildRecorder` calls `SolverBuildCompletion` before its legacy recorder.
+Successful stopped builds publish executables and logs; failed builds conserve logs
+and preserve the original source. A terminal pair status alone cannot authorize
+either outcome. The conserved stop receipt, release decision, resource lease and
+exact current artifact must agree. Publication and staging accounting are separate;
+unavailable storage, quota or verification retains the unresolved staging allowance.
+
+Ordinary Podman jobs obtain published inputs from the catalog for their current
+attempt. Repeated stage references share one exact read-only solver bind; build
+logs and the parent store are not exposed. The prebuilt image is fixed by its
+immutable identity. Before its jobscript starts, a trusted launcher checks the
+source inode, kernel device/root and read-only mount, rejects nested mounts and
+writable physical aliases, and requires no-new-privileges without CAP_SYS_ADMIN.
+A changed catalog, source or creation policy defers execution or retains its exact
+container for observation. It cannot silently select an ordinary writable bind.
+
+This protects published solver inputs. Legacy data/output bindings still require
+the ordinary-job isolation work; this feature alone does not establish complete
+runner isolation or physical storage capacity.
 
 Completed pair metadata is read relative to an open directory through
 `DescriptorDirectory.readQuiescentText`. Each file must be regular, have stable
@@ -348,6 +377,18 @@ isolation and termination scope. No existing deployment is automatically migrate
 or made safe by adding this observer.
 
 ## Verification
+
+For artifact-store policy, published consumer guards and recorder compatibility:
+
+```sh
+mvn -B -pl starexec-app -Dtest=BuildArtifactStoreTest,PublishedSolverMountsTest,PodmanBackendTests,SolverBuildRecorderTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+```
+
+Against a disposable PostgreSQL database, `SolverBuildCompletionSqlTest` exercises
+the actual periodic caller, publication accounting and current-attempt consumer
+catalog. Run it after both a fresh migration and an upgrade. Its physical resource
+observation and provider stop receipts are synthetic; it does not attest deployed
+acceptance or provisioned capacity.
 
 For managed preparation, private provider orchestration and runtime validation:
 

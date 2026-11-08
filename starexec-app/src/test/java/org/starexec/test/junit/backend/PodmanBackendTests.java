@@ -34,6 +34,7 @@ import org.starexec.backend.PodmanPrivateBuild;
 import org.starexec.backend.storage.BuildExecutionMounts;
 import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.PublishedSolverInputs;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.jobs.JobManager;
 
@@ -87,6 +88,7 @@ public class PodmanBackendTests {
     private Path tempDir;
     private AutoCloseable mocks;
     private MockedStatic<PodmanPrivateBuild> privateBuildFactory;
+    private MockedStatic<PublishedSolverInputs> publishedInputs;
 
     // Test constants
     private static final String TEST_CONTAINER_ID = "abc123def456";
@@ -96,6 +98,8 @@ public class PodmanBackendTests {
     @BeforeEach
     public void setUp() throws Exception {
         mocks = MockitoAnnotations.openMocks(this);
+        publishedInputs = mockStatic(PublishedSolverInputs.class);
+        publishedInputs.when(() -> PublishedSolverInputs.forPair(anyInt(), any())).thenReturn(List.of());
 
         // Create temp directory for test files
         tempDir = Files.createTempDirectory("podman_backend_test");
@@ -114,6 +118,7 @@ public class PodmanBackendTests {
     @AfterEach
     public void tearDown() throws Exception {
         if (privateBuildFactory != null) privateBuildFactory.close();
+        if (publishedInputs != null) publishedInputs.close();
         if (mocks != null) {
             mocks.close();
         }

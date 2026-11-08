@@ -131,7 +131,7 @@ public final class PodmanPrivateBuild {
     }
 
     /** Socket path digits are never evidence of provider ownership or user mapping. */
-    private static BuildExecutionRuntime.Identity requireLocalRootlessProvider(DockerClient client, String socket)
+    static BuildExecutionRuntime.Identity requireLocalRootlessProvider(DockerClient client, String socket)
             throws IOException {
         require(socket!=null,"Private build provider socket is unavailable");
         Path endpoint=Path.of(socket.startsWith("unix://")?socket.substring(7):socket);

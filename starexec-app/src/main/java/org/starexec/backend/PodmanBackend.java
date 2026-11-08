@@ -1531,7 +1531,6 @@ public class PodmanBackend implements Backend {
 
         if (build != null) build.requireMatches(pairId, attemptNo);
 
-        log.info("Submitting job: " + jobName);
         log.debug("Working directory: " + workingDirectory);
         log.debug("Script path: " + scriptPath);
         log.debug("Log path: " + logPath);
@@ -1539,6 +1538,10 @@ public class PodmanBackend implements Backend {
 
         if (build != null && !usePrebuiltImage) {
             throw new SubmissionDeferredException("Private builds require a prebuilt runner image");
+        }
+        if (build == null && pairId > 0 && !usePrebuiltImage
+                && !org.starexec.data.database.PublishedSolverInputs.forPair(pairId,attemptNo).isEmpty()) {
+            throw new SubmissionDeferredException("Published solver inputs require a prebuilt runner image");
         }
 
         // Ensure legacy log directories only; private monitor files belong to the leased resource.
@@ -1568,6 +1571,7 @@ public class PodmanBackend implements Backend {
         );
 
         PodmanPrivateBuild privateBuild = null;
+        PublishedSolverMounts publishedInputs = null;
         List<String> entrypoint = List.of("/bin/bash");
         List<String> command = List.of(scriptPath);
         if (build != null) {
@@ -1584,6 +1588,27 @@ public class PodmanBackend implements Backend {
             workingDirectory = privateBuild.mounts().workingDirectory().toString();
             entrypoint = privateBuild.entrypoint();
             command = privateBuild.command();
+        } else if (pairId > 0) {
+            try {
+                var writableRoots = new ArrayList<Path>();
+                writableRoots.add(Path.of(containerDataPath));
+                writableRoots.add(Path.of(workingDirectory));
+                writableRoots.add(Path.of(EnvironmentConfig.getJobOutputDirectory()));
+                writableRoots.add(Path.of(EnvironmentConfig.getJobLogDirectory()));
+                if (logDir != null) writableRoots.add(logDir);
+                publishedInputs = PublishedSolverMounts.prepare(dockerClient,containerSocketPath,imageName,
+                    pairId,attemptNo,writableRoots);
+                if (publishedInputs != null) {
+                    hostConfig = publishedInputs.hostConfig(hostConfig);
+                    imageName = publishedInputs.image();
+                    entrypoint = publishedInputs.entrypoint();
+                    // A lost create reply cannot create another consumer under a different name.
+                    jobName = "starexec-pair-" + pairId + "-attempt-" + attemptNo;
+                }
+            } catch (IOException | java.sql.SQLException unavailable) {
+                log.warn("Published solver input validation unavailable for pair " + pairId,unavailable);
+                throw new SubmissionDeferredException("Published solver inputs are unavailable; pair stays queued");
+            }
         }
 
         // Get output directory for container communication (status.json, etc.)
@@ -1604,8 +1629,10 @@ public class PodmanBackend implements Backend {
             labels.put(PodmanBuildStopObserver.ARTIFACT_LABEL,Long.toString(build.artifactId()));
             labels.put(PodmanPrivateBuild.LAYOUT_LABEL,PodmanPrivateBuild.LAYOUT);
         }
+        if (publishedInputs != null) labels.put(PublishedSolverMounts.LABEL,PublishedSolverMounts.LAYOUT);
 
         // Log container creation parameters for debugging
+        log.info("Submitting job: " + jobName);
         log.info("Creating container with:");
         log.info("  Image: " + imageName);
         log.info("  Name: " + jobName);
@@ -1638,7 +1665,7 @@ public class PodmanBackend implements Backend {
                 .withEntrypoint(entrypoint.toArray(String[]::new))
                 .withCmd(command.toArray(String[]::new))
                 .withWorkingDir(workingDirectory);
-            if (privateBuild != null) {
+            if (privateBuild != null || publishedInputs != null) {
                 creation.withUser("0:0");
                 creation.withStopSignal("SIGTERM");
                 creation.withHealthcheck(new com.github.dockerjava.api.model.HealthCheck().withTest(List.of("NONE")));
@@ -1683,7 +1710,7 @@ public class PodmanBackend implements Backend {
                     workingDirectory,
                     entrypoint,
                     command,
-                    privateBuild != null
+                    privateBuild != null || publishedInputs != null
                 );
                 log.info("Container created via curl: " + containerId);
             } else {
@@ -1697,8 +1724,19 @@ public class PodmanBackend implements Backend {
         }
 
         // Start container (with post-failure verification to avoid duplicate retries)
-        if (build == null) {
+        if (build == null && publishedInputs == null) {
             startContainerWithVerification(containerId);
+        } else if (publishedInputs != null) {
+            execIdToContainerId.put(execId,containerId);
+            try {
+                publishedInputs.requireCreated(dockerClient.inspectContainerCmd(containerId).exec(),containerId,
+                    pairId,attemptNo,execId,command);
+                dockerClient.startContainerCmd(containerId).exec();
+            } catch (Exception unresolved) {
+                log.error("Published solver consumer start is unresolved for execution " + execId
+                    + "; container and capacity retained for observation",unresolved);
+                return execId;
+            }
         } else {
             buildExecutions.put(execId, containerId);
             execIdToContainerId.put(execId, containerId);
