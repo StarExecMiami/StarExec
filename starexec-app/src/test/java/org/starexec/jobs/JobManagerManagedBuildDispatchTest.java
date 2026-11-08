@@ -8,8 +8,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 import org.starexec.backend.Backend;
+import org.starexec.backend.BuildExecutionContext;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.ExecutionStorageLeases;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.database.Queues;
 import org.starexec.data.database.SolverBuildArtifacts;
@@ -26,6 +28,7 @@ import org.starexec.data.to.pipelines.JoblineStage;
 import org.starexec.data.to.pipelines.StageAttributes;
 
 import java.lang.reflect.Field;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
@@ -46,6 +49,8 @@ class JobManagerManagedBuildDispatchTest {
     private Object originalTemplate;
     private boolean managedHistory;
     private boolean historyReadFails;
+    private boolean leasedStagingRequired;
+    private String preparationFailure;
 
     @BeforeEach void saveGlobals() throws Exception {
         originalBackend = R.BACKEND;
@@ -96,13 +101,41 @@ class JobManagerManagedBuildDispatchTest {
         dispatch(true, Optional.of(artifact("planned")), false, true, true);
     }
 
+    @Test void dedicatedBackendReceivesThePreparedContextWithoutReplacingLegacyLogs() throws Exception {
+        leasedStagingRequired = true;
+        dispatch(true, Optional.of(artifact("planned")), false, false, true);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sql", "io", "null"})
+    void failedPreparationNeverFallsBackToLegacySubmission(String failure) throws Exception {
+        leasedStagingRequired = true;
+        preparationFailure = failure;
+        dispatch(true, Optional.of(artifact("planned")), false, true, true);
+    }
+
+    @Test void unsupportedDedicatedBackendDefersBeforeAllocatingStorage() throws Exception {
+        leasedStagingRequired = true;
+        dispatch(true, Optional.of(artifact("planned")), false, true, false);
+    }
+
+    @Test void ordinaryJobsDoNotAllocateBuildStorageEvenWhenTheBackendRequiresLeases() throws Exception {
+        leasedStagingRequired = true;
+        dispatch(false, Optional.empty(), true, false, true);
+    }
+
     private void dispatch(boolean build, Optional<SolverBuildArtifacts.Artifact> artifact,
                           boolean registryFails, boolean deferred, boolean stagingSupported) throws Exception {
         Backend backend = mock(Backend.class);
         R.BACKEND = backend;
         when(backend.isQueueDispatchable(anyString())).thenReturn(true);
         when(backend.supportsBuildStaging()).thenReturn(stagingSupported);
+        when(backend.requiresLeasedBuildStaging()).thenReturn(leasedStagingRequired);
         when(backend.submitScript(anyInt(), anyString(), any(), anyString(), anyString())).thenReturn(500);
+        when(backend.submitScript(anyInt(), anyString(), any(), anyString(), anyString(), any())).thenReturn(500);
+        BuildExecutionContext prepared = new BuildExecutionContext(1,101,2,
+                UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                files.resolve("source_src"),files.resolve("resource/build"));
 
         User owner = new User();
         owner.setId(7);
@@ -142,6 +175,7 @@ class JobManagerManagedBuildDispatchTest {
              MockedStatic<Users> users = mockStatic(Users.class);
              MockedStatic<Queues> queues = mockStatic(Queues.class);
              MockedStatic<SolverBuildArtifacts> artifacts = mockStatic(SolverBuildArtifacts.class);
+             MockedStatic<ExecutionStorageLeases> leases = mockStatic(ExecutionStorageLeases.class);
              MockedStatic<R> constants = mockStatic(R.class, CALLS_REAL_METHODS)) {
             pairs.when(() -> JobPairs.tryMarkPendingPairEnqueued(anyInt())).thenAnswer(call -> {
                 claims.add(call.getArgument(0));
@@ -159,6 +193,15 @@ class JobManagerManagedBuildDispatchTest {
                     .thenReturn(deferred ? List.of(pair, pair(102, job.getId())) : List.of(pair));
             jobs.when(() -> Jobs.getSlotsInJobQueue(any(Job.class))).thenReturn("1");
             constants.when(R::getJobInboxDir).thenReturn(root);
+            leases.when(() -> ExecutionStorageLeases.prepareRegistered(eq(101),anyList())).thenAnswer(call -> {
+                assertEquals("conserved prior output\n", Files.readString(log));
+                try (var entries = Files.list(inbox)) {
+                    assertEquals(0, entries.count(), "preparation precedes script generation");
+                }
+                if ("sql".equals(preparationFailure)) throw new SQLException("unavailable");
+                if ("io".equals(preparationFailure)) throw new IOException("unavailable");
+                return "null".equals(preparationFailure) ? null : prepared;
+            });
             if (registryFails) {
                 artifacts.when(() -> SolverBuildArtifacts.findCurrent(101)).thenThrow(new SQLException("unavailable"));
             } else {
@@ -177,8 +220,11 @@ class JobManagerManagedBuildDispatchTest {
                 verify(backend, never()).submitScript(anyInt(), anyString(), any(), anyString(), anyString(), any());
             }
             assertEquals(List.of(101), claims, "only one pair is claimed in this pass");
-            if (build) artifacts.verify(() -> SolverBuildArtifacts.findCurrent(101));
+            if (build && !leasedStagingRequired) artifacts.verify(() -> SolverBuildArtifacts.findCurrent(101));
             else artifacts.verifyNoInteractions();
+            if (build && leasedStagingRequired && stagingSupported) {
+                leases.verify(() -> ExecutionStorageLeases.prepareRegistered(eq(101),anyList()));
+            } else leases.verifyNoInteractions();
             pairs.verify(() -> JobPairs.getPairStatusLookup(anyInt()), never());
             if (deferred) {
                 assertEquals(List.of(101), returned, "return the captured pair and execution to pending");
@@ -188,9 +234,16 @@ class JobManagerManagedBuildDispatchTest {
                 }
                 pairs.verify(() -> JobPairs.getLogFilePath(any(JobPair.class)), never());
             } else {
-                verify(backend).submitScript(eq(101), anyString(), any(), eq(log.toString()), eq("all.q"));
+                if (build && leasedStagingRequired) {
+                    verify(backend).submitScript(eq(101),anyString(),any(),eq(log.toString()),eq("all.q"),eq(prepared));
+                    verify(backend,never()).submitScript(anyInt(),anyString(),any(),anyString(),anyString());
+                    pairs.verify(() -> JobPairs.tryUpdateBackendExecId(anyInt(),anyInt()),never());
+                    assertEquals("conserved prior output\n", Files.readString(log));
+                } else {
+                    verify(backend).submitScript(eq(101), anyString(), any(), eq(log.toString()), eq("all.q"));
+                    assertFalse(Files.exists(log), "legacy log replacement remains unchanged");
+                }
                 assertTrue(returned.isEmpty());
-                assertFalse(Files.exists(log), "legacy log replacement remains unchanged");
                 try (var entries = Files.walk(inbox)) {
                     assertTrue(entries.anyMatch(Files::isRegularFile), "the real script writer ran");
                 }

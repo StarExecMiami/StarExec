@@ -216,6 +216,44 @@ Backend integration must commit this decision before its one release request and
 retain the exact resource after a lost response. These database methods do not
 activate dispatch on their own.
 
+### Managed Podman dispatch
+
+`JobManager` prepares a leased build before writing its execution script. It
+selects an existing registered resource only after matching its current physical
+identity and capacity, and reserves that entire capacity against the owner's
+quota. A retry conserves its original lease and allowance; uncertain preparation
+cannot select another resource. Unavailable storage defers the build rather than
+falling back to shared output directories.
+
+`PodmanPrivateBuild` requires a local rootless Unix provider with a verified peer
+owner matching the unprivileged application identity, an immutable image without
+declared volumes, private mounts and a disabled image healthcheck. Unknown user
+namespace mappings and remote providers are refused. Both creation transports
+preserve the same complete host policy and trusted hold. The fallback transport
+uses the configured finite connection/response deadlines, a bounded JSON response
+and an exact container identity; it does not use user curl configuration or a
+proxy.
+
+Admission commits the pair's execution locator and artifact engine binding in one
+transaction, before starting the hold. Cancellation can therefore find an admitted
+execution without waiting for submission to return. The new release decision also
+checks the current pair, locator and job cancellation/pause state under the same
+locks. An uncertain admission, start or release retains the exact known provider
+resource and its capacity without creating or releasing a replacement.
+
+Held-resource validation preserves the scheduler's CPU policy: pinned partitions
+retain their cpuset-only boundary without an added CFS quota, while explicit quotas
+must match. The kernel's effective affinity, bandwidth policy and zero swap limit
+are checked independently. A provider's numeric Linux SIGTERM representation is
+equivalent to the requested termination signal; unrelated signals are refused.
+
+Completed private output is located through the versioned layout, exact admitted
+execution, stop receipt, active lease and conserved release decision. Runner
+environment and broad legacy mounts cannot redirect that locator. Unsupported
+build layouts remain unresolved. This connection does not replace immutable output
+publication, positive process termination or independent staging reclamation;
+those remain required before enabling the complete untrusted lifecycle.
+
 Completed pair metadata is read relative to an open directory through
 `DescriptorDirectory.readQuiescentText`. Each file must be regular, have stable
 identity and size, and contain valid UTF-8. The byte bound is enforced during the
@@ -310,6 +348,16 @@ isolation and termination scope. No existing deployment is automatically migrate
 or made safe by adding this observer.
 
 ## Verification
+
+For managed preparation, private provider orchestration and runtime validation:
+
+```sh
+mvn -B -pl starexec-app -Dtest=JobManagerManagedBuildDispatchTest,PodmanPrivateBuildDispatchTest,PodmanBackendTests,BuildExecutionMountsTest,BuildExecutionRuntimeTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+```
+
+The provider orchestration tests use simulated transports. The SQL tests separately
+exercise admission visibility, cancellation and lost commit replies; neither is a
+substitute for execution on a provisioned bounded resource.
 
 Run the capacity and mount-contract tests without a database:
 

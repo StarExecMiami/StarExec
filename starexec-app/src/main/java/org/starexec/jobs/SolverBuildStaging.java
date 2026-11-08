@@ -19,6 +19,7 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Set;
+import java.util.List;
 import java.util.UUID;
 
 /** Durable staging allocation for a dispatcher that exclusively owns the pair claim. */
@@ -26,6 +27,60 @@ public final class SolverBuildStaging {
     private static final Set<PosixFilePermission> PRIVATE = PosixFilePermissions.fromString("rwx------");
 
     private SolverBuildStaging() { }
+
+    /** Selects an existing, freshly verified registration; a retry must preserve its exact committed lease. */
+    public static BuildExecutionContext prepareRegistered(Connection connection, int pairId, List<Path> protectedRoots)
+            throws SQLException, IOException {
+        if (!connection.getAutoCommit()) throw new SQLException("Build selection requires a standalone connection");
+        var artifact = SolverBuildArtifacts.findCurrent(connection, pairId)
+                .orElseThrow(() -> new SQLException("Current build artifact is unavailable"));
+        if (artifact.engineIdentity() != null || artifact.stoppedAt() != null
+                || !(artifact.state().equals("PLANNED") || artifact.state().equals("STAGED"))) {
+            throw new IOException("Registered build requires recovery rather than another launch");
+        }
+        if (artifact.executionToken() != null) {
+            if (artifact.stagingPath() == null) throw new IOException("Prepared build staging is unavailable");
+            var build = new BuildExecutionContext(artifact.id(),pairId,artifact.attemptNo(),artifact.executionToken(),
+                    Path.of(artifact.sourcePath()),Path.of(artifact.stagingPath()));
+            var registration = ExecutionStorageLeases.registeredResource(connection,build)
+                    .orElseThrow(() -> new IOException("Prepared build has no conserved dedicated resource"));
+            var resource = registration.inspect(protectedRoots);
+            return prepareLeased(connection,pairId,artifact.attemptNo(),resource,registeredAllowance(connection,build));
+        }
+        if (artifact.stagingPath() != null || artifact.storageRoot() != null || artifact.solverPath() != null
+                || !"PLANNED".equals(artifact.state())) {
+            throw new IOException("Build history cannot fall back to a new unbound allocation");
+        }
+        IOException firstObservationFailure = null;
+        for (var registration : ExecutionStorageLeases.availableResources(connection,artifact.ownerId())) {
+            final DedicatedStorageResource resource;
+            try {
+                resource = registration.inspect(protectedRoots);
+            } catch (IOException unavailable) {
+                if (firstObservationFailure == null) firstObservationFailure = unavailable;
+                continue;
+            }
+            // Never try another resource after preparation: a failed response may follow a committed reservation.
+            return prepareLeased(connection,pairId,artifact.attemptNo(),resource,resource.capacityBytes());
+        }
+        throw new IOException("No verified dedicated execution resource is available",firstObservationFailure);
+    }
+
+    private static long registeredAllowance(Connection connection, BuildExecutionContext build) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT c.limit_bytes FROM starexec.solver_build_storage_charges c"
+                + " JOIN starexec.solver_build_artifacts a ON a.id=c.artifact_id"
+                + " WHERE a.id=? AND a.execution_token=? AND c.storage_kind='STAGING'"
+                + " AND c.owner_id=a.origin_owner_id AND c.path=? AND c.released_at IS NULL"
+                + " AND c.limit_bytes>0 AND c.charged_bytes=c.limit_bytes")) {
+            statement.setLong(1,build.artifactId());statement.setObject(2,build.token());
+            statement.setString(3,build.staging().toString());
+            try (var rows=statement.executeQuery()) {
+                if (!rows.next()) throw new SQLException("Prepared build allowance is unavailable");
+                return rows.getLong(1);
+            }
+        }
+    }
 
     /** Commits the verified resource, allowance and exclusive lease before directory creation. */
     public static BuildExecutionContext prepareLeased(Connection con, int pairId, int attemptNo,

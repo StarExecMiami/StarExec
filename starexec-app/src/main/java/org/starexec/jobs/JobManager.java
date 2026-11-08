@@ -4,6 +4,7 @@ import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.starexec.backend.Backend;
+import org.starexec.backend.BuildExecutionContext;
 import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.DB;
@@ -36,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 
 /**
  * Handles all SGE interactions for job submission and maintenance
@@ -722,18 +724,35 @@ public abstract class JobManager {
 						log.trace("About to submit pair " + pair.getId());
 
 						try {
-							requireLegacyBuildDispatch(s.job, pair);
+							BuildExecutionContext build = null;
+							if (s.job.isBuildJob() && R.BACKEND.requiresLeasedBuildStaging()) {
+								if (!R.BACKEND.supportsBuildStaging()) {
+									throw new SubmissionDeferredException("Backend cannot accept dedicated build staging");
+								}
+								try {
+									build = ExecutionStorageLeases.prepareRegistered(pair.getId(),List.of(
+											Path.of(R.STAREXEC_DATA_DIR),Path.of(EnvironmentConfig.getJobOutputDirectory()),
+											Path.of(EnvironmentConfig.getJobLogDirectory())));
+									if (build == null) throw new SubmissionDeferredException("Dedicated build context is unavailable");
+								} catch (SQLException | IOException unavailable) {
+									log.warn("Dedicated build preparation unavailable for pair " + pair.getId(), unavailable);
+									throw new SubmissionDeferredException("Dedicated build preparation unavailable; pair stays queued");
+									}
+							} else {
+								requireLegacyBuildDispatch(s.job, pair);
+							}
 							// Write the script that will run this individual pair
 							final String scriptPath = JobManager.writeJobScript(s.jobTemplate, s.job, pair, q);
 							log.trace("About to get the log path from the database...");
 							final String logPath = JobPairs.getLogFilePath(pair);
 							log.trace("Just got the log path from the database.");
-							final File file = new File(logPath);
-							file.getParentFile().mkdirs();
-
-							if (file.exists()) {
-								log.debug("Deleting old log file for " + pair.getId());
-								file.delete();
+							if (build == null) {
+								final File file = new File(logPath);
+								file.getParentFile().mkdirs();
+								if (file.exists()) {
+									log.debug("Deleting old log file for " + pair.getId());
+									file.delete();
+								}
 							}
 							// Submit to the grid engine
 
@@ -744,8 +763,10 @@ public abstract class JobManager {
 							// is an inert comment to a backend that places work itself, so
 							// such a backend had no way to learn which queue a pair
 							// belonged to and could run it anywhere.
-							int execId = R.BACKEND.submitScript(
-									pair.getId(), scriptPath, R.BACKEND_WORKING_DIR, logPath, q.getName());
+							int execId = build == null ? R.BACKEND.submitScript(
+									pair.getId(), scriptPath, R.BACKEND_WORKING_DIR, logPath, q.getName())
+									: R.BACKEND.submitScript(pair.getId(),scriptPath,R.BACKEND_WORKING_DIR,
+											logPath,q.getName(),build);
 
 							log.trace("Just submitted pair " + pair.getId());
 
@@ -757,6 +778,11 @@ public abstract class JobManager {
 								);
 								queueSize++;
 							} else {
+								if (build != null) {
+									// Managed admission owns the durable binding; a late update could overwrite a rerun.
+									queueSize++;
+									continue;
+								}
 								JobPairs.ConditionalPairUpdateResult execUpdateResult = JobPairs.tryUpdateBackendExecId(
 										pair.getId(), execId);
 								if (execUpdateResult == JobPairs.ConditionalPairUpdateResult.UPDATED) {

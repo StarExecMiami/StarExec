@@ -152,6 +152,14 @@ public final class BuildExecutionMounts {
         if (!ExecutionStorageLeases.findDispatchInputs(connection,build,resource).filter(inputs::equals).isPresent()) {
             throw new SQLException("Build input authorization changed before provider admission");
         }
+        requireUnchangedInputs();
+        for (var entry:directories.entrySet()) {
+            if (!entry.getKey().equals(build.staging())) requireEmpty(entry.getKey());
+        }
+    }
+
+    /** Physical input checks during an independently verified hold; this does not authorize release. */
+    public void requireUnchangedInputs() throws IOException {
         resource.requireUnchanged(); requireOnlyStaging(resource.root(),build.staging()); requireNoNestedMounts(build.source());
         if (!source.equals(SolverArtifactTree.inspectInputDirectory(build.source(),maxInputBytes,maxInputEntries))) {
             throw new IOException("Build source bytes changed before provider admission");
@@ -172,7 +180,6 @@ public final class BuildExecutionMounts {
             if (!entry.getValue().equals(privateDirectory(entry.getKey()))) {
                 throw new IOException("Private build directory identity changed before provider admission");
             }
-            if (!entry.getKey().equals(build.staging())) requireEmpty(entry.getKey());
         }
         resource.requireUnchanged();
     }
@@ -182,7 +189,10 @@ public final class BuildExecutionMounts {
     public Path script() { return CONTROL.resolve("jobscript"); }
     public Path workingDirectory() { return EXECUTION.resolve("work"); }
     public Path outputDirectory() { return EXECUTION.resolve("monitor"); }
-    public Path hostOutputDirectory() { return build.staging().resolve("monitor"); }
+    public Path hostOutputDirectory() { return hostOutputDirectory(build); }
+
+    /** Resolve only after independently matching the provider's private-layout profile and execution identity. */
+    public static Path hostOutputDirectory(BuildExecutionContext build) { return build.staging().resolve("monitor"); }
 
     public Map<String,String> environment() {
         return Map.ofEntries(Map.entry(PRIVATE_VARIABLE,"1"),

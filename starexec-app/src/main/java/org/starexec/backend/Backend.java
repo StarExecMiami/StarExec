@@ -93,6 +93,15 @@ public interface Backend {
         return false;
     }
 
+    /**
+     * Whether queued builds require a dedicated lease. Such a backend must atomically
+     * conserve the pair's execution ID with admission before enabling a payload;
+     * the caller must not rebind that execution after provider I/O.
+     */
+    default boolean requiresLeasedBuildStaging() {
+        return false;
+    }
+
     /** A build context must never be silently discarded by a legacy backend. */
     default int submitScript(int pairId, String scriptPath, String workingDirectoryPath,
                              String logPath, String queueName, BuildExecutionContext build) {

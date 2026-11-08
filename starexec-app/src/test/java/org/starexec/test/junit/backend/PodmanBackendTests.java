@@ -30,6 +30,8 @@ import org.mockito.MockitoAnnotations;
 import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.CpuPartition;
 import org.starexec.backend.PodmanBackend;
+import org.starexec.backend.PodmanPrivateBuild;
+import org.starexec.backend.storage.BuildExecutionMounts;
 import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
@@ -84,6 +86,7 @@ public class PodmanBackendTests {
     private PodmanBackend backend;
     private Path tempDir;
     private AutoCloseable mocks;
+    private MockedStatic<PodmanPrivateBuild> privateBuildFactory;
 
     // Test constants
     private static final String TEST_CONTAINER_ID = "abc123def456";
@@ -110,6 +113,7 @@ public class PodmanBackendTests {
 
     @AfterEach
     public void tearDown() throws Exception {
+        if (privateBuildFactory != null) privateBuildFactory.close();
         if (mocks != null) {
             mocks.close();
         }
@@ -647,11 +651,12 @@ public class PodmanBackendTests {
 
     @Test
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public void buildSubmissionPassesOnlyItsEncodedStagingPath() throws Exception {
+    public void buildSubmissionPassesOnlyItsEncodedPrivateOutputPath() throws Exception {
         configureBackendForSubmitScript();
         configureCreateContainerSuccess(TEST_CONTAINER_ID);
         var build = new org.starexec.backend.BuildExecutionContext(5, 42, 1,
             java.util.UUID.randomUUID(), tempDir.resolve("source"), tempDir.resolve("build output"));
+        var mounts = stubPrivateBuild(build);
         java.util.concurrent.atomic.AtomicBoolean committed = new java.util.concurrent.atomic.AtomicBoolean();
         doAnswer(call -> { assertTrue(committed.get(), "admission must commit before start"); return null; })
             .when(mockStartContainerCmd).exec();
@@ -669,7 +674,7 @@ public class PodmanBackendTests {
             verify(mockCreateContainerCmd).withEnv(environment.capture());
             List<String> values = environment.getValue();
             String expected = org.starexec.backend.BuildExecutionContext.OUTPUT_VARIABLE + "="
-                + build.environment().get(org.starexec.backend.BuildExecutionContext.OUTPUT_VARIABLE);
+                + mounts.environment().get(org.starexec.backend.BuildExecutionContext.OUTPUT_VARIABLE);
             assertTrue(values.contains(expected));
             assertEquals(1, values.stream().filter(value -> value.startsWith(
                 org.starexec.backend.BuildExecutionContext.OUTPUT_VARIABLE + "=")).count());
@@ -728,6 +733,26 @@ public class PodmanBackendTests {
     }
 
     @Test
+    public void anUncertainAdmissionRetainsItsContainerAndCapacityForReconciliation() throws Exception {
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+        var build = buildContext();
+        try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class);
+             var artifacts = mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
+            pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            artifacts.when(() -> org.starexec.data.database.SolverBuildArtifacts.admitExecution(eq(build), anyString()))
+                .thenThrow(new java.sql.SQLException("admission response unavailable"));
+            int execution = submitBuild(build);
+            assertTrue(execution > 0);
+            assertEquals(TEST_CONTAINER_ID,getExecIdMap().get(execution));
+            assertEquals(1,getActiveSubmissionSlots());
+            verify(mockDockerClient,times(1)).createContainerCmd(anyString());
+            verify(mockDockerClient,never()).startContainerCmd(anyString());
+            verify(mockDockerClient,never()).removeContainerCmd(TEST_CONTAINER_ID);
+        }
+    }
+
+    @Test
     public void aDatabaseAdmissionFailureCannotTriggerASecondContainerOrStart() throws Exception {
         configureBackendForSubmitScript();
         configureCreateContainerSuccess(TEST_CONTAINER_ID);
@@ -773,7 +798,8 @@ public class PodmanBackendTests {
         configureCreateContainerSuccess(TEST_CONTAINER_ID);
         doThrow(new RuntimeException("Broken pipe")).when(mockStartContainerCmd).exec();
         when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID)).thenReturn(mockInspectContainerCmd);
-        when(mockInspectContainerCmd.exec()).thenThrow(new RuntimeException("engine unavailable"));
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse)
+            .thenThrow(new RuntimeException("engine unavailable"));
         var build = buildContext();
         try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class);
              var artifacts = mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
@@ -790,7 +816,7 @@ public class PodmanBackendTests {
         }
     }
 
-    private org.starexec.backend.BuildExecutionContext buildContext() {
+    private org.starexec.backend.BuildExecutionContext buildContext() throws Exception {
         var labels = new java.util.concurrent.atomic.AtomicReference<Map<String, String>>();
         var config = mock(ContainerConfig.class);
         when(config.getLabels()).thenAnswer(call -> labels.get());
@@ -808,8 +834,34 @@ public class PodmanBackendTests {
         when(mockContainerState.getStartedAt()).thenReturn("0001-01-01T00:00:00Z");
         when(mockInspectContainerResponse.getHostConfig()).thenReturn(HostConfig.newHostConfig()
             .withRestartPolicy(RestartPolicy.noRestart()).withPrivileged(false));
-        return new org.starexec.backend.BuildExecutionContext(5, 42, 1,
+        var build = new org.starexec.backend.BuildExecutionContext(5, 42, 1,
             UUID.randomUUID(), tempDir.resolve("source"), tempDir.resolve("build output"));
+        stubPrivateBuild(build);
+        return build;
+    }
+
+    /** Isolate orchestration tests from real provider sockets; policy guards have their own tests. */
+    private BuildExecutionMounts stubPrivateBuild(org.starexec.backend.BuildExecutionContext build) throws Exception {
+        var mounts=mock(BuildExecutionMounts.class,CALLS_REAL_METHODS);
+        doReturn(List.of()).when(mounts).bindings();
+        var plan=mock(PodmanPrivateBuild.class);
+        when(plan.mounts()).thenReturn(mounts);
+        when(plan.image()).thenReturn("sha256:"+"a".repeat(64));
+        when(plan.entrypoint()).thenReturn(org.starexec.backend.storage.BuildExecutionHold.entrypoint(60));
+        var command=org.starexec.backend.storage.BuildExecutionHold.command(mounts.script());
+        when(plan.command()).thenReturn(command);
+        var environment=new ArrayList<String>();
+        mounts.environment().forEach((key,value)->environment.add(key+"="+value));
+        environment.add("CONTAINER_MODE=true");
+        when(plan.environment()).thenReturn(List.copyOf(environment));
+        when(plan.hostConfig(any(HostConfig.class),anyMap())).thenAnswer(call->call.getArgument(0));
+        when(plan.admit(anyInt(),anyString())).thenAnswer(call->
+            org.starexec.data.database.SolverBuildArtifacts.admitExecution(build,
+                "podman:"+call.getArgument(0)+":"+call.getArgument(1)));
+        privateBuildFactory=mockStatic(PodmanPrivateBuild.class);
+        privateBuildFactory.when(()->PodmanPrivateBuild.prepare(eq(mockDockerClient),eq(build),anyString(),
+                nullable(String.class),any(BuildExecutionMounts.Controls.class))).thenReturn(plan);
+        return mounts;
     }
 
     private int submitBuild(org.starexec.backend.BuildExecutionContext build) {

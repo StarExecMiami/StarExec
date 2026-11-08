@@ -7,8 +7,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedStatic;
 import org.starexec.backend.BuildExecutionContext;
 import org.starexec.backend.storage.DedicatedStorageResource;
+import org.starexec.backend.storage.BuildExecutionRuntime;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.ExecutionStorageLeases;
 import org.starexec.data.database.SolverBuildArtifacts;
@@ -108,11 +110,310 @@ class SolverBuildLeasedStagingSqlTest extends Common {
         try (var entries=Files.list(slot)) { return entries.count(); }
     }
 
+    private void queued() throws SQLException {
+        assertEquals(pair,number(connection,"UPDATE starexec.job_pairs SET status_code=2 WHERE id=? RETURNING id",pair));
+    }
+
+    private void disableDispatch(String condition) throws SQLException {
+        switch (condition) {
+            case "completed" -> number(connection,"UPDATE starexec.job_pairs SET status_code=7 WHERE id=? RETURNING id",pair);
+            case "paused", "killed", "deleted" -> number(connection,"UPDATE starexec.jobs SET "+condition
+                    +"=TRUE WHERE id=(SELECT job_id FROM starexec.job_pairs WHERE id=?) RETURNING id",pair);
+            case "superseded" -> number(connection,"UPDATE starexec.job_pair_attempts SET current_attempt_no=current_attempt_no+1"
+                    +" WHERE pair_id=? RETURNING pair_id",pair);
+            case "different-execution" -> number(connection,"UPDATE starexec.job_pairs SET sge_id=2002 WHERE id=? RETURNING id",pair);
+            default -> throw new AssertionError("Unknown test condition");
+        }
+    }
+
+    private BuildExecutionRuntime.Observation runtime() {
+        java.util.Map<String,String> namespaces=new java.util.LinkedHashMap<>();
+        for (String name:List.of("pid","ipc","net","mnt","user","cgroup")) namespaces.put(name,name+":[123]");
+        return new BuildExecutionRuntime.Observation(456,64,16,"0",namespaces);
+    }
+
+    @Test void podmanDispatchPublishesItsCancellationLocatorWithAdmission() throws Exception {
+        var build=prepare();queued();
+        assertTrue(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,"created-container"));
+        try (var observer=Common.getConnection()) {
+            assertEquals(1001,number(observer,"SELECT sge_id FROM starexec.job_pairs WHERE id=?",pair));
+            assertEquals("podman:1001:created-container",SolverBuildArtifacts.find(observer,pair,1).orElseThrow().engineIdentity());
+        }
+        assertTrue(connection.getAutoCommit());assertEquals(1,leases());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"completed","paused","killed","deleted","superseded"})
+    void podmanDispatchRefusalCannotLeaveAPartialAdmission(String condition) throws Exception {
+        var build=prepare();queued();disableDispatch(condition);
+        long previous=number(connection,"SELECT sge_id FROM starexec.job_pairs WHERE id=?",pair);
+        assertFalse(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,"created-container"));
+        assertNull(SolverBuildArtifacts.find(connection,pair,1).orElseThrow().engineIdentity());
+        assertEquals(previous,number(connection,"SELECT sge_id FROM starexec.job_pairs WHERE id=?",pair));
+        assertTrue(connection.getAutoCommit());assertEquals(1,leases());
+    }
+
+    @Test void podmanDispatchLostCommitReplyPreservesBothExecutionBindings() throws Exception {
+        var build=prepare();queued();
+        Connection fault=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(connection));
+        doAnswer(call->{connection.commit();throw new SQLException("INJECTED LOST ADMISSION REPLY");}).when(fault).commit();
+        var failure=assertThrows(SQLException.class,()->ExecutionStorageLeases.admitPodman(fault,build,resource,1001,"created-container"));
+        assertTrue(failure.getMessage().contains("INJECTED LOST ADMISSION REPLY"));
+        try (var observer=Common.getConnection()) {
+            assertEquals(1001,number(observer,"SELECT sge_id FROM starexec.job_pairs WHERE id=?",pair));
+            assertEquals("podman:1001:created-container",SolverBuildArtifacts.find(observer,pair,1).orElseThrow().engineIdentity());
+        }
+        assertEquals(1,leases());assertTrue(connection.getAutoCommit());
+    }
+
+    @ParameterizedTest @ValueSource(ints={2,4})
+    void podmanReleaseRequiresANewDecisionForTheCurrentLivePair(int status) throws Exception {
+        var build=prepare();queued();
+        assertTrue(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,"created-container"));
+        number(connection,"UPDATE starexec.job_pairs SET status_code=? WHERE id=? RETURNING id",status,pair);
+        var request=UUID.randomUUID();
+        assertTrue(ExecutionStorageLeases.claimPodmanRelease(connection,build,resource,1001,"created-container",request,runtime()));
+        assertFalse(ExecutionStorageLeases.claimPodmanRelease(connection,build,resource,1001,"created-container",request,runtime()));
+        assertFalse(ExecutionStorageLeases.claimPodmanRelease(connection,build,resource,1001,"created-container",UUID.randomUUID(),runtime()));
+        assertEquals(request,ExecutionStorageLeases.findReleaseDecision(connection,build,resource).orElseThrow().requestToken());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"completed","paused","killed","deleted","superseded","different-execution"})
+    void podmanReleaseRefusalRollsBackItsNewDecision(String condition) throws Exception {
+        var build=prepare();queued();
+        assertTrue(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,"created-container"));
+        disableDispatch(condition);
+        assertFalse(ExecutionStorageLeases.claimPodmanRelease(connection,build,resource,1001,"created-container",UUID.randomUUID(),runtime()));
+        assertTrue(ExecutionStorageLeases.findReleaseDecision(connection,build,resource).isEmpty());
+        assertEquals(0,number(connection,"SELECT count(*) FROM starexec.solver_build_release_decisions WHERE artifact_id=?",build.artifactId()));
+        assertEquals(1,leases());assertTrue(connection.getAutoCommit());
+    }
+
+    @Test void podmanReleaseLostCommitReplyCannotGrantAnotherSignal() throws Exception {
+        var build=prepare();queued();
+        assertTrue(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,"created-container"));
+        Connection fault=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(connection));
+        doAnswer(call->{connection.commit();throw new SQLException("INJECTED LOST RELEASE REPLY");}).when(fault).commit();
+        var request=UUID.randomUUID();
+        var failure=assertThrows(SQLException.class,()->ExecutionStorageLeases.claimPodmanRelease(fault,build,resource,1001,"created-container",request,runtime()));
+        assertTrue(failure.getMessage().contains("INJECTED LOST RELEASE REPLY"));
+        assertEquals(request,ExecutionStorageLeases.findReleaseDecision(connection,build,resource).orElseThrow().requestToken());
+        assertFalse(ExecutionStorageLeases.claimPodmanRelease(connection,build,resource,1001,"created-container",UUID.randomUUID(),runtime()));
+        assertEquals(1,leases());assertTrue(connection.getAutoCommit());
+    }
+
     private void requireUnallocated(int requestedPair) throws Exception {
         var artifact=SolverBuildArtifacts.find(connection,requestedPair,1).orElseThrow();
         assertNull(artifact.executionToken()); assertNull(artifact.stagingPath());
         assertEquals(0,number(connection,"SELECT count(*) FROM starexec.solver_build_storage_charges WHERE artifact_id=?",artifact.id()));
         assertTrue(connection.getAutoCommit());
+    }
+
+    private MockedStatic<DedicatedStorageResource> observedPool(DedicatedStorageResource... resources) throws Exception {
+        var observations = mockStatic(DedicatedStorageResource.class);
+        observations.when(() -> DedicatedStorageResource.inspect(any(Path.class),
+                any(DedicatedStorageResource.Limits.class),anyList())).thenThrow(new IOException("resource unavailable"));
+        for (var known : resources) {
+            Path root = known.root();
+            observations.when(() -> DedicatedStorageResource.inspect(eq(root),
+                    any(DedicatedStorageResource.Limits.class),eq(List.of(source)))).thenReturn(known);
+        }
+        return observations;
+    }
+
+    private DedicatedStorageResource alternativeResource() throws Exception {
+        var alternative = mock(DedicatedStorageResource.class);
+        when(alternative.root()).thenReturn(directory("alternative"));
+        when(alternative.filesystemKey()).thenReturn(UUID.randomUUID().toString().replace("-",""));
+        when(alternative.identity()).thenReturn("observed-alternative-device-and-mount");
+        when(alternative.capacityBytes()).thenReturn(512L);
+        when(alternative.inodeLimit()).thenReturn(32L);
+        assertTrue(ExecutionStorageLeases.register(connection,alternative));
+        return alternative;
+    }
+
+    @Test void registeredDispatchBooksTheEntireObservedResource() throws Exception {
+        assertTrue(ExecutionStorageLeases.register(connection,resource));
+        try (var observations = observedPool(resource)) {
+            var build = SolverBuildStaging.prepareRegistered(connection,pair,List.of(source));
+            assertEquals(276,usage());
+            assertEquals(1,leases());
+            assertTrue(Files.isDirectory(build.staging()));
+            assertEquals(256,number(connection,"SELECT limit_bytes FROM starexec.solver_build_storage_charges"
+                    + " WHERE artifact_id=? AND storage_kind='STAGING'",build.artifactId()));
+            observations.verify(() -> DedicatedStorageResource.inspect(slot,
+                    new DedicatedStorageResource.Limits(256,16),List.of(source)));
+        }
+    }
+
+    @Test void registeredDispatchOnlyListsResourcesWithinTheCurrentOwnerQuota() throws Exception {
+        assertTrue(ExecutionStorageLeases.register(connection,resource));
+        assertTrue(ExecutionStorageLeases.availableResources(connection,user).stream()
+                .anyMatch(candidate -> candidate.key().equals(resource.filesystemKey())));
+        try (var update = connection.prepareStatement("UPDATE starexec.users SET disk_quota=disk_size WHERE id=?")) {
+            update.setInt(1,user);assertEquals(1,update.executeUpdate());
+        }
+        assertTrue(ExecutionStorageLeases.availableResources(connection,user).isEmpty());
+        assertTrue(ExecutionStorageLeases.availableResources(connection,-1).isEmpty());
+        assertEquals(20,usage());
+        assertEquals(0,contents());
+    }
+
+    @Test void registeredDispatchDoesNotListAnAlreadyLeasedResource() throws Exception {
+        prepare();
+        assertFalse(ExecutionStorageLeases.availableResources(connection,user).stream()
+                .anyMatch(candidate -> candidate.key().equals(resource.filesystemKey())));
+        assertEquals(1,leases());
+        assertEquals(532,usage());
+    }
+
+    @Test void registeredDispatchRetryPreservesALargerConservedAllowance() throws Exception {
+        var build = prepare();
+        Files.writeString(build.staging().resolve("keep"),"conserved");
+        try (var observations = observedPool(resource)) {
+            assertEquals(build,SolverBuildStaging.prepareRegistered(connection,pair,List.of(source)));
+            assertEquals(532,usage());
+            assertEquals(1,leases());
+            assertEquals("conserved",Files.readString(build.staging().resolve("keep")));
+        }
+    }
+
+    @Test void registeredDispatchCannotAdoptAnUnleasedPreparation() throws Exception {
+        UUID token = UUID.randomUUID();
+        Path staging = slot.resolve("build-" + token);
+        assertTrue(SolverBuildArtifacts.prepare(connection,pair,1,token,staging));
+        assertTrue(ExecutionStorageLeases.register(connection,resource));
+        try (var observations = observedPool(resource)) {
+            assertThrows(IOException.class,() -> SolverBuildStaging.prepareRegistered(connection,pair,List.of(source)));
+            observations.verifyNoInteractions();
+        }
+        assertEquals(token,SolverBuildArtifacts.findCurrent(connection,pair).orElseThrow().executionToken());
+        assertEquals(0,leases());
+        assertEquals(20,usage());
+        assertEquals(0,contents());
+    }
+
+    @Test void registeredDispatchCannotLaunchAnAlreadyBoundExecution() throws Exception {
+        var build = prepare();
+        assertTrue(SolverBuildArtifacts.admitExecution(build,"podman:1000:conserved-container"));
+        try (var observations = observedPool(resource)) {
+            assertThrows(IOException.class,() -> SolverBuildStaging.prepareRegistered(connection,pair,List.of(source)));
+            observations.verifyNoInteractions();
+        }
+        assertEquals(1,leases());
+        assertEquals(532,usage());
+    }
+
+    @Test void registeredDispatchRequiresAPhysicalMatchWithoutAllocatingFiles() throws Exception {
+        assertTrue(ExecutionStorageLeases.register(connection,resource));
+        try (var observations = observedPool()) {
+            assertThrows(IOException.class,() -> SolverBuildStaging.prepareRegistered(connection,pair,List.of(source)));
+        }
+        requireUnallocated(pair);
+        assertEquals(20,usage());
+        assertEquals(0,contents());
+    }
+
+    @Test void registeredDispatchRefusesAForeignTransaction() throws Exception {
+        connection.setAutoCommit(false);
+        try {
+            assertThrows(SQLException.class,() -> SolverBuildStaging.prepareRegistered(connection,pair,List.of(source)));
+        } finally {
+            connection.rollback();connection.setAutoCommit(true);
+        }
+        requireUnallocated(pair);
+        assertEquals(0,contents());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"identity", "key", "bytes", "inodes"})
+    void registeredDispatchRefusesChangedPhysicalRegistration(String changed) throws Exception {
+        assertTrue(ExecutionStorageLeases.register(connection,resource));
+        switch (changed) {
+            case "identity" -> when(resource.identity()).thenReturn("different mount");
+            case "key" -> when(resource.filesystemKey()).thenReturn("abcdef");
+            case "bytes" -> when(resource.capacityBytes()).thenReturn(128L);
+            case "inodes" -> when(resource.inodeLimit()).thenReturn(8L);
+            default -> throw new AssertionError(changed);
+        }
+        try (var observations = observedPool(resource)) {
+            assertThrows(IOException.class,() -> SolverBuildStaging.prepareRegistered(connection,pair,List.of(source)));
+        }
+        requireUnallocated(pair);
+        assertEquals(20,usage());
+        assertEquals(0,contents());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"commit", "directory"})
+    void registeredDispatchDoesNotSelectAnotherResourceAfterAnUncertainPreparation(String failure) throws Exception {
+        assertTrue(ExecutionStorageLeases.register(connection,resource));
+        var alternative = alternativeResource();
+        Path alternativeRoot = alternative.root();
+        try (var observations = observedPool(resource,alternative)) {
+            if (failure.equals("commit")) {
+                var uncertain = spy(connection);
+                doAnswer(call -> {
+                    call.callRealMethod();
+                    throw new SQLException("lost committed response");
+                }).when(uncertain).commit();
+                assertThrows(SQLException.class,() -> SolverBuildStaging.prepareRegistered(uncertain,pair,List.of(source)));
+            } else {
+                try (var directories = mockStatic(Files.class,call -> {
+                    if (call.getMethod().getName().equals("createDirectory")
+                            && slot.equals(((Path)call.getArgument(0)).getParent())) throw new IOException("creation unavailable");
+                    return call.callRealMethod();
+                })) {
+                    assertThrows(IOException.class,() -> SolverBuildStaging.prepareRegistered(connection,pair,List.of(source)));
+                }
+            }
+            observations.verify(() -> DedicatedStorageResource.inspect(eq(alternativeRoot),
+                    any(DedicatedStorageResource.Limits.class),anyList()),never());
+            var captured = SolverBuildArtifacts.findCurrent(connection,pair).orElseThrow();
+            assertNotNull(captured.executionToken());
+            assertEquals(276,usage());
+            assertEquals(1,leases());
+            assertEquals(0,contents());
+            var recovered = SolverBuildStaging.prepareRegistered(connection,pair,List.of(source));
+            assertEquals(captured.executionToken(),recovered.token());
+            assertEquals(captured.stagingPath(),recovered.staging().toString());
+            assertEquals(276,usage());
+            assertEquals(1,leases());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"artifact", "pair", "attempt", "token", "source", "staging"})
+    void registeredDispatchLocatorRequiresTheCompleteConservedContext(String changed) throws Exception {
+        var build = prepare();
+        var wrong = new BuildExecutionContext(build.artifactId()+(changed.equals("artifact")?1:0),
+                build.pairId()+(changed.equals("pair")?1:0),build.attemptNo()+(changed.equals("attempt")?1:0),
+                changed.equals("token")?UUID.randomUUID():build.token(),
+                changed.equals("source")?files.resolve("other_source"):build.source(),
+                changed.equals("staging")?files.resolve("other_staging"):build.staging());
+        assertTrue(ExecutionStorageLeases.registeredResource(connection,wrong).isEmpty());
+        assertTrue(ExecutionStorageLeases.registeredResource(connection,build).isPresent());
+        assertEquals(532,usage());
+        assertEquals(1,leases());
+    }
+
+    @Test void registeredDispatchUsesANewLeaseForANewManagedAttempt() throws Exception {
+        var first = prepare();
+        assertTrue(SolverBuildArtifacts.admitExecution(first,"podman:1000:earlier-container"));
+        var alternative = alternativeResource();
+        try (var update = connection.prepareStatement(
+                "UPDATE starexec.job_pair_attempts SET current_attempt_no=2 WHERE pair_id=?")) {
+            update.setInt(1,pair);assertEquals(1,update.executeUpdate());
+        }
+        try (var observations = observedPool(resource,alternative)) {
+            var next = SolverBuildStaging.prepareRegistered(connection,pair,List.of(source));
+            assertEquals(2,next.attemptNo());
+            assertNotEquals(first.token(),next.token());
+            assertEquals(alternative.root(),next.staging().getParent());
+            assertEquals(1044,usage());
+            assertEquals(2,number(connection,"SELECT count(*) FROM starexec.solver_build_storage_leases l"
+                    + " JOIN starexec.solver_build_artifacts a ON a.id=l.artifact_id WHERE a.origin_pair_id=?",pair));
+            assertEquals("podman:1000:earlier-container",SolverBuildArtifacts.find(connection,pair,1).orElseThrow().engineIdentity());
+        }
     }
 
     @Test void legacyDispatchHistoryAllowsAnUnboundPlannedAttempt() throws Exception {

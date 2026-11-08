@@ -3,6 +3,7 @@ package org.starexec.data.database;
 import com.google.gson.Gson;
 import org.starexec.backend.BuildExecutionContext;
 import org.starexec.backend.storage.BuildExecutionRuntime;
+import org.starexec.backend.storage.BuildExecutionMounts;
 import org.starexec.backend.storage.DedicatedStorageResource;
 import org.starexec.util.DescriptorDirectory;
 
@@ -14,6 +15,8 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -22,13 +25,169 @@ public final class ExecutionStorageLeases {
     private static final Gson JSON = new Gson();
     private ExecutionStorageLeases() { }
 
+    /** Owns the standalone connection; preparation commits its reservation before writing files. */
+    public static BuildExecutionContext prepareRegistered(int pairId, List<Path> protectedRoots)
+            throws SQLException, IOException {
+        try (Connection connection = Common.getConnection()) {
+            return org.starexec.jobs.SolverBuildStaging.prepareRegistered(connection,pairId,protectedRoots);
+        }
+    }
+
+    /** Materializes private controls only after verifying this conserved active lease. */
+    public static BuildExecutionMounts prepareMounts(BuildExecutionContext build, DedicatedStorageResource resource,
+                                                    BuildExecutionMounts.Controls controls) throws SQLException, IOException {
+        try (Connection connection = Common.getConnection()) {
+            return BuildExecutionMounts.prepare(connection,build,resource,controls,resource.capacityBytes(),
+                    (int)Math.min(Integer.MAX_VALUE,resource.inodeLimit()));
+        }
+    }
+
+    public static Optional<RegisteredResource> registeredResource(BuildExecutionContext build) throws SQLException {
+        try (Connection connection = Common.getConnection()) { return registeredResource(connection,build); }
+    }
+
+    /** Publish cancellation's execution locator in the same transaction as engine admission. */
+    public static boolean admitPodman(BuildExecutionContext build, DedicatedStorageResource resource,
+                                      int execution, String container) throws SQLException {
+        try (Connection connection = Common.getConnection()) {
+            return admitPodman(connection,build,resource,execution,container);
+        }
+    }
+
+    public static boolean admitPodman(Connection connection, BuildExecutionContext build,
+                                      DedicatedStorageResource resource, int execution, String container) throws SQLException {
+        if (execution<1 || container==null || container.isBlank() || container.contains(":")) return false;
+        String engine="podman:"+execution+":"+container;
+        return transact(connection,transaction -> {
+            resource.requireUnchanged();
+            if (!call(transaction,"SELECT starexec.admit_leased_solver_build_execution(?,?,?,?,?,?,?,?,?)",
+                    build.artifactId(),build.pairId(),build.attemptNo(),build.token(),build.source().toString(),
+                    build.staging().toString(),resource.filesystemKey(),resource.identity(),engine)) return false;
+            // Admission retains job, pair and current-attempt locks until this locator commits.
+            try (var update=transaction.prepareStatement("UPDATE starexec.job_pairs p SET sge_id=?"
+                    + " FROM starexec.jobs j,starexec.job_pair_attempts a"
+                    + " WHERE p.id=? AND j.id=p.job_id AND a.pair_id=p.id AND a.current_attempt_no=?"
+                    + " AND p.status_code=? AND j.paused=FALSE AND j.killed=FALSE AND j.deleted=FALSE")) {
+                update.setInt(1,execution);update.setInt(2,build.pairId());update.setInt(3,build.attemptNo());
+                update.setInt(4,org.starexec.data.to.Status.StatusCode.STATUS_ENQUEUED.getVal());
+                if (update.executeUpdate()!=1) return false;
+            }
+            resource.requireUnchanged();
+            return true;
+        });
+    }
+
+    /** A paused, cancelled, completed or superseded pair cannot authorize a payload release. */
+    public static boolean claimPodmanRelease(BuildExecutionContext build, DedicatedStorageResource resource,
+                                             int execution, String container, UUID request,
+                                             BuildExecutionRuntime.Observation observation) throws SQLException {
+        if (execution<1 || container==null || container.isBlank() || container.contains(":")
+                || request==null || observation==null) return false;
+        try (Connection connection=Common.getConnection()) {
+            return claimPodmanRelease(connection,build,resource,execution,container,request,observation);
+        }
+    }
+
+    public static boolean claimPodmanRelease(Connection connection, BuildExecutionContext build,
+                                             DedicatedStorageResource resource, int execution, String container,
+                                             UUID request, BuildExecutionRuntime.Observation observation) throws SQLException {
+        if (execution<1 || container==null || container.isBlank() || container.contains(":")
+                || request==null || observation==null) return false;
+        return transact(connection,transaction -> {
+                resource.requireUnchanged();
+                String engine="podman:"+execution+":"+container;
+                if (!call(transaction,"SELECT starexec.claim_solver_build_release(?,?,?,?,?,?,?,?,?,?,?)",
+                        build.artifactId(),build.pairId(),build.attemptNo(),build.token(),
+                        build.source().toString(),build.staging().toString(),resource.filesystemKey(),resource.identity(),
+                        engine,request,JSON.toJson(Map.of("version",1,"observation",observation)))) return false;
+                try (var check=transaction.prepareStatement("SELECT 1 FROM starexec.job_pairs p"
+                        + " JOIN starexec.jobs j ON j.id=p.job_id"
+                        + " JOIN starexec.job_pair_attempts a ON a.pair_id=p.id"
+                        + " WHERE p.id=? AND p.sge_id=? AND a.current_attempt_no=? AND p.status_code IN (?,?)"
+                        + " AND j.paused=FALSE AND j.killed=FALSE AND j.deleted=FALSE")) {
+                    check.setInt(1,build.pairId());check.setInt(2,execution);check.setInt(3,build.attemptNo());
+                    check.setInt(4,org.starexec.data.to.Status.StatusCode.STATUS_ENQUEUED.getVal());
+                    check.setInt(5,org.starexec.data.to.Status.StatusCode.STATUS_RUNNING.getVal());
+                    try (var rows=check.executeQuery()) { if (!rows.next()) return false; }
+                }
+                resource.requireUnchanged();
+                return true;
+        });
+    }
+
     public record StagingCleanup(UUID token, String stagingIdentity, Instant startedAt, Instant finishedAt, Instant releasedAt) { }
+
+    /** Registration is not a physical observation or permission to acquire a lease. */
+    public record RegisteredResource(String key, Path root, String identity, long bytes, long inodes) {
+        public DedicatedStorageResource inspect(List<Path> protectedRoots) throws IOException {
+            var observed = DedicatedStorageResource.inspect(root,
+                    new DedicatedStorageResource.Limits(bytes, inodes), protectedRoots);
+            if (!key.equals(observed.filesystemKey()) || !identity.equals(observed.identity())
+                    || bytes != observed.capacityBytes() || inodes != observed.inodeLimit()) {
+                throw new IOException("Registered execution resource differs from its physical observation");
+            }
+            return observed;
+        }
+    }
+
+    /** Candidates only; authoritative acquisition rechecks ownership, quota and exclusivity. */
+    public static List<RegisteredResource> availableResources(Connection connection, int owner) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT r.resource_key,r.root_path,r.observed_identity,r.capacity_bytes,r.inode_limit"
+                + " FROM starexec.execution_storage_resources r JOIN starexec.users u ON u.id=?"
+                + " WHERE r.capacity_bytes<=CASE WHEN u.disk_size>=0 AND u.disk_quota>=u.disk_size"
+                + " THEN u.disk_quota-u.disk_size END"
+                + " AND NOT EXISTS (SELECT 1 FROM starexec.solver_build_storage_leases l"
+                + " WHERE l.resource_key=r.resource_key AND l.released_at IS NULL)"
+                + " ORDER BY r.capacity_bytes,r.resource_key")) {
+            statement.setInt(1, owner);
+            try (var rows = statement.executeQuery()) {
+                List<RegisteredResource> result = new ArrayList<>();
+                while (rows.next()) result.add(registered(rows));
+                return List.copyOf(result);
+            }
+        }
+    }
+
+    /** Conserved locator only; callers must independently check current ownership and physical state. */
+    public static Optional<RegisteredResource> registeredResource(Connection connection, BuildExecutionContext build)
+            throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT r.resource_key,r.root_path,r.observed_identity,r.capacity_bytes,r.inode_limit"
+                + " FROM starexec.execution_storage_resources r"
+                + " JOIN starexec.solver_build_storage_leases l ON l.resource_key=r.resource_key"
+                + " JOIN starexec.solver_build_artifacts a ON a.id=l.artifact_id"
+                + " WHERE a.id=? AND a.origin_pair_id=? AND a.attempt_no=? AND a.execution_token=?"
+                + " AND a.source_path=? AND a.staging_path=? AND l.execution_token=a.execution_token")) {
+            Object[] arguments = {build.artifactId(),build.pairId(),build.attemptNo(),build.token(),
+                    build.source().toString(),build.staging().toString()};
+            for (int i=0;i<arguments.length;i++) statement.setObject(i+1,arguments[i]);
+            try (var rows = statement.executeQuery()) {
+                return rows.next() ? Optional.of(registered(rows)) : Optional.empty();
+            }
+        }
+    }
+
+    private static RegisteredResource registered(java.sql.ResultSet rows) throws SQLException {
+        return new RegisteredResource(rows.getString(1),Path.of(rows.getString(2)),rows.getString(3),
+                rows.getLong(4),rows.getLong(5));
+    }
 
     /** Input identity is a snapshot; engine admission must recheck the current execution. */
     public record DispatchInputs(int ownerId, long generation, Path source, SolverBuildArtifacts.Helper helper) { }
 
     public record ReleaseDecision(UUID requestToken, String engineIdentity, String runtimePayload,
                                   String runtimeSha256, Instant requestedAt) { }
+
+    public static Optional<ReleaseDecision> findReleaseDecision(BuildExecutionContext build,
+                                                                DedicatedStorageResource resource) throws SQLException {
+        try (Connection connection=Common.getConnection()) { return findReleaseDecision(connection,build,resource); }
+    }
+
+    public static Optional<StagingCleanup> findStagingCleanup(BuildExecutionContext build,
+                                                             DedicatedStorageResource resource) throws SQLException {
+        try (Connection connection=Common.getConnection()) { return findStagingCleanup(connection,build,resource); }
+    }
 
     /** Call only after trusted kernel validation. A committed existing decision never grants another release. */
     public static boolean claimRelease(Connection connection, BuildExecutionContext build,

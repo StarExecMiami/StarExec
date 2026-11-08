@@ -1351,6 +1351,9 @@ public class PodmanBackend implements Backend {
     public boolean supportsBuildStaging() { return true; }
 
     @Override
+    public boolean requiresLeasedBuildStaging() { return true; }
+
+    @Override
     public int submitScript(int pairId, String scriptPath, String workingDirectory,
                             String logPath, String queueName, BuildExecutionContext build) {
         return submitScriptInternal(pairId, scriptPath, workingDirectory, logPath, build);
@@ -1404,7 +1407,7 @@ public class PodmanBackend implements Backend {
         final String baseJobName = CONTAINER_PREFIX + timestamp;
 
         // Retry logic for handling intermittent "Broken pipe" errors with Podman
-        final int maxRetries = 3;
+        final int maxRetries = build == null ? 3 : 1;
         final long baseRetryDelay = 500; // milliseconds
 
         try {
@@ -1534,9 +1537,13 @@ public class PodmanBackend implements Backend {
         log.debug("Log path: " + logPath);
         log.debug("CPU partition: " + selectedPartition);
 
-        // Ensure log directory exists (use the directory part of logPath, as it may be a file path)
+        if (build != null && !usePrebuiltImage) {
+            throw new SubmissionDeferredException("Private builds require a prebuilt runner image");
+        }
+
+        // Ensure legacy log directories only; private monitor files belong to the leased resource.
         Path logDir = Paths.get(logPath).getParent();
-        if (logDir != null) {
+        if (build == null && logDir != null) {
             Files.createDirectories(logDir);
         }
 
@@ -1560,25 +1567,43 @@ public class PodmanBackend implements Backend {
             selectedPartition
         );
 
+        PodmanPrivateBuild privateBuild = null;
+        List<String> entrypoint = List.of("/bin/bash");
+        List<String> command = List.of(scriptPath);
+        if (build != null) {
+            Path controls = Path.of(org.starexec.constants.R.CONFIG_PATH).resolve("sge");
+            privateBuild = PodmanPrivateBuild.prepare(dockerClient,build,imageName,containerSocketPath,
+                    new org.starexec.backend.storage.BuildExecutionMounts.Controls(Path.of(scriptPath),
+                            controls.resolve("functions.bash"),controls.resolve("status_codes.bash")));
+            Map<Path,Path> providerSources = new LinkedHashMap<>();
+            for (var binding:privateBuild.mounts().bindings()) {
+                providerSources.put(binding.source(),Path.of(translateToHostPath(binding.source().toString())));
+            }
+            hostConfig = privateBuild.hostConfig(hostConfig,providerSources);
+            imageName = privateBuild.image();
+            workingDirectory = privateBuild.mounts().workingDirectory().toString();
+            entrypoint = privateBuild.entrypoint();
+            command = privateBuild.command();
+        }
+
         // Get output directory for container communication (status.json, etc.)
         String outputDir = logDir != null ? logDir.toString() : "/tmp/output";
 
-        List<String> envVars = createEnvironmentVariables(
+        List<String> envVars = privateBuild == null ? createEnvironmentVariables(
             pairId,
             workingDirectory,
             outputDir
-        );
-        if (build != null) {
-            build.environment().forEach((name, value) -> envVars.add(name + "=" + value));
-            hostConfig.withRestartPolicy(com.github.dockerjava.api.model.RestartPolicy.noRestart());
-        }
+        ) : privateBuild.environment();
         Map<String, String> labels = createContainerLabels(
             pairId,
             execId,
             selectedPartition,
             attemptNo
         );
-        if (build != null) labels.put(PodmanBuildStopObserver.ARTIFACT_LABEL, Long.toString(build.artifactId()));
+        if (build != null) {
+            labels.put(PodmanBuildStopObserver.ARTIFACT_LABEL,Long.toString(build.artifactId()));
+            labels.put(PodmanPrivateBuild.LAYOUT_LABEL,PodmanPrivateBuild.LAYOUT);
+        }
 
         // Log container creation parameters for debugging
         log.info("Creating container with:");
@@ -1594,8 +1619,7 @@ public class PodmanBackend implements Backend {
         );
         log.info("  Memory: " + hostConfig.getMemory());
         log.info("  EnvVars count: " + envVars.size());
-        log.info("  Entrypoint: [/bin/bash]");
-        log.info("  Cmd: [" + scriptPath + "]");
+        log.info("  Entrypoint: " + (privateBuild == null ? "Bash" : "trusted build hold"));
 
         // Try Java client first, fall back to curl if it fails with "Broken pipe"
         String containerId = null;
@@ -1604,17 +1628,22 @@ public class PodmanBackend implements Backend {
             // Override entrypoint to bypass the default image entrypoint
             // Use exec form (array) for proper entrypoint handling
             // Set hostname to match the worker node name in the database
-            CreateContainerResponse container = dockerClient
+            var creation = dockerClient
                 .createContainerCmd(imageName)
                 .withName(jobName)
                 .withHostName(selectedPartition.workerNodeName)
                 .withHostConfig(hostConfig)
                 .withEnv(envVars)
                 .withLabels(labels)
-                .withEntrypoint(new String[] { "/bin/bash" }) // Override image entrypoint as array
-                .withCmd(scriptPath) // Pass script as argument to bash
-                .withWorkingDir(workingDirectory)
-                .exec();
+                .withEntrypoint(entrypoint.toArray(String[]::new))
+                .withCmd(command.toArray(String[]::new))
+                .withWorkingDir(workingDirectory);
+            if (privateBuild != null) {
+                creation.withUser("0:0");
+                creation.withStopSignal("SIGTERM");
+                creation.withHealthcheck(new com.github.dockerjava.api.model.HealthCheck().withTest(List.of("NONE")));
+            }
+            CreateContainerResponse container = creation.exec();
             containerId = container.getId();
             log.info("Container created via Java client: " + containerId);
         } catch (Exception e) {
@@ -1651,8 +1680,10 @@ public class PodmanBackend implements Backend {
                     envVars,
                     labels,
                     selectedPartition.workerNodeName,
-                    scriptPath,
-                    workingDirectory
+                    workingDirectory,
+                    entrypoint,
+                    command,
+                    privateBuild != null
                 );
                 log.info("Container created via curl: " + containerId);
             } else {
@@ -1671,13 +1702,22 @@ public class PodmanBackend implements Backend {
         } else {
             buildExecutions.put(execId, containerId);
             execIdToContainerId.put(execId, containerId);
-            if (!admitBuildBeforeStart(build, execId, containerId)) return execId;
+            try {
+                privateBuild.requireCreated(dockerClient.inspectContainerCmd(containerId).exec(),containerId,execId);
+            } catch (Exception unavailable) {
+                log.error("Private build resource was not admitted for execution " + execId
+                    + "; container and capacity retained for reconciliation",unavailable);
+                return execId;
+            }
+            if (!admitBuildBeforeStart(build, execId, containerId, privateBuild)) return execId;
             try {
                 dockerClient.startContainerCmd(containerId).exec();
+                privateBuild.release(dockerClient,execId,containerId);
             } catch (Exception failure) {
                 // A failed response is not proof that start failed at the engine. Keep the
                 // exact resource and its capacity; never retry by creating another build.
-                log.error("Build start outcome is unresolved for execution " + execId
+                if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
+                log.error("Build start or release did not complete for execution " + execId
                     + "; container and capacity retained for observation", failure);
                 return execId;
             }
@@ -1703,13 +1743,15 @@ public class PodmanBackend implements Backend {
         return execId;
     }
 
-    private boolean admitBuildBeforeStart(BuildExecutionContext build, int execId, String containerId) {
+    private boolean admitBuildBeforeStart(BuildExecutionContext build, int execId, String containerId,
+                                           PodmanPrivateBuild privateBuild) {
         boolean admitted = false;
         try {
-            admitted = org.starexec.data.database.SolverBuildArtifacts.admitExecution(
-                build, "podman:" + execId + ":" + containerId);
-        } catch (java.sql.SQLException | RuntimeException failure) {
-            log.warn("Could not commit build execution admission for execution " + execId, failure);
+            admitted = privateBuild.admit(execId,containerId);
+        } catch (java.sql.SQLException | IOException | RuntimeException failure) {
+            log.warn("Build execution admission is unresolved for execution " + execId
+                + "; container and capacity retained for reconciliation", failure);
+            return false;
         }
         if (admitted) return true;
 
@@ -1880,155 +1922,46 @@ public class PodmanBackend implements Backend {
      *
      * @return The container ID
      */
-    private String createContainerWithCurl(
-        String name,
-        String image,
-        HostConfig hostConfig,
-        List<String> env,
-        Map<String, String> labels,
-        String hostName,
-        String scriptPath,
-        String workDir
-    ) throws Exception {
-        // Build JSON payload for container creation
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"Image\":\"").append(escapeJson(image)).append("\",");
-        json
-            .append("\"Hostname\":\"")
-            .append(escapeJson(hostName))
-            .append("\",");
-        json.append("\"Entrypoint\":[\"/bin/bash\"],");
-        json
-            .append("\"Cmd\":[\"")
-            .append(escapeJson(scriptPath))
-            .append("\"],");
-        json
-            .append("\"WorkingDir\":\"")
-            .append(escapeJson(workDir))
-            .append("\",");
-
-        // Environment variables
-        json.append("\"Env\":[");
-        for (int i = 0; i < env.size(); i++) {
-            if (i > 0) json.append(",");
-            json.append("\"").append(escapeJson(env.get(i))).append("\"");
+    private String createContainerWithCurl(String name, String image, HostConfig hostConfig,
+                                            List<String> env, Map<String,String> labels, String hostName,
+                                            String workDir, List<String> entrypoint,
+                                            List<String> command, boolean privateBuild) throws Exception {
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("Image", image);
+        request.put("Hostname", hostName);
+        request.put("Entrypoint",entrypoint);
+        request.put("Cmd",command);
+        request.put("WorkingDir", workDir);
+        request.put("Env", env);
+        request.put("Labels", labels);
+        request.put("HostConfig", hostConfig);
+        if (privateBuild) {
+            request.put("User","0:0");
+            request.put("StopSignal","SIGTERM");
+            request.put("Healthcheck",Map.of("Test",List.of("NONE")));
         }
-        json.append("],");
-
-        // Labels
-        json.append("\"Labels\":{");
-        int labelIdx = 0;
-        for (Map.Entry<String, String> entry : labels.entrySet()) {
-            if (labelIdx > 0) json.append(",");
-            json.append("\"").append(escapeJson(entry.getKey())).append("\":");
-            json.append("\"").append(escapeJson(entry.getValue())).append("\"");
-            labelIdx++;
-        }
-        json.append("},");
-
-        // HostConfig
-        json.append("\"HostConfig\":{");
-        if (hostConfig.getRestartPolicy() != null) {
-            json.append("\"RestartPolicy\":{\"Name\":\"")
-                .append(escapeJson(hostConfig.getRestartPolicy().getName())).append("\"},");
-        }
-
-        // Binds
-        Bind[] binds = hostConfig.getBinds();
-        if (binds != null && binds.length > 0) {
-            json.append("\"Binds\":[");
-            for (int i = 0; i < binds.length; i++) {
-                if (i > 0) json.append(",");
-                String bindStr =
-                    binds[i].getPath() + ":" + binds[i].getVolume().getPath();
-                // Check if read-only via access mode
-                if (
-                    binds[i].getAccessMode() ==
-                    com.github.dockerjava.api.model.AccessMode.ro
-                ) {
-                    bindStr += ":ro";
-                }
-                json.append("\"").append(escapeJson(bindStr)).append("\"");
-            }
-            json.append("],");
-        }
-
-        // Network mode
-        if (hostConfig.getNetworkMode() != null) {
-            json
-                .append("\"NetworkMode\":\"")
-                .append(escapeJson(hostConfig.getNetworkMode()))
-                .append("\",");
-        }
-
-        // Memory limits
-        if (hostConfig.getMemory() != null) {
-            json
-                .append("\"Memory\":")
-                .append(hostConfig.getMemory())
-                .append(",");
-        }
-        if (hostConfig.getMemorySwap() != null) {
-            json
-                .append("\"MemorySwap\":")
-                .append(hostConfig.getMemorySwap())
-                .append(",");
-        }
-
-        // CPU limits
-        if (hostConfig.getCpuPeriod() != null) {
-            json
-                .append("\"CpuPeriod\":")
-                .append(hostConfig.getCpuPeriod())
-                .append(",");
-        }
-        if (hostConfig.getCpuQuota() != null) {
-            json
-                .append("\"CpuQuota\":")
-                .append(hostConfig.getCpuQuota())
-                .append(",");
-        }
-
-        // Cpuset CPU/memory pinning must be preserved in the curl fallback path.
-        if (
-            hostConfig.getCpusetCpus() != null &&
-            !hostConfig.getCpusetCpus().isEmpty()
-        ) {
-            json
-                .append("\"CpusetCpus\":\"")
-                .append(escapeJson(hostConfig.getCpusetCpus()))
-                .append("\",");
-        }
-        if (
-            hostConfig.getCpusetMems() != null &&
-            !hostConfig.getCpusetMems().isEmpty()
-        ) {
-            json
-                .append("\"CpusetMems\":\"")
-                .append(escapeJson(hostConfig.getCpusetMems()))
-                .append("\",");
-        }
-
-        // Remove trailing comma and close HostConfig
-        String jsonStr = json.toString();
-        if (jsonStr.endsWith(",")) {
-            jsonStr = jsonStr.substring(0, jsonStr.length() - 1);
-        }
-        jsonStr += "}}";
-
-        log.debug("Container creation JSON: " + jsonStr);
+        String jsonStr = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(request);
+        log.debug("Creating container " + name + " through the fallback transport");
 
         // Get socket path (strip unix:// prefix if present)
         String socketPath = containerSocketPath;
         if (socketPath.startsWith("unix://")) {
             socketPath = socketPath.substring(7);
         }
+        int timeout = EnvironmentConfig.getContainerResponseTimeout();
+        int connectTimeout = EnvironmentConfig.getContainerConnectionTimeout();
+        if (timeout < 1 || connectTimeout < 1) throw new IOException("Container transport timeouts must be positive");
 
         // Execute curl command
         ProcessBuilder pb = new ProcessBuilder(
             "curl",
+            "-q",
             "-s",
+            "--show-error",
+            "--fail",
+            "--noproxy", "*",
+            "--connect-timeout", Integer.toString(connectTimeout),
+            "--max-time", Integer.toString(timeout),
             "-X",
             "POST",
             "--unix-socket",
@@ -2042,56 +1975,29 @@ public class PodmanBackend implements Backend {
         pb.redirectErrorStream(true);
 
         Process process = pb.start();
-        String output;
-        try (
-            java.io.BufferedReader reader = new java.io.BufferedReader(
-                new java.io.InputStreamReader(process.getInputStream())
-            )
-        ) {
-            output = reader
-                .lines()
-                .collect(java.util.stream.Collectors.joining("\n"));
-        }
-
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new Exception(
-                "curl failed with exit code " + exitCode + ": " + output
-            );
-        }
-
-        log.debug("curl response: " + output);
-
-        // Parse container ID from JSON response: {"Id":"...", "Warnings":[...]}
-        String containerId = null;
-        if (output.contains("\"Id\":")) {
-            int start = output.indexOf("\"Id\":\"") + 6;
-            int end = output.indexOf("\"", start);
-            if (start > 5 && end > start) {
-                containerId = output.substring(start, end);
+        boolean finished = false;
+        try (var input = process.getInputStream()) {
+            finished = process.waitFor(timeout, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) throw new IOException("Container creation transport timed out; its outcome is unknown");
+            int exitCode = process.exitValue();
+            if (exitCode != 0) throw new IOException("Container creation transport exited with code " + exitCode);
+            byte[] output = input.readNBytes(16 * 1024 + 1);
+            if (output.length > 16 * 1024) throw new IOException("Container creation response exceeds its bound");
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper()
+                .enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+                .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+            var response = mapper.readTree(output);
+            var id = response == null ? null : response.get("Id");
+            if (id == null || !id.isTextual() || !id.textValue().matches("[0-9a-f]{64}")) {
+                throw new IOException("Container creation returned no verified resource identity");
             }
+            return id.textValue();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw interrupted;
+        } finally {
+            if (!finished) process.destroyForcibly();
         }
-
-        if (containerId == null || containerId.isEmpty()) {
-            throw new Exception(
-                "Failed to parse container ID from response: " + output
-            );
-        }
-
-        return containerId;
-    }
-
-    /**
-     * Escapes a string for use in JSON.
-     */
-    private String escapeJson(String s) {
-        if (s == null) return "";
-        return s
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t");
     }
 
     /**
@@ -3170,9 +3076,10 @@ public class PodmanBackend implements Backend {
                         exitCode = state.getExitCodeLong().intValue();
                     }
 
-                    String outputDir = null;
+                    String outputDir = PodmanBuildStopObserver.isBuild(inspection)
+                        ? PodmanPrivateBuild.stoppedOutputDirectory(inspection, container.getId()).toString() : null;
                     var config = inspection.getConfig();
-                    if (config != null && config.getEnv() != null) {
+                    if (outputDir == null && config != null && config.getEnv() != null) {
                         for (String env : config.getEnv()) {
                             if (env.startsWith("STAREXEC_OUTPUT_DIR=")) {
                                 outputDir = env.substring("STAREXEC_OUTPUT_DIR=".length());
@@ -3598,10 +3505,11 @@ public class PodmanBackend implements Backend {
                     exitCode = state.getExitCodeLong().intValue();
                 }
 
-                String outputDir = null;
+                String outputDir = PodmanBuildStopObserver.isBuild(inspection)
+                    ? PodmanPrivateBuild.stoppedOutputDirectory(inspection, container.getId()).toString() : null;
                 // First, try to get STAREXEC_OUTPUT_DIR from container's environment
                 var config = inspection.getConfig();
-                if (config != null && config.getEnv() != null) {
+                if (outputDir == null && config != null && config.getEnv() != null) {
                     for (String env : config.getEnv()) {
                         if (env.startsWith("STAREXEC_OUTPUT_DIR=")) {
                             outputDir = env.substring(
