@@ -2529,8 +2529,8 @@ public class PodmanBackend implements Backend {
                 log.debug("Container already stopped: " + containerId);
             }
 
-            // Remove container
-            removeContainerArtifacts(containerId, true);
+            // Conserve explicit cancellation before removing its physical stop evidence.
+            removeContainerArtifacts(containerId, true, true);
 
             execIdToContainerId.remove(execId);
             containerIdToPairId.invalidate(containerId);
@@ -3676,8 +3676,16 @@ public class PodmanBackend implements Backend {
     }
 
     private void removeContainerArtifacts(String containerId, boolean force) {
+        removeContainerArtifacts(containerId,force,false);
+    }
+
+    private void removeContainerArtifacts(String containerId, boolean force, boolean cancelled) {
         try {
-            observeStoppedBuild(dockerClient.inspectContainerCmd(containerId).exec(), containerId);
+            var inspection=dockerClient.inspectContainerCmd(containerId).exec();
+            if (cancelled) {
+                rememberBuild(inspection,containerId);
+                PodmanBuildStopObserver.recordCancelledIfBuild(inspection,containerId);
+            } else observeStoppedBuild(inspection,containerId);
         } catch (java.sql.SQLException failure) {
             throw new IllegalStateException("Could not conserve build stop evidence before cleanup", failure);
         }

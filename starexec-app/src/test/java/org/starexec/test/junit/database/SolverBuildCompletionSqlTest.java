@@ -179,6 +179,27 @@ class SolverBuildCompletionSqlTest extends Common {
         assertTrue(Files.isRegularFile(output().resolve("solver/program")));
     }
 
+    @ParameterizedTest @ValueSource(strings={"cancelled","never_started"})
+    void periodicRecorderSettlesExplicitNonCompletionWithoutPublishing(String disposition) throws Exception {
+        String backend=disposition.equals("never_started")?"kubernetes":"podman";
+        String engine=backend+":1001:synthetic-container";
+        assertTrue(ExecutionStorageLeases.admit(connection,build,resource,engine));
+        JsonObject facts=new JsonObject();facts.addProperty("status","exited");facts.addProperty("disposition",disposition);
+        if (disposition.equals("never_started")) { facts.addProperty("suspended",true);facts.addProperty("pod_count",0); }
+        var receipt=SolverBuildStopReceipt.observed(backend,build.artifactId(),pair,1,engine,"synthetic-container",Instant.now(),facts);
+        assertTrue(disposition.equals("never_started")
+                ?SolverBuildArtifacts.recordUnstarted(connection,pair,1,build.token(),engine,receipt)
+                :SolverBuildArtifacts.recordCancelled(connection,pair,1,build.token(),engine,receipt));
+        long status=number(connection,"SELECT status_code FROM starexec.job_pairs WHERE id=?",pair);
+        record(store);record(store);
+        assertEquals("REJECTED",SolverBuildArtifacts.find(connection,pair,1).orElseThrow().state());
+        assertEquals(receipt.payload(),SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt().payload());
+        assertEquals(originalBytes,usage());assertEquals(0,activeLeases());assertFalse(Files.exists(build.staging()));
+        assertFalse(Files.exists(output()));assertTrue(SolverBuildArtifacts.findOutputManifest(connection,build.artifactId()).isEmpty());
+        assertEquals(status,number(connection,"SELECT status_code FROM starexec.job_pairs WHERE id=?",pair));
+        assertEquals("original source\n",Files.readString(source.resolve("starexec_build")));
+    }
+
     @ParameterizedTest @ValueSource(strings={"missing","shared","permissions","linked","quota","unreleased","nonterminal"})
     void unverifiedPublicationConservesItsStagingAndAccounting(String condition) throws Exception {
         stopped(!condition.equals("unreleased"),condition.equals("nonterminal")?4:7);

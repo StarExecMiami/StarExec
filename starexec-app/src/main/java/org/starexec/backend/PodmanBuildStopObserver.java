@@ -29,6 +29,14 @@ final class PodmanBuildStopObserver {
     }
 
     static void recordIfBuild(InspectContainerResponse inspection, String containerId) throws SQLException {
+        recordIfBuild(inspection,containerId,false);
+    }
+
+    static void recordCancelledIfBuild(InspectContainerResponse inspection, String containerId) throws SQLException {
+        recordIfBuild(inspection,containerId,true);
+    }
+
+    private static void recordIfBuild(InspectContainerResponse inspection, String containerId, boolean cancellationRequested) throws SQLException {
         if (!isBuild(inspection)) return;
         Identity identity = identity(inspection, containerId);
         var state = inspection.getState();
@@ -55,6 +63,10 @@ final class PodmanBuildStopObserver {
         facts.addProperty("started_at", state.getStartedAt()); facts.addProperty("finished_at", state.getFinishedAt());
         facts.addProperty("exit_code", state.getExitCodeLong());
         var existing = SolverBuildArtifacts.findStopReceipt(identity.pair(), identity.attempt());
+        boolean cancelled=cancellationRequested || existing.isPresent()
+                && existing.get().receipt().facts().has("disposition")
+                && "cancelled".equals(existing.get().receipt().facts().get("disposition").getAsString());
+        if (cancelled) facts.addProperty("disposition","cancelled");
         SolverBuildStopReceipt receipt;
         if (existing.isPresent()) {
             receipt = existing.get().receipt();
@@ -65,8 +77,10 @@ final class PodmanBuildStopObserver {
             receipt = SolverBuildStopReceipt.observed("podman", identity.artifact(), identity.pair(),
                     identity.attempt(), engine, containerId, Instant.now(), facts);
         }
-        require(SolverBuildArtifacts.recordStopReceipt(identity.pair(), identity.attempt(), artifact.executionToken(),
-                engine, receipt), "Could not conserve the build stop receipt");
+        boolean conserved=cancelled
+                ? SolverBuildArtifacts.recordCancelled(identity.pair(),identity.attempt(),artifact.executionToken(),engine,receipt)
+                : SolverBuildArtifacts.recordStopReceipt(identity.pair(),identity.attempt(),artifact.executionToken(),engine,receipt);
+        require(conserved, "Could not conserve the build stop receipt");
     }
 
     /** A refused launch can discard a positively observed never-started resource without claiming completion. */

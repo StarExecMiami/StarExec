@@ -69,6 +69,77 @@ class PodmanBuildStopObserverTest {
                 "/data/staging", null, null, token, admittedEngine, null, "PLANNED");
     }
 
+    private record Killing(PodmanBackend backend,RemoveContainerCmd remove) { }
+
+    private Killing killing() throws Exception {
+        var backend=new PodmanBackend();var client=mock(DockerClient.class);
+        Field clientField=PodmanBackend.class.getDeclaredField("dockerClient");clientField.setAccessible(true);clientField.set(backend,client);
+        Field tracked=PodmanBackend.class.getDeclaredField("execIdToContainerId");tracked.setAccessible(true);
+        ((Map<Integer,String>)tracked.get(backend)).put(1001,id);
+        var initial=mock(InspectContainerResponse.class);var running=mock(InspectContainerResponse.ContainerState.class);
+        when(initial.getState()).thenReturn(running);when(running.getRunning()).thenReturn(true);
+        var inspect=mock(InspectContainerCmd.class);when(client.inspectContainerCmd(id)).thenReturn(inspect);
+        when(inspect.exec()).thenReturn(initial,inspection);
+        var stop=mock(com.github.dockerjava.api.command.StopContainerCmd.class);
+        when(client.stopContainerCmd(id)).thenReturn(stop);when(stop.withTimeout(10)).thenReturn(stop);
+        var remove=mock(RemoveContainerCmd.class);when(client.removeContainerCmd(id)).thenReturn(remove);
+        when(remove.withForce(true)).thenReturn(remove);when(remove.withRemoveVolumes(true)).thenReturn(remove);
+        return new Killing(backend,remove);
+    }
+
+    @Test void stoppedCancellationIsPersistedBeforeExactContainerRemoval() throws Exception {
+        var target=killing();var backend=target.backend();var remove=target.remove();
+        AtomicReference<SolverBuildStopReceipt> conserved=new AtomicReference<>();
+        try (var dao=registered()) {
+            dao.when(()->SolverBuildArtifacts.recordCancelled(eq(42),eq(1),eq(token),eq(engine),any()))
+                    .thenAnswer(call->{conserved.set(call.getArgument(4));return true;});
+            doAnswer(call->{assertNotNull(conserved.get(),"Cancellation must be conserved before removing its provider evidence");return null;}).when(remove).exec();
+            assertTrue(backend.killPair(1001));
+            assertEquals("cancelled",conserved.get().facts().get("disposition").getAsString());
+            assertEquals(id,conserved.get().resourceId());
+            dao.verify(()->SolverBuildArtifacts.recordStopReceipt(anyInt(),anyInt(),any(),anyString(),any()),never());
+            verify(remove).exec();
+        }
+    }
+
+    @Test void unknownCancellationCommitConservesTheProviderAndTracking() throws Exception {
+        var target=killing();
+        try (var dao=registered()) {
+            dao.when(()->SolverBuildArtifacts.recordCancelled(anyInt(),anyInt(),any(),anyString(),any()))
+                    .thenThrow(new SQLException("Commit outcome is unknown"));
+            assertFalse(target.backend().killPair(1001));verify(target.remove(),never()).exec();
+            Field tracked=PodmanBackend.class.getDeclaredField("execIdToContainerId");tracked.setAccessible(true);
+            assertEquals(id,((Map<?,?>)tracked.get(target.backend())).get(1001));
+        }
+    }
+
+    @Test void normalObservationReusesAnAlreadyConservedCancellation() throws Exception {
+        AtomicReference<SolverBuildStopReceipt> first=new AtomicReference<>();
+        try (var dao=registered()) {
+            dao.when(()->SolverBuildArtifacts.recordCancelled(eq(42),eq(1),eq(token),eq(engine),any()))
+                    .thenAnswer(call->{first.compareAndSet(null,call.getArgument(4));return true;});
+            PodmanBuildStopObserver.recordCancelledIfBuild(inspection,id);
+            var receipt=first.get();assertNotNull(receipt);
+            dao.when(()->SolverBuildArtifacts.findStopReceipt(42,1)).thenReturn(Optional.of(new SolverBuildArtifacts.StoredStopReceipt(receipt,Instant.now())));
+            PodmanBuildStopObserver.recordIfBuild(inspection,id);
+            dao.verify(()->SolverBuildArtifacts.recordCancelled(42,1,token,engine,receipt),times(2));
+            dao.verify(()->SolverBuildArtifacts.recordStopReceipt(anyInt(),anyInt(),any(),anyString(),any()),never());
+        }
+    }
+
+    @Test void cancellationCannotRewriteAnOrdinaryCompletionReceipt() throws Exception {
+        AtomicReference<SolverBuildStopReceipt> first=new AtomicReference<>();
+        try (var dao=registered()) {
+            dao.when(()->SolverBuildArtifacts.recordStopReceipt(eq(42),eq(1),eq(token),eq(engine),any()))
+                    .thenAnswer(call->{first.set(call.getArgument(4));return true;});
+            PodmanBuildStopObserver.recordIfBuild(inspection,id);var receipt=first.get();assertNotNull(receipt);
+            dao.when(()->SolverBuildArtifacts.findStopReceipt(42,1)).thenReturn(Optional.of(new SolverBuildArtifacts.StoredStopReceipt(receipt,Instant.now())));
+            assertThrows(IllegalStateException.class,()->PodmanBuildStopObserver.recordCancelledIfBuild(inspection,id));
+            assertFalse(receipt.facts().has("disposition"));
+            dao.verify(()->SolverBuildArtifacts.recordCancelled(anyInt(),anyInt(),any(),anyString(),any()),never());
+        }
+    }
+
     @Test void deletionMustFollowTheDurableMatchingReceipt() throws Exception {
         var backend = new PodmanBackend(); var client = mock(DockerClient.class);
         Field field = PodmanBackend.class.getDeclaredField("dockerClient"); field.setAccessible(true); field.set(backend, client);

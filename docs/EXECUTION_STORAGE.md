@@ -254,6 +254,18 @@ build layouts remain unresolved. The periodic build recorder applies conserved
 managed outcomes and reclaims staging only after immutable output readback.
 Positive process termination and independent staging reclamation remain required.
 
+Explicit Podman cancellation conserves its positive stop observation and atomic
+output rejection before removing the container. An unavailable or uncertain
+cancellation commit retains the container and tracking. Later observations reuse
+the exact cancelled receipt; they cannot turn it into a normal completion or
+rewrite an already conserved normal receipt. The periodic recorder discards
+cancelled staging only through the existing non-completion cleanup contract.
+
+Podman launch refusal without admission, and cancellation racing an already
+conserved ordinary completion receipt, still require compatible recovery handling.
+Retain their resource ownership and charges; do not substitute a Kubernetes
+non-execution receipt or infer settlement from a terminal pair status.
+
 ### Immutable publication and Podman consumers
 
 Set `STAREXEC_BUILD_ARTIFACT_DIR` to an existing application-owned directory with
