@@ -1,6 +1,5 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -69,8 +68,8 @@ import static org.starexec.test.TemporaryFolders.newFolder;
  * write is recorded as a separate call, so a double or partial write is visible, and each stage's
  * attributes are compared as an exact map.
  *
- * <p>Every test runs once per backend. Local polls while a pair runs, so the mid-run tests are
- * Local's alone; Podman and Kubernetes ingest once, after the job has exited.
+ * <p>Common scenarios run once per backend. Local polls while a pair runs, so live-poll and
+ * helper-only scenarios enumerate Local alone; Podman and Kubernetes ingest after job exit.
  */
 public class StageResultAttributionTest {
 
@@ -88,6 +87,11 @@ public class StageResultAttributionTest {
 	public static Object[] backends() {
 		return Backend.values();
 	}
+
+	public static Object[] localBackend() {
+		return new Object[] { Backend.LOCAL };
+	}
+
 	public Backend backend;
 
 	@TempDir
@@ -264,11 +268,10 @@ public class StageResultAttributionTest {
 	}
 
 	/** Local polls mid-stage-1: stage 1's snapshot still says RUNNING, so nothing is consumed. */
-	@MethodSource("backends")
+	@MethodSource("localBackend")
 	@ParameterizedTest(name = "{0}")
 	public void aLocalPollDuringStageOneRecordsNothing(Backend backend) throws Exception {
 		initStageResultAttributionTest(backend);
-		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM);
@@ -285,11 +288,10 @@ public class StageResultAttributionTest {
 	 * status.json still names stage 1 as running, so nothing is consumed yet -- and once the pair
 	 * completes, both stages are recorded from their own files.
 	 */
-	@MethodSource("backends")
+	@MethodSource("localBackend")
 	@ParameterizedTest(name = "{0}")
 	public void aLocalPollDuringStageTwoRecordsNothingUntilThePairCompletes(Backend backend) throws Exception {
 		initStageResultAttributionTest(backend);
-		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -320,11 +322,10 @@ public class StageResultAttributionTest {
 	 * attributes, has started over: the files this poll already read belong to the attempt the
 	 * rerun replaced, so none of them may be written against the pair.
 	 */
-	@MethodSource("backends")
+	@MethodSource("localBackend")
 	@ParameterizedTest(name = "{0}")
 	public void aLocalPollSupersededAfterTheStatusWriteRecordsNoAttributes(Backend backend) throws Exception {
 		initStageResultAttributionTest(backend);
-		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -508,11 +509,10 @@ public class StageResultAttributionTest {
 	}
 
 	/** Clearing never follows a link planted where the marker belongs. */
-	@MethodSource("backends")
+	@MethodSource("localBackend")
 	@ParameterizedTest(name = "{0}")
 	public void aLinkedMarkerIsReplacedRatherThanClearedThrough(Backend backend) throws Exception {
 		initStageResultAttributionTest(backend);
-		Assumptions.assumeTrue(backend == Backend.LOCAL); // a property of the helper alone
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.run(0);
@@ -532,11 +532,10 @@ public class StageResultAttributionTest {
 	}
 
 	/** Rollback: an older monitor reads attributes.txt, which the new helper still publishes. */
-	@MethodSource("backends")
+	@MethodSource("localBackend")
 	@ParameterizedTest(name = "{0}")
 	public void theLegacyFileIsStillPublishedForAnOlderMonitor(Backend backend) throws Exception {
 		initStageResultAttributionTest(backend);
-		Assumptions.assumeTrue(backend == Backend.LOCAL); // a property of the helper alone
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -684,11 +683,10 @@ public class StageResultAttributionTest {
 	 * Local polls a finished stage again and again. Each poll records the same measurements, and
 	 * the user is still charged each stage's disk once.
 	 */
-	@MethodSource("backends")
+	@MethodSource("localBackend")
 	@ParameterizedTest(name = "{0}")
 	public void repeatedLocalPollsChargeEachStageOnce(Backend backend) throws Exception {
 		initStageResultAttributionTest(backend);
-		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -710,12 +708,11 @@ public class StageResultAttributionTest {
 	 * Local polls mid-stage-2, after stage 2's copyOutput published but before the stage
 	 * finished: nothing is recorded yet, not stage 2's numbers under whatever stats.json names.
 	 */
-	@MethodSource("backends")
+	@MethodSource("localBackend")
 	@ParameterizedTest(name = "{0}")
 	public void aLocalPollDuringStageTwoRecordsNoMeasurementsUntilThePairCompletes(Backend backend)
 			throws Exception {
 		initStageResultAttributionTest(backend);
-		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -738,11 +735,10 @@ public class StageResultAttributionTest {
 	}
 
 	/** As for attributes: a rerun registered at the status write has started over. */
-	@MethodSource("backends")
+	@MethodSource("localBackend")
 	@ParameterizedTest(name = "{0}")
 	public void aLocalPollSupersededAfterTheStatusWriteRecordsNoMeasurements(Backend backend) throws Exception {
 		initStageResultAttributionTest(backend);
-		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -854,11 +850,10 @@ public class StageResultAttributionTest {
 	}
 
 	/** The helper declares the protocol when the pair starts, before any stage publishes. */
-	@MethodSource("backends")
+	@MethodSource("localBackend")
 	@ParameterizedTest(name = "{0}")
 	public void theMeasurementsMarkerIsCreatedWhenThePairStarts(Backend backend) throws Exception {
 		initStageResultAttributionTest(backend);
-		Assumptions.assumeTrue(backend == Backend.LOCAL); // a property of the helper alone
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.run(0);
