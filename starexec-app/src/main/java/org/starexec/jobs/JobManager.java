@@ -722,6 +722,7 @@ public abstract class JobManager {
 						log.trace("About to submit pair " + pair.getId());
 
 						try {
+							requireLegacyBuildDispatch(s.job, pair);
 							// Write the script that will run this individual pair
 							final String scriptPath = JobManager.writeJobScript(s.jobTemplate, s.job, pair, q);
 							log.trace("About to get the log path from the database...");
@@ -834,6 +835,26 @@ public abstract class JobManager {
 		}
 
 	} // end submitJobs()
+
+	/** A registry read is a replay guard, never permission to launch a managed execution. */
+	private static void requireLegacyBuildDispatch(Job job, JobPair pair) {
+		if (!job.isBuildJob()) return;
+		try {
+			var artifact = SolverBuildArtifacts.findCurrent(pair.getId()).orElse(null);
+			if (artifact != null && (artifact.executionToken() != null || artifact.stagingPath() != null
+					|| artifact.engineIdentity() != null || artifact.stoppedAt() != null
+					|| artifact.storageRoot() != null || artifact.solverPath() != null
+					|| !"PLANNED".equals(artifact.state()))) {
+				throw new SubmissionDeferredException("Registered build requires managed dispatch or recovery");
+			}
+			if (SolverBuildArtifacts.hasManagedHistory(pair.getId())) {
+				throw new SubmissionDeferredException("Earlier managed build attempt requires reconciliation");
+			}
+		} catch (SQLException unavailable) {
+			log.warn("Build registry unavailable before dispatch of pair " + pair.getId(), unavailable);
+			throw new SubmissionDeferredException("Build registry unavailable; pair stays queued");
+		}
+	}
 
 	private static void cleanupSubmittedBackendWork(int pairId, int execId, String reason) {
 		log.warn(

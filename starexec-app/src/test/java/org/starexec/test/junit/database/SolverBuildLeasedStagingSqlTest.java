@@ -115,6 +115,73 @@ class SolverBuildLeasedStagingSqlTest extends Common {
         assertTrue(connection.getAutoCommit());
     }
 
+    @Test void legacyDispatchHistoryAllowsAnUnboundPlannedAttempt() throws Exception {
+        assertEquals("PLANNED", SolverBuildArtifacts.findCurrent(connection, pair).orElseThrow().state());
+        assertFalse(SolverBuildArtifacts.hasManagedHistory(pair));
+        assertFalse(SolverBuildArtifacts.hasManagedHistory(-1));
+        assertEquals(20, usage());
+        assertEquals(0, leases());
+    }
+
+    @Test void legacyDispatchHistoryIncludesCommittedLeasedPreparation() throws Exception {
+        var build = prepare();
+        assertNull(SolverBuildArtifacts.findCurrent(connection, pair).orElseThrow().engineIdentity());
+        assertTrue(SolverBuildArtifacts.hasManagedHistory(pair));
+        assertEquals(build.token(), SolverBuildArtifacts.findCurrent(connection, pair).orElseThrow().executionToken());
+        assertEquals(532, usage());
+        assertEquals(1, leases());
+    }
+
+    @Test void legacyDispatchHistoryIncludesRegistryOnlyPreparation() throws Exception {
+        UUID token = UUID.randomUUID();
+        assertTrue(SolverBuildArtifacts.prepare(connection, pair, 1, token, slot.resolve("build-" + token)));
+        assertEquals(0, leases());
+        assertEquals(0, contents());
+        assertTrue(SolverBuildArtifacts.hasManagedHistory(pair));
+    }
+
+    @Test void legacyDispatchHistorySurvivesAChangeOfCurrentAttempt() throws Exception {
+        var build = prepare();
+        try (var update = connection.prepareStatement(
+                "UPDATE starexec.job_pair_attempts SET current_attempt_no=2 WHERE pair_id=?")) {
+            update.setInt(1, pair);
+            assertEquals(1, update.executeUpdate());
+        }
+        var current = SolverBuildArtifacts.findCurrent(connection, pair).orElseThrow();
+        assertEquals(2, current.attemptNo());
+        assertNull(current.executionToken());
+        assertEquals("PLANNED", current.state());
+        assertTrue(SolverBuildArtifacts.hasManagedHistory(pair));
+        assertEquals(build.token(), SolverBuildArtifacts.find(connection, pair, 1).orElseThrow().executionToken());
+    }
+
+    @Test void legacyDispatchHistoryDoesNotRejectAnEarlierUnboundLegacyOutcome() throws Exception {
+        try (var reject = connection.prepareStatement(
+                "UPDATE starexec.solver_build_artifacts SET state='REJECTED' WHERE origin_pair_id=?")) {
+            reject.setInt(1, pair);
+            assertEquals(1, reject.executeUpdate());
+        }
+        try (var update = connection.prepareStatement(
+                "UPDATE starexec.job_pair_attempts SET current_attempt_no=2 WHERE pair_id=?")) {
+            update.setInt(1, pair);
+            assertEquals(1, update.executeUpdate());
+        }
+        assertEquals("PLANNED", SolverBuildArtifacts.findCurrent(connection, pair).orElseThrow().state());
+        assertFalse(SolverBuildArtifacts.hasManagedHistory(pair));
+    }
+
+    @Test void legacyDispatchHistorySurvivesLivePairDeletion() throws Exception {
+        var build = prepare();
+        try (var remove = connection.prepareStatement("DELETE FROM starexec.job_pairs WHERE id=?")) {
+            remove.setInt(1, pair);
+            assertEquals(1, remove.executeUpdate());
+        }
+        assertTrue(SolverBuildArtifacts.hasManagedHistory(pair));
+        assertEquals(build.token(), SolverBuildArtifacts.find(connection, pair, 1).orElseThrow().executionToken());
+        assertEquals(532, usage());
+        assertEquals(1, leases());
+    }
+
     @Test void leaseAndAllowanceAreCommittedBeforeTheFirstDirectoryWrite() throws Exception {
         AtomicInteger creations=new AtomicInteger();
         try (var physical=mockStatic(Files.class,invocation->{

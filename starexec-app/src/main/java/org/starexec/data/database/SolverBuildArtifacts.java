@@ -293,6 +293,21 @@ public final class SolverBuildArtifacts {
         return find(connection, pairId, JobPairs.getCurrentAttemptNo(connection, pairId));
     }
 
+    /** Compatibility preflight only; absence does not authorize a concurrent execution. */
+    public static boolean hasManagedHistory(int pairId) throws SQLException {
+        try (Connection connection = Common.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT EXISTS (SELECT 1 FROM starexec.solver_build_artifacts WHERE origin_pair_id=?"
+                     + " AND (execution_token IS NOT NULL OR staging_path IS NOT NULL OR engine_identity IS NOT NULL"
+                     + " OR execution_stopped_at IS NOT NULL OR storage_root IS NOT NULL OR artifact_path IS NOT NULL))")) {
+            statement.setInt(1, pairId);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) throw new SQLException("Build history observation is unavailable");
+                return result.getBoolean(1);
+            }
+        }
+    }
+
     /** Historical lookup remains possible after the live pair or solver is deleted. */
     public static Optional<Artifact> find(Connection con, int pairId, int attemptNo) throws SQLException {
         try (PreparedStatement ps = con.prepareStatement(

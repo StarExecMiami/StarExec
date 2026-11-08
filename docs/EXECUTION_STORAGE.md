@@ -72,6 +72,16 @@ transaction helpers keep their caller's commit ownership; standalone operations
 continue to refuse foreign transactions. The older path-based preparation methods
 remain registry utilities and do not establish a private runtime mount boundary.
 
+The queued dispatcher checks build registration before writing a script or
+replacing a log. An already prepared, execution-bound or closed current attempt
+cannot fall through to legacy submission. Managed history on an earlier attempt
+also bars that fallback: the legacy outcome recorder excludes those pairs.
+Unavailable registry reads defer the pair with its captured execution identity,
+preserving its output and pending status. Ordinary jobs and unbound legacy builds
+retain their existing dispatch path. This read preflight does not grant launch
+permission or replace the leased admission, runtime observation and recovery
+required by a managed dispatcher.
+
 `ExecutionStorageLeases.findDispatchInputs` captures the exact source and retained
 helper only for a current, unbound attempt with a committed active lease. It checks
 the helper's original owner, path, booked bytes and retirement state under the
