@@ -76,6 +76,35 @@ class PodmanCreateOnceHttpClientTest {
     }
 
     @ParameterizedTest
+    @ValueSource(ints={429,503})
+    @Timeout(20)
+    void startPermissionCannotBeReplayedByHttpRecovery(int status) throws Exception {
+        assertSingleLifecycleWrite("/containers/"+"a".repeat(64)+"/start",status);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints={429,503})
+    @Timeout(20)
+    void releasePermissionCannotBeReplayedByHttpRecovery(int status) throws Exception {
+        assertSingleLifecycleWrite("/v1.44/containers/"+"a".repeat(64)+"/kill?signal=USR2",status);
+    }
+
+    private void assertSingleLifecycleWrite(String path,int status) throws Exception {
+        AtomicInteger received=new AtomicInteger();
+        HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        server.createContext(path.split("\\?",2)[0],exchange->{
+            try {received.incrementAndGet();exchange.getRequestBody().readAllBytes();exchange.sendResponseHeaders(status,-1);}
+            finally {exchange.close();}
+        });
+        server.start();
+        try(DockerHttpClient client=client(server.getAddress().getPort())) {
+            var request=DockerHttpClient.Request.builder().method("POST").path(path).build();
+            try(var response=client.execute(request)) {assertEquals(status,response.getStatusCode());}
+            assertEquals(1,received.get(),"One lifecycle permission must not become two HTTP writes");
+        } finally {server.stop(0);}
+    }
+
+    @ParameterizedTest
     @ValueSource(strings={"/containers/json","/containers/create-extra","/v1.44/containers/id/start"})
     void unrelatedRequestsAreDelegatedUnchanged(String path) throws Exception {
         DockerHttpClient delegate=mock(DockerHttpClient.class);
