@@ -33,6 +33,7 @@ import org.starexec.backend.PodmanBackend;
 import org.starexec.backend.PodmanPrivateBuild;
 import org.starexec.backend.storage.BuildExecutionMounts;
 import org.starexec.backend.exception.BackendTransientException;
+import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.PublishedSolverInputs;
 import org.starexec.data.to.Status.StatusCode;
@@ -92,7 +93,7 @@ public class PodmanBackendTests {
     private MockedStatic<PublishedSolverInputs> publishedInputs;
 
     // Test constants
-    private static final String TEST_CONTAINER_ID = "abc123def456";
+    private static final String TEST_CONTAINER_ID = "abc123def456"+"0".repeat(52);
     private static final String TEST_CONTAINER_NAME = "starexec-job-test";
     private static final int TEST_EXEC_ID = 1001;
 
@@ -868,7 +869,7 @@ public class PodmanBackendTests {
         return build;
     }
 
-    /** Isolate orchestration tests from real provider sockets; policy guards have their own tests. */
+    /** Provider-policy validation is covered separately from backend control-flow tests. */
     private BuildExecutionMounts stubPrivateBuild(org.starexec.backend.BuildExecutionContext build) throws Exception {
         var mounts=mock(BuildExecutionMounts.class,CALLS_REAL_METHODS);
         doReturn(List.of()).when(mounts).bindings();
@@ -876,6 +877,8 @@ public class PodmanBackendTests {
         privatePlan=plan;
         when(plan.mounts()).thenReturn(mounts);
         when(plan.image()).thenReturn("sha256:"+"a".repeat(64));
+        when(plan.creationName()).thenReturn(org.starexec.data.database.SolverBuildCreations.containerName(build));
+        when(plan.claimCreation(anyInt(),any(org.starexec.data.database.SolverBuildCreations.Transport.class),anyString())).thenReturn(true);
         when(plan.entrypoint()).thenReturn(org.starexec.backend.storage.BuildExecutionHold.entrypoint(60));
         var command=org.starexec.backend.storage.BuildExecutionHold.command(mounts.script());
         when(plan.command()).thenReturn(command);
@@ -897,6 +900,97 @@ public class PodmanBackendTests {
     private int submitBuild(org.starexec.backend.BuildExecutionContext build) {
         return backend.submitScript(42, tempDir.resolve("script.sh").toString(),
             tempDir.toString(), tempDir.resolve("job.log").toString(), "queue", build);
+    }
+
+    @Test
+    public void aLostBuildCreateReplyAndFailedLookupRetainActiveOwnershipWithoutResend() throws Exception {
+        configureBackendForSubmitScript();configureCreateContainerSuccess(TEST_CONTAINER_ID);var build=buildContext();
+        when(mockCreateContainerCmd.exec()).thenThrow(new IllegalStateException("Synthetic lost create response"));
+        when(mockListContainersCmd.withNameFilter(anyCollection())).thenReturn(mockListContainersCmd);
+        when(mockListContainersCmd.exec()).thenThrow(new IllegalStateException("Synthetic ownership lookup unavailable"));
+        try(var pairs=mockStatic(JobPairs.class)) {
+            pairs.when(()->JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            int execution=submitBuild(build);assertTrue(execution>0);
+            assertEquals(1,getActiveSubmissionSlots());assertTrue(backend.getActiveExecutionIds().contains(execution));
+            assertEquals(PodmanBackend.KillOutcome.UNPROVEN,backend.killPairConfirmed(execution));
+            assertEquals(1,getActiveSubmissionSlots());
+            verify(mockCreateContainerCmd).exec();verify(privatePlan).claimCreation(eq(execution),
+                    eq(org.starexec.data.database.SolverBuildCreations.Transport.JAVA),anyString());
+            verify(mockDockerClient,never()).startContainerCmd(anyString());verify(mockDockerClient,never()).removeContainerCmd(anyString());
+            verify(privatePlan,never()).admit(anyInt(),anyString());
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    public void aRefusedOrUnacknowledgedCreationClaimCannotSend(boolean responseLost) throws Exception {
+        configureBackendForSubmitScript();configureCreateContainerSuccess(TEST_CONTAINER_ID);var build=buildContext();
+        if(responseLost) when(privatePlan.claimCreation(anyInt(),any(),anyString())).thenThrow(new java.sql.SQLException("Synthetic lost claim response"));
+        else when(privatePlan.claimCreation(anyInt(),any(),anyString())).thenReturn(false);
+        try(var pairs=mockStatic(JobPairs.class)) {
+            pairs.when(()->JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            org.junit.jupiter.api.Assertions.assertThrows(SubmissionDeferredException.class,()->submitBuild(build));
+            verify(mockCreateContainerCmd,never()).exec();verify(mockDockerClient,never()).listContainersCmd();
+            verify(mockDockerClient,never()).startContainerCmd(anyString());assertTrue(getExecIdMap().isEmpty());
+            assertEquals(0,getActiveSubmissionSlots());assertTrue(backend.getActiveExecutionIds().isEmpty());
+        }
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(20)
+    public void aConsumedBuildCreationCannotSendAgainOrReleaseItsPriorPendingSlot() throws Exception {
+        configureBackendForSubmitScript();configureCreateContainerSuccess(TEST_CONTAINER_ID);var build=buildContext();
+        setBackendField("partitions",List.of(new CpuPartition(0,"2-3",null)));
+        ensurePartitionStateReady();
+        setBackendField("partitionMaxSlots",new int[]{2});
+        when(privatePlan.claimCreation(anyInt(),any(),anyString())).thenReturn(true,false);
+        when(mockCreateContainerCmd.exec()).thenThrow(new IllegalStateException("Synthetic lost create response"));
+        when(mockListContainersCmd.withNameFilter(anyCollection())).thenReturn(mockListContainersCmd);
+        when(mockListContainersCmd.exec()).thenThrow(new IllegalStateException("Synthetic lookup unavailable"));
+        try(var pairs=mockStatic(JobPairs.class)) {
+            pairs.when(()->JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            int owned=submitBuild(build);assertTrue(owned>0);assertEquals(1,getActiveSubmissionSlots());
+            org.junit.jupiter.api.Assertions.assertThrows(SubmissionDeferredException.class,()->submitBuild(build));
+            verify(mockCreateContainerCmd).exec();assertEquals(1,getActiveSubmissionSlots());
+            assertEquals(Set.of(owned),backend.getActiveExecutionIds());
+            verify(mockDockerClient,never()).startContainerCmd(anyString());
+        }
+    }
+
+    @Test
+    public void aLostBuildCreateReplyCanReuseOnlyTheSameExactOwnedResource() throws Exception {
+        configureBackendForSubmitScript();configureCreateContainerSuccess(TEST_CONTAINER_ID);var build=buildContext();
+        configureCreateFailsAfterTheEngineCreated(new IllegalStateException("Synthetic lost create response"));
+        doReturn(true).when(privatePlan).admit(anyInt(),anyString());
+        try(var pairs=mockStatic(JobPairs.class)) {
+            pairs.when(()->JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            int execution=submitBuild(build);assertTrue(execution>0);assertEquals(REUSED_CONTAINER_ID,getExecIdMap().get(execution));
+            verify(mockCreateContainerCmd).exec();verify(mockStartContainerCmd).exec();
+            verify(privatePlan).requireCreated(any(),eq(REUSED_CONTAINER_ID),eq(execution));
+            verify(privatePlan).release(eq(mockDockerClient),eq(execution),eq(REUSED_CONTAINER_ID));
+        }
+    }
+
+    @Test
+    public void onlyAPreSendJavaFailureCanSelectTheCurlBuildTransport() throws Exception {
+        configureBackendForSubmitScript();configureCreateContainerSuccess(TEST_CONTAINER_ID);var build=buildContext();
+        setBackendField("containerSocketPath","unix://"+tempDir.resolve("provider.sock"));
+        when(mockDockerClient.createContainerCmd(anyString())).thenThrow(new IllegalStateException("Broken pipe before command execution"));
+        doReturn(true).when(privatePlan).admit(anyInt(),anyString());
+        var process=mock(Process.class);
+        when(process.getInputStream()).thenReturn(new java.io.ByteArrayInputStream(("{\"Id\":\""+TEST_CONTAINER_ID+"\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        when(process.waitFor(anyLong(),any(java.util.concurrent.TimeUnit.class))).thenReturn(true);when(process.exitValue()).thenReturn(0);
+        try(var environment=mockStatic(org.starexec.config.EnvironmentConfig.class,CALLS_REAL_METHODS);
+            var builders=mockConstruction(ProcessBuilder.class,(builder,context)->{
+                when(builder.redirectErrorStream(true)).thenReturn(builder);when(builder.start()).thenReturn(process);
+            });var pairs=mockStatic(JobPairs.class)) {
+            environment.when(org.starexec.config.EnvironmentConfig::getContainerResponseTimeout).thenReturn(5);
+            environment.when(org.starexec.config.EnvironmentConfig::getContainerConnectionTimeout).thenReturn(2);
+            pairs.when(()->JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            int execution=submitBuild(build);assertTrue(execution>0);assertEquals(1,builders.constructed().size());
+            verify(privatePlan).claimCreation(eq(execution),eq(org.starexec.data.database.SolverBuildCreations.Transport.CURL),anyString());
+            verify(mockCreateContainerCmd,never()).exec();verify(privatePlan).release(eq(mockDockerClient),eq(execution),eq(TEST_CONTAINER_ID));
+        }
     }
 
     // ==================== Virtual Queue/Node Tests ====================
@@ -2355,7 +2449,7 @@ public class PodmanBackendTests {
     // diagnosed; and if the engine had already created the container before the client call
     // failed, curl's create was a second request for the same name.
 
-    private static final String REUSED_CONTAINER_ID = "reused0000container";
+    private static final String REUSED_CONTAINER_ID = "b".repeat(64);
 
     /**
      * The client call fails after the engine created the container: the existing container,

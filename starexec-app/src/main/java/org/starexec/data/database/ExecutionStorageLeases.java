@@ -117,6 +117,15 @@ public final class ExecutionStorageLeases {
             if (!call(transaction,"SELECT starexec.admit_leased_solver_build_execution(?,?,?,?,?,?,?,?,?)",
                     build.artifactId(),build.pairId(),build.attemptNo(),build.token(),build.source().toString(),
                     build.staging().toString(),resource.filesystemKey(),resource.identity(),engine)) return false;
+            // Admission owns the artifact lock, so a concurrent creation claim cannot appear after this observation.
+            try (var creation=transaction.prepareStatement("SELECT execution_token,execution_id,resource_key,resource_identity"
+                    +" FROM starexec.solver_build_creation_requests WHERE artifact_id=? FOR SHARE NOWAIT")) {
+                creation.setLong(1,build.artifactId());
+                try (var rows=creation.executeQuery()) {
+                    if (rows.next() && (!build.token().equals(rows.getObject(1,UUID.class)) || execution!=rows.getInt(2)
+                            || !resource.filesystemKey().equals(rows.getString(3)) || !resource.identity().equals(rows.getString(4)))) return false;
+                }
+            }
             // Admission retains job, pair and current-attempt locks until this locator commits.
             try (var update=transaction.prepareStatement("UPDATE starexec.job_pairs p SET sge_id=?"
                     + " FROM starexec.jobs j,starexec.job_pair_attempts a"

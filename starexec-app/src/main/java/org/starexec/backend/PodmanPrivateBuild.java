@@ -166,6 +166,16 @@ public final class PodmanPrivateBuild {
     }
 
     public String image() { return image; }
+    public String creationName() { return org.starexec.data.database.SolverBuildCreations.containerName(build); }
+
+    /** A pre-send failure or historical claim never permits a provider request. */
+    public boolean claimCreation(int execution,org.starexec.data.database.SolverBuildCreations.Transport transport,
+                                 String payload) throws IOException,SQLException {
+        require(requested!=null,"Private build creation policy is unavailable");
+        mounts.requireUnchangedInputs();
+        return org.starexec.data.database.SolverBuildCreations.claim(build,resource,execution,image,transport,payload);
+    }
+
     public BuildExecutionMounts mounts() { return mounts; }
     public List<String> entrypoint() { return BuildExecutionHold.entrypoint(HOLD_SECONDS); }
     public List<String> command() { return BuildExecutionHold.command(mounts.script()); }

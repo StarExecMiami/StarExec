@@ -199,6 +199,7 @@ public class PodmanBackend implements Backend {
 
     // Build identities survive tracking transitions until their engine resource is safely removed.
     private final Map<Integer, String> buildExecutions = new ConcurrentHashMap<>();
+    private final Set<Integer> pendingCreationExecutions = ConcurrentHashMap.newKeySet();
 
     // Executions whose container has exited but whose result ContainerJobMonitor has not
     // ingested yet (execId -> containerId). Reported by getActiveExecutionIds() so the
@@ -1579,6 +1580,7 @@ public class PodmanBackend implements Backend {
             privateBuild = PodmanPrivateBuild.prepare(dockerClient,build,imageName,containerSocketPath,
                     new org.starexec.backend.storage.BuildExecutionMounts.Controls(Path.of(scriptPath),
                             controls.resolve("functions.bash"),controls.resolve("status_codes.bash")));
+            jobName=privateBuild.creationName();
             Map<Path,Path> providerSources = new LinkedHashMap<>();
             for (var binding:privateBuild.mounts().bindings()) {
                 providerSources.put(binding.source(),Path.of(translateToHostPath(binding.source().toString())));
@@ -1650,7 +1652,11 @@ public class PodmanBackend implements Backend {
 
         // Try Java client first, fall back to curl if it fails with "Broken pipe"
         String containerId = null;
-        try {
+        if (privateBuild!=null) {
+            containerId=createManagedBuildContainer(privateBuild,execId,jobName,imageName,hostConfig,envVars,labels,
+                    selectedPartition.workerNodeName,workingDirectory,entrypoint,command);
+            if (containerId==null) return execId;
+        } else try {
             // Create container that runs the job script directly
             // Override entrypoint to bypass the default image entrypoint
             // Use exec form (array) for proper entrypoint handling
@@ -1742,6 +1748,7 @@ public class PodmanBackend implements Backend {
             execIdToContainerId.put(execId, containerId);
             try {
                 privateBuild.requireCreated(dockerClient.inspectContainerCmd(containerId).exec(),containerId,execId);
+                pendingCreationExecutions.remove(execId);
             } catch (Exception unavailable) {
                 log.error("Private build resource was not admitted for execution " + execId
                     + "; container and capacity retained for reconciliation",unavailable);
@@ -1820,6 +1827,68 @@ public class PodmanBackend implements Backend {
         execIdToContainerId.remove(execId, containerId);
         containerIdToPairId.invalidate(containerId);
         throw new SubmissionDeferredException("Build admission was refused; its cancelled resource was conserved and removed");
+    }
+
+    /** Only the first acknowledged claim may send; a lost response is observed, never resent. */
+    private String createManagedBuildContainer(PodmanPrivateBuild build,int execution,String name,String image,
+            HostConfig host,List<String> environment,Map<String,String> labels,String hostname,String directory,
+            List<String> entrypoint,List<String> command) throws Exception {
+        com.github.dockerjava.api.command.CreateContainerCmd javaCreate=null;
+        var transport=org.starexec.data.database.SolverBuildCreations.Transport.JAVA;
+        try {
+            javaCreate=dockerClient.createContainerCmd(image).withName(name).withHostName(hostname)
+                    .withHostConfig(host).withEnv(environment).withLabels(labels).withEntrypoint(entrypoint.toArray(String[]::new))
+                    .withCmd(command.toArray(String[]::new)).withWorkingDir(directory);
+            javaCreate.withUser("0:0");javaCreate.withStopSignal("SIGTERM");
+            javaCreate.withHealthcheck(new com.github.dockerjava.api.model.HealthCheck().withTest(List.of("NONE")));
+        } catch (Exception beforeSend) {
+            if (!isTransientConnectionError(beforeSend)) throw beforeSend;
+            // Command construction has not executed a request. The selected transport still needs its own claim.
+            transport=org.starexec.data.database.SolverBuildCreations.Transport.CURL;
+        }
+        String payload=creationPayload(image,host,environment,labels,hostname,directory,entrypoint,command,true);
+        try {
+            if (!build.claimCreation(execution,transport,payload)) {
+                throw new SubmissionDeferredException("Build creation was already consumed or its ownership changed");
+            }
+        } catch (IOException | java.sql.SQLException unacknowledged) {
+            log.warn("Build creation claim is unresolved for execution "+execution,unacknowledged);
+            throw new SubmissionDeferredException("Build creation claim is unresolved; no provider request was sent");
+        }
+        pendingCreationExecutions.add(execution);
+        try {
+            String id;
+            if (transport==org.starexec.data.database.SolverBuildCreations.Transport.JAVA) {
+                var response=javaCreate.exec();id=response==null?null:response.getId();
+            } else {
+                id=createContainerWithCurl(name,image,host,environment,labels,hostname,directory,entrypoint,command,true);
+            }
+            if (id==null || !id.matches("[0-9a-f]{64}")) throw new IOException("Build create returned no immutable container identity");
+            return id;
+        } catch (Exception uncertain) {
+            if (uncertain instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.warn("Build creation response is unresolved for execution "+execution+": "+describeCauseChain(uncertain,environment));
+            return findCreatedBuild(name,labels);
+        }
+    }
+
+    private String findCreatedBuild(String name,Map<String,String> expectedLabels) {
+        try {
+            var candidates=dockerClient.listContainersCmd().withShowAll(true).withNameFilter(List.of(name)).exec();
+            if (candidates==null) return null;
+            String found=null;
+            for (var candidate:candidates) {
+                if (candidate.getNames()==null || !Arrays.asList(candidate.getNames()).contains("/"+name)) continue;
+                var labels=candidate.getLabels();String id=candidate.getId();
+                if (found!=null || id==null || !id.matches("[0-9a-f]{64}") || labels==null
+                        || !expectedLabels.entrySet().stream().allMatch(e->e.getValue().equals(labels.get(e.getKey())))) return null;
+                found=id;
+            }
+            return found;
+        } catch (Exception unavailable) {
+            log.warn("Cannot establish exact ownership after build creation for "+name);
+            return null;
+        }
     }
 
     /**
@@ -1972,21 +2041,7 @@ public class PodmanBackend implements Backend {
                                             List<String> env, Map<String,String> labels, String hostName,
                                             String workDir, List<String> entrypoint,
                                             List<String> command, boolean privateBuild) throws Exception {
-        Map<String, Object> request = new LinkedHashMap<>();
-        request.put("Image", image);
-        request.put("Hostname", hostName);
-        request.put("Entrypoint",entrypoint);
-        request.put("Cmd",command);
-        request.put("WorkingDir", workDir);
-        request.put("Env", env);
-        request.put("Labels", labels);
-        request.put("HostConfig", hostConfig);
-        if (privateBuild) {
-            request.put("User","0:0");
-            request.put("StopSignal","SIGTERM");
-            request.put("Healthcheck",Map.of("Test",List.of("NONE")));
-        }
-        String jsonStr = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(request);
+        String jsonStr=creationPayload(image,hostConfig,env,labels,hostName,workDir,entrypoint,command,privateBuild);
         log.debug("Creating container " + name + " through the fallback transport");
 
         // Get socket path (strip unix:// prefix if present)
@@ -2044,6 +2099,18 @@ public class PodmanBackend implements Backend {
         } finally {
             if (!finished) process.destroyForcibly();
         }
+    }
+
+    private String creationPayload(String image,HostConfig hostConfig,List<String> env,Map<String,String> labels,
+            String hostName,String workDir,List<String> entrypoint,List<String> command,boolean privateBuild) throws IOException {
+        Map<String,Object> request=new LinkedHashMap<>();
+        request.put("Image",image);request.put("Hostname",hostName);request.put("Entrypoint",entrypoint);
+        request.put("Cmd",command);request.put("WorkingDir",workDir);request.put("Env",env);
+        request.put("Labels",labels);request.put("HostConfig",hostConfig);
+        if (privateBuild) {
+            request.put("User","0:0");request.put("StopSignal","SIGTERM");request.put("Healthcheck",Map.of("Test",List.of("NONE")));
+        }
+        return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(request);
     }
 
     /**
@@ -2595,6 +2662,10 @@ public class PodmanBackend implements Backend {
 
     /** The census behind {@link #killPairConfirmed(int)}; package-private for tests. */
     KillOutcome observeExecutionSafety(int execId) {
+        if (pendingCreationExecutions.contains(execId)) {
+            log.warn("Creation outcome remains unresolved for execution "+execId+"; absence cannot establish safety");
+            return KillOutcome.UNPROVEN;
+        }
         DockerClient client = dockerClient;
         if (client == null) {
             log.warn(
@@ -3402,6 +3473,7 @@ public class PodmanBackend implements Backend {
         }
 
         activeIds.addAll(buildExecutions.keySet());
+        activeIds.addAll(pendingCreationExecutions);
         return activeIds;
     }
 
@@ -3691,7 +3763,7 @@ public class PodmanBackend implements Backend {
                 )
                 .build();
 
-        return DockerClientImpl.getInstance(config, httpClient);
+        return DockerClientImpl.getInstance(config, new PodmanCreateOnceHttpClient(httpClient));
     }
 
     private RuntimeException toUncheckedContainerEngineFailure(

@@ -240,6 +240,21 @@ uses the configured finite connection/response deadlines, a bounded JSON respons
 and an exact container identity; it does not use user curl configuration or a
 proxy.
 
+Before sending a managed build create, the controller commits an immutable request
+with its existing lease, execution locator, image and stable container name. Only
+the first acknowledged insertion permits a send. An uncertain commit or historical
+request never permits a retry. The Java transport makes create bodies non-repeatable
+so HTTP recovery cannot silently resend them after a lost response or HTTP 429/503.
+Curl can be selected only before the Java command has attempted execution.
+
+If the response is lost, an exact unique name and ownership lookup may recover
+the same resource for normal policy validation and admission. An unavailable,
+ambiguous or empty lookup retains the positive execution and its capacity without
+starting a replacement. The creation record is intent, not execution admission,
+termination proof or a payload-release decision. Admission cannot rebind its
+conserved execution locator. Recovery of unresolved creation after controller
+restart remains required before activation of this lifecycle.
+
 Admission commits the pair's execution locator and artifact engine binding in one
 transaction, before starting the hold. Cancellation can therefore find an admitted
 execution without waiting for submission to return. The new release decision also
@@ -443,6 +458,15 @@ mvn -B -pl starexec-app -Dtest=JobManagerManagedBuildDispatchTest,PodmanPrivateB
 The provider orchestration tests use simulated transports. The SQL tests separately
 exercise admission visibility, cancellation and lost commit replies; neither is a
 substitute for execution on a provisioned bounded resource.
+
+For single-send creation, real loopback HTTP responses and durable request claims:
+
+```sh
+mvn -B -pl starexec-app -Dtest=PodmanCreateOnceHttpClientTest,SolverBuildCreationSqlTest -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+```
+
+The SQL selection requires a disposable migrated PostgreSQL database. These checks
+do not replace recovery tests against the actual container engine.
 
 Run the capacity and mount-contract tests without a database:
 
