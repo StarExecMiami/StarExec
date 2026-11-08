@@ -35,6 +35,7 @@ class PodmanRefusedBuildRecoveryTest {
     private Map<String,String> labels;
     private MockedStatic<SolverBuildArtifacts> artifacts;
     private MockedStatic<JobPairs> pairs;
+    private MockedStatic<org.starexec.data.database.SolverBuildCreations> creations;
     private SolverBuildArtifacts.Artifact artifact;
     private SolverBuildStopReceipt receipt;
     private final AtomicBoolean removed=new AtomicBoolean();
@@ -56,6 +57,9 @@ class PodmanRefusedBuildRecoveryTest {
     }
 
     @BeforeEach void setup() throws Exception {
+        creations=mockStatic(org.starexec.data.database.SolverBuildCreations.class,CALLS_REAL_METHODS);
+        creations.when(org.starexec.data.database.SolverBuildCreations::pending).thenReturn(List.of());
+        creations.when(org.starexec.data.database.SolverBuildCreations::maximumExecutionId).thenReturn(0);
         backend=new PodmanBackend();client=mock(DockerClient.class);
         field(backend,"dockerClient",client);field(backend,"partitions",List.of(new CpuPartition(0,"2",null)));
         field(backend,"partitionActiveSlots",new int[]{0});field(backend,"partitionMaxSlots",new int[]{2});
@@ -93,7 +97,7 @@ class PodmanRefusedBuildRecoveryTest {
         pairs.when(()->JobPairs.getPairIdsByStatusCode(4)).thenReturn(List.of());
     }
 
-    @AfterEach void close() { if(pairs!=null) pairs.close();if(artifacts!=null) artifacts.close(); }
+    @AfterEach void close() { if(pairs!=null) pairs.close();if(artifacts!=null) artifacts.close();if(creations!=null) creations.close(); }
 
     @Test void coldStartupRetiresOnlyTheConservedCreatedResourceWithPurgedStaging() throws Exception {
         var restored=PodmanBuildStopObserver.restoreRefusedCreation(artifact);

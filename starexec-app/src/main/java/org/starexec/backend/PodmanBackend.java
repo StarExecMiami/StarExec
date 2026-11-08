@@ -200,6 +200,10 @@ public class PodmanBackend implements Backend {
     // Build identities survive tracking transitions until their engine resource is safely removed.
     private final Map<Integer, String> buildExecutions = new ConcurrentHashMap<>();
     private final Set<Integer> pendingCreationExecutions = ConcurrentHashMap.newKeySet();
+    private final Map<Integer,Long> pendingCreationArtifacts = new ConcurrentHashMap<>();
+    private final Set<Integer> inFlightBuildExecutions = ConcurrentHashMap.newKeySet();
+    private final Object creationRecoveryLock = new Object();
+    private boolean creationCatalogRecovered;
 
     // Executions whose container has exited but whose result ContainerJobMonitor has not
     // ingested yet (execId -> containerId). Reported by getActiveExecutionIds() so the
@@ -338,6 +342,7 @@ public class PodmanBackend implements Backend {
 
             // Reconcile pairs left in ENQUEUED or RUNNING state from a previous crash.
             reconcileOrphanedPairs();
+            if (!creationCatalogRecovered) throw new IOException("Build creation ownership recovery is unavailable");
 
             // Start the job completion monitor
             this.jobMonitor.start();
@@ -1411,6 +1416,7 @@ public class PodmanBackend implements Backend {
         final int maxRetries = build == null ? 3 : 1;
         final long baseRetryDelay = 500; // milliseconds
 
+        if(build!=null) inFlightBuildExecutions.add(execIdForSlot);
         try {
             for (int attempt = 1; attempt <= maxRetries; attempt++) {
                 // Use unique name for each retry attempt to avoid conflicts
@@ -1498,6 +1504,7 @@ public class PodmanBackend implements Backend {
 
             return -1; // Should not reach here
         } finally {
+            inFlightBuildExecutions.remove(execIdForSlot);
             if (slotAcquired && !submissionAccepted) {
                 releaseSubmissionSlot(execIdForSlot, "submission rejected");
             }
@@ -1653,7 +1660,7 @@ public class PodmanBackend implements Backend {
         // Try Java client first, fall back to curl if it fails with "Broken pipe"
         String containerId = null;
         if (privateBuild!=null) {
-            containerId=createManagedBuildContainer(privateBuild,execId,jobName,imageName,hostConfig,envVars,labels,
+            containerId=createManagedBuildContainer(privateBuild,build,execId,jobName,imageName,hostConfig,envVars,labels,
                     selectedPartition.workerNodeName,workingDirectory,entrypoint,command);
             if (containerId==null) return execId;
         } else try {
@@ -1749,6 +1756,7 @@ public class PodmanBackend implements Backend {
             try {
                 privateBuild.requireCreated(dockerClient.inspectContainerCmd(containerId).exec(),containerId,execId);
                 pendingCreationExecutions.remove(execId);
+                pendingCreationArtifacts.remove(execId,build.artifactId());
             } catch (Exception unavailable) {
                 log.error("Private build resource was not admitted for execution " + execId
                     + "; container and capacity retained for reconciliation",unavailable);
@@ -1830,7 +1838,7 @@ public class PodmanBackend implements Backend {
     }
 
     /** Only the first acknowledged claim may send; a lost response is observed, never resent. */
-    private String createManagedBuildContainer(PodmanPrivateBuild build,int execution,String name,String image,
+    private String createManagedBuildContainer(PodmanPrivateBuild build,BuildExecutionContext context,int execution,String name,String image,
             HostConfig host,List<String> environment,Map<String,String> labels,String hostname,String directory,
             List<String> entrypoint,List<String> command) throws Exception {
         com.github.dockerjava.api.command.CreateContainerCmd javaCreate=null;
@@ -1856,6 +1864,7 @@ public class PodmanBackend implements Backend {
             throw new SubmissionDeferredException("Build creation claim is unresolved; no provider request was sent");
         }
         pendingCreationExecutions.add(execution);
+        pendingCreationArtifacts.put(execution,context.artifactId());
         try {
             String id;
             if (transport==org.starexec.data.database.SolverBuildCreations.Transport.JAVA) {
@@ -2819,6 +2828,38 @@ public class PodmanBackend implements Backend {
      *   <tr><td>RUNNING</td><td>none / legacy label</td><td>leave unresolved for intervention</td></tr>
      * </table>
      */
+    private int reconcilePendingBuildCreations(Set<String> excluded,Set<Integer> registeredPairs) throws java.sql.SQLException {
+        var pending=org.starexec.data.database.SolverBuildCreations.pending();
+        int highest=org.starexec.data.database.SolverBuildCreations.maximumExecutionId();
+        for(var creation:pending) {
+            int execution=creation.execution();long artifact=creation.build().artifactId();
+            highest=Math.max(highest,execution);registeredPairs.add(creation.build().pairId());
+            Long prior=pendingCreationArtifacts.putIfAbsent(execution,artifact);
+            if(prior!=null && prior!=artifact) throw new IllegalStateException("Pending build execution identities conflict");
+            if(inFlightBuildExecutions.contains(execution)) continue;
+            pendingCreationExecutions.add(execution);
+            try {
+                ensurePartitionStateReady();
+                var labels=PodmanBuildCreationRecovery.labels(creation);
+                reserveRecoveredPartitionSlot(parsePartitionIndex(labels),execution);
+                String container=findCreatedBuild(creation.name(),labels);
+                if(container==null) continue;
+                excluded.add(container);
+                String tracked=execIdToContainerId.get(execution);
+                if(tracked!=null && !tracked.equals(container)) throw new IllegalStateException("Pending execution has another tracked resource");
+                String buildTracked=buildExecutions.get(execution);
+                if(buildTracked!=null && !buildTracked.equals(container)) throw new IllegalStateException("Pending build has another tracked resource");
+                var inspection=dockerClient.inspectContainerCmd(container).exec();
+                if (!PodmanBuildCreationRecovery.cancel(dockerClient,containerSocketPath,inspection,container,creation)) continue;
+                execIdToContainerId.putIfAbsent(execution,container);buildExecutions.putIfAbsent(execution,container);
+                pendingCreationExecutions.remove(execution);
+            } catch(Exception uncertain) {
+                log.warn("Pending build creation remains unresolved for pair "+creation.build().pairId(),uncertain);
+            }
+        }
+        return highest;
+    }
+
     private int reconcileRefusedBuildCreations(Set<String> excluded,Set<Integer> registeredPairs) throws java.sql.SQLException {
         int highestExecution=0;
         for (var artifact:org.starexec.data.database.SolverBuildArtifacts.refusedPodmanCreations()) {
@@ -2829,6 +2870,14 @@ public class PodmanBackend implements Backend {
                 var restored=PodmanBuildStopObserver.restoreRefusedCreation(artifact);
                 String container=restored.container();int execution=restored.execution();
                 highestExecution=Math.max(highestExecution,execution);
+                if(inFlightBuildExecutions.contains(execution)) continue;
+                if (Long.valueOf(artifact.id()).equals(pendingCreationArtifacts.get(execution))) {
+                    String tracked=execIdToContainerId.putIfAbsent(execution,container);
+                    if(tracked!=null && !tracked.equals(container)) throw new IllegalStateException("Cancelled execution has another tracked resource");
+                    String buildTracked=buildExecutions.putIfAbsent(execution,container);
+                    if(buildTracked!=null && !buildTracked.equals(container)) throw new IllegalStateException("Cancelled build has another tracked resource");
+                    pendingCreationExecutions.remove(execution);
+                }
                 try {
                     var inspection=dockerClient.inspectContainerCmd(container).exec();
                     PodmanBuildStopObserver.requireRefusedCreation(inspection,restored);
@@ -2851,6 +2900,7 @@ public class PodmanBackend implements Backend {
                     containerIdToPairId.invalidate(container);
                     releaseSubmissionSlot(execution,"recovered refused build creation");
                 }
+                pendingCreationArtifacts.remove(execution,artifact.id());
             } catch (Exception unresolved) {
                 log.warn("Created build cancellation recovery remains unresolved for pair "+artifact.pairId(),unresolved);
             }
@@ -2863,7 +2913,13 @@ public class PodmanBackend implements Backend {
             log.info("Starting orphaned-pair reconciliation...");
             Set<String> retainedContainerIds = new HashSet<>();
             Set<Integer> registeredCancelledPairs = new HashSet<>();
-            int maxRecoveredExecId = reconcileRefusedBuildCreations(retainedContainerIds,registeredCancelledPairs);
+            int maxRecoveredExecId;
+            synchronized(creationRecoveryLock) {
+                maxRecoveredExecId=reconcilePendingBuildCreations(retainedContainerIds,registeredCancelledPairs);
+                maxRecoveredExecId=Math.max(maxRecoveredExecId,reconcileRefusedBuildCreations(retainedContainerIds,registeredCancelledPairs));
+            }
+            advanceRecoveredExecutionId(maxRecoveredExecId);
+            creationCatalogRecovered=true;
 
             // ---- Step 1: build container→pairId maps from V2 labels only ----
             Map<Integer, String> pairIdToRunningContainer = new HashMap<>();
@@ -3036,6 +3092,13 @@ public class PodmanBackend implements Backend {
 
         } catch (Exception e) {
             log.error("Failed to reconcile orphaned pairs on startup", e);
+        }
+    }
+
+    private void advanceRecoveredExecutionId(int execution) {
+        synchronized(execIdLock) {
+            if(execution==Integer.MAX_VALUE) throw new IllegalStateException("Execution identity space requires operator recovery");
+            if(execution>=nextExecId) nextExecId=execution+1;
         }
     }
 
@@ -3427,12 +3490,24 @@ public class PodmanBackend implements Backend {
      */
     @Override
     public Set<Integer> getActiveExecutionIds() throws IOException {
+        if(!pendingCreationArtifacts.isEmpty()) {
+            synchronized(creationRecoveryLock) {
+                try {
+                    int highest=reconcilePendingBuildCreations(new HashSet<>(),new HashSet<>());
+                    highest=Math.max(highest,reconcileRefusedBuildCreations(new HashSet<>(),new HashSet<>()));
+                    advanceRecoveredExecutionId(highest);
+                } catch(java.sql.SQLException | RuntimeException failure) { throw new IOException("Pending build ownership is unavailable",failure); }
+            }
+        }
         // Refresh the map by checking actual container states
         Set<Integer> activeIds = new HashSet<>();
 
         for (Map.Entry<Integer, String> entry : new HashMap<>(
             execIdToContainerId
         ).entrySet()) {
+            if(pendingCreationExecutions.contains(entry.getKey())) {
+                activeIds.add(entry.getKey());continue;
+            }
             try {
                 var inspection = dockerClient
                     .inspectContainerCmd(entry.getValue())

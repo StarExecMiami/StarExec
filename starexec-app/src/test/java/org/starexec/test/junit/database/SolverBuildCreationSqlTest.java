@@ -206,4 +206,100 @@ class SolverBuildCreationSqlTest extends Common {
         }
         assertEquals(saved,SolverBuildCreations.find(connection,build.artifactId()).orElseThrow());assertEquals(1001,locator());
     }
+
+    private org.starexec.data.to.SolverBuildStopReceipt cancellation(SolverBuildCreations.Creation creation,String container) {
+        var facts=new com.google.gson.JsonObject();
+        facts.addProperty("disposition","cancelled");facts.addProperty("reason","creation_unacknowledged");
+        facts.addProperty("container_name",creation.name());facts.addProperty("request_sha256",creation.sha256());
+        facts.addProperty("image_id",creation.image());facts.addProperty("status","created");facts.addProperty("pid",0);
+        for(String name:List.of("running","paused","restarting","privileged")) facts.addProperty(name,false);
+        facts.addProperty("private_pid_namespace",true);facts.addProperty("restart_policy","no");
+        facts.addProperty("started_at","0001-01-01T00:00:00Z");
+        return org.starexec.data.to.SolverBuildStopReceipt.observed("podman",build.artifactId(),pair,1,
+                "podman:"+creation.execution()+":"+container,container,java.time.Instant.now(),facts);
+    }
+
+    @Test void coldCancellationCommitsExactNonExecutionWithoutRebookingOrGrantingAdmission() throws Exception {
+        assertTrue(claim());var saved=SolverBuildCreations.find(connection,build.artifactId()).orElseThrow();
+        String container="c".repeat(64);var receipt=cancellation(saved,container);long before=usage();
+        assertFalse(ExecutionStorageLeases.cancelRefusedPodmanCreation(connection,build,resource,1001,container,receipt),
+                "An unacknowledged create must use its exact saved request, not the admission-refusal entry point");
+        assertTrue(SolverBuildCreations.cancel(connection,saved,resource,container,receipt));
+        assertTrue(SolverBuildCreations.cancel(connection,saved,resource,container,receipt));
+        var cancelled=SolverBuildArtifacts.find(connection,pair,1).orElseThrow();
+        assertEquals("REJECTED",cancelled.state());assertEquals("podman:1001:"+container,cancelled.engineIdentity());
+        assertNotNull(cancelled.stoppedAt());assertEquals(receipt.payload(),SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt().payload());
+        assertEquals(before,usage());assertEquals(1001,locator());assertEquals(saved,SolverBuildCreations.find(connection,build.artifactId()).orElseThrow());
+        assertFalse(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,container));
+        assertTrue(ExecutionStorageLeases.findReleaseDecision(connection,build,resource).isEmpty());
+        assertTrue(SolverBuildCreations.pending().stream().noneMatch(c->c.build().artifactId()==build.artifactId()));
+        assertTrue(SolverBuildArtifacts.refusedPodmanCreations().stream().anyMatch(a->a.id()==build.artifactId()));
+        assertTrue(SolverBuildCreations.maximumExecutionId()>=1001);
+    }
+
+    @ParameterizedTest @ValueSource(strings={"receipt-write","physical-replacement"})
+    void failedColdCancellationRollsBackItsEngineBinding(String fault) throws Exception {
+        assertTrue(claim());var saved=SolverBuildCreations.find(connection,build.artifactId()).orElseThrow();
+        String container="c".repeat(64);var receipt=cancellation(saved,container);long before=usage();
+        var observed=spy(connection);
+        if(fault.equals("physical-replacement")) doNothing().doThrow(new IOException("Synthetic resource replacement")).when(resource).requireUnchanged();
+        else doAnswer(call->{
+            if(((String)call.getArgument(0)).contains("record_solver_build_cancelled")) throw new SQLException("Synthetic receipt write failure");
+            return call.callRealMethod();
+        }).when(observed).prepareStatement(anyString());
+        assertThrows(SQLException.class,()->SolverBuildCreations.cancel(observed,saved,resource,container,receipt));
+        var current=SolverBuildArtifacts.find(connection,pair,1).orElseThrow();assertNull(current.engineIdentity());assertNull(current.stoppedAt());
+        assertEquals(before,usage());assertEquals(1,count());assertEquals(1001,locator());assertTrue(connection.getAutoCommit());
+        assertTrue(SolverBuildArtifacts.findStopReceipt(connection,pair,1).isEmpty());
+    }
+
+    @Test void aCompetingAdmissionLockCannotBeBypassedByColdCancellation() throws Exception {
+        assertTrue(claim());var saved=SolverBuildCreations.find(connection,build.artifactId()).orElseThrow();
+        String container="c".repeat(64);var receipt=cancellation(saved,container);long before=usage();
+        try(var competitor=Common.getConnection()) {
+            competitor.setAutoCommit(false);
+            try {
+                number(competitor,"SELECT id FROM starexec.solver_build_artifacts WHERE id=? FOR UPDATE",build.artifactId());
+                var denied=assertThrows(SQLException.class,()->SolverBuildCreations.cancel(connection,saved,resource,container,receipt));
+                assertEquals("55P03",denied.getSQLState());assertTrue(connection.getAutoCommit());
+                assertNull(SolverBuildArtifacts.find(connection,pair,1).orElseThrow().engineIdentity());
+            } finally {competitor.rollback();competitor.setAutoCommit(true);}
+            assertTrue(ExecutionStorageLeases.admitPodman(competitor,build,resource,1001,container));
+            assertFalse(SolverBuildCreations.cancel(connection,saved,resource,container,receipt));
+        }
+        assertEquals(before,usage());assertTrue(SolverBuildArtifacts.findStopReceipt(connection,pair,1).isEmpty());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"request-digest","name","image","execution","admitted","foreign-resource","after-real-commit"})
+    void coldCancellationPreservesConflictsAndLostAcknowledgements(String fault) throws Exception {
+        assertTrue(claim());var saved=SolverBuildCreations.find(connection,build.artifactId()).orElseThrow();
+        String container="c".repeat(64);var receipt=cancellation(saved,container);long before=usage();
+        if(fault.equals("admitted")) assertTrue(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,container));
+        if(fault.equals("foreign-resource")) when(resource.identity()).thenReturn("replacement-resource");
+        if(List.of("request-digest","name","image","execution").contains(fault)) {
+            var facts=receipt.facts();
+            switch(fault) {
+                case "request-digest" -> facts.addProperty("request_sha256","f".repeat(64));
+                case "name" -> facts.addProperty("container_name","starexec-build-999999");
+                case "image" -> facts.addProperty("image_id","sha256:"+"d".repeat(64));
+                default -> { }
+            }
+            receipt=org.starexec.data.to.SolverBuildStopReceipt.observed("podman",build.artifactId(),pair,1,
+                    "podman:"+(fault.equals("execution")?1002:1001)+":"+container,container,java.time.Instant.now(),facts);
+        }
+        if(fault.equals("after-real-commit")) {
+            var uncertain=spy(connection);var observed=receipt;
+            doAnswer(call->{call.callRealMethod();throw new SQLException("Synthetic cancellation response loss after commit");}).when(uncertain).commit();
+            assertThrows(SQLException.class,()->SolverBuildCreations.cancel(uncertain,saved,resource,container,observed));
+            assertTrue(connection.getAutoCommit());assertTrue(SolverBuildCreations.cancel(connection,saved,resource,container,receipt));
+            assertEquals("REJECTED",SolverBuildArtifacts.find(connection,pair,1).orElseThrow().state());
+        } else {
+            assertFalse(SolverBuildCreations.cancel(connection,saved,resource,container,receipt));
+            var current=SolverBuildArtifacts.find(connection,pair,1).orElseThrow();
+            assertNull(current.stoppedAt());assertEquals(fault.equals("admitted")?"podman:1001:"+container:null,current.engineIdentity());
+            assertTrue(SolverBuildArtifacts.findStopReceipt(connection,pair,1).isEmpty());
+        }
+        assertEquals(before,usage());assertEquals(1001,locator());assertEquals(1,count());
+        assertTrue(ExecutionStorageLeases.findReleaseDecision(connection,build,resource).isEmpty());
+    }
 }

@@ -91,6 +91,7 @@ public class PodmanBackendTests {
     private MockedStatic<PodmanPrivateBuild> privateBuildFactory;
     private PodmanPrivateBuild privatePlan;
     private MockedStatic<PublishedSolverInputs> publishedInputs;
+    private MockedStatic<org.starexec.data.database.SolverBuildCreations> creationCatalog;
 
     // Test constants
     private static final String TEST_CONTAINER_ID = "abc123def456"+"0".repeat(52);
@@ -102,6 +103,9 @@ public class PodmanBackendTests {
         mocks = MockitoAnnotations.openMocks(this);
         publishedInputs = mockStatic(PublishedSolverInputs.class);
         publishedInputs.when(() -> PublishedSolverInputs.forPair(anyInt(), any())).thenReturn(List.of());
+        creationCatalog=mockStatic(org.starexec.data.database.SolverBuildCreations.class,CALLS_REAL_METHODS);
+        creationCatalog.when(org.starexec.data.database.SolverBuildCreations::pending).thenReturn(List.of());
+        creationCatalog.when(org.starexec.data.database.SolverBuildCreations::maximumExecutionId).thenReturn(0);
 
         // Create temp directory for test files
         tempDir = Files.createTempDirectory("podman_backend_test");
@@ -121,6 +125,7 @@ public class PodmanBackendTests {
     public void tearDown() throws Exception {
         if (privateBuildFactory != null) privateBuildFactory.close();
         if (publishedInputs != null) publishedInputs.close();
+        if (creationCatalog != null) creationCatalog.close();
         if (mocks != null) {
             mocks.close();
         }
@@ -877,7 +882,8 @@ public class PodmanBackendTests {
         privatePlan=plan;
         when(plan.mounts()).thenReturn(mounts);
         when(plan.image()).thenReturn("sha256:"+"a".repeat(64));
-        when(plan.creationName()).thenReturn(org.starexec.data.database.SolverBuildCreations.containerName(build));
+        String creationName=org.starexec.data.database.SolverBuildCreations.containerName(build);
+        when(plan.creationName()).thenReturn(creationName);
         when(plan.claimCreation(anyInt(),any(org.starexec.data.database.SolverBuildCreations.Transport.class),anyString())).thenReturn(true);
         when(plan.entrypoint()).thenReturn(org.starexec.backend.storage.BuildExecutionHold.entrypoint(60));
         var command=org.starexec.backend.storage.BuildExecutionHold.command(mounts.script());
@@ -908,7 +914,7 @@ public class PodmanBackendTests {
         when(mockCreateContainerCmd.exec()).thenThrow(new IllegalStateException("Synthetic lost create response"));
         when(mockListContainersCmd.withNameFilter(anyCollection())).thenReturn(mockListContainersCmd);
         when(mockListContainersCmd.exec()).thenThrow(new IllegalStateException("Synthetic ownership lookup unavailable"));
-        try(var pairs=mockStatic(JobPairs.class)) {
+        try(var artifacts=mockStatic(org.starexec.data.database.SolverBuildArtifacts.class);var pairs=mockStatic(JobPairs.class)) {
             pairs.when(()->JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
             int execution=submitBuild(build);assertTrue(execution>0);
             assertEquals(1,getActiveSubmissionSlots());assertTrue(backend.getActiveExecutionIds().contains(execution));
@@ -947,7 +953,7 @@ public class PodmanBackendTests {
         when(mockCreateContainerCmd.exec()).thenThrow(new IllegalStateException("Synthetic lost create response"));
         when(mockListContainersCmd.withNameFilter(anyCollection())).thenReturn(mockListContainersCmd);
         when(mockListContainersCmd.exec()).thenThrow(new IllegalStateException("Synthetic lookup unavailable"));
-        try(var pairs=mockStatic(JobPairs.class)) {
+        try(var artifacts=mockStatic(org.starexec.data.database.SolverBuildArtifacts.class);var pairs=mockStatic(JobPairs.class)) {
             pairs.when(()->JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
             int owned=submitBuild(build);assertTrue(owned>0);assertEquals(1,getActiveSubmissionSlots());
             org.junit.jupiter.api.Assertions.assertThrows(SubmissionDeferredException.class,()->submitBuild(build));

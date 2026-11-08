@@ -252,8 +252,22 @@ the same resource for normal policy validation and admission. An unavailable,
 ambiguous or empty lookup retains the positive execution and its capacity without
 starting a replacement. The creation record is intent, not execution admission,
 termination proof or a payload-release decision. Admission cannot rebind its
-conserved execution locator. Recovery of unresolved creation after controller
-restart remains required before activation of this lifecycle.
+conserved execution locator.
+
+Startup restores pending creation ownership and advances the allocator beyond all
+conserved creation IDs, including already bound history. An unavailable catalog
+prevents initialization. Periodic observation also reconciles pending ownership;
+it skips an active submission frame and never borrows another execution's tracking.
+An exact never-started resource can be cancelled only after rechecking its stored
+request, effective private policy and registered physical lease. The cancellation
+transaction checks the immutable request digest and records the distinct
+`creation_unacknowledged` reason; it cannot use the admission-refusal entry point,
+rebook storage, override admission or grant a payload release.
+
+An unavailable, absent, conflicting or changed resource remains unresolved with
+its capacity held. Operator recovery must reconcile that same consumed request;
+even an empty census cannot authorize another create. No resource or receipt is
+invented to make progress.
 
 Admission commits the pair's execution locator and artifact engine binding in one
 transaction, before starting the hold. Cancellation can therefore find an admitted
@@ -308,7 +322,7 @@ This readback never reserves storage again. Only matching in-memory execution
 ownership can release a held submission slot; repeated cold recovery creates none.
 Registered builds without this proof cannot use the ordinary missing-container reset.
 
-Unknown creation outcomes, uncertain start/release, and cancellation
+Unobservable creation outcomes, uncertain start/release, and cancellation
 racing an already conserved ordinary completion receipt still require compatible
 recovery handling. Retain their resource ownership and charges; do not substitute
 a Kubernetes non-execution receipt or infer settlement from a terminal pair status.

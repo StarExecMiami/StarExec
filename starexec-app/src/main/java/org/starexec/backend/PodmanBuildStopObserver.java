@@ -40,12 +40,30 @@ final class PodmanBuildStopObserver {
         var restored=new RefusedCreation(artifact,execution,receipt);
         require(org.starexec.data.database.ExecutionStorageLeases.isRefusedPodmanCreation(
                 restored.build(),execution,receipt.resourceId(),receipt),"Created cancellation facts are invalid");
+        if("creation_unacknowledged".equals(receipt.facts().get("reason").getAsString())) {
+            var creation=org.starexec.data.database.SolverBuildCreations.find(artifact.id()).orElseThrow(
+                    ()->new IllegalStateException("Created cancellation has no conserved request"));
+            require(creation.build().equals(restored.build()) && creation.execution()==execution
+                    && creation.sha256().equals(receipt.facts().get("request_sha256").getAsString())
+                    && creation.name().equals(receipt.facts().get("container_name").getAsString())
+                    && creation.image().equals(receipt.facts().get("image_id").getAsString()),
+                    "Created cancellation differs from its conserved request");
+        }
         return restored;
     }
 
     /** A stored cancellation is not authority to remove a resource whose physical facts changed. */
     static void requireRefusedCreation(InspectContainerResponse inspection, RefusedCreation restored) throws SQLException {
-        var receipt=cancelledCreationReceipt(inspection,restored.container(),restored.build(),restored.execution());
+        SolverBuildStopReceipt receipt;
+        if ("creation_unacknowledged".equals(restored.receipt().facts().get("reason").getAsString())) {
+            var creation=org.starexec.data.database.SolverBuildCreations.find(restored.artifact().id()).orElseThrow(
+                    ()->new IllegalStateException("Conserved creation request is unavailable"));
+            require(creation.build().equals(restored.build()) && creation.execution()==restored.execution(),
+                    "Conserved creation request differs from cancellation");
+            try { PodmanBuildCreationRecovery.requireCreated(inspection,restored.container(),creation); }
+            catch(java.io.IOException invalid) { throw new SQLException("Recovered creation policy differs",invalid); }
+            receipt=unacknowledgedCreationReceipt(inspection,restored.container(),creation);
+        } else receipt=cancelledCreationReceipt(inspection,restored.container(),restored.build(),restored.execution());
         require(restored.receipt().payload().equals(receipt.payload()),"Recovered cancellation receipt changed");
     }
 
@@ -131,11 +149,25 @@ final class PodmanBuildStopObserver {
     /** Positive created-state observation; persistence must bind and reject atomically, never admit launch. */
     static SolverBuildStopReceipt cancelledCreationReceipt(InspectContainerResponse inspection,String containerId,
                                                             BuildExecutionContext build,int execution) throws SQLException {
+        return cancelledCreationReceipt(inspection,containerId,build,execution,null);
+    }
+
+    static SolverBuildStopReceipt unacknowledgedCreationReceipt(InspectContainerResponse inspection,String container,
+            org.starexec.data.database.SolverBuildCreations.Creation creation) throws SQLException {
+        require(creation.image().equals(inspection.getImageId()),"Unacknowledged creation image differs");
+        return cancelledCreationReceipt(inspection,container,creation.build(),creation.execution(),creation);
+    }
+
+    private static SolverBuildStopReceipt cancelledCreationReceipt(InspectContainerResponse inspection,String containerId,
+            BuildExecutionContext build,int execution,org.starexec.data.database.SolverBuildCreations.Creation creation) throws SQLException {
         requireNeverStarted(inspection,containerId,build,execution);
         require(inspection.getImageId()!=null && inspection.getImageId().matches("sha256:[0-9a-f]{64}"),
                 "Created build image identity is unavailable");
         var state=inspection.getState();var facts=new JsonObject();
-        facts.addProperty("disposition","cancelled");facts.addProperty("reason","admission_refused");
+        facts.addProperty("disposition","cancelled");facts.addProperty("reason",creation==null?"admission_refused":"creation_unacknowledged");
+        if(creation!=null) {
+            facts.addProperty("container_name",creation.name());facts.addProperty("request_sha256",creation.sha256());
+        }
         facts.addProperty("status",state.getStatus());facts.addProperty("pid",state.getPidLong());
         facts.addProperty("running",state.getRunning());facts.addProperty("paused",state.getPaused());facts.addProperty("restarting",state.getRestarting());
         facts.addProperty("started_at",state.getStartedAt());facts.addProperty("restart_policy",inspection.getHostConfig().getRestartPolicy().getName());

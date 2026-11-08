@@ -154,7 +154,8 @@ public final class ExecutionStorageLeases {
                                                        DedicatedStorageResource resource, int execution, String container,
                                                        org.starexec.data.to.SolverBuildStopReceipt receipt) throws SQLException {
         if (execution<1 || container==null || !container.matches("[0-9a-f]{64}")
-                || !isRefusedPodmanCreation(build,execution,container,receipt)) return false;
+                || !isRefusedPodmanCreation(build,execution,container,receipt)
+                || !"admission_refused".equals(receipt.facts().get("reason").getAsString())) return false;
         String engine="podman:"+execution+":"+container;
         return transact(connection,transaction->{
             resource.requireUnchanged();
@@ -214,8 +215,13 @@ public final class ExecutionStorageLeases {
                 || !receipt.matches(build.artifactId(),build.pairId(),build.attemptNo(),"podman:"+execution+":"+container)) return false;
         try {
             var facts=receipt.facts();
+            String reason=facts.get("reason").getAsString();
+            boolean knownReason="admission_refused".equals(reason)
+                    || "creation_unacknowledged".equals(reason)
+                    && SolverBuildCreations.containerName(build).equals(facts.get("container_name").getAsString())
+                    && facts.get("request_sha256").getAsString().matches("[0-9a-f]{64}");
             return "cancelled".equals(facts.get("disposition").getAsString())
-                    && "admission_refused".equals(facts.get("reason").getAsString()) && "created".equals(facts.get("status").getAsString())
+                    && knownReason && "created".equals(facts.get("status").getAsString())
                     && facts.getAsJsonPrimitive("pid").isNumber() && "0".equals(facts.get("pid").getAsString())
                     && falseFact(facts,"running") && falseFact(facts,"paused") && falseFact(facts,"restarting")
                     && falseFact(facts,"privileged") && facts.getAsJsonPrimitive("private_pid_namespace").isBoolean()

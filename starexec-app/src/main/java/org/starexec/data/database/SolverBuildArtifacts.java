@@ -352,7 +352,7 @@ public final class SolverBuildArtifacts {
         try (Connection connection=Common.getConnection();var query=connection.prepareStatement(
                 "SELECT * FROM starexec.solver_build_artifacts WHERE state IN ('REJECTED','DELETED')"
                 +" AND execution_stopped_at IS NOT NULL AND engine_identity LIKE 'podman:%'"
-                +" AND execution_stop_receipt_payload::jsonb->'facts'->>'reason'='admission_refused' ORDER BY id")) {
+                +" AND execution_stop_receipt_payload::jsonb->'facts'->>'reason' IN ('admission_refused','creation_unacknowledged') ORDER BY id")) {
             List<Artifact> artifacts=new ArrayList<>();
             try (var rows=query.executeQuery()) { while (rows.next()) artifacts.add(artifact(rows)); }
             return List.copyOf(artifacts);

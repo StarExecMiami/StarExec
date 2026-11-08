@@ -142,6 +142,68 @@ public final class SolverBuildCreations {
         }
     }
 
+    public static Optional<Creation> find(long artifact) throws SQLException {
+        try (Connection connection=Common.getConnection()) { return find(connection,artifact); }
+    }
+
+    /** Conserves a positive never-started observation without admission or a new reservation. */
+    public static boolean cancel(Creation expected,DedicatedStorageResource resource,String container,
+                                 org.starexec.data.to.SolverBuildStopReceipt receipt) throws SQLException {
+        try (Connection connection=Common.getConnection()) { return cancel(connection,expected,resource,container,receipt); }
+    }
+
+    public static boolean cancel(Connection connection,Creation expected,DedicatedStorageResource resource,String container,
+                                 org.starexec.data.to.SolverBuildStopReceipt receipt) throws SQLException {
+        var build=expected.build();
+        if (!expected.resourceKey().equals(resource.filesystemKey()) || !expected.resourceIdentity().equals(resource.identity())
+                || !ExecutionStorageLeases.isRefusedPodmanCreation(build,expected.execution(),container,receipt)
+                || !"creation_unacknowledged".equals(receipt.facts().get("reason").getAsString())
+                || !expected.sha256().equals(receipt.facts().get("request_sha256").getAsString())
+                || !expected.name().equals(receipt.facts().get("container_name").getAsString())
+                || !expected.image().equals(receipt.facts().get("image_id").getAsString())) return false;
+        String engine="podman:"+expected.execution()+":"+container;
+        try {
+            return Common.runTransactional(connection,transaction->{
+                resource.requireUnchanged();
+                if (!expected.equals(find(transaction,build.artifactId()).orElse(null))) throw new Refused();
+                try (var lock=transaction.prepareStatement("SELECT a.execution_stopped_at FROM starexec.solver_build_artifacts a"
+                        +" JOIN starexec.solver_build_storage_leases l ON l.artifact_id=a.id"
+                        +" JOIN starexec.execution_storage_resources r ON r.resource_key=l.resource_key"
+                        +" JOIN starexec.solver_build_storage_charges c ON c.artifact_id=a.id AND c.storage_kind='STAGING'"
+                        +" JOIN starexec.users u ON u.id=a.origin_owner_id"
+                        +" WHERE a.id=? AND a.execution_token=? AND a.origin_pair_id=? AND a.attempt_no=?"
+                        +" AND a.source_path=? AND a.staging_path=? AND a.cleanup_token IS NULL"
+                        +" AND ((a.engine_identity IS NULL AND a.execution_stopped_at IS NULL AND a.state IN ('PLANNED','STAGED'))"
+                        +" OR (a.engine_identity=? AND a.execution_stopped_at IS NOT NULL AND a.state IN ('REJECTED','DELETED')"
+                        +" AND a.execution_stop_receipt_payload=? AND a.execution_stop_receipt_sha256=?))"
+                        +" AND l.execution_token=a.execution_token AND l.resource_key=? AND l.released_at IS NULL AND l.cleanup_token IS NULL"
+                        +" AND r.observed_identity=? AND r.root_path=? AND r.capacity_bytes=? AND r.inode_limit=?"
+                        +" AND c.owner_id=a.origin_owner_id AND c.path=a.staging_path AND c.limit_bytes>=r.capacity_bytes"
+                        +" AND c.charged_bytes=c.limit_bytes AND c.verified_at IS NULL AND c.released_at IS NULL"
+                        +" AND u.disk_size>=(SELECT COALESCE(sum(charged_bytes),0) FROM starexec.solver_build_storage_charges"
+                        +" WHERE owner_id=u.id AND released_at IS NULL)"
+                        +" AND NOT EXISTS (SELECT 1 FROM starexec.solver_build_release_decisions d WHERE d.artifact_id=a.id)"
+                        +" FOR UPDATE OF a,l NOWAIT FOR SHARE OF r,c,u NOWAIT")) {
+                    Object[] values={build.artifactId(),build.token(),build.pairId(),build.attemptNo(),build.source().toString(),
+                            build.staging().toString(),engine,receipt.payload(),receipt.sha256(),resource.filesystemKey(),resource.identity(),
+                            resource.root().toString(),resource.capacityBytes(),resource.inodeLimit()};
+                    for(int i=0;i<values.length;i++) lock.setObject(i+1,values[i]);
+                    try (var row=lock.executeQuery()) {
+                        if(!row.next()) throw new Refused();
+                        if(row.getTimestamp(1)!=null) { resource.requireUnchanged();return true; }
+                    }
+                }
+                if (!expected.resourceKey().equals(resource.filesystemKey()) || !expected.resourceIdentity().equals(resource.identity())
+                        || !SolverBuildArtifacts.bindExecution(transaction,build.pairId(),build.attemptNo(),build.token(),engine)
+                        || !SolverBuildArtifacts.recordCancelled(transaction,build.pairId(),build.attemptNo(),build.token(),engine,receipt)) throw new Refused();
+                resource.requireUnchanged();return true;
+            });
+        } catch (Refused refused) {
+            if(refused.getSuppressed().length!=0) throw refused;
+            return false;
+        }
+    }
+
     public static List<Creation> pending() throws SQLException {
         try (Connection connection=Common.getConnection();var query=connection.prepareStatement(
                 "SELECT q.*,a.origin_pair_id,a.attempt_no,a.source_path,a.staging_path FROM starexec.solver_build_creation_requests q"
@@ -149,6 +211,17 @@ public final class SolverBuildCreations {
             List<Creation> pending=new ArrayList<>();
             try (var rows=query.executeQuery()) { while (rows.next()) pending.add(creation(rows)); }
             return List.copyOf(pending);
+        }
+    }
+
+    /** Conserved creation IDs must not be reassigned even when their engine outcome is already bound. */
+    public static int maximumExecutionId() throws SQLException {
+        try (Connection connection=Common.getConnection();var query=connection.prepareStatement(
+                "SELECT COALESCE(max(execution_id),0) FROM starexec.solver_build_creation_requests")) {
+            try(var row=query.executeQuery()) {
+                if(!row.next()) throw new SQLException("Creation identity range is unavailable");
+                return row.getInt(1);
+            }
         }
     }
 
