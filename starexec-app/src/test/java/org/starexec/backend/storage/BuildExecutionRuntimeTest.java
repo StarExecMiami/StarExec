@@ -24,13 +24,15 @@ class BuildExecutionRuntimeTest {
     @TempDir Path directory;
     private BuildExecutionRuntime runtime;
     private Map<String,String> data;
+    private List<BuildExecutionMounts.Binding> bindings;
+    private Map<String,String> forbidden;
 
     private static String encoded(String text) { return Base64.getEncoder().encodeToString(text.getBytes(StandardCharsets.UTF_8)); }
     private static String decoded(String text) { return new String(Base64.getDecoder().decode(text),StandardCharsets.UTF_8); }
     private static String escaped(Path path) { return path.toString().replace("\\","\\134").replace(" ","\\040").replace("\t","\\011").replace("\n","\\012"); }
 
     @BeforeEach void seed() throws Exception {
-        List<BuildExecutionMounts.Binding> bindings=new ArrayList<>();
+        bindings=new ArrayList<>();
         Path source=Files.createDirectory(directory.resolve("source"));
         bindings.add(new BuildExecutionMounts.Binding(source,BuildExecutionMounts.SOURCE,true));
         bindings.add(new BuildExecutionMounts.Binding(Files.writeString(directory.resolve("helper"),"helper"),BuildExecutionMounts.HELPER,true));
@@ -40,7 +42,7 @@ class BuildExecutionRuntimeTest {
         for (Path target:List.of(BuildExecutionMounts.EXECUTION,Path.of("/tmp"),Path.of("/run"),Path.of("/var/tmp"))) {
             bindings.add(new BuildExecutionMounts.Binding(Files.createDirectory(directory.resolve("write-"+bindings.size())),target,false));
         }
-        Map<String,String> forbidden=new HashMap<>();
+        forbidden=new HashMap<>();
         for (String name:List.of("pid","ipc","net","mnt","user","cgroup")) forbidden.put(name,name+":[10]");
         runtime=BuildExecutionRuntime.capture(bindings,new BuildExecutionRuntime.Identity(0,0,1000,1000),
                 new BuildExecutionRuntime.Limits(134217728,64,"2",100000,100000),forbidden,30);
@@ -81,6 +83,18 @@ class BuildExecutionRuntimeTest {
     @Test void exactHeldKernelStateCanBeObserved() throws Exception {
         var result=runtime.verify(json());assertEquals(1234567,result.startTicks());assertEquals(64,result.pids());assertEquals("2",result.cpus());
         assertThrows(UnsupportedOperationException.class,()->result.namespaces().clear());
+    }
+
+    @Test void cpuSetOnlyPolicyPreservesTheUnthrottledPartition() throws Exception {
+        var pinned=BuildExecutionRuntime.capture(bindings,new BuildExecutionRuntime.Identity(0,0,1000,1000),
+                new BuildExecutionRuntime.Limits(134217728,64,"2",-1,0),forbidden,30);
+        put("cpu","max 100000\n");
+        assertEquals("2",pinned.verify(json()).cpus());
+        for (String value:List.of("100000 100000","max 0","max -1","max","max 01","max 1 extra")) {
+            put("cpu",value);assertThrows(IOException.class,()->pinned.verify(json()),value);
+        }
+        put("cpu","max 100000\n");put("cpuset","2-3");
+        assertThrows(IOException.class,()->pinned.verify(json()));
     }
     @ParameterizedTest @ValueSource(strings={"memory","pids","cpu","cpuset","cmdline","nodes","ns-pid"})
     void incompleteResponsesCannotPass(String field) { data.remove(field);assertThrows(IOException.class,()->runtime.verify(json())); }

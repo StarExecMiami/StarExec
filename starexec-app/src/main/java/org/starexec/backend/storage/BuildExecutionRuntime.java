@@ -96,10 +96,13 @@ public final class BuildExecutionRuntime {
     }
     public record Limits(long memoryBytes,long pids,String cpus,long cpuQuota,long cpuPeriod) {
         public Limits {
-            if (memoryBytes<1 || pids<1 || cpuQuota<1 || cpuPeriod<1 || cpus==null || cpus.isBlank()) {
-                throw new IllegalArgumentException("Build runtime limits must be explicit and positive");
+            boolean cpuPolicy=cpuQuota>0 && cpuPeriod>0 || cpuQuota==-1 && cpuPeriod>=0;
+            if (memoryBytes<1 || pids<1 || !cpuPolicy || cpus==null || cpus.isBlank()) {
+                throw new IllegalArgumentException("Build runtime requires positive limits and an explicit CPU policy");
             }
         }
+        /** A quota of -1 preserves cpuset-only scheduling; period zero means no period was requested. */
+        public boolean cpuSetOnly() { return cpuQuota==-1; }
     }
     public record Observation(long startTicks,long memoryBytes,long pids,String cpus,Map<String,String> namespaces) {
         public Observation { namespaces=Map.copyOf(namespaces); }
@@ -213,7 +216,11 @@ public final class BuildExecutionRuntime {
         BitSet cpus=cpuSet(text(raw,"cpuset").trim()),allowed=cpuSet(required(status,"Cpus_allowed_list"));
         require(cpus.equals(cpuSet(limits.cpus())) && cpus.equals(allowed),"Effective CPU affinity differs");
         String[] cpu=text(raw,"cpu").trim().split("\\s+");
-        require(cpu.length==2 && positive(cpu[0])==limits.cpuQuota() && positive(cpu[1])==limits.cpuPeriod(),"Effective CPU quota differs");
+        require(cpu.length==2,"Effective CPU bandwidth policy is unavailable");
+        if (limits.cpuSetOnly()) {
+            require("max".equals(cpu[0]) && cpu[1].matches("[1-9][0-9]*") && positive(cpu[1])>0
+                    && (limits.cpuPeriod()==0 || positive(cpu[1])==limits.cpuPeriod()),"Effective cpuset-only CPU policy differs");
+        } else require(positive(cpu[0])==limits.cpuQuota() && positive(cpu[1])==limits.cpuPeriod(),"Effective CPU quota differs");
         verifyMounts(text(raw,"mounts"),text(raw,"nodes"),text(raw,"devices"),memory);
         return new Observation(start,memory,pids,canonical(cpus),namespaces);
     }
