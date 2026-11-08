@@ -96,6 +96,14 @@ public final class ExecutionStorageLeases {
         }
     }
 
+    public static BuildExecutionMounts recoverMounts(BuildExecutionContext build,DedicatedStorageResource resource,
+            BuildExecutionMounts.Controls controls,String fingerprint,String engine) throws SQLException,IOException {
+        try(Connection connection=Common.getConnection()) {
+            return BuildExecutionMounts.restore(connection,build,resource,controls,resource.capacityBytes(),
+                    (int)Math.min(Integer.MAX_VALUE,resource.inodeLimit()),fingerprint,engine);
+        }
+    }
+
     public static Optional<RegisteredResource> registeredResource(BuildExecutionContext build) throws SQLException {
         try (Connection connection = Common.getConnection()) { return registeredResource(connection,build); }
     }
@@ -384,6 +392,18 @@ public final class ExecutionStorageLeases {
 
     public static Optional<DispatchInputs> findDispatchInputs(Connection connection, BuildExecutionContext build,
                                                                DedicatedStorageResource resource) throws SQLException {
+        return findDispatchInputs(connection,build,resource,null);
+    }
+
+    /** Reads only the same already admitted execution; it cannot authorize a new launch. */
+    public static Optional<DispatchInputs> recoverDispatchInputs(Connection connection,BuildExecutionContext build,
+            DedicatedStorageResource resource,String engine) throws SQLException {
+        if(engine==null || !engine.matches("podman:[1-9][0-9]*:[0-9a-f]{64}")) return Optional.empty();
+        return findDispatchInputs(connection,build,resource,engine);
+    }
+
+    private static Optional<DispatchInputs> findDispatchInputs(Connection connection,BuildExecutionContext build,
+            DedicatedStorageResource resource,String engine) throws SQLException {
         if (!connection.getAutoCommit()) throw new SQLException("Build input capture cannot use a foreign transaction");
         try {
             return Common.runTransactional(connection, transaction -> {
@@ -396,12 +416,13 @@ public final class ExecutionStorageLeases {
                         + " FROM starexec.solver_build_artifacts a"
                         + " JOIN starexec.solver_build_helpers h ON h.benchmark_id=a.helper_benchmark_id"
                         + " JOIN starexec.benchmarks b ON b.id=h.benchmark_id"
-                        + " WHERE a.id=? AND a.execution_token=? AND a.engine_identity IS NULL"
+                        + " WHERE a.id=? AND a.execution_token=? AND ((?::text IS NULL AND a.engine_identity IS NULL) OR a.engine_identity=?)"
                         + " AND a.execution_stopped_at IS NULL AND a.cleanup_token IS NULL"
                         + " AND a.state IN ('PLANNED','STAGED') AND h.cleanup_token IS NULL"
                         + " AND h.owner_id=a.origin_owner_id AND b.user_id=h.owner_id AND b.deleted IS NOT TRUE"
                         + " AND b.name='starexec_build' AND b.path=h.path AND b.disk_size=h.byte_size")) {
                     statement.setLong(1, build.artifactId()); statement.setObject(2, build.token());
+                    statement.setString(3,engine);statement.setString(4,engine);
                     try (var result = statement.executeQuery()) {
                         if (!result.next()) throw new Refused();
                         var helper = new SolverBuildArtifacts.Helper(result.getInt(3),result.getInt(4),

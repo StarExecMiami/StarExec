@@ -64,23 +64,49 @@ public final class BuildExecutionMounts {
     private final Map<Path,DirectoryIdentity> directories;
     private final long maxInputBytes;
     private final int maxInputEntries;
+    private final String recoveredEngine;
 
     private BuildExecutionMounts(BuildExecutionContext build, DedicatedStorageResource resource,
                                   ExecutionStorageLeases.DispatchInputs inputs, List<Binding> bindings,
                                   SolverArtifactTree.Snapshot source, Map<Path,FileObservation> files,
-                                  Map<Path,DirectoryIdentity> directories, long maxInputBytes, int maxInputEntries) {
+                                  Map<Path,DirectoryIdentity> directories, long maxInputBytes, int maxInputEntries,String recoveredEngine) {
         this.build=build; this.resource=resource; this.inputs=inputs; this.bindings=List.copyOf(bindings);
         this.source=source; this.files=Map.copyOf(files); this.directories=Map.copyOf(directories);
         this.maxInputBytes=maxInputBytes; this.maxInputEntries=maxInputEntries;
+        this.recoveredEngine=recoveredEngine;
     }
 
     /** Host input and control ancestors must remain application-owned and protected from other writers. */
     public static BuildExecutionMounts prepare(Connection connection, BuildExecutionContext build,
                                                 DedicatedStorageResource resource, Controls controls,
                                                 long maxInputBytes, int maxInputEntries) throws SQLException, IOException {
+        return observe(connection,build,resource,controls,maxInputBytes,maxInputEntries,true,null);
+    }
+
+    /** Restores only an unchanged original observation; missing directories are never recreated. */
+    public static BuildExecutionMounts restore(Connection connection,BuildExecutionContext build,
+            DedicatedStorageResource resource,Controls controls,long maxInputBytes,int maxInputEntries,
+            String fingerprint) throws SQLException,IOException {
+        return restore(connection,build,resource,controls,maxInputBytes,maxInputEntries,fingerprint,null);
+    }
+
+    public static BuildExecutionMounts restore(Connection connection,BuildExecutionContext build,
+            DedicatedStorageResource resource,Controls controls,long maxInputBytes,int maxInputEntries,
+            String fingerprint,String engine) throws SQLException,IOException {
+        if(fingerprint==null || !fingerprint.matches("[0-9a-f]{64}")) throw new IOException("Original input fingerprint is unavailable");
+        var restored=observe(connection,build,resource,controls,maxInputBytes,maxInputEntries,false,engine);
+        if(!fingerprint.equals(restored.fingerprint())) throw new IOException("Recovered build inputs differ from their original observation");
+        return restored;
+    }
+
+    private static BuildExecutionMounts observe(Connection connection,BuildExecutionContext build,
+            DedicatedStorageResource resource,Controls controls,long maxInputBytes,int maxInputEntries,
+            boolean createDirectories,String recoveredEngine) throws SQLException,IOException {
         if (maxInputBytes < 1 || maxInputEntries < 1) throw new IllegalArgumentException("Input observation requires positive limits");
         Objects.requireNonNull(controls,"controls");
-        var inputs=ExecutionStorageLeases.findDispatchInputs(connection,build,resource)
+        var captured=recoveredEngine==null?ExecutionStorageLeases.findDispatchInputs(connection,build,resource)
+                :ExecutionStorageLeases.recoverDispatchInputs(connection,build,resource,recoveredEngine);
+        var inputs=captured
                 .orElseThrow(()->new SQLException("Current leased build inputs are unavailable"));
         if (!inputs.source().equals(build.source()) || inputs.helper().ownerId()!=inputs.ownerId()) {
             throw new IOException("Build input ownership differs from the conserved context");
@@ -136,20 +162,24 @@ public final class BuildExecutionMounts {
             }
             for (String name:DIRECTORIES) {
                 Path directory=build.staging().resolve(name);
-                try { Files.createDirectory(directory,PosixFilePermissions.asFileAttribute(PRIVATE)); }
-                catch (FileAlreadyExistsException existing) { }
+                if(createDirectories) {
+                    try { Files.createDirectory(directory,PosixFilePermissions.asFileAttribute(PRIVATE)); }
+                    catch (FileAlreadyExistsException existing) { }
+                }
                 directories.put(directory,privateDirectory(directory)); requireEmpty(directory);
             }
-            staging.force();
+            if(createDirectories) staging.force();
         }
-        var result=new BuildExecutionMounts(build,resource,inputs,bindings,source,files,directories,maxInputBytes,maxInputEntries);
+        var result=new BuildExecutionMounts(build,resource,inputs,bindings,source,files,directories,maxInputBytes,maxInputEntries,recoveredEngine);
         result.requireCurrent(connection);
         return result;
     }
 
     /** Recheck immediately before creation/admission; this snapshot never authorizes launch by itself. */
     public void requireCurrent(Connection connection) throws SQLException, IOException {
-        if (!ExecutionStorageLeases.findDispatchInputs(connection,build,resource).filter(inputs::equals).isPresent()) {
+        var current=recoveredEngine==null?ExecutionStorageLeases.findDispatchInputs(connection,build,resource)
+                :ExecutionStorageLeases.recoverDispatchInputs(connection,build,resource,recoveredEngine);
+        if (!current.filter(inputs::equals).isPresent()) {
             throw new SQLException("Build input authorization changed before provider admission");
         }
         requireUnchangedInputs();
@@ -186,6 +216,44 @@ public final class BuildExecutionMounts {
 
     public BuildExecutionContext build() { return build; }
     public List<Binding> bindings() { return bindings; }
+
+    /** Stable bytes bind input content, logical roles and Unix identities across controller restart. */
+    public String fingerprint() throws IOException {
+        requireUnchangedInputs();
+        Map<String,Object> proof=new LinkedHashMap<>();
+        proof.put("version",1);
+        proof.put("build",List.of(build.artifactId(),build.pairId(),build.attemptNo(),build.token().toString(),
+                build.source().toString(),build.staging().toString()));
+        proof.put("inputs",List.of(inputs.ownerId(),inputs.generation(),inputs.source().toString(),inputs.helper().benchmarkId(),
+                inputs.helper().ownerId(),inputs.helper().path(),inputs.helper().byteSize()));
+        proof.put("source",List.of(source.sha256(),source.byteSize(),source.entryCount()));
+        Map<String,Object> fileProof=new java.util.TreeMap<>();
+        for(var entry:files.entrySet()) {
+            var observation=entry.getValue();
+            fileProof.put(entry.getKey().toString(),List.of(observation.size(),observation.modified().toInstant().toString(),
+                    observation.permissions().stream().map(Enum::name).sorted().toList(),observation.sha256()));
+        }
+        proof.put("files",fileProof);
+        Map<String,Object> directoryProof=new java.util.TreeMap<>();
+        for(var entry:directories.entrySet()) directoryProof.put(entry.getKey().toString(),entry.getValue().created().toInstant().toString());
+        proof.put("directories",directoryProof);
+        List<Object> bindingProof=new ArrayList<>();
+        for(var binding:bindings.stream().sorted(java.util.Comparator.comparing(b->b.target().toString())).toList()) {
+            try(var parent=DescriptorDirectory.open(binding.source().getParent())) {
+                var attributes=Files.readAttributes(binding.source(),"unix:dev,ino,mode,nlink",LinkOption.NOFOLLOW_LINKS);
+                bindingProof.add(List.of(binding.source().toString(),binding.target().toString(),binding.readOnly(),
+                        attributes.get("dev"),attributes.get("ino"),attributes.get("mode"),attributes.get("nlink")));
+                if(!attributes.equals(Files.readAttributes(binding.source(),"unix:dev,ino,mode,nlink",LinkOption.NOFOLLOW_LINKS))) {
+                    throw new IOException("Build input identity changed during fingerprint observation");
+                }
+            }
+        }
+        proof.put("bindings",bindingProof);
+        byte[] payload=new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(proof);
+        requireUnchangedInputs();
+        try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload)); }
+        catch(NoSuchAlgorithmException unavailable) { throw new IOException("SHA-256 is unavailable",unavailable); }
+    }
     public Path script() { return CONTROL.resolve("jobscript"); }
     public Path workingDirectory() { return EXECUTION.resolve("work"); }
     public Path outputDirectory() { return EXECUTION.resolve("monitor"); }

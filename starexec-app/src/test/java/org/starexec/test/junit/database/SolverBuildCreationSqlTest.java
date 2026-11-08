@@ -134,6 +134,32 @@ class SolverBuildCreationSqlTest extends Common {
         assertTrue(ExecutionStorageLeases.findReleaseDecision(connection,build,resource).isEmpty());
     }
 
+    @Test void heldInputReadbackRequiresTheSameAdmittedEngineAndCannotReopenInitialDispatch() throws Exception {
+        assertTrue(claim());String engine="podman:1001:"+"b".repeat(64);long before=usage();
+        assertTrue(ExecutionStorageLeases.recoverDispatchInputs(connection,build,resource,engine).isEmpty());
+        assertTrue(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,"b".repeat(64)));
+        assertTrue(ExecutionStorageLeases.findDispatchInputs(connection,build,resource).isEmpty());
+        var restored=ExecutionStorageLeases.recoverDispatchInputs(connection,build,resource,engine).orElseThrow();
+        assertEquals(owner,restored.ownerId());assertEquals(build.source(),restored.source());
+        assertTrue(ExecutionStorageLeases.recoverDispatchInputs(connection,build,resource,"podman:1001:"+"c".repeat(64)).isEmpty());
+        assertEquals(before,usage());assertEquals(1001,locator());assertTrue(ExecutionStorageLeases.findReleaseDecision(connection,build,resource).isEmpty());
+        assertTrue(SolverBuildCreations.unreleased().stream().anyMatch(c->c.build().artifactId()==build.artifactId()));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"killed","deleted","solver-deleted","solver-recycled","rerun"})
+    void heldInputReadbackCannotRestoreRevokedOwnership(String change) throws Exception {
+        assertTrue(claim());String engine="podman:1001:"+"b".repeat(64);
+        assertTrue(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,"b".repeat(64)));
+        if(change.equals("rerun")) {
+            try(var statement=connection.prepareStatement("SELECT starexec.RerunJobPairsBatchCore(ARRAY[?]::INTEGER[])")) {
+                statement.setInt(1,pair);Common.executeAndDrain(statement);
+            }
+        } else if(change.startsWith("solver-")) number(connection,"UPDATE starexec.solvers SET "+change.substring(7)+"=true WHERE id=? RETURNING id",solver);
+        else number(connection,"UPDATE starexec.jobs SET "+change+"=true WHERE id=? RETURNING id",job);
+        long before=usage();assertTrue(ExecutionStorageLeases.recoverDispatchInputs(connection,build,resource,engine).isEmpty());
+        assertEquals(before,usage());assertTrue(ExecutionStorageLeases.findReleaseDecision(connection,build,resource).isEmpty());
+    }
+
     @ParameterizedTest @ValueSource(strings={"malformed","duplicate","trailing","oversized","foreign-image","foreign-label"})
     void invalidRequestBytesCannotCreateIntentOrChangeLocator(String fault) throws Exception {
         String payload=payload(1001);

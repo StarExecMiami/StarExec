@@ -214,6 +214,19 @@ public final class SolverBuildCreations {
         }
     }
 
+    /** Candidates only; a restored caller must recheck the exact current hold before its first release. */
+    public static List<Creation> unreleased() throws SQLException {
+        try(Connection connection=Common.getConnection();var query=connection.prepareStatement(
+                "SELECT q.*,a.origin_pair_id,a.attempt_no,a.source_path,a.staging_path FROM starexec.solver_build_creation_requests q"
+                +" JOIN starexec.solver_build_artifacts a ON a.id=q.artifact_id WHERE a.engine_identity LIKE 'podman:%'"
+                +" AND a.execution_stopped_at IS NULL AND a.state IN ('PLANNED','STAGED') AND a.cleanup_token IS NULL"
+                +" AND NOT EXISTS (SELECT 1 FROM starexec.solver_build_release_decisions d WHERE d.artifact_id=a.id) ORDER BY q.artifact_id")) {
+            List<Creation> result=new ArrayList<>();
+            try(var rows=query.executeQuery()) {while(rows.next()) result.add(creation(rows));}
+            return List.copyOf(result);
+        }
+    }
+
     /** Conserved creation IDs must not be reassigned even when their engine outcome is already bound. */
     public static int maximumExecutionId() throws SQLException {
         try (Connection connection=Common.getConnection();var query=connection.prepareStatement(

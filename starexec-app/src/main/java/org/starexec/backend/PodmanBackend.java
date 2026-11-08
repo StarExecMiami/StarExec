@@ -1637,6 +1637,7 @@ public class PodmanBackend implements Backend {
         if (build != null) {
             labels.put(PodmanBuildStopObserver.ARTIFACT_LABEL,Long.toString(build.artifactId()));
             labels.put(PodmanPrivateBuild.LAYOUT_LABEL,PodmanPrivateBuild.LAYOUT);
+            labels.putAll(privateBuild.recoveryLabels());
         }
         if (publishedInputs != null) labels.put(PublishedSolverMounts.LABEL,PublishedSolverMounts.LAYOUT);
 
@@ -2908,6 +2909,44 @@ public class PodmanBackend implements Backend {
         return highestExecution;
     }
 
+    private int reconcileHeldBuilds(Set<String> excluded,Set<Integer> registeredPairs) throws java.sql.SQLException {
+        int highest=0;
+        for(var creation:org.starexec.data.database.SolverBuildCreations.unreleased()) {
+            int execution=creation.execution();
+            highest=Math.max(highest,execution);registeredPairs.add(creation.build().pairId());
+            if(inFlightBuildExecutions.contains(execution)) continue;
+            try {
+                var artifact=org.starexec.data.database.SolverBuildArtifacts.find(creation.build().pairId(),creation.build().attemptNo()).orElseThrow(
+                        ()->new IOException("Unreleased build registration is unavailable"));
+                String prefix="podman:"+execution+":";
+                if(artifact.id()!=creation.build().artifactId() || artifact.engineIdentity()==null || !artifact.engineIdentity().startsWith(prefix)) {
+                    throw new IOException("Unreleased build execution identity differs");
+                }
+                String container=artifact.engineIdentity().substring(prefix.length());
+                if(!container.matches("[0-9a-f]{64}")) throw new IOException("Unreleased build has no immutable provider identity");
+                excluded.add(container);
+                ensurePartitionStateReady();
+                reserveRecoveredPartitionSlot(parsePartitionIndex(PodmanBuildCreationRecovery.labels(creation)),execution);
+                String existingBuild=buildExecutions.get(execution);
+                if(existingBuild!=null && !existingBuild.equals(container)) throw new IOException("Unreleased build conflicts with another tracked resource");
+                String tracked=execIdToContainerId.putIfAbsent(execution,container);
+                if(tracked!=null && !tracked.equals(container)) throw new IOException("Unreleased build conflicts with another tracked resource");
+                String buildTracked=buildExecutions.putIfAbsent(execution,container);
+                if(buildTracked!=null && !buildTracked.equals(container)) {
+                    if(tracked==null) execIdToContainerId.remove(execution,container);
+                    throw new IOException("Unreleased build conflicts with another tracked resource");
+                }
+                var inspection=dockerClient.inspectContainerCmd(container).exec();
+                var held=PodmanPrivateBuild.recoverHeld(dockerClient,containerSocketPath,creation,inspection,container);
+                held.release(dockerClient,execution,container);
+                markPairRunningSafely(creation.build().pairId(),"held build recovery");
+            } catch(Exception uncertain) {
+                log.warn("Held build recovery remains unresolved for pair "+creation.build().pairId(),uncertain);
+            }
+        }
+        return highest;
+    }
+
     private void reconcileOrphanedPairs() {
         try {
             log.info("Starting orphaned-pair reconciliation...");
@@ -2917,6 +2956,7 @@ public class PodmanBackend implements Backend {
             synchronized(creationRecoveryLock) {
                 maxRecoveredExecId=reconcilePendingBuildCreations(retainedContainerIds,registeredCancelledPairs);
                 maxRecoveredExecId=Math.max(maxRecoveredExecId,reconcileRefusedBuildCreations(retainedContainerIds,registeredCancelledPairs));
+                maxRecoveredExecId=Math.max(maxRecoveredExecId,reconcileHeldBuilds(retainedContainerIds,registeredCancelledPairs));
             }
             advanceRecoveredExecutionId(maxRecoveredExecId);
             creationCatalogRecovered=true;
@@ -3490,6 +3530,12 @@ public class PodmanBackend implements Backend {
      */
     @Override
     public Set<Integer> getActiveExecutionIds() throws IOException {
+        if(creationCatalogRecovered || !buildExecutions.isEmpty()) {
+            synchronized(creationRecoveryLock) {
+                try {advanceRecoveredExecutionId(reconcileHeldBuilds(new HashSet<>(),new HashSet<>()));}
+                catch(java.sql.SQLException failure) {throw new IOException("Unreleased build ownership is unavailable",failure);}
+            }
+        }
         if(!pendingCreationArtifacts.isEmpty()) {
             synchronized(creationRecoveryLock) {
                 try {

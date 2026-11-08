@@ -87,6 +87,62 @@ class BuildExecutionMountsTest {
         return BuildExecutionMounts.prepare(connection,build,resource,controls,1024,64);
     }
 
+    @Test void aNewObservationRestoresOnlyTheSameOriginalFingerprint() throws Exception {
+        try(var guard=authorization()) {
+            var original=prepare();String fingerprint=original.fingerprint();assertTrue(fingerprint.matches("[0-9a-f]{64}"));
+            var restored=BuildExecutionMounts.restore(connection,build,resource,controls,1024,64,fingerprint);
+            assertEquals(fingerprint,restored.fingerprint());assertEquals(original.bindings(),restored.bindings());
+        }
+    }
+
+    @Test void restartCannotRecreateAMissingPrivateDirectory() throws Exception {
+        try(var guard=authorization()) {
+            var original=prepare();String fingerprint=original.fingerprint();Path work=build.staging().resolve("work");
+            Files.delete(work);
+            assertThrows(IOException.class,()->BuildExecutionMounts.restore(connection,build,resource,controls,1024,64,fingerprint));
+            assertFalse(Files.exists(work));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings={"source","helper","script","functions","status","permissions","replaced-control","replaced-directory","relocated-control"})
+    void restartCannotAdoptChangedInputsOrPhysicalRoles(String change) throws Exception {
+        try(var guard=authorization()) {
+            var original=prepare();String fingerprint=original.fingerprint();var recoveredControls=controls;
+            switch(change) {
+                case "source" -> Files.writeString(build.source().resolve("starexec_build"),"changed source\n");
+                case "helper" -> Files.writeString(Path.of(inputs.helper().path()),"HELPER");
+                case "script" -> Files.writeString(controls.script(),"SCRIPT");
+                case "functions" -> Files.writeString(controls.functions(),"FUNCTIONS");
+                case "status" -> Files.writeString(controls.statusCodes(),"STATUS CODES");
+                case "permissions" -> Files.setPosixFilePermissions(controls.functions(),PosixFilePermissions.fromString("rwx------"));
+                case "replaced-control" -> {
+                    Path replacement=Files.writeString(files.resolve("replacement"),Files.readString(controls.script()));
+                    Files.setLastModifiedTime(replacement,Files.getLastModifiedTime(controls.script()));
+                    Files.move(replacement,controls.script(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+                case "replaced-directory" -> {
+                    Path work=build.staging().resolve("work");Files.delete(work);
+                    Files.createDirectory(work,PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+                }
+                case "relocated-control" -> recoveredControls=new BuildExecutionMounts.Controls(
+                        Files.copy(controls.script(),files.resolve("relocated")),controls.functions(),controls.statusCodes());
+                default -> throw new AssertionError(change);
+            }
+            var requested=recoveredControls;
+            assertThrows(IOException.class,()->BuildExecutionMounts.restore(connection,build,resource,requested,1024,64,fingerprint));
+        }
+    }
+
+    @Test void anUnknownOriginalFingerprintCannotObserveOrMaterializeRecovery() throws Exception {
+        try(var guard=authorization()) {
+            assertThrows(IOException.class,()->BuildExecutionMounts.restore(connection,build,resource,controls,1024,64,null));
+            assertThrows(IOException.class,()->BuildExecutionMounts.restore(connection,build,resource,controls,1024,64,"unknown"));
+            guard.verify(()->ExecutionStorageLeases.findDispatchInputs(any(),any(),any()),never());
+            assertFalse(Files.exists(build.staging().resolve("work")));
+        }
+    }
+
     @AfterEach void restoreOwnedDirectories() throws Exception {
         Files.walkFileTree(files,new SimpleFileVisitor<>() {
             @Override public FileVisitResult preVisitDirectory(Path path, BasicFileAttributes attrs) throws IOException {

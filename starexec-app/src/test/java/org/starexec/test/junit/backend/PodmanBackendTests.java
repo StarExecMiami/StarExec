@@ -106,6 +106,7 @@ public class PodmanBackendTests {
         creationCatalog=mockStatic(org.starexec.data.database.SolverBuildCreations.class,CALLS_REAL_METHODS);
         creationCatalog.when(org.starexec.data.database.SolverBuildCreations::pending).thenReturn(List.of());
         creationCatalog.when(org.starexec.data.database.SolverBuildCreations::maximumExecutionId).thenReturn(0);
+        creationCatalog.when(org.starexec.data.database.SolverBuildCreations::unreleased).thenReturn(List.of());
 
         // Create temp directory for test files
         tempDir = Files.createTempDirectory("podman_backend_test");

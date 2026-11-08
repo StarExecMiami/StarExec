@@ -243,8 +243,9 @@ proxy.
 Before sending a managed build create, the controller commits an immutable request
 with its existing lease, execution locator, image and stable container name. Only
 the first acknowledged insertion permits a send. An uncertain commit or historical
-request never permits a retry. The Java transport makes create bodies non-repeatable
-so HTTP recovery cannot silently resend them after a lost response or HTTP 429/503.
+request never permits a retry. The Java transport makes creation, exact-container
+start and payload-release requests non-repeatable, including requests with empty
+bodies, so HTTP recovery cannot silently resend them after HTTP 429/503.
 Curl can be selected only before the Java command has attempted execution.
 
 If the response is lost, an exact unique name and ownership lookup may recover
@@ -275,6 +276,17 @@ execution without waiting for submission to return. The new release decision als
 checks the current pair, locator and job cancellation/pause state under the same
 locks. An uncertain admission, start or release retains the exact known provider
 resource and its capacity without creating or releasing a replacement.
+
+If a start response is lost before payload release, startup and periodic observation
+can restore the same admitted execution. The immutable creation request conserves
+the original input fingerprint and application control locators. Recovery requires
+unchanged source contents, helper ownership, control files, directory identities,
+logical bindings and physical identities; it never recreates missing directories.
+The catalog must still authorize the same leased attempt, and the actual container
+must still be running the trusted hold with the original policy. Only the first
+durable release decision permits one signal. Recovery never creates or starts a
+container, adopts changed inputs, or repeats an existing release decision. Older
+requests without an original input proof remain unresolved.
 
 Held-resource validation preserves the scheduler's CPU policy: pinned partitions
 retain their cpuset-only boundary without an added CFS quota, while explicit quotas
@@ -322,9 +334,9 @@ This readback never reserves storage again. Only matching in-memory execution
 ownership can release a held submission slot; repeated cold recovery creates none.
 Registered builds without this proof cannot use the ordinary missing-container reset.
 
-Unobservable creation outcomes, uncertain start/release, and cancellation
-racing an already conserved ordinary completion receipt still require compatible
-recovery handling. Retain their resource ownership and charges; do not substitute
+Unobservable creation outcomes, expired or changed holds, uncertain release, and
+cancellation racing an already conserved ordinary completion receipt still require
+compatible recovery handling. Retain their resource ownership and charges; do not substitute
 a Kubernetes non-execution receipt or infer settlement from a terminal pair status.
 
 ### Immutable publication and Podman consumers

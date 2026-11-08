@@ -98,6 +98,7 @@ class PodmanPendingCreationRecoveryTest {
         creations=mockStatic(SolverBuildCreations.class,CALLS_REAL_METHODS);
         creations.when(SolverBuildCreations::pending).thenAnswer(call->receipt.get()==null?List.of(creation):List.of());
         creations.when(SolverBuildCreations::maximumExecutionId).thenReturn(1001);
+        creations.when(SolverBuildCreations::unreleased).thenReturn(List.of());
         creations.when(()->SolverBuildCreations.find(5)).thenReturn(Optional.of(creation));
         artifacts=mockStatic(SolverBuildArtifacts.class);
         artifacts.when(SolverBuildArtifacts::refusedPodmanCreations).thenAnswer(call->receipt.get()==null?List.of():List.of(
@@ -187,5 +188,61 @@ class PodmanPendingCreationRecoveryTest {
         reconcile();
         assertFalse((Boolean)field("creationCatalogRecovered"),"Failed identity recovery cannot initialize the backend");
         verify(client,never()).createContainerCmd(anyString());verify(client,never()).startContainerCmd(anyString());
+    }
+
+    private PodmanPrivateBuild admittedHold(AtomicBoolean released) throws Exception {
+        creations.when(SolverBuildCreations::pending).thenReturn(List.of());
+        creations.when(SolverBuildCreations::unreleased).thenAnswer(call->released.get()?List.of():List.of(creation));
+        var artifact=new SolverBuildArtifacts.Artifact(5,42,1,7,7,8,1,build.source().toString(),build.staging().toString(),
+                null,null,token,"podman:1001:"+container,null,"PLANNED");
+        artifacts.when(()->SolverBuildArtifacts.find(42,1)).thenReturn(Optional.of(artifact));
+        when(state.getStatus()).thenReturn("running");when(state.getRunning()).thenReturn(true);when(state.getPidLong()).thenReturn(33L);
+        return mock(PodmanPrivateBuild.class);
+    }
+
+    @Test void anAdmittedHoldGetsOnlyItsFirstReleaseAndNeverAnotherCreateOrStart() throws Exception {
+        AtomicBoolean released=new AtomicBoolean();var held=admittedHold(released);
+        try(var plans=mockStatic(PodmanPrivateBuild.class)) {
+            plans.when(()->PodmanPrivateBuild.recoverHeld(eq(client),nullable(String.class),eq(creation),eq(inspection),eq(container))).thenReturn(held);
+            doAnswer(call->{released.set(true);return null;}).when(held).release(client,1001,container);
+            reconcile();assertEquals(Set.of(1001),backend.getActiveExecutionIds());reconcile();
+            verify(held).release(client,1001,container);assertEquals(1,((int[])field("partitionActiveSlots"))[0]);
+            verify(client,never()).createContainerCmd(anyString());verify(client,never()).startContainerCmd(anyString());
+            verify(client,never()).removeContainerCmd(anyString());
+        }
+    }
+
+    @Test void aLostReleaseCommitReplyDoesNotPermitAnotherSignalDuringRecovery() throws Exception {
+        AtomicBoolean released=new AtomicBoolean();var held=admittedHold(released);
+        try(var plans=mockStatic(PodmanPrivateBuild.class)) {
+            plans.when(()->PodmanPrivateBuild.recoverHeld(eq(client),nullable(String.class),eq(creation),eq(inspection),eq(container))).thenReturn(held);
+            doAnswer(call->{released.set(true);throw new SQLException("Synthetic release reply lost after commit");}).when(held).release(client,1001,container);
+            reconcile();assertEquals(Set.of(1001),backend.getActiveExecutionIds());reconcile();
+            verify(held).release(client,1001,container);assertEquals(1,((int[])field("partitionActiveSlots"))[0]);
+            verify(client,never()).createContainerCmd(anyString());verify(client,never()).startContainerCmd(anyString());
+        }
+    }
+
+    @Test void changedHeldInputsKeepTheirResourceAndCapacityWithoutRelease() throws Exception {
+        AtomicBoolean released=new AtomicBoolean();var held=admittedHold(released);
+        try(var plans=mockStatic(PodmanPrivateBuild.class)) {
+            plans.when(()->PodmanPrivateBuild.recoverHeld(eq(client),nullable(String.class),eq(creation),eq(inspection),eq(container)))
+                    .thenThrow(new java.io.IOException("Synthetic changed input proof"));
+            reconcile();assertEquals(Set.of(1001),backend.getActiveExecutionIds());
+            assertEquals(1,((int[])field("partitionActiveSlots"))[0]);verifyNoInteractions(held);
+            verify(client,never()).createContainerCmd(anyString());verify(client,never()).startContainerCmd(anyString());
+            verify(client,never()).removeContainerCmd(anyString());
+        }
+    }
+
+    @Test void aForeignTrackedResourceCannotBeReplacedByHeldRecovery() throws Exception {
+        var held=admittedHold(new AtomicBoolean());
+        ((Map<Integer,String>)field("execIdToContainerId")).put(1001,"another-resource");
+        try(var plans=mockStatic(PodmanPrivateBuild.class)) {
+            reconcile();assertEquals("another-resource",((Map<?,?>)field("execIdToContainerId")).get(1001));
+            assertFalse(((Map<?,?>)field("buildExecutions")).containsKey(1001));verifyNoInteractions(held);
+            plans.verify(()->PodmanPrivateBuild.recoverHeld(any(),nullable(String.class),any(),any(),anyString()),never());
+            verify(client,never()).removeContainerCmd(anyString());
+        }
     }
 }

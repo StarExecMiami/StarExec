@@ -44,6 +44,10 @@ public final class PodmanPrivateBuild {
     public static final String LAYOUT_LABEL = "starexec.build.layout";
     public static final String LAYOUT = "private-v1";
     public static final int HOLD_SECONDS = 60;
+    static final String INPUTS_LABEL="starexec.build.inputs.sha256";
+    static final String SCRIPT_LABEL="starexec.build.control.script";
+    static final String FUNCTIONS_LABEL="starexec.build.control.functions";
+    static final String STATUS_LABEL="starexec.build.control.status-codes";
     private final BuildExecutionContext build;
     private final DedicatedStorageResource resource;
     private final BuildExecutionMounts mounts;
@@ -74,11 +78,49 @@ public final class PodmanPrivateBuild {
                 .orElseThrow(() -> new IOException("Private build resource registration is unavailable"));
         var resource = registration.inspect(protectedRoots());
         var mounts = ExecutionStorageLeases.prepareMounts(build,resource,controls);
-        Map<String,String> namespaces = new LinkedHashMap<>();
+        return new PodmanPrivateBuild(build,resource,mounts,identity,parentNamespaces(),inspected.getId());
+    }
+
+    private static Map<String,String> parentNamespaces() throws IOException {
+        Map<String,String> namespaces=new LinkedHashMap<>();
         for (String name:List.of("pid","ipc","user","net","mnt","cgroup")) {
             namespaces.put(name,Files.readSymbolicLink(Path.of("/proc/self/ns/"+name)).toString());
         }
-        return new PodmanPrivateBuild(build,resource,mounts,identity,namespaces,inspected.getId());
+        return namespaces;
+    }
+
+    /** Restores the original admitted hold and input proof; it never calls create, start or admission. */
+    static PodmanPrivateBuild recoverHeld(DockerClient client,String socket,
+            org.starexec.data.database.SolverBuildCreations.Creation creation,InspectContainerResponse inspection,
+            String container) throws IOException,SQLException {
+        var build=creation.build();String engine="podman:"+creation.execution()+":"+container;
+        var current=SolverBuildArtifacts.find(build.pairId(),build.attemptNo()).orElseThrow(
+                ()->new IOException("Held build registration is unavailable"));
+        require(current.id()==build.artifactId() && build.token().equals(current.executionToken())
+                && engine.equals(current.engineIdentity()) && current.stoppedAt()==null
+                && ("PLANNED".equals(current.state()) || "STAGED".equals(current.state())),"Held build execution ownership differs");
+        var identity=requireLocalRootlessProvider(client,socket);
+        var registration=ExecutionStorageLeases.registeredResource(build).orElseThrow(
+                ()->new IOException("Held build resource registration is unavailable"));
+        require(creation.resourceKey().equals(registration.key()) && creation.resourceIdentity().equals(registration.identity()),
+                "Held build resource differs from its creation request");
+        var resource=registration.inspect(protectedRoots());
+        require(ExecutionStorageLeases.findReleaseDecision(build,resource).isEmpty(),"A prior release decision cannot authorize another signal");
+        var labels=PodmanBuildCreationRecovery.labels(creation);
+        final BuildExecutionMounts.Controls controls;
+        try { controls=new BuildExecutionMounts.Controls(Path.of(labels.get(SCRIPT_LABEL)),Path.of(labels.get(FUNCTIONS_LABEL)),Path.of(labels.get(STATUS_LABEL))); }
+        catch(IllegalArgumentException | NullPointerException invalid) { throw new IOException("Conserved build control locators are unavailable",invalid); }
+        var mounts=ExecutionStorageLeases.recoverMounts(build,resource,controls,labels.get(INPUTS_LABEL),engine);
+        var restored=new PodmanPrivateBuild(build,resource,mounts,identity,parentNamespaces(),creation.image());
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+        restored.requested=mapper.treeToValue(mapper.readTree(creation.payload()).get("HostConfig"),HostConfig.class);
+        require(inspection!=null && (creation.name().equals(inspection.getName()) || ("/"+creation.name()).equals(inspection.getName())),
+                "Held build provider name differs");
+        require(inspection.getConfig()!=null && inspection.getConfig().getLabels()!=null && labels.entrySet().stream()
+                .allMatch(e->e.getValue().equals(inspection.getConfig().getLabels().get(e.getKey()))),"Held build conserved labels differ");
+        restored.requireHeld(inspection,container,creation.execution());
+        restored.captureRuntime(inspection);
+        return restored;
     }
 
     private static List<Path> protectedRoots() {
@@ -168,11 +210,28 @@ public final class PodmanPrivateBuild {
     public String image() { return image; }
     public String creationName() { return org.starexec.data.database.SolverBuildCreations.containerName(build); }
 
+    public Map<String,String> recoveryLabels() throws IOException {
+        Map<String,String> labels=new LinkedHashMap<>();labels.put(INPUTS_LABEL,mounts.fingerprint());
+        for(var role:Map.of(SCRIPT_LABEL,"jobscript",FUNCTIONS_LABEL,"functions.bash",STATUS_LABEL,"status_codes.bash").entrySet()) {
+            Path target=BuildExecutionMounts.CONTROL.resolve(role.getValue());
+            labels.put(role.getKey(),mounts.bindings().stream().filter(b->b.readOnly() && b.target().equals(target))
+                    .map(b->b.source().toString()).findFirst().orElseThrow(()->new IOException("Build control mapping is incomplete")));
+        }
+        return Map.copyOf(labels);
+    }
+
     /** A pre-send failure or historical claim never permits a provider request. */
     public boolean claimCreation(int execution,org.starexec.data.database.SolverBuildCreations.Transport transport,
                                  String payload) throws IOException,SQLException {
         require(requested!=null,"Private build creation policy is unavailable");
         mounts.requireUnchangedInputs();
+        require(payload!=null && payload.length()<=65536 && payload.getBytes(StandardCharsets.UTF_8).length<=65536,
+                "Build creation request exceeds its bound");
+        var request=new com.fasterxml.jackson.databind.ObjectMapper()
+                .enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+                .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readTree(payload);
+        for(var entry:recoveryLabels().entrySet()) require(request!=null
+                && entry.getValue().equals(request.path("Labels").path(entry.getKey()).textValue()),"Build creation lost its original input observation");
         return org.starexec.data.database.SolverBuildCreations.claim(build,resource,execution,image,transport,payload);
     }
 
@@ -200,6 +259,10 @@ public final class PodmanPrivateBuild {
     public void requireCreated(InspectContainerResponse inspection, String container, int execution) throws IOException {
         requireMetadata(inspection,container,execution);
         PodmanBuildStopObserver.requireNeverStarted(inspection,container,build,execution);
+        captureRuntime(inspection);
+    }
+
+    private void captureRuntime(InspectContainerResponse inspection) throws IOException {
         require(requested!=null,"Private build creation policy is unavailable");
         var actual=inspection.getHostConfig();
         require(Objects.equals(requested.getMemory(),actual.getMemory())

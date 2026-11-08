@@ -60,6 +60,7 @@ class PodmanRefusedBuildRecoveryTest {
         creations=mockStatic(org.starexec.data.database.SolverBuildCreations.class,CALLS_REAL_METHODS);
         creations.when(org.starexec.data.database.SolverBuildCreations::pending).thenReturn(List.of());
         creations.when(org.starexec.data.database.SolverBuildCreations::maximumExecutionId).thenReturn(0);
+        creations.when(org.starexec.data.database.SolverBuildCreations::unreleased).thenReturn(List.of());
         backend=new PodmanBackend();client=mock(DockerClient.class);
         field(backend,"dockerClient",client);field(backend,"partitions",List.of(new CpuPartition(0,"2",null)));
         field(backend,"partitionActiveSlots",new int[]{0});field(backend,"partitionMaxSlots",new int[]{2});
