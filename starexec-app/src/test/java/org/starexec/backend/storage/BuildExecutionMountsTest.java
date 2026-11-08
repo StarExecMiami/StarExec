@@ -34,6 +34,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Base64;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -98,6 +99,122 @@ class BuildExecutionMountsTest {
     private HostConfig limits() {
         return new HostConfig().withMemory(64L*1024*1024).withMemorySwap(64L*1024*1024)
                 .withCpusetCpus("2").withCpusetMems("0").withNetworkMode("none");
+    }
+
+    private Map<Path,Path> providerPaths(BuildExecutionMounts layout) {
+        Map<Path,Path> paths=new LinkedHashMap<>();
+        for (var binding:layout.bindings()) {
+            paths.put(binding.source(),Path.of("/provider-view").resolve(
+                    binding.source().getRoot().relativize(binding.source())));
+        }
+        return paths;
+    }
+
+    @Test void explicitProviderPathsPreserveApplicationAndRunnerLocators() throws Exception {
+        try (var guard=authorization()) {
+            var layout=prepare();var original=List.copyOf(layout.bindings());
+            var paths=providerPaths(layout);
+            var configured=layout.toPodmanHostConfig(limits().withPidsLimit(64L),paths);
+            assertEquals(original.size(),configured.getMounts().size());
+            for (int i=0;i<original.size();i++) {
+                var binding=original.get(i);var actual=configured.getMounts().get(i);
+                assertEquals(paths.get(binding.source()).toString(),actual.getSource());
+                assertEquals(binding.target().toString(),actual.getTarget());
+                assertEquals(binding.readOnly(),actual.getReadOnly());
+            }
+            assertEquals(original,layout.bindings());
+            assertEquals(build.staging().resolve("monitor"),layout.hostOutputDirectory());
+            assertEquals(layout.outputDirectory().toString(),layout.environment().get("STAREXEC_OUTPUT_DIR"));
+            assertFalse(String.join(" ",layout.environment().values()).contains("/provider-view"));
+            assertEquals(64L,configured.getPidsLimit());
+            assertEquals("2",configured.getCpusetCpus());
+        }
+    }
+
+    @Test void incompleteOrAdditionalProviderMappingsHaveNoImplicitFallback() throws Exception {
+        try (var guard=authorization()) {
+            var layout=prepare();var missing=providerPaths(layout);
+            missing.remove(layout.bindings().get(0).source());
+            assertThrows(IllegalArgumentException.class,()->layout.toPodmanHostConfig(limits(),missing));
+            var extra=providerPaths(layout);
+            extra.put(files.resolve("undeclared"),Path.of("/provider-view/undeclared"));
+            assertThrows(IllegalArgumentException.class,()->layout.toPodmanHostConfig(limits(),extra));
+        }
+    }
+
+    @Test void providerPathsRequireNormalizedAbsoluteNonrootLocations() throws Exception {
+        try (var guard=authorization()) {
+            var layout=prepare();
+            for (Path path:List.of(Path.of("relative"),Path.of("/provider/../outside"),Path.of("/"))) {
+                var paths=providerPaths(layout);paths.put(build.source(),path);
+                assertThrows(IllegalArgumentException.class,()->layout.toPodmanHostConfig(limits(),paths));
+            }
+        }
+    }
+
+    @Test void providerMappingsCannotContainNullPaths() throws Exception {
+        try (var guard=authorization()) {
+            var layout=prepare();
+            assertThrows(IllegalArgumentException.class,()->layout.toPodmanHostConfig(limits(),null));
+            var nullValue=providerPaths(layout);nullValue.put(build.source(),null);
+            assertThrows(IllegalArgumentException.class,()->layout.toPodmanHostConfig(limits(),nullValue));
+            var nullKey=providerPaths(layout);nullKey.put(null,Path.of("/provider-view/extra"));
+            assertThrows(IllegalArgumentException.class,()->layout.toPodmanHostConfig(limits(),nullKey));
+        }
+    }
+
+    @Test void providerMappingsCannotMergeDistinctSources() throws Exception {
+        try (var guard=authorization()) {
+            var layout=prepare();var paths=providerPaths(layout);
+            paths.put(layout.bindings().get(0).source(),paths.get(layout.bindings().get(1).source()));
+            assertThrows(IllegalArgumentException.class,()->layout.toPodmanHostConfig(limits(),paths));
+        }
+    }
+
+    @Test void providerMappingsCannotIntroduceReadonlyWritableOverlap() throws Exception {
+        try (var guard=authorization()) {
+            var layout=prepare();
+            for (boolean parent:List.of(false,true)) {
+                var paths=providerPaths(layout);Path writable=paths.get(build.staging());
+                paths.put(build.source(),parent?writable.getParent():writable.resolve("input"));
+                assertThrows(IllegalArgumentException.class,()->layout.toPodmanHostConfig(limits(),paths));
+            }
+        }
+    }
+
+    @Test void providerScratchCannotLeaveOrMoveWithinItsStagingTree() throws Exception {
+        try (var guard=authorization()) {
+            var layout=prepare();
+            for (String child:List.of("tmp","run","var-tmp")) {
+                var outside=providerPaths(layout);
+                outside.put(build.staging().resolve(child),Path.of("/outside-provider").resolve(child));
+                assertThrows(IllegalArgumentException.class,()->layout.toPodmanHostConfig(limits(),outside));
+                var renamed=providerPaths(layout);
+                renamed.put(build.staging().resolve(child),renamed.get(build.staging()).resolve("other-"+child));
+                assertThrows(IllegalArgumentException.class,()->layout.toPodmanHostConfig(limits(),renamed));
+            }
+        }
+    }
+
+    @Test void independentReadonlyProviderLocationsRemainSupported() throws Exception {
+        try (var guard=authorization()) {
+            var layout=prepare();var paths=providerPaths(layout);
+            Path helper=Path.of(inputs.helper().path());
+            paths.put(helper,Path.of("/separate-readonly-helper/starexec_build"));
+            var configured=layout.toPodmanHostConfig(limits(),paths);
+            assertEquals(paths.get(helper).toString(),configured.getMounts().get(1).getSource());
+            assertEquals(Boolean.TRUE,configured.getMounts().get(1).getReadOnly());
+        }
+    }
+
+    @Test void identityProviderMappingPreservesTheExistingRequest() throws Exception {
+        try (var guard=authorization()) {
+            var layout=prepare();Map<Path,Path> paths=new LinkedHashMap<>();
+            for (var binding:layout.bindings()) paths.put(binding.source(),binding.source());
+            var json=new ObjectMapper();
+            assertEquals(json.valueToTree(layout.toPodmanHostConfig(limits())),
+                    json.valueToTree(layout.toPodmanHostConfig(limits(),paths)));
+        }
     }
 
     private long stagingEntries() throws Exception {

@@ -32,6 +32,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -192,7 +193,19 @@ public final class BuildExecutionMounts {
                 Map.entry("TMPDIR","/tmp"));
     }
 
+    /** Uses identical source path names in the application and provider namespaces. */
     public HostConfig toPodmanHostConfig(HostConfig limits) {
+        Map<Path,Path> sources=new LinkedHashMap<>();
+        for (Binding binding:bindings) sources.put(binding.source(),binding.source());
+        return toPodmanHostConfig(limits,sources);
+    }
+
+    /**
+     * Declares every provider-visible source without changing application or runner locators.
+     * Capture expected physical identity from the original bindings and verify the effective
+     * mounts on the held resource before release; these path declarations grant no launch permission.
+     */
+    public HostConfig toPodmanHostConfig(HostConfig limits, Map<Path,Path> providerSources) {
         Objects.requireNonNull(limits,"limits");
         String network=limits.getNetworkMode();
         if (network!=null && (network.equals("host") || network.startsWith("container:") || network.startsWith("ns:"))) {
@@ -201,6 +214,7 @@ public final class BuildExecutionMounts {
         if (limits.getMemory()==null || limits.getMemory()<=0) {
             throw new IllegalArgumentException("Private builds require an explicit positive memory limit");
         }
+        List<Binding> rendered=providerBindings(providerSources);
         return new HostConfig()
                 .withMemory(limits.getMemory()).withMemorySwap(limits.getMemorySwap())
                 .withMemoryReservation(limits.getMemoryReservation()).withMemorySwappiness(limits.getMemorySwappiness())
@@ -213,10 +227,45 @@ public final class BuildExecutionMounts {
                 .withNetworkMode(network).withReadonlyRootfs(true).withPrivileged(false)
                 .withCapDrop(Capability.ALL).withSecurityOpts(List.of("no-new-privileges"))
                 .withRestartPolicy(RestartPolicy.noRestart()).withAutoRemove(false)
-                .withMounts(bindings.stream().map(binding->new Mount().withType(MountType.BIND)
+                .withMounts(rendered.stream().map(binding->new Mount().withType(MountType.BIND)
                         .withSource(binding.source().toString()).withTarget(binding.target().toString())
                         .withReadOnly(binding.readOnly()).withBindOptions(new BindOptions()
                                 .withPropagation(BindPropagation.R_PRIVATE))).toList());
+    }
+
+    private List<Binding> providerBindings(Map<Path,Path> providerSources) {
+        final Map<Path,Path> declared;
+        try { declared=Map.copyOf(Objects.requireNonNull(providerSources,"providerSources")); }
+        catch (NullPointerException invalid) {
+            throw new IllegalArgumentException("Provider paths require a complete non-null declaration",invalid);
+        }
+        Set<Path> required=new HashSet<>();
+        for (Binding binding:bindings) required.add(binding.source());
+        if (required.size()!=bindings.size() || !declared.keySet().equals(required)) {
+            throw new IllegalArgumentException("Provider paths must name exactly the conserved application sources");
+        }
+        Set<Path> distinct=new HashSet<>();List<Binding> rendered=new ArrayList<>();
+        for (Binding binding:bindings) {
+            Path path=declared.get(binding.source());
+            if (!path.isAbsolute() || path.getParent()==null || !path.equals(path.normalize())
+                    || !path.getFileSystem().equals(binding.source().getFileSystem()) || !distinct.add(path)) {
+                throw new IllegalArgumentException("Provider sources must be distinct normalized absolute non-root paths");
+            }
+            if (!binding.readOnly() && (!binding.source().startsWith(build.staging())
+                    || !declared.get(build.staging()).resolve(build.staging().relativize(binding.source())).equals(path))) {
+                throw new IllegalArgumentException("Provider scratch paths must preserve the leased staging tree");
+            }
+            rendered.add(new Binding(path,binding.target(),binding.readOnly()));
+        }
+        for (Binding input:rendered) {
+            if (!input.readOnly()) continue;
+            for (Binding writable:rendered) {
+                if (!writable.readOnly() && overlap(input.source(),writable.source())) {
+                    throw new IllegalArgumentException("Provider read-only inputs overlap private writable storage");
+                }
+            }
+        }
+        return List.copyOf(rendered);
     }
 
     private static boolean overlap(Path left, Path right) { return left.startsWith(right)||right.startsWith(left); }

@@ -227,6 +227,16 @@ a substitute for the backend's isolation and positive-stop guarantees. Exact
 provider/host path binding and all per-stage readers must satisfy the same boundary
 before enabling the complete untrusted execution profile.
 
+Private Podman requests may declare a complete mapping from the application's
+conserved source paths to provider-visible paths. The mapping refuses missing or
+extra sources, relative or dot-segment paths, merged sources and overlap between
+read-only inputs and writable storage. Writable scratch paths preserve their exact
+positions below the leased staging root; read-only inputs may use independent
+provider locations. The original application bindings, host output locator and
+runner environment remain unchanged. Expected physical identities must still be
+captured from those application bindings and verified against the actual held
+resource before release. A path declaration alone cannot authorize execution.
+
 Shared per-stage metadata readers also bind listing and reads to open directories,
 refuse symbolic-link ancestors and leaves, and enforce byte bounds while reading.
 The status reader retains its bounded entry count and Gson validation. Trusted
