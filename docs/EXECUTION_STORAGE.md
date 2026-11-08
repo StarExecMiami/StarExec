@@ -371,6 +371,14 @@ can read the conserved logs only while the same current attempt remains cancelle
 The failure-recording API continues to reject cancelled pairs. Both paths recheck
 ownership, current attempt and the exact positive stop before committing output.
 
+An explicitly cancelled Podman build without a payload-release decision can settle
+diagnostics only when its complete stopped facts match the immutable admitted
+creation, resource and image. Require a private terminal process scope, zero PID,
+no running, paused, restarting or privileged state, no automatic restart and valid
+start/finish observations. Incomplete or coerced facts remain unresolved. Normal
+completion ingestion still requires payload release; cancellation cleanup grants
+neither execution permission nor a scientific result or automatic retry.
+
 Ordinary Podman jobs obtain published inputs from the catalog for their current
 attempt. Repeated stage references share one exact read-only solver bind; build
 logs and the parent store are not exposed. The prebuilt image is fixed by its

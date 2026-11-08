@@ -17,6 +17,7 @@ import org.starexec.data.database.Common;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.ExecutionStorageLeases;
 import org.starexec.data.database.SolverBuildArtifacts;
+import org.starexec.data.database.SolverBuildCreations;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.database.PublishedSolverInputs;
 import org.starexec.data.to.SolverBuildStopReceipt;
@@ -207,6 +208,71 @@ class SolverBuildCompletionSqlTest extends Common {
         }
         assertThrows(SQLException.class,()->Solvers.readSolverBuildLog(solver,owner));
         assertEquals("original source\n",Files.readString(source.resolve("starexec_build")));
+    }
+
+    private SolverBuildStopReceipt stoppedWithoutRelease(String fault) throws Exception {
+        String image="sha256:"+"a".repeat(64),container="b".repeat(64),engine="podman:1001:"+container;
+        var request=new JsonObject();request.addProperty("Image",image);
+        request.add("HostConfig",new JsonObject());
+        for(String field:List.of("Entrypoint","Cmd","Env")) request.add(field,new com.google.gson.JsonArray());
+        request.addProperty("WorkingDir","/starexec/execution/work");
+        var labels=new JsonObject();
+        Map.of("starexec.managed","true","starexec.label.version","2","starexec.kind","job-pair",
+                "starexec.build.layout","private-v1","starexec.build.artifact",Long.toString(build.artifactId()),
+                "starexec.pair.id",Integer.toString(pair),"starexec.attempt","1","starexec.exec.id","1001").forEach(labels::addProperty);
+        request.add("Labels",labels);
+        if(!fault.equals("missing-request")) assertTrue(SolverBuildCreations.claim(connection,build,resource,1001,image,
+                SolverBuildCreations.Transport.JAVA,request.toString()));
+        assertTrue(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,container));
+        var facts=new JsonObject();facts.addProperty("status","exited");facts.addProperty("pid",0);
+        for(String field:List.of("running","paused","restarting","privileged")) facts.addProperty(field,false);
+        facts.addProperty("private_pid_namespace",true);facts.addProperty("restart_policy","no");facts.addProperty("image_id",image);
+        facts.addProperty("started_at","2026-01-01T00:00:00Z");facts.addProperty("finished_at","2026-01-01T00:01:00Z");
+        facts.addProperty("exit_code",75);
+        if(fault.startsWith("missing-")) facts.remove(fault.substring(8));
+        switch(fault) {
+            case "running","paused","restarting","privileged" -> facts.addProperty(fault,true);
+            case "namespace" -> facts.addProperty("private_pid_namespace",false);
+            case "pid" -> facts.addProperty("pid",17);
+            case "restart" -> facts.addProperty("restart_policy","always");
+            case "image" -> facts.addProperty("image_id","sha256:"+"c".repeat(64));
+            case "created" -> facts.addProperty("status","created");
+            case "string-pid" -> facts.addProperty("pid","0");
+            case "string-flag" -> facts.addProperty("running","false");
+            case "fractional-exit" -> facts.addProperty("exit_code",75.5);
+            case "negative-exit" -> facts.addProperty("exit_code",-1);
+            case "no-start" -> facts.addProperty("started_at","0001-01-01T00:00:00Z");
+            case "reverse-time" -> facts.addProperty("finished_at","2025-01-01T00:00:00Z");
+            default -> { }
+        }
+        var receipt=SolverBuildStopReceipt.observed("podman",build.artifactId(),pair,1,engine,container,Instant.now(),facts);
+        assertTrue(SolverBuildArtifacts.recordStopReceipt(connection,pair,1,build.token(),engine,receipt));
+        int status=fault.equals("successful")?7:fault.equals("failed")?11:21;
+        number(connection,"UPDATE starexec.job_pairs SET status_code=? WHERE id=? RETURNING id",status,pair);
+        return receipt;
+    }
+
+    @Test void completeStoppedCancellationCanSettleWithoutClaimingPayloadRelease() throws Exception {
+        var receipt=stoppedWithoutRelease("complete");record(store);record(store);
+        assertEquals("REJECTED",SolverBuildArtifacts.find(connection,pair,1).orElseThrow().state());
+        assertEquals(receipt.payload(),SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt().payload());
+        assertFalse(Files.exists(build.staging()));assertEquals(0,activeLeases());
+        assertEquals(0,number(connection,"SELECT count(*) FROM starexec.solver_build_release_decisions WHERE artifact_id=?",build.artifactId()));
+        assertEquals(0,number(connection,"SELECT build_status FROM starexec.solvers WHERE id=?",solver));
+        assertEquals("build log\n",Solvers.readSolverBuildLog(solver,owner).orElseThrow());
+        assertFalse(Files.exists(output().resolve("solver")));assertEquals("original source\n",Files.readString(source.resolve("starexec_build")));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"missing-request","missing-pid","missing-exit_code","missing-image_id","missing-private_pid_namespace",
+            "running","paused","restarting","privileged","namespace","pid","restart","image","created","string-pid",
+            "string-flag","fractional-exit","negative-exit","no-start","reverse-time","successful","failed"})
+    void incompleteOrUncancelledStopCannotBypassPayloadRelease(String fault) throws Exception {
+        var receipt=stoppedWithoutRelease(fault);long before=usage();record(store);
+        assertEquals("PLANNED",SolverBuildArtifacts.find(connection,pair,1).orElseThrow().state());
+        assertEquals(receipt.payload(),SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt().payload());
+        assertTrue(Files.exists(build.staging()));assertEquals(1,activeLeases());assertEquals(before,usage());
+        assertFalse(Files.exists(output()));
+        assertEquals(0,number(connection,"SELECT count(*) FROM starexec.solver_build_release_decisions WHERE artifact_id=?",build.artifactId()));
     }
 
     private int consumer() throws Exception {

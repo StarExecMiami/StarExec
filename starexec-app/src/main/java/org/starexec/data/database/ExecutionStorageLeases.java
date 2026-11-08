@@ -37,7 +37,7 @@ public final class ExecutionStorageLeases {
         }
     }
 
-    /** Conserves a released stopped outcome before independently settling its staging lease. */
+    /** Conserves verified stopped output before independently settling its staging lease. */
     public static boolean recordBuildOutcomeAndClean(SolverBuildArtifacts.Artifact expected, BuildArtifactStore store,
                                                      List<Path> protectedRoots) throws SQLException, IOException {
         try (Connection connection=Common.getConnection()) {
@@ -60,7 +60,6 @@ public final class ExecutionStorageLeases {
             }
             if (disposition!=null) return false;
             var release=findReleaseDecision(connection,build,resource).orElse(null);
-            if (release==null || !current.engineIdentity().equals(release.engineIdentity())) return false;
             boolean success;
             boolean cancelled;
             try (var query=connection.prepareStatement("SELECT status_code=7,starexec.IsTerminalPairStatus(status_code)"
@@ -72,6 +71,9 @@ public final class ExecutionStorageLeases {
                     cancelled=row.getBoolean(3);
                 }
             }
+            if(release==null) {
+                if(!cancelled || !matchesUnreleasedCancelledPodmanStop(connection,build,resource,current.engineIdentity(),stopped.receipt())) return false;
+            } else if(!current.engineIdentity().equals(release.engineIdentity())) return false;
             store.requireUnchanged();
             boolean conserved=cancelled?SolverBuildPublication.recordCancelledLogs(connection,build,store.root(),resource.capacityBytes(),entries)
                     :success?SolverBuildPublication.publish(connection,build,store.root(),resource.capacityBytes(),entries)
@@ -80,6 +82,35 @@ public final class ExecutionStorageLeases {
             store.requireUnchanged();
             return SolverBuildStagingCleanup.purge(connection,build,resource,entries);
         }
+    }
+
+    /** Positive process termination can settle cancellation; it never grants payload execution. */
+    private static boolean matchesUnreleasedCancelledPodmanStop(Connection connection,BuildExecutionContext build,
+            DedicatedStorageResource resource,String engine,org.starexec.data.to.SolverBuildStopReceipt receipt) throws SQLException {
+        if(!"podman".equals(receipt.backend()) || !receipt.resourceId().matches("[0-9a-f]{64}")) return false;
+        var creation=SolverBuildCreations.find(connection,build.artifactId()).orElse(null);
+        if(creation==null || !creation.build().equals(build) || !creation.resourceKey().equals(resource.filesystemKey())
+                || !creation.resourceIdentity().equals(resource.identity())
+                || !engine.equals("podman:"+creation.execution()+":"+receipt.resourceId())) return false;
+        var facts=receipt.facts();
+        try {
+            for(String name:List.of("running","paused","restarting","privileged","private_pid_namespace")) {
+                var flag=facts.getAsJsonPrimitive(name);
+                if(!flag.isBoolean() || flag.getAsBoolean()!=name.equals("private_pid_namespace")) return false;
+            }
+            for(String name:List.of("status","restart_policy","image_id","started_at","finished_at")) {
+                if(!facts.getAsJsonPrimitive(name).isString()) return false;
+            }
+            var pid=facts.getAsJsonPrimitive("pid");var exit=facts.getAsJsonPrimitive("exit_code");
+            if(!pid.isNumber() || pid.getAsBigDecimal().longValueExact()!=0 || !exit.isNumber()) return false;
+            int code=exit.getAsBigDecimal().intValueExact();
+            if(code<0 || code>255 || !java.util.Set.of("exited","dead").contains(facts.get("status").getAsString())
+                    || !java.util.Set.of("no","").contains(facts.get("restart_policy").getAsString())
+                    || !creation.image().equals(facts.get("image_id").getAsString())) return false;
+            Instant started=Instant.parse(facts.get("started_at").getAsString());
+            Instant finished=Instant.parse(facts.get("finished_at").getAsString());
+            return started.isAfter(Instant.EPOCH) && !finished.isBefore(started);
+        } catch(RuntimeException invalidFacts) { return false; }
     }
 
     /** Owns the standalone connection; preparation commits its reservation before writing files. */
