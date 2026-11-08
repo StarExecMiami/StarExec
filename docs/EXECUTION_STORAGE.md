@@ -288,6 +288,14 @@ durable release decision permits one signal. Recovery never creates or starts a
 container, adopts changed inputs, or repeats an existing release decision. Older
 requests without an original input proof remain unresolved.
 
+After a release response is lost, its durable decision remains consumed regardless
+of whether delivery succeeded. A restarted controller can ingest a complete outcome
+from that same container; it must not send another release. If no attributable
+outcome exists, keep the execution unresolved until explicit cancellation or a
+verified outcome is available. Explicit cancellation stops that same owned execution
+and conserves its positive cancellation receipt before cleanup. It does not assert
+that the payload never started or permit another attempt by itself.
+
 Held-resource validation preserves the scheduler's CPU policy: pinned partitions
 retain their cpuset-only boundary without an added CFS quota, while explicit quotas
 must match. The kernel's effective affinity, bandwidth policy and zero swap limit
