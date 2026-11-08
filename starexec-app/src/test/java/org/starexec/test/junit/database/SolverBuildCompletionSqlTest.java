@@ -179,6 +179,102 @@ class SolverBuildCompletionSqlTest extends Common {
         assertTrue(Files.isRegularFile(output().resolve("solver/program")));
     }
 
+    @Test void refusedAdmissionCanCancelItsKnownCreatedResourceWithoutLaunchPermission() throws Exception {
+        int job=(int)number(connection,"SELECT job_id FROM starexec.job_pairs WHERE id=?",pair);
+        number(connection,"UPDATE starexec.jobs SET paused=true WHERE id=? RETURNING id",job);
+        assertFalse(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,"synthetic-created"));
+        assertNull(SolverBuildArtifacts.find(connection,pair,1).orElseThrow().engineIdentity());
+        String container="c".repeat(64),engine="podman:1001:"+container;
+        JsonObject facts=new JsonObject();facts.addProperty("disposition","cancelled");facts.addProperty("reason","admission_refused");
+        facts.addProperty("status","created");facts.addProperty("pid",0);facts.addProperty("running",false);
+        facts.addProperty("paused",false);facts.addProperty("restarting",false);facts.addProperty("started_at","0001-01-01T00:00:00Z");
+        facts.addProperty("privileged",false);facts.addProperty("private_pid_namespace",true);facts.addProperty("restart_policy","no");
+        facts.addProperty("image_id","sha256:"+"a".repeat(64));
+        var receipt=SolverBuildStopReceipt.observed("podman",build.artifactId(),pair,1,engine,container,Instant.now(),facts);
+        assertTrue(ExecutionStorageLeases.cancelRefusedPodmanCreation(connection,build,resource,1001,container,receipt));
+        assertTrue(ExecutionStorageLeases.cancelRefusedPodmanCreation(connection,build,resource,1001,container,receipt));
+        number(connection,"UPDATE starexec.jobs SET paused=false WHERE id=? RETURNING id",job);
+        assertFalse(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,container));
+        assertEquals("REJECTED",SolverBuildArtifacts.find(connection,pair,1).orElseThrow().state());
+        assertEquals(receipt.payload(),SolverBuildArtifacts.findStopReceipt(connection,pair,1).orElseThrow().receipt().payload());
+        assertTrue(ExecutionStorageLeases.findReleaseDecision(connection,build,resource).isEmpty());
+        record(store);record(store);
+        assertEquals(originalBytes,usage());assertEquals(0,activeLeases());assertFalse(Files.exists(build.staging()));
+        assertTrue(SolverBuildArtifacts.findOutputManifest(connection,build.artifactId()).isEmpty());
+        assertEquals(2,number(connection,"SELECT status_code FROM starexec.job_pairs WHERE id=?",pair));
+    }
+
+    private JsonObject createdFacts() {
+        JsonObject facts=new JsonObject();facts.addProperty("disposition","cancelled");facts.addProperty("reason","admission_refused");
+        facts.addProperty("status","created");facts.addProperty("pid",0);facts.addProperty("running",false);facts.addProperty("paused",false);
+        facts.addProperty("restarting",false);facts.addProperty("started_at","0001-01-01T00:00:00Z");facts.addProperty("privileged",false);
+        facts.addProperty("private_pid_namespace",true);facts.addProperty("restart_policy","no");facts.addProperty("image_id","sha256:"+"a".repeat(64));
+        return facts;
+    }
+
+    private SolverBuildStopReceipt createdReceipt(String container,JsonObject facts) {
+        return SolverBuildStopReceipt.observed("podman",build.artifactId(),pair,1,"podman:1001:"+container,container,Instant.now(),facts);
+    }
+
+    @ParameterizedTest @ValueSource(strings={"reason","status","pid","pid-type","running","flag-type","started","privileged","namespace","restart","image"})
+    void unverifiedCreatedCancellationCannotBindOrRefund(String condition) throws Exception {
+        String container="c".repeat(64);var facts=createdFacts();
+        switch(condition) {
+            case "reason" -> facts.remove("reason");
+            case "status" -> facts.addProperty("status","exited");
+            case "pid" -> facts.addProperty("pid",44);
+            case "pid-type" -> facts.addProperty("pid","0");
+            case "running" -> facts.addProperty("running",true);
+            case "flag-type" -> facts.addProperty("running","false");
+            case "started" -> facts.addProperty("started_at","2026-01-01T00:00:00Z");
+            case "privileged" -> facts.addProperty("privileged",true);
+            case "namespace" -> facts.addProperty("private_pid_namespace",false);
+            case "restart" -> facts.addProperty("restart_policy","always");
+            case "image" -> facts.remove("image_id");
+            default -> throw new AssertionError(condition);
+        }
+        long before=usage();
+        assertFalse(ExecutionStorageLeases.cancelRefusedPodmanCreation(connection,build,resource,1001,container,createdReceipt(container,facts)));
+        assertNull(SolverBuildArtifacts.find(connection,pair,1).orElseThrow().engineIdentity());
+        assertTrue(SolverBuildArtifacts.findStopReceipt(connection,pair,1).isEmpty());
+        assertEquals(before,usage());assertEquals(1,activeLeases());assertTrue(Files.exists(build.staging()));
+    }
+
+    @Test void refusedCancellationCannotTakeAnAlreadyAdmittedEngine() throws Exception {
+        String container="c".repeat(64);
+        assertTrue(ExecutionStorageLeases.admitPodman(connection,build,resource,1001,container));
+        assertFalse(ExecutionStorageLeases.cancelRefusedPodmanCreation(connection,build,resource,1001,container,createdReceipt(container,createdFacts())));
+        assertNull(SolverBuildArtifacts.find(connection,pair,1).orElseThrow().stoppedAt());
+        assertTrue(SolverBuildArtifacts.findStopReceipt(connection,pair,1).isEmpty());assertEquals(1,activeLeases());
+    }
+
+    @Test void cancellationRefusalRollsBackItsNewBinding() throws Exception {
+        String container="c".repeat(64);var receipt=createdReceipt(container,createdFacts());long before=usage();
+        try (var dao=mockStatic(SolverBuildArtifacts.class,CALLS_REAL_METHODS)) {
+            dao.when(()->SolverBuildArtifacts.recordCancelled(any(Connection.class),eq(pair),eq(1),eq(build.token()),anyString(),any())).thenReturn(false);
+            assertFalse(ExecutionStorageLeases.cancelRefusedPodmanCreation(connection,build,resource,1001,container,receipt));
+        }
+        var current=SolverBuildArtifacts.find(connection,pair,1).orElseThrow();
+        assertNull(current.engineIdentity());assertNull(current.stoppedAt());
+        assertEquals(before,usage());assertEquals(1,activeLeases());
+    }
+
+    @Test void lostCreatedCancellationCommitIsAcknowledgedWithoutASecondWrite() throws Exception {
+        String container="c".repeat(64);var receipt=createdReceipt(container,createdFacts());long before=usage();
+        var uncertain=spy(connection);
+        doAnswer(call->{call.callRealMethod();throw new SQLException("Lost cancellation commit response");}).when(uncertain).commit();
+        assertThrows(SQLException.class,()->ExecutionStorageLeases.cancelRefusedPodmanCreation(uncertain,build,resource,1001,container,receipt));
+        try (var observed=Common.getConnection()) {
+            assertEquals("REJECTED",SolverBuildArtifacts.find(observed,pair,1).orElseThrow().state());
+            assertEquals(receipt.payload(),SolverBuildArtifacts.findStopReceipt(observed,pair,1).orElseThrow().receipt().payload());
+        }
+        assertTrue(ExecutionStorageLeases.cancelRefusedPodmanCreation(connection,build,resource,1001,container,receipt));
+        assertEquals(before,usage());assertEquals(1,activeLeases());
+        record(store);assertEquals(originalBytes,usage());assertEquals(0,activeLeases());
+        assertFalse(ExecutionStorageLeases.cancelRefusedPodmanCreation(connection,build,resource,1001,container,receipt));
+        assertEquals(originalBytes,usage());assertEquals(0,activeLeases());
+    }
+
     @ParameterizedTest @ValueSource(strings={"cancelled","never_started"})
     void periodicRecorderSettlesExplicitNonCompletionWithoutPublishing(String disposition) throws Exception {
         String backend=disposition.equals("never_started")?"kubernetes":"podman";

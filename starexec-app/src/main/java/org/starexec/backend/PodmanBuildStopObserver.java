@@ -97,6 +97,29 @@ final class PodmanBuildStopObserver {
                 "Refused build has a previous start");
     }
 
+    /** Positive created-state observation; persistence must bind and reject atomically, never admit launch. */
+    static SolverBuildStopReceipt cancelledCreationReceipt(InspectContainerResponse inspection,String containerId,
+                                                            BuildExecutionContext build,int execution) throws SQLException {
+        requireNeverStarted(inspection,containerId,build,execution);
+        require(inspection.getImageId()!=null && inspection.getImageId().matches("sha256:[0-9a-f]{64}"),
+                "Created build image identity is unavailable");
+        var state=inspection.getState();var facts=new JsonObject();
+        facts.addProperty("disposition","cancelled");facts.addProperty("reason","admission_refused");
+        facts.addProperty("status",state.getStatus());facts.addProperty("pid",state.getPidLong());
+        facts.addProperty("running",state.getRunning());facts.addProperty("paused",state.getPaused());facts.addProperty("restarting",state.getRestarting());
+        facts.addProperty("started_at",state.getStartedAt());facts.addProperty("restart_policy",inspection.getHostConfig().getRestartPolicy().getName());
+        facts.addProperty("private_pid_namespace",true);facts.addProperty("privileged",false);facts.addProperty("image_id",inspection.getImageId());
+        String engine="podman:"+execution+":"+containerId;
+        var stored=SolverBuildArtifacts.findStopReceipt(build.pairId(),build.attemptNo());
+        if (stored.isPresent()) {
+            var receipt=stored.get().receipt();
+            require(receipt.matches(build.artifactId(),build.pairId(),build.attemptNo(),engine) && "podman".equals(receipt.backend())
+                    && containerId.equals(receipt.resourceId()) && facts.equals(receipt.facts()),"Created cancellation conflicts with the conserved receipt");
+            return receipt;
+        }
+        return SolverBuildStopReceipt.observed("podman",build.artifactId(),build.pairId(),build.attemptNo(),engine,containerId,Instant.now(),facts);
+    }
+
     private static Identity identity(InspectContainerResponse inspection, String containerId) {
         require(isBuild(inspection) && containerId != null && containerId.equals(inspection.getId()),
                 "Build inspection resource identity differs");

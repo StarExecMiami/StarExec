@@ -215,6 +215,13 @@ public final class PodmanPrivateBuild {
         return ExecutionStorageLeases.admitPodman(build,resource,execution,container);
     }
 
+    /** A known refusal can cancel only the same fully verified, never-started resource. */
+    public boolean cancelRefusedCreation(InspectContainerResponse inspection,String container,int execution) throws IOException,SQLException {
+        requireCreated(inspection,container,execution);
+        var receipt=PodmanBuildStopObserver.cancelledCreationReceipt(inspection,container,build,execution);
+        return ExecutionStorageLeases.cancelRefusedPodmanCreation(build,resource,execution,container,receipt);
+    }
+
     /** Execute only against the exact verified held resource; zero swap is independently required. */
     public static List<String> observationCommand() {
         List<String> command=new ArrayList<>(BuildExecutionRuntime.observationCommand());

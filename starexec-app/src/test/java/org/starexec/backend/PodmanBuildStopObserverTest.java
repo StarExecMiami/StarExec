@@ -140,6 +140,58 @@ class PodmanBuildStopObserverTest {
         }
     }
 
+    private BuildExecutionContext createdBuild() {
+        when(state.getStatus()).thenReturn("created");when(state.getStartedAt()).thenReturn("0001-01-01T00:00:00Z");
+        when(inspection.getImageId()).thenReturn("sha256:"+"a".repeat(64));
+        return new BuildExecutionContext(5,42,1,token,java.nio.file.Path.of("/data/source"),java.nio.file.Path.of("/data/staging"));
+    }
+
+    @Test void createdRefusalCapturesOnlyItsExactNonExecutionFacts() throws Exception {
+        var build=createdBuild();
+        try (var dao=registered()) {
+            var receipt=PodmanBuildStopObserver.cancelledCreationReceipt(inspection,id,build,1001);
+            assertTrue(receipt.matches(5,42,1,engine));assertEquals(id,receipt.resourceId());assertEquals("podman",receipt.backend());
+            assertEquals("cancelled",receipt.facts().get("disposition").getAsString());
+            assertEquals("admission_refused",receipt.facts().get("reason").getAsString());
+            assertEquals("created",receipt.facts().get("status").getAsString());assertEquals(0,receipt.facts().get("pid").getAsLong());
+            verify(config,never()).getEnv();
+            dao.verify(()->SolverBuildArtifacts.recordStopReceipt(anyInt(),anyInt(),any(),anyString(),any()),never());
+            dao.verify(()->SolverBuildArtifacts.recordCancelled(anyInt(),anyInt(),any(),anyString(),any()),never());
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings={"running","prior-start","pid","privileged","namespace","restart","resource","image"})
+    void createdRefusalDoesNotAcceptAnUnverifiedPhysicalObservation(String fault) throws Exception {
+        var build=createdBuild();String resource=id;
+        switch(fault) {
+            case "running" -> when(state.getRunning()).thenReturn(true);
+            case "prior-start" -> when(state.getStartedAt()).thenReturn("2026-01-01T00:00:00Z");
+            case "pid" -> when(state.getPidLong()).thenReturn(44L);
+            case "privileged" -> host.withPrivileged(true);
+            case "namespace" -> host.withPidMode("host");
+            case "restart" -> host.withRestartPolicy(RestartPolicy.alwaysRestart());
+            case "resource" -> resource="other-resource";
+            case "image" -> when(inspection.getImageId()).thenReturn("runner:latest");
+            default -> throw new AssertionError(fault);
+        }
+        final String captured=resource;
+        try (var dao=registered()) {
+            assertThrows(IllegalStateException.class,()->PodmanBuildStopObserver.cancelledCreationReceipt(inspection,captured,build,1001));
+            dao.verifyNoInteractions();
+        }
+    }
+
+    @Test void createdRefusalReusesItsExactReceiptAndRefusesChangedImageFacts() throws Exception {
+        var build=createdBuild();
+        try (var dao=registered()) {
+            var receipt=PodmanBuildStopObserver.cancelledCreationReceipt(inspection,id,build,1001);
+            dao.when(()->SolverBuildArtifacts.findStopReceipt(42,1)).thenReturn(Optional.of(new SolverBuildArtifacts.StoredStopReceipt(receipt,Instant.now())));
+            assertSame(receipt,PodmanBuildStopObserver.cancelledCreationReceipt(inspection,id,build,1001));
+            when(inspection.getImageId()).thenReturn("sha256:"+"b".repeat(64));
+            assertThrows(IllegalStateException.class,()->PodmanBuildStopObserver.cancelledCreationReceipt(inspection,id,build,1001));
+        }
+    }
+
     @Test void deletionMustFollowTheDurableMatchingReceipt() throws Exception {
         var backend = new PodmanBackend(); var client = mock(DockerClient.class);
         Field field = PodmanBackend.class.getDeclaredField("dockerClient"); field.setAccessible(true); field.set(backend, client);

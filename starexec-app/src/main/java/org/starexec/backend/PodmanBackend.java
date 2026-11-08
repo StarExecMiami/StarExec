@@ -1747,7 +1747,7 @@ public class PodmanBackend implements Backend {
                     + "; container and capacity retained for reconciliation",unavailable);
                 return execId;
             }
-            if (!admitBuildBeforeStart(build, execId, containerId, privateBuild)) return execId;
+            if (!admitBuildBeforeStart(execId, containerId, privateBuild)) return execId;
             try {
                 dockerClient.startContainerCmd(containerId).exec();
                 privateBuild.release(dockerClient,execId,containerId);
@@ -1781,7 +1781,7 @@ public class PodmanBackend implements Backend {
         return execId;
     }
 
-    private boolean admitBuildBeforeStart(BuildExecutionContext build, int execId, String containerId,
+    private boolean admitBuildBeforeStart(int execId, String containerId,
                                            PodmanPrivateBuild privateBuild) {
         boolean admitted = false;
         try {
@@ -1795,9 +1795,11 @@ public class PodmanBackend implements Backend {
 
         boolean removed = false;
         try {
-            PodmanBuildStopObserver.requireNeverStarted(dockerClient.inspectContainerCmd(containerId).exec(),
-                    containerId, build, execId);
-            deleteContainerArtifacts(containerId, true);
+            if (!privateBuild.cancelRefusedCreation(dockerClient.inspectContainerCmd(containerId).exec(),containerId,execId)) {
+                log.warn("Refused build cancellation is unresolved; resource and capacity retained for execution " + execId);
+                return false;
+            }
+            deleteContainerArtifacts(containerId, false);
             removed = true;
         } catch (NotFoundException absent) {
             log.warn("Refused build resource disappeared without positive never-started inspection");
@@ -1811,7 +1813,7 @@ public class PodmanBackend implements Backend {
         }
         execIdToContainerId.remove(execId, containerId);
         containerIdToPairId.invalidate(containerId);
-        throw new IllegalStateException("Build admission was refused and its container was removed");
+        throw new SubmissionDeferredException("Build admission was refused; its cancelled resource was conserved and removed");
     }
 
     /**

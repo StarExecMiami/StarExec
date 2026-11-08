@@ -267,10 +267,23 @@ the exact cancelled receipt; they cannot turn it into a normal completion or
 rewrite an already conserved normal receipt. The periodic recorder discards
 cancelled staging only through the existing non-completion cleanup contract.
 
-Podman launch refusal without admission, and cancellation racing an already
-conserved ordinary completion receipt, still require compatible recovery handling.
-Retain their resource ownership and charges; do not substitute a Kubernetes
-non-execution receipt or infer settlement from a terminal pair status.
+When admission is definitely refused for an owned container still in `created`
+state, the controller rechecks its exact policy, zero PID and absent prior start.
+The existing positive lease and allowance must match; a prior release, conflicting
+engine or receipt, or cleanup claim refuses the operation. One transaction binds
+this non-execution outcome and records cancellation/rejection. That binding cannot
+authorize launch, and reactivation of the job cannot admit the rejected artifact.
+
+Only an acknowledged cancellation permits removal without force. An unknown
+commit retains the provider and capacity; an exact repeat acknowledges the saved
+receipt without another binding write or allowance reservation. After confirmed
+removal, the pair is deferred rather than assigned a terminal solver failure.
+Periodic cancellation cleanup independently settles staging without publication.
+
+Unknown creation outcomes, controller-restart reconciliation and cancellation
+racing an already conserved ordinary completion receipt still require compatible
+recovery handling. Retain their resource ownership and charges; do not substitute
+a Kubernetes non-execution receipt or infer settlement from a terminal pair status.
 
 ### Immutable publication and Podman consumers
 

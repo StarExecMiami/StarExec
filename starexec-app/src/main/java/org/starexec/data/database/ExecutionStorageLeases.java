@@ -131,6 +131,95 @@ public final class ExecutionStorageLeases {
         });
     }
 
+    /** Conserves a known refused created resource without granting execution admission. */
+    public static boolean cancelRefusedPodmanCreation(BuildExecutionContext build, DedicatedStorageResource resource,
+                                                       int execution, String container,
+                                                       org.starexec.data.to.SolverBuildStopReceipt receipt) throws SQLException {
+        try (Connection connection=Common.getConnection()) {
+            return cancelRefusedPodmanCreation(connection,build,resource,execution,container,receipt);
+        }
+    }
+
+    /** Binds only a verified non-execution outcome, atomically rejected before it can authorize launch. */
+    public static boolean cancelRefusedPodmanCreation(Connection connection, BuildExecutionContext build,
+                                                       DedicatedStorageResource resource, int execution, String container,
+                                                       org.starexec.data.to.SolverBuildStopReceipt receipt) throws SQLException {
+        if (execution<1 || container==null || !container.matches("[0-9a-f]{64}")
+                || !createdCancellation(build,execution,container,receipt)) return false;
+        String engine="podman:"+execution+":"+container;
+        return transact(connection,transaction->{
+            resource.requireUnchanged();
+            var prior=SolverBuildArtifacts.find(transaction,build.pairId(),build.attemptNo()).orElse(null);
+            if (prior!=null && prior.stoppedAt()!=null) {
+                return acknowledgeRefusedCreation(transaction,build,resource,engine,receipt);
+            }
+            if (!reserveInTransaction(transaction,build,resource)) return false;
+            var current=SolverBuildArtifacts.find(transaction,build.pairId(),build.attemptNo()).orElse(null);
+            var lease=findStagingCleanup(transaction,build,resource).orElse(null);
+            if (current==null || current.id()!=build.artifactId() || !build.token().equals(current.executionToken())
+                    || !build.source().toString().equals(current.sourcePath()) || !build.staging().toString().equals(current.stagingPath())
+                    || lease==null || lease.releasedAt()!=null || lease.token()!=null
+                    || findReleaseDecision(transaction,build,resource).isPresent()) return false;
+            var stored=SolverBuildArtifacts.findStopReceipt(transaction,build.pairId(),build.attemptNo());
+            if (stored.isPresent() && !stored.get().receipt().payload().equals(receipt.payload())) return false;
+            if (current.engineIdentity()!=null && (!engine.equals(current.engineIdentity()) || stored.isEmpty())) return false;
+            if (!SolverBuildArtifacts.bindExecution(transaction,build.pairId(),build.attemptNo(),build.token(),engine)
+                    || !SolverBuildArtifacts.recordCancelled(transaction,build.pairId(),build.attemptNo(),build.token(),engine,receipt)) return false;
+            resource.requireUnchanged();
+            return true;
+        });
+    }
+
+    /** Readback only: a stopped outcome must not reacquire an allowance or repeat a binding write. */
+    private static boolean acknowledgeRefusedCreation(Connection connection,BuildExecutionContext build,
+                                                       DedicatedStorageResource resource,String engine,
+                                                       org.starexec.data.to.SolverBuildStopReceipt receipt) throws SQLException,IOException {
+        try (var query=connection.prepareStatement("SELECT a.id FROM starexec.solver_build_artifacts a"
+                +" JOIN starexec.solver_build_storage_leases l ON l.artifact_id=a.id"
+                +" JOIN starexec.execution_storage_resources r ON r.resource_key=l.resource_key"
+                +" JOIN starexec.solver_build_storage_charges c ON c.artifact_id=a.id AND c.storage_kind='STAGING'"
+                +" WHERE a.id=? AND a.origin_pair_id=? AND a.attempt_no=? AND a.execution_token=?"
+                +" AND a.source_path=? AND a.staging_path=? AND a.engine_identity=? AND a.state IN ('REJECTED','DELETED')"
+                +" AND a.execution_stopped_at IS NOT NULL AND a.execution_stop_receipt_payload=? AND a.execution_stop_receipt_sha256=?"
+                +" AND l.execution_token=a.execution_token AND l.released_at IS NULL AND l.cleanup_token IS NULL"
+                +" AND r.resource_key=? AND r.observed_identity=? AND r.root_path=? AND r.capacity_bytes=? AND r.inode_limit=?"
+                +" AND c.owner_id=a.origin_owner_id AND c.path=a.staging_path AND c.limit_bytes>=r.capacity_bytes"
+                +" AND c.charged_bytes=c.limit_bytes AND c.verified_at IS NULL AND c.released_at IS NULL"
+                +" FOR SHARE OF a,l,r,c NOWAIT")) {
+            Object[] values={build.artifactId(),build.pairId(),build.attemptNo(),build.token(),build.source().toString(),
+                    build.staging().toString(),engine,receipt.payload(),receipt.sha256(),resource.filesystemKey(),
+                    resource.identity(),resource.root().toString(),resource.capacityBytes(),resource.inodeLimit()};
+            for (int i=0;i<values.length;i++) query.setObject(i+1,values[i]);
+            try (var rows=query.executeQuery()) {
+                if (!rows.next()) return false;
+                resource.requireUnchanged();return true;
+            }
+        }
+    }
+
+    private static boolean createdCancellation(BuildExecutionContext build,int execution,String container,
+                                                 org.starexec.data.to.SolverBuildStopReceipt receipt) {
+        if (receipt==null || !"podman".equals(receipt.backend()) || !container.equals(receipt.resourceId())
+                || !receipt.matches(build.artifactId(),build.pairId(),build.attemptNo(),"podman:"+execution+":"+container)) return false;
+        try {
+            var facts=receipt.facts();
+            return "cancelled".equals(facts.get("disposition").getAsString())
+                    && "admission_refused".equals(facts.get("reason").getAsString()) && "created".equals(facts.get("status").getAsString())
+                    && facts.getAsJsonPrimitive("pid").isNumber() && "0".equals(facts.get("pid").getAsString())
+                    && falseFact(facts,"running") && falseFact(facts,"paused") && falseFact(facts,"restarting")
+                    && falseFact(facts,"privileged") && facts.getAsJsonPrimitive("private_pid_namespace").isBoolean()
+                    && facts.get("private_pid_namespace").getAsBoolean()
+                    && ("no".equals(facts.get("restart_policy").getAsString()) || "".equals(facts.get("restart_policy").getAsString()))
+                    && facts.get("image_id").getAsString().matches("sha256:[0-9a-f]{64}")
+                    && Instant.parse("0001-01-01T00:00:00Z").equals(Instant.parse(facts.get("started_at").getAsString()));
+        } catch (RuntimeException malformed) { return false; }
+    }
+
+    private static boolean falseFact(com.google.gson.JsonObject facts,String name) {
+        var value=facts.get(name);
+        return value!=null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean() && !value.getAsBoolean();
+    }
+
     /** A paused, cancelled, completed or superseded pair cannot authorize a payload release. */
     public static boolean claimPodmanRelease(BuildExecutionContext build, DedicatedStorageResource resource,
                                              int execution, String container, UUID request,

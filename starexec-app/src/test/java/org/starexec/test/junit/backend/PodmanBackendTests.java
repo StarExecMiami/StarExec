@@ -88,6 +88,7 @@ public class PodmanBackendTests {
     private Path tempDir;
     private AutoCloseable mocks;
     private MockedStatic<PodmanPrivateBuild> privateBuildFactory;
+    private PodmanPrivateBuild privatePlan;
     private MockedStatic<PublishedSolverInputs> publishedInputs;
 
     // Test constants
@@ -711,9 +712,9 @@ public class PodmanBackendTests {
         try (MockedStatic<JobPairs> pairs = mockStatic(JobPairs.class);
              var artifacts = mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
             pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
-            assertTrue(submitBuild(build) < 0);
+            org.junit.jupiter.api.Assertions.assertThrows(org.starexec.backend.exception.SubmissionDeferredException.class,()->submitBuild(build));
             verify(mockDockerClient, never()).startContainerCmd(anyString());
-            verify(mockRemoveContainerCmd).withForce(true);
+            verify(mockRemoveContainerCmd).withForce(false);
             assertEquals(0, getActiveSubmissionSlots());
             assertTrue(getExecIdMap().isEmpty());
         }
@@ -734,6 +735,25 @@ public class PodmanBackendTests {
             verify(mockDockerClient, never()).startContainerCmd(anyString());
             assertEquals(TEST_CONTAINER_ID, getExecIdMap().get(execution));
             assertEquals(1, getActiveSubmissionSlots());
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    public void refusedCreationRetainsItsProviderUntilCancellationIsAcknowledged(boolean replyLost) throws Exception {
+        configureBackendForSubmitScript();configureCreateContainerSuccess(TEST_CONTAINER_ID);
+        var build=buildContext();
+        try (var pairs=mockStatic(JobPairs.class);var artifacts=mockStatic(org.starexec.data.database.SolverBuildArtifacts.class)) {
+            pairs.when(()->JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            if (replyLost) when(privatePlan.cancelRefusedCreation(any(InspectContainerResponse.class),anyString(),anyInt()))
+                    .thenThrow(new java.sql.SQLException("Cancellation response unavailable"));
+            else when(privatePlan.cancelRefusedCreation(any(InspectContainerResponse.class),anyString(),anyInt())).thenReturn(false);
+            int execution=submitBuild(build);
+            assertTrue(execution>0);assertEquals(TEST_CONTAINER_ID,getExecIdMap().get(execution));
+            assertEquals(1,getActiveSubmissionSlots());
+            verify(mockDockerClient,never()).startContainerCmd(anyString());
+            verify(mockDockerClient,never()).removeContainerCmd(anyString());
+            verify(mockDockerClient,times(1)).createContainerCmd(anyString());
         }
     }
 
@@ -850,6 +870,7 @@ public class PodmanBackendTests {
         var mounts=mock(BuildExecutionMounts.class,CALLS_REAL_METHODS);
         doReturn(List.of()).when(mounts).bindings();
         var plan=mock(PodmanPrivateBuild.class);
+        privatePlan=plan;
         when(plan.mounts()).thenReturn(mounts);
         when(plan.image()).thenReturn("sha256:"+"a".repeat(64));
         when(plan.entrypoint()).thenReturn(org.starexec.backend.storage.BuildExecutionHold.entrypoint(60));
@@ -863,6 +884,7 @@ public class PodmanBackendTests {
         when(plan.admit(anyInt(),anyString())).thenAnswer(call->
             org.starexec.data.database.SolverBuildArtifacts.admitExecution(build,
                 "podman:"+call.getArgument(0)+":"+call.getArgument(1)));
+        when(plan.cancelRefusedCreation(any(InspectContainerResponse.class),anyString(),anyInt())).thenReturn(true);
         privateBuildFactory=mockStatic(PodmanPrivateBuild.class);
         privateBuildFactory.when(()->PodmanPrivateBuild.prepare(eq(mockDockerClient),eq(build),anyString(),
                 nullable(String.class),any(BuildExecutionMounts.Controls.class))).thenReturn(plan);
