@@ -737,10 +737,13 @@ public class PodmanBackendTests {
             pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
             artifacts.when(() -> org.starexec.data.database.SolverBuildArtifacts.admitExecution(eq(build), anyString()))
                 .thenThrow(new java.sql.SQLException("Broken pipe"));
-            assertTrue(submitBuild(build) < 0);
+            int execution = submitBuild(build);
+            assertTrue(execution > 0);
+            assertEquals(TEST_CONTAINER_ID,getExecIdMap().get(execution));
             verify(mockDockerClient, times(1)).createContainerCmd(anyString());
             verify(mockDockerClient, never()).startContainerCmd(anyString());
-            assertEquals(0, getActiveSubmissionSlots());
+            verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
+            assertEquals(1, getActiveSubmissionSlots());
         }
     }
 
@@ -754,10 +757,13 @@ public class PodmanBackendTests {
             pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
             artifacts.when(() -> org.starexec.data.database.SolverBuildArtifacts.admitExecution(eq(build), anyString()))
                 .thenThrow(new IllegalStateException("Broken pipe"));
-            assertTrue(submitBuild(build) < 0);
+            int execution = submitBuild(build);
+            assertTrue(execution > 0);
+            assertEquals(TEST_CONTAINER_ID,getExecIdMap().get(execution));
             verify(mockDockerClient, times(1)).createContainerCmd(anyString());
             verify(mockDockerClient, never()).startContainerCmd(anyString());
-            assertEquals(0, getActiveSubmissionSlots());
+            verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
+            assertEquals(1, getActiveSubmissionSlots());
         }
     }
 
