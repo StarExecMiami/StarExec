@@ -587,9 +587,8 @@ public abstract class JobManager {
 				while (it.hasNext()) {
 					SchedulingState s = it.next();
 
-					if (!s.pairIter.hasNext()) {
-						// we will remove this SchedulingState from the schedule, since it is out of job
-						// pairs
+					if (s.deferred || !s.pairIter.hasNext()) {
+						// Remove exhausted jobs and jobs deferred for this scheduling pass.
 						it.remove();
 						continue;
 					}
@@ -598,8 +597,8 @@ public abstract class JobManager {
 					if (!s.job.isHighPriority() && userToHighPriorityStates.containsKey(currentStateUserId)) {
 						List<SchedulingState> highPriorityStates = userToHighPriorityStates.get(currentStateUserId);
 
-						// Filter out all of the high priority states that have no more job pairs.
-						highPriorityStates = highPriorityStates.stream().filter(state -> state.pairIter.hasNext())
+						// Deferred high-priority jobs must not displace runnable ordinary work.
+							highPriorityStates = highPriorityStates.stream().filter(state -> !state.deferred && state.pairIter.hasNext())
 								.collect(Collectors.toList());
 
 						// Replace the high priority states with the filtered ones.
@@ -723,6 +722,7 @@ public abstract class JobManager {
 						i++;
 						log.trace("About to submit pair " + pair.getId());
 
+						boolean preparingBuild = s.job.isBuildJob();
 						try {
 							BuildExecutionContext build = null;
 							if (s.job.isBuildJob() && R.BACKEND.requiresLeasedBuildStaging()) {
@@ -741,6 +741,7 @@ public abstract class JobManager {
 							} else {
 								requireLegacyBuildDispatch(s.job, pair);
 							}
+							preparingBuild = false;
 							// Write the script that will run this individual pair
 							final String scriptPath = JobManager.writeJobScript(s.jobTemplate, s.job, pair, q);
 							log.trace("About to get the log path from the database...");
@@ -828,6 +829,12 @@ public abstract class JobManager {
 							if (returned == JobPairs.ConditionalPairUpdateResult.ERROR) {
 								log.error("submitJobs", "could not return deferred pair " + pair.getId() +
 										" to PENDING_SUBMIT; it stays ENQUEUED without an execution");
+							}
+							if (preparingBuild && returned != JobPairs.ConditionalPairUpdateResult.ERROR) {
+								// Build storage and recovery can be unavailable while ordinary jobs remain runnable.
+								s.deferred = true;
+								log.info("submitJobs", "deferring build job " + s.job.getId() + " for this pass: " + e.getMessage());
+								break;
 							}
 							log.info(
 									"submitJobs",
@@ -1886,6 +1893,7 @@ public abstract class JobManager {
 		final Job job;
 		final String jobTemplate;
 		final Iterator<JobPair> pairIter;
+		boolean deferred;
 
 		SchedulingState(Job _job, String _jobTemplate, Iterator<JobPair> _pairIter) {
 			job = _job;

@@ -225,6 +225,12 @@ quota. A retry conserves its original lease and allowance; uncertain preparation
 cannot select another resource. Unavailable storage defers the build rather than
 falling back to shared output directories.
 
+A build-specific preparation deferral parks that job for the current scheduling
+pass after its pair is conditionally returned to pending. Other runnable jobs can
+continue, including ordinary jobs behind a deferred high-priority build. The next
+pass can retry the build. Genuine backend capacity deferral or failure to reset
+the pair still ends the queue pass; no execution or storage guard is bypassed.
+
 `PodmanPrivateBuild` requires a local rootless Unix provider with a verified peer
 owner matching the unprivileged application identity, an immutable image without
 declared volumes, private mounts and a disabled image healthcheck. Unknown user

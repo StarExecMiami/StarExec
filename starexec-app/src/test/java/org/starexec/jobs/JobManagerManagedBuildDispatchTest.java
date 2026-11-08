@@ -124,6 +124,61 @@ class JobManagerManagedBuildDispatchTest {
         dispatch(false, Optional.empty(), true, false, true);
     }
 
+    @ParameterizedTest @ValueSource(strings={"null","sql","io","priority","unsupported","backend-full","reset-error"})
+    void unavailableBuildStorageDoesNotBlockAnOrdinaryJobInTheSameQueue(String condition) throws Exception {
+        Backend backend=mock(Backend.class);R.BACKEND=backend;
+        when(backend.isQueueDispatchable(anyString())).thenReturn(true);
+        when(backend.requiresLeasedBuildStaging()).thenReturn(true);when(backend.supportsBuildStaging()).thenReturn(true);
+        when(backend.submitScript(eq(102),anyString(),any(),anyString(),anyString())).thenReturn(500);
+        User owner=new User();owner.setId(7);owner.setDiskQuota(Long.MAX_VALUE);
+        Job build=queueJob(3,true,owner),ordinary=queueJob(4,false,owner);
+        if (condition.equals("priority")) build.setHighPriority();
+        if (condition.equals("unsupported")) when(backend.supportsBuildStaging()).thenReturn(false);
+        if (condition.equals("backend-full")) when(backend.submitScript(eq(101),anyString(),any(),anyString(),anyString(),any()))
+                .thenThrow(new org.starexec.backend.exception.SubmissionDeferredException("Backend is full"));
+        JobPair buildPair=pair(101,3),ordinaryPair=pair(102,4);buildPair.setBackendExecId(41);
+        Queue queue=new Queue();queue.setId(1);queue.setName("all.q");
+        Path inbox=Files.createDirectory(files.resolve("independent-inbox"));
+        Path buildLog=Files.writeString(files.resolve("build.log"),"conserved build log\n");
+        Path ordinaryLog=files.resolve("ordinary.log");List<Integer> claims=new ArrayList<>();
+        try (var pairs=mockStatic(JobPairs.class);var jobs=mockStatic(Jobs.class);var users=mockStatic(Users.class);
+             var queues=mockStatic(Queues.class);var leases=mockStatic(ExecutionStorageLeases.class);
+             var constants=mockStatic(R.class,CALLS_REAL_METHODS)) {
+            constants.when(R::getJobInboxDir).thenReturn(inbox.toString());
+            jobs.when(()->Jobs.getPendingPairsDetailed(eq(build),anyInt())).thenReturn(List.of(buildPair,pair(103,3)));
+            jobs.when(()->Jobs.getPendingPairsDetailed(eq(ordinary),anyInt())).thenReturn(List.of(ordinaryPair));
+            jobs.when(()->Jobs.getSlotsInJobQueue(any(Job.class))).thenReturn("1");
+            pairs.when(()->JobPairs.tryMarkPendingPairEnqueued(anyInt())).thenAnswer(call->{claims.add(call.getArgument(0));return JobPairs.ConditionalPairUpdateResult.UPDATED;});
+            pairs.when(()->JobPairs.tryReturnDeferredPairToPending(101,41)).thenReturn(condition.equals("reset-error")
+                    ?JobPairs.ConditionalPairUpdateResult.ERROR:JobPairs.ConditionalPairUpdateResult.UPDATED);
+            pairs.when(()->JobPairs.tryUpdateBackendExecId(102,500)).thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
+            pairs.when(()->JobPairs.getLogFilePath(ordinaryPair)).thenReturn(ordinaryLog.toString());
+            pairs.when(()->JobPairs.getLogFilePath(buildPair)).thenReturn(buildLog.toString());
+            pairs.when(()->JobPairs.getPairStdout(ordinaryPair)).thenReturn(files.resolve("stdout").toString());
+            pairs.when(()->JobPairs.getPairStdout(buildPair)).thenReturn(files.resolve("build-stdout").toString());
+            leases.when(()->ExecutionStorageLeases.prepareRegistered(eq(101),anyList())).thenAnswer(call->{
+                if (condition.equals("sql")) throw new SQLException("Build resource registry unavailable");
+                if (condition.equals("io")) throw new IOException("Build resource unavailable");
+                return condition.equals("backend-full")?new BuildExecutionContext(1,101,2,UUID.randomUUID(),files.resolve("source_src"),files.resolve("resource/build")):null;
+            });
+            JobManager.submitJobs(List.of(build,ordinary),queue,0,1);
+            boolean queueWide=condition.equals("backend-full") || condition.equals("reset-error");
+            assertEquals(queueWide?List.of(101):List.of(101,102),claims,"Only a backend-wide refusal or failed reset should stop independent queue work");
+            verify(backend,queueWide?never():times(1)).submitScript(eq(102),anyString(),any(),eq(ordinaryLog.toString()),eq("all.q"));
+            verify(backend,condition.equals("backend-full")?times(1):never()).submitScript(eq(101),anyString(),any(),anyString(),anyString(),any());
+            pairs.verify(()->JobPairs.tryReturnDeferredPairToPending(101,41));
+            assertEquals("conserved build log\n",Files.readString(buildLog));
+        }
+    }
+
+    private static Job queueJob(int id,boolean build,User owner) {
+        Job job=new Job();job.setId(id);job.setUserId(owner.getId());job.setUser(owner);job.setBuildJob(build);
+        job.setWallclockTimeout(60);job.setCpuTimeout(60);job.setMaxMemory(1L<<30);
+        job.setBenchmarkingFramework(BenchmarkingFramework.RUNSOLVER);
+        StageAttributes stage=new StageAttributes();stage.setStageNumber(1);stage.setCpuTimeout(60);stage.setWallclockTimeout(60);stage.setMaxMemory(1L<<30);
+        job.addStageAttributes(stage);return job;
+    }
+
     private void dispatch(boolean build, Optional<SolverBuildArtifacts.Artifact> artifact,
                           boolean registryFails, boolean deferred, boolean stagingSupported) throws Exception {
         Backend backend = mock(Backend.class);
