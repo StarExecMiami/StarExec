@@ -14,6 +14,7 @@ This guide documents how to interact with StarExec programmatically via HTTP req
 4. [Common Issues & Troubleshooting](#common-issues--troubleshooting)
 5. [Live Job Pair Log Streaming (SSE)](#live-job-pair-log-streaming-sse)
 6. [Pair Reproducibility Manifest](#pair-reproducibility-manifest)
+7. [Job and Pair Output Downloads](#job-and-pair-output-downloads)
 
 ---
 
@@ -447,3 +448,42 @@ echo "Done!"
 - **Session timeout**: 60 minutes
 - **Max upload size**: 50MB for job XML
 - **Supported archive formats**: .zip, .tar, .tgz
+
+## Job and Pair Output Downloads
+
+Use `GET /secure/download` with the session cookie and one of these output types:
+
+| `type` | Target parameter | Result |
+|---|---|---|
+| `j_outputs` | `id`: positive job ID | Job output ZIP |
+| `jp_output` | `id`: positive pair ID | Pair output ZIP |
+| `jp_outputs` | `id[]`: comma-separated positive pair IDs from one job | Pair output ZIP |
+
+For job output, optional `since` and `lastTimestamp` retain their signed 32-bit
+completion-ID and signed 64-bit timestamp formats, respectively. Query parameter
+brackets must be URL-encoded when constructing a bulk request.
+
+| Condition | HTTP response |
+|---|---|
+| Authorized existing output | Existing ZIP response and contents |
+| Absent target or insufficient visibility | 404, `Output not found.` |
+| Malformed IDs, filters or a bulk request spanning visible jobs | 400 |
+| Database or output-generation failure detected before response commit | 500, `Failed to generate download` |
+
+Output errors use `Cache-Control: no-store` and the encoded status-message cookie
+consumed by StarExecCommand. Missing and inaccessible targets use the same message
+and cookie value. Permission checks precede archive creation and repeat before
+export; internal diagnostics stay in server logs. This response policy does not
+promise equal request timing.
+Once response bytes have been committed, a later transport failure cannot replace
+the HTTP status; clients must also verify that the ZIP was received completely.
+
+Successful exports, CSV/XML downloads, reproducibility manifests and existing
+anonymous-link and method restrictions retain their own contracts. In particular,
+an anonymous link does not authorize job output downloads, and mixing `anonId`
+with a sequential `id` remains a bad request.
+
+The uniform 404 choice follows
+[RFC 9110 section 15.5.5](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.5.5).
+Explicit cache prevention follows
+[RFC 9111 section 5.2.2.5](https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.2.5).

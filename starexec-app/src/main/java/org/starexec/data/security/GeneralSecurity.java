@@ -12,6 +12,7 @@ import org.starexec.util.SystemTestStatus;
 import org.starexec.util.Validator;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 
 public class GeneralSecurity {
 
@@ -168,6 +169,20 @@ public class GeneralSecurity {
 
 	public static boolean hasAdminReadPrivileges(Connection con, int userId) {
 		return Users.isAdmin(con, userId) || Users.isDeveloper(con, userId);
+	}
+
+	/** Reads download privileges without converting a failed role lookup into a denial. */
+	public static boolean hasAdminReadPrivilegesChecked(Connection con, int userId) throws SQLException {
+		try (var statement = con.prepareStatement(
+				"SELECT ur.role FROM starexec.users u JOIN starexec.user_roles ur ON ur.email = u.email WHERE u.id = ?")) {
+			statement.setInt(1, userId);
+			try (var rows = statement.executeQuery()) {
+				if (!rows.next()) return false;
+				String role = rows.getString(1);
+				if (role == null || rows.next()) throw new SQLException("Indeterminate account role for download access");
+				return R.ADMIN_ROLE_NAME.equals(role) || R.DEVELOPER_ROLE_NAME.equals(role);
+			}
+		}
 	}
 
 	/**
