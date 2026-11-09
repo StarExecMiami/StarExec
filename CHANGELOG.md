@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Persist ordinary job creation requests and cancellation locators atomically, retaining exact immutable request bytes across uncertain replies and cancellation.
+
 - Serialize dedicated storage ownership across solver builds and ordinary job
   attempts, preserving build lease history and booking each job allowance once.
   Refuse reclamation after storage use begins or while its contents are unknown.

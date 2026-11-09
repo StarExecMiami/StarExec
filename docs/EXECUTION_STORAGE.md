@@ -94,6 +94,17 @@ reconciliation rather than recreated or released. `capturePrepared` revalidates
 an already-used reservation without reserving or charging it again; the original
 `capture` remains restricted to unused reservations.
 
+`job_execution_requests` conserves one exact UTF-8 creation
+request per ordinary attempt, its immutable image and prepared-input digest,
+and the resource incarnation. Consumption requires the current funded used
+reservation and commits the pair's cancellation locator in the same transaction.
+Only the first acknowledged consumption permits the caller to send once;
+an existing request or an uncertain commit response permits observation only.
+Request history cannot be changed or deleted after cancellation or pair removal.
+The request is bounded by both 16 MiB and the reserved capacity; it is not proof
+of effective mounts, engine creation, payload release, termination or cleanup.
+The ordinary dispatcher remains separate from this durable protocol foundation.
+
 The ordinary-job adapter consumes a one-way storage-use marker before the first
 filesystem mutation. That marker grants no engine admission. Only a never-used,
 independently reobserved empty resource can be reclaimed by this adapter; beginning
