@@ -85,6 +85,16 @@ class BuildExecutionRuntimeTest {
         assertThrows(UnsupportedOperationException.class,()->result.namespaces().clear());
     }
 
+    @Test void encodedMountTargetsPreserveTheSamePhysicalIdentity() throws Exception {
+        StringBuilder nodes=new StringBuilder();
+        for (String line:decoded(data.get("nodes")).lines().toList()) {
+            int split=line.indexOf('|');
+            nodes.append("b64:").append(encoded(line.substring(0,split))).append(line.substring(split)).append('\n');
+        }
+        put("nodes",nodes.toString());
+        assertEquals(1234567,runtime.verify(json()).startTicks());
+    }
+
     @Test void cpuSetOnlyPolicyPreservesTheUnthrottledPartition() throws Exception {
         var pinned=BuildExecutionRuntime.capture(bindings,new BuildExecutionRuntime.Identity(0,0,1000,1000),
                 new BuildExecutionRuntime.Limits(134217728,64,"2",-1,0),forbidden,30);

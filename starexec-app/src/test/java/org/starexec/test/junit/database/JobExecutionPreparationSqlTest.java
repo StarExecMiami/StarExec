@@ -422,6 +422,24 @@ class JobExecutionPreparationSqlTest extends Common {
         var runtime=captureRuntime(prepared);assertNotNull(runtime);assertEquals(script,prepared.script());
         assertThrows(IOException.class,()->runtime.verify(""));held();
     }
+    @ParameterizedTest @ValueSource(strings={"unbound","bound"})
+    void ordinaryObservationCollectsEveryPreparedTarget(String state) throws Exception {
+        var prepared=prepare();
+        if (state.equals("bound")) { consumeCreation(prepared,prepared.fingerprint());prepared=restoreBound(prepared); }
+        var runtime=captureRuntime(prepared);
+        java.util.List<String> command;
+        try {
+            @SuppressWarnings("unchecked") var selected=(java.util.List<String>)runtime.getClass()
+                    .getMethod("observationCommandForBindings").invoke(runtime);
+            command=selected;
+        } catch (NoSuchMethodException absent) {
+            command=org.starexec.backend.storage.BuildExecutionRuntime.observationCommand();
+        }
+        assertTrue(command.size()>=7,"The collector still embeds fixed build targets instead of ordinary bindings");
+        assertEquals("--",command.get(6));
+        assertEquals(prepared.bindings().stream().map(b->b.target().toString()).sorted().toList(),command.subList(7,command.size()));
+        assertEquals(command.size()-7,new java.util.HashSet<>(command.subList(7,command.size())).size());held();
+    }
     @ParameterizedTest @ValueSource(strings={"metadata","bytes"})
     void ordinaryRuntimeCaptureRevalidatesItsInputs(String change) throws Exception {
         var prepared=prepare();consumeCreation(prepared,prepared.fingerprint());var bound=restoreBound(prepared);
