@@ -81,6 +81,19 @@ digest of its exact payload bytes. It neither copies inputs nor admits an engine
 subsequent filesystem preparation must revalidate the captured identities and
 permissions before use.
 
+`JobExecutionPreparation` copies authorized inputs and trusted controls into the
+same reserved resource while preserving their logical mount targets. It commits
+the one-way use marker before its first write and conserves a durable receipt
+of metadata, content, filesystem identities and mount descriptions. Input copies
+are separate from writable execution directories; the receipt and their common
+parent are not runner mounts. The caller must conserve the returned fingerprint
+before creating an engine. Pre-engine restoration requires that fingerprint,
+unchanged permissions and ownership, exact source/copy identities and empty
+execution directories. Missing, changed or partial state is retained for trusted
+reconciliation rather than recreated or released. `capturePrepared` revalidates
+an already-used reservation without reserving or charging it again; the original
+`capture` remains restricted to unused reservations.
+
 The ordinary-job adapter consumes a one-way storage-use marker before the first
 filesystem mutation. That marker grants no engine admission. Only a never-used,
 independently reobserved empty resource can be reclaimed by this adapter; beginning

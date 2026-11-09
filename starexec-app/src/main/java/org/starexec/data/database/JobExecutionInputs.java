@@ -37,6 +37,17 @@ public final class JobExecutionInputs {
     /** Uses one repeatable database snapshot; later filesystem preparation and admission must revalidate it. */
     public static Optional<Snapshot> capture(Connection connection, JobStorageLeases.Lease expected,
                                               DedicatedStorageResource resource) throws SQLException {
+        return capture(connection, expected, resource, false);
+    }
+
+    /** Revalidates prepared metadata; a consumed use marker still grants no engine admission. */
+    public static Optional<Snapshot> capturePrepared(Connection connection, JobStorageLeases.Lease expected,
+                                                     DedicatedStorageResource resource) throws SQLException {
+        return capture(connection, expected, resource, true);
+    }
+
+    private static Optional<Snapshot> capture(Connection connection, JobStorageLeases.Lease expected,
+                                               DedicatedStorageResource resource, boolean prepared) throws SQLException {
         if (!connection.getAutoCommit()) throw new SQLException("Job input capture cannot use a foreign transaction");
         int previous = connection.getTransactionIsolation();
         int isolation = previous == Connection.TRANSACTION_SERIALIZABLE ? previous : Connection.TRANSACTION_REPEATABLE_READ;
@@ -44,16 +55,20 @@ public final class JobExecutionInputs {
         try {
             if (previous != isolation) connection.setTransactionIsolation(isolation);
             return Common.runTransactional(connection, tx -> {
-                if (expected == null || expected.releasedAt() != null || expected.useStartedAt() != null
+                if (expected == null || expected.releasedAt() != null || (expected.useStartedAt() != null) != prepared
                         || !expected.equals(JobStorageLeases.find(tx, expected.token()).orElse(null))
                         || !expected.resourceKey().equals(resource.filesystemKey()) || !expected.root().equals(resource.root())
                         || !expected.resourceIdentity().equals(resource.identity()) || expected.limitBytes() != resource.capacityBytes()
                         || expected.inodeLimit() != resource.inodeLimit()) throw new Refused();
                 resource.requireUnchanged();
-                try (var claim = tx.prepareStatement("SELECT starexec.reserve_job_storage(?,?,?,?,?)")) {
-                    claim.setInt(1, expected.pairId()); claim.setInt(2, expected.attemptNo()); claim.setObject(3, expected.token());
-                    claim.setString(4, expected.resourceKey()); claim.setString(5, expected.resourceIdentity());
-                    try (var row = claim.executeQuery()) { if (!row.next() || !row.getBoolean(1)) throw new Refused(); }
+                if (prepared) {
+                    lockPrepared(tx, expected);
+                } else {
+                    try (var claim = tx.prepareStatement("SELECT starexec.reserve_job_storage(?,?,?,?,?)")) {
+                        claim.setInt(1, expected.pairId()); claim.setInt(2, expected.attemptNo()); claim.setObject(3, expected.token());
+                        claim.setString(4, expected.resourceKey()); claim.setString(5, expected.resourceIdentity());
+                        try (var row = claim.executeQuery()) { if (!row.next() || !row.getBoolean(1)) throw new Refused(); }
+                    }
                 }
                 var snapshot = new Capture(tx, expected).read();
                 resource.requireUnchanged();
@@ -75,6 +90,39 @@ public final class JobExecutionInputs {
                 }
             }
         }
+    }
+
+    private static void lockPrepared(Connection connection, JobStorageLeases.Lease expected) throws SQLException {
+        try (var query = connection.prepareStatement("SELECT starexec.lock_current_job_storage_pair(?,?,?,?,TRUE)")) {
+            query.setInt(1, expected.pairId()); query.setInt(2, expected.attemptNo());
+            query.setInt(3, expected.ownerId()); query.setObject(4, expected.priorExecutionId());
+            try (var row = query.executeQuery()) { if (!row.next() || !row.getBoolean(1)) throw new Refused(); }
+        }
+        try (var query = connection.prepareStatement("SELECT disk_size,disk_quota,starexec.active_execution_storage_bytes(id)"
+                + " FROM starexec.users WHERE id=? FOR UPDATE NOWAIT")) {
+            query.setInt(1, expected.ownerId());
+            try (var row = query.executeQuery()) {
+                if (!row.next() || row.getObject(1) == null || row.getObject(2) == null
+                        || row.getLong(1) < 0 || row.getBigDecimal(3) == null
+                        || java.math.BigDecimal.valueOf(row.getLong(1)).compareTo(row.getBigDecimal(3)) < 0) throw new Refused();
+            }
+        }
+        try (var query = connection.prepareStatement("SELECT observed_identity,capacity_bytes,inode_limit,root_path,"
+                + "starexec.execution_storage_root_unreferenced(root_path) FROM starexec.execution_storage_resources"
+                + " WHERE resource_key=? FOR UPDATE NOWAIT")) {
+            query.setString(1, expected.resourceKey());
+            try (var row = query.executeQuery()) {
+                if (!row.next() || !expected.resourceIdentity().equals(row.getString(1))
+                        || expected.limitBytes() != row.getLong(2) || expected.inodeLimit() != row.getLong(3)
+                        || !expected.root().toString().equals(row.getString(4)) || !row.getBoolean(5)) throw new Refused();
+            }
+        }
+        try (var query = connection.prepareStatement("SELECT execution_token FROM starexec.execution_storage_claims"
+                + " WHERE execution_token=? FOR UPDATE NOWAIT")) {
+            query.setObject(1, expected.token());
+            try (var row = query.executeQuery()) { if (!row.next()) throw new Refused(); }
+        }
+        if (!expected.equals(JobStorageLeases.find(connection, expected.token()).orElse(null))) throw new Refused();
     }
 
     private static final class Capture {
