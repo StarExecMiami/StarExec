@@ -663,7 +663,9 @@ public class Download extends HttpServlet {
 					}
 				}
 			}
-			if (lastModified == -1 || earlyDate == Long.valueOf(lastModified)) {
+			boolean hasCompletedPairs = pairs.stream().anyMatch(p -> p.getStatus().getCode().finishedRunning());
+			if (lastModified == -1
+					|| (earlyDate != null && lastModified == earlyDate.longValue() && !hasCompletedPairs)) {
 				response.setStatus(HttpServletResponse.SC_NOT_MODIFIED);
 			} else {
 				response.setDateHeader("Last-Modified", lastModified);

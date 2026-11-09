@@ -59,7 +59,8 @@ class DownloadPrivateOutputHttpTest {
             protected void service(HttpServletRequest request, HttpServletResponse response) throws java.io.IOException {
                 String scenario = request.getParameter("fixture");
                 try (var fixture = new DownloadPrivateOutputPolicyTest.Fixture(request.getParameter("type"),
-                        !"missing".equals(scenario), "owner".equals(scenario) || "archive-failure".equals(scenario),
+                        !"missing".equals(scenario), "owner".equals(scenario) || "running".equals(scenario)
+                                || "archive-failure".equals(scenario),
                         "database".equals(scenario));
                      var archive = "archive-failure".equals(scenario) ? mockStatic(ArchiveUtil.class, invocation -> {
                          if (invocation.getMethod().getName().equals("addDirToArchive")) {
@@ -75,12 +76,19 @@ class DownloadPrivateOutputHttpTest {
                     JobPair pair = mock(JobPair.class);
                     when(pair.getId()).thenReturn(51);
                     when(pair.getJobId()).thenReturn(41);
+                    when(pair.getCompletionId()).thenReturn(1);
                     when(pair.getBenchPath()).thenReturn("solver/default/benchmark");
                     Status status = new Status();
-                    status.setCode(Status.StatusCode.STATUS_COMPLETE.getVal());
+                    status.setCode(("running".equals(scenario) ? Status.StatusCode.STATUS_RUNNING
+                            : Status.StatusCode.STATUS_COMPLETE).getVal());
                     when(pair.getStatus()).thenReturn(status);
                     fixture.pairs.when(() -> JobPairs.getPair(51)).thenReturn("missing".equals(scenario) ? null : pair);
                     fixture.pairs.when(() -> JobPairs.getOutputPaths(pair)).thenReturn(List.of(output.toFile()));
+                    fixture.jobs.when(() -> Jobs.getNewCompletedPairsShallow(41, 0))
+                            .thenAnswer(invocation -> new java.util.ArrayList<>(List.of(pair)));
+                    fixture.jobs.when(() -> Jobs.getNewCompletedPairsShallow(41, 1))
+                            .thenAnswer(invocation -> new java.util.ArrayList<JobPair>());
+                    fixture.jobs.when(() -> Jobs.doesJobCopyBackIncrementally(41)).thenReturn(true);
                     new Download().service(request, response);
                 } catch (Exception failure) {
                     throw new java.io.IOException(failure);
@@ -183,6 +191,67 @@ class DownloadPrivateOutputHttpTest {
         assertTrue(new String(response.body(), StandardCharsets.UTF_8).contains("Failed to generate download"));
         assertFalse(new String(response.body(), StandardCharsets.UTF_8).contains("synthetic archive failure"));
         assertEquals(CONTENT, Files.readString(output.resolve("result.txt")));
+    }
+
+    @Test
+    void unchangedIncrementalOutputReturnsNotModifiedAfterTheClientRoundTrip() throws Exception {
+        var initial = HttpRequest.newBuilder(URI.create(endpoint + "?type=" + R.JOB_OUTPUT + "&id=41&fixture=owner&since=0"))
+                .timeout(Duration.ofSeconds(10)).GET().build();
+        var first = client.send(initial, HttpResponse.BodyHandlers.ofByteArray());
+        assertEquals(200, first.statusCode());
+        String modified = first.headers().firstValue("Last-Modified").orElseThrow();
+        long timestamp = java.time.ZonedDateTime.parse(modified, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
+                .toInstant().toEpochMilli();
+        assertTrue(timestamp > 127, "Use an ordinary timestamp outside the small boxed-value cache");
+        assertTrue(first.headers().allValues("Set-Cookie").stream().anyMatch(value -> value.startsWith("Max-Completion=1")));
+        var poll = HttpRequest.newBuilder(URI.create(endpoint + "?type=" + R.JOB_OUTPUT
+                + "&id=41&fixture=owner&since=1&lastTimestamp=" + timestamp))
+                .timeout(Duration.ofSeconds(10)).GET().build();
+        var unchanged = client.send(poll, HttpResponse.BodyHandlers.ofByteArray());
+        assertEquals(304, unchanged.statusCode());
+        assertEquals(0, unchanged.body().length);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0, 60000})
+    void newCompletedOutputIsDeliveredEvenIfItsTimestampIsNotNewerThanTheCutoff(long offset) throws Exception {
+        long cutoff = Math.addExact(Files.getLastModifiedTime(output.resolve("result.txt")).toMillis(), offset);
+        var request = HttpRequest.newBuilder(URI.create(endpoint + "?type=" + R.JOB_OUTPUT
+                + "&id=41&fixture=owner&since=0&lastTimestamp=" + cutoff))
+                .timeout(Duration.ofSeconds(10)).GET().build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        assertEquals(200, response.statusCode());
+        boolean found = false;
+        try (var zip = new ZipInputStream(new ByteArrayInputStream(response.body()))) {
+            for (var entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {
+                if (entry.getName().endsWith("result.txt")) {
+                    assertEquals(CONTENT, new String(zip.readAllBytes(), StandardCharsets.UTF_8));
+                    found = true;
+                }
+            }
+        }
+        assertTrue(found, "A new completion must deliver its bytes even when its file mtime is older");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void runningOutputIsDeliveredOnlyWhenNewerThanTheCutoff(boolean newer) throws Exception {
+        long modified = Files.getLastModifiedTime(output.resolve("result.txt")).toMillis();
+        long cutoff = newer ? modified - 60000 : modified + 60000;
+        var request = HttpRequest.newBuilder(URI.create(endpoint + "?type=" + R.JOB_OUTPUT
+                + "&id=41&fixture=running&since=0&lastTimestamp=" + cutoff))
+                .timeout(Duration.ofSeconds(10)).GET().build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        assertEquals(newer ? 200 : 304, response.statusCode());
+        if (newer) {
+            try (var zip = new ZipInputStream(new ByteArrayInputStream(response.body()))) {
+                assertNotNull(zip.getNextEntry());
+                assertEquals(CONTENT, new String(zip.readAllBytes(), StandardCharsets.UTF_8));
+                assertNull(zip.getNextEntry());
+            }
+        } else {
+            assertEquals(0, response.body().length);
+        }
     }
 
     private static HttpResponse<byte[]> get(String type, String scenario, boolean malformed) throws Exception {

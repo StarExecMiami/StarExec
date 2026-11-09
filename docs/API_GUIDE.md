@@ -463,6 +463,12 @@ For job output, optional `since` and `lastTimestamp` retain their signed 32-bit
 completion-ID and signed 64-bit timestamp formats, respectively. Query parameter
 brackets must be URL-encoded when constructing a bulk request.
 
+Incremental clients send the previous `Max-Completion` cookie as `since` and the
+previous `Last-Modified` date, converted to epoch milliseconds, as `lastTimestamp`.
+A poll with no new completed pairs or newer running output returns 304 without a
+response body. Newly completed pairs still return their output even when their
+file modification times are at or before that timestamp.
+
 | Condition | HTTP response |
 |---|---|
 | Authorized existing output | Existing ZIP response and contents |
