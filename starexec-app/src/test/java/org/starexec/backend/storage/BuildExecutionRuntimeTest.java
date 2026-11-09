@@ -95,6 +95,64 @@ class BuildExecutionRuntimeTest {
         assertEquals(1234567,runtime.verify(json()).startTicks());
     }
 
+    @ParameterizedTest @ValueSource(strings={"invalid-base64","invalid-utf8","relative","dotdot","nul","other-node","duplicate","wrong-inode"})
+    void encodedMountTargetsDoNotWeakenIdentityChecks(String change) throws Exception {
+        String original=decoded(data.get("nodes"));String first=original.lines().findFirst().orElseThrow();
+        int split=first.indexOf('|');String path=first.substring(0,split),suffix=first.substring(split);
+        String field="b64:"+encoded(path);
+        switch (change) {
+            case "invalid-base64" -> field="b64:%%%";
+            case "invalid-utf8" -> field="b64:"+Base64.getEncoder().encodeToString(new byte[]{(byte)0xff});
+            case "relative" -> field="b64:"+encoded("relative");
+            case "dotdot" -> field="b64:"+encoded("/foreign/../node");
+            case "nul" -> field="b64:"+encoded("/node\0");
+            case "other-node" -> field="b64:"+encoded("/foreign");
+            case "duplicate" -> { }
+            case "wrong-inode" -> {
+                String[] fields=first.split("\\|",-1);fields[2]=Long.toString(Long.parseLong(fields[2])+1);
+                suffix="|"+String.join("|",java.util.Arrays.copyOfRange(fields,1,fields.length));
+            }
+            default -> throw new AssertionError();
+        }
+        String replacement=field+suffix+"\n";
+        put("nodes",change.equals("duplicate")?original+replacement:replacement+original.substring(first.length()+1));
+        assertThrows(IOException.class,()->runtime.verify(json()),change);
+    }
+
+    @Test void buildCollectorRetainsEveryFixedMountRole() {
+        var command=BuildExecutionRuntime.observationCommand();
+        assertEquals("--",command.get(6));
+        assertEquals(bindings.stream().map(b->b.target().toString()).sorted().toList(),command.subList(7,command.size()));
+        assertEquals(command,runtime.observationCommandForBindings());
+        assertTrue(command.get(5).contains("mount_nodes=$(nodes \"$@\" | base64 -w0)"));
+    }
+
+    @Test void nodeStatArgumentsCannotBecomeShellCodeOrRecordDelimiters() throws Exception {
+        var command=runtime.observationCommandForBindings();String program=command.get(5);
+        int start=program.indexOf("nodes() {"),end=program.indexOf("done",start)+4;
+        assertTrue(start>=0 && end>start);
+        String fragment="set -euo pipefail\nexport PATH=/usr/bin:/bin\n"+program.substring(start,end)+"\n}\nnodes \"$@\"\n";
+        var paths=new ArrayList<Path>();
+        for (String name:List.of("space node","pipe|node","new\nline","é-node","node $(touch marker) ' \""))
+            paths.add(Files.writeString(directory.resolve(name),"data"));
+        var args=new ArrayList<>(List.of("/bin/bash","--noprofile","--norc","-p","-c",fragment,"--"));
+        paths.stream().map(Path::toString).forEach(args::add);
+        var process=new ProcessBuilder(args).directory(directory.toFile()).redirectErrorStream(true).start();
+        String response=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8);
+        assertTrue(process.waitFor(5,java.util.concurrent.TimeUnit.SECONDS));assertEquals(0,process.exitValue(),response);
+        assertFalse(Files.exists(directory.resolve("marker")));var lines=response.lines().toList();assertEquals(paths.size(),lines.size());
+        for (int i=0;i<paths.size();i++) {
+            String[] fields=lines.get(i).split("\\|",-1);assertEquals(6,fields.length);assertTrue(fields[0].startsWith("b64:"));
+            assertEquals(paths.get(i).toString(),decoded(fields[0].substring(4)));
+            var actual=Files.readAttributes(paths.get(i),"unix:dev,ino,mode,size,nlink");
+            assertEquals(((Number)actual.get("dev")).longValue(),Long.parseLong(fields[1]));
+            assertEquals(((Number)actual.get("ino")).longValue(),Long.parseLong(fields[2]));
+            assertEquals(((Number)actual.get("mode")).longValue(),Long.parseLong(fields[3],16));
+            assertEquals(((Number)actual.get("size")).longValue(),Long.parseLong(fields[4]));
+            assertEquals(((Number)actual.get("nlink")).longValue(),Long.parseLong(fields[5]));
+        }
+    }
+
     @Test void cpuSetOnlyPolicyPreservesTheUnthrottledPartition() throws Exception {
         var pinned=BuildExecutionRuntime.capture(bindings,new BuildExecutionRuntime.Identity(0,0,1000,1000),
                 new BuildExecutionRuntime.Limits(134217728,64,"2",-1,0),forbidden,30);

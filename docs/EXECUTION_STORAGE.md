@@ -108,6 +108,13 @@ trusted logical script. Fixed build mount roles and the physical verification
 checks remain separate from that ordinary policy. A captured policy still needs
 observations from the exact held provider before payload admission.
 
+Runtime collection uses the exact captured mount targets as separate Bash
+arguments. Observed path bytes are encoded independently of record delimiters;
+the decoder preserves legacy observations while rejecting invalid paths,
+duplicate targets and altered physical identity. Build collection retains its
+fixed mount roles and the zero-swap check. These command descriptions still
+require observation through the exact held provider before admission.
+
 `JobExecutionProtocol` reads and writes typed exact-byte creation and phase
 records through owned read-committed transactions. Readback is checked inside the
 transaction; only a first acknowledged insertion is new consumption. Historical

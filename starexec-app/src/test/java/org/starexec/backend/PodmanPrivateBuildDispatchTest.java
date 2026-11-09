@@ -43,6 +43,19 @@ import static org.mockito.Mockito.*;
 class PodmanPrivateBuildDispatchTest {
     @TempDir Path files;
 
+    @Test void zeroSwapGuardRemainsInTheProgramBeforePositionalTargets() {
+        var original=org.starexec.backend.storage.BuildExecutionRuntime.observationCommand();
+        var runtime=mock(org.starexec.backend.storage.BuildExecutionRuntime.class);
+        when(runtime.observationCommandForBindings()).thenReturn(original);
+        for (var command:List.of(PodmanPrivateBuild.observationCommand(),PodmanPrivateBuild.observationCommand(runtime))) {
+            assertEquals(original.subList(0,5),command.subList(0,5));
+            assertEquals(original.subList(6,original.size()),command.subList(6,command.size()));
+            assertTrue(command.get(5).startsWith("IFS= read -r starexec_swap_limit < /sys/fs/cgroup/memory.swap.max || exit 76\n"));
+            assertTrue(command.get(5).contains("[[ \"$starexec_swap_limit\" == 0 ]] || exit 76\n"));
+            assertTrue(command.get(5).endsWith(original.get(5)));
+        }
+    }
+
     @ParameterizedTest @ValueSource(strings={"SIGTERM","TERM","15"})
     void providerNormalizationPreservesTheTerminationPolicy(String signal) {
         assertDoesNotThrow(()->PodmanPrivateBuild.requireStopPolicy(signal));

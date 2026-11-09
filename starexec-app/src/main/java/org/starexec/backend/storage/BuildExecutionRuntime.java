@@ -50,8 +50,9 @@ public final class BuildExecutionRuntime {
               done < /proc/1/mountinfo
             }
             nodes() {
-              for point in /starexec/inputs/source_src /starexec/inputs/starexec_build /starexec/control/jobscript /starexec/control/functions.bash /starexec/control/status_codes.bash /starexec/execution /tmp /run /var/tmp; do
-                stat --printf='%n|%d|%i|%f|%s|%h\\n' -- "$point"
+              for point in "$@"; do
+                printf 'b64:%s|' "$(printf '%s' "$point" | base64 -w0)"
+                stat --printf='%d|%i|%f|%s|%h\\n' -- "$point"
               done
               while read -r mount_id parent_id device mount_root point remaining; do
                 case "$point" in
@@ -70,7 +71,7 @@ public final class BuildExecutionRuntime {
             cpu=$(base64 -w0 < /sys/fs/cgroup/cpu.max)
             cpuset=$(base64 -w0 < /sys/fs/cgroup/cpuset.cpus.effective)
             device_nodes=$(devices | base64 -w0)
-            mount_nodes=$(nodes | base64 -w0)
+            mount_nodes=$(nodes "$@" | base64 -w0)
             cmdline=$(base64 -w0 < /proc/1/cmdline)
             cgroup=$(base64 -w0 < /proc/1/cgroup)
             selfgroup=$(base64 -w0 < /proc/self/cgroup)
@@ -86,7 +87,22 @@ public final class BuildExecutionRuntime {
 
     /** Collect only through the independently verified exact held resource; do not execute against a host process. */
     public static List<String> observationCommand() {
-        return List.of("/bin/bash","--noprofile","--norc","-p","-c",COLLECTOR);
+        List<Path> targets=new ArrayList<>();
+        targets.add(BuildExecutionMounts.SOURCE);targets.add(BuildExecutionMounts.HELPER);
+        for (String name:List.of("jobscript","functions.bash","status_codes.bash")) targets.add(BuildExecutionMounts.CONTROL.resolve(name));
+        targets.addAll(List.of(BuildExecutionMounts.EXECUTION,Path.of("/tmp"),Path.of("/run"),Path.of("/var/tmp")));
+        return observationCommand(targets);
+    }
+
+    /** Positional arguments preserve the exact captured targets, including shell and record delimiters. */
+    public List<String> observationCommandForBindings() {
+        return observationCommand(expected.stream().map(Expected::target).toList());
+    }
+
+    private static List<String> observationCommand(List<Path> targets) {
+        List<String> command=new ArrayList<>(List.of("/bin/bash","--noprofile","--norc","-p","-c",COLLECTOR,"--"));
+        command.addAll(targets.stream().map(Path::toString).sorted().toList());
+        return List.copyOf(command);
     }
 
     public record Identity(long insideUid,long insideGid,long outsideUid,long outsideGid) {
@@ -389,10 +405,16 @@ public final class BuildExecutionRuntime {
         Map<Path,Node> result=new HashMap<>();
         for (String line:text.lines().toList()) {
             String[] f=line.split("\\|",-1);require(f.length==6,"Malformed runtime node");
-            Path point=kernelPath(f[0]);Node node=new Node(number(f[1],10),positive(f[2]),(int)(hex(f[3])&0170000),number(f[4],10),number(f[5],10));
+            Path point=nodePath(f[0]);Node node=new Node(number(f[1],10),positive(f[2]),(int)(hex(f[3])&0170000),number(f[4],10),number(f[5],10));
             require(result.put(point,node)==null,"Duplicate runtime node");
         }
         return result;
+    }
+    private static Path nodePath(String field) throws IOException {
+        if (!field.startsWith("b64:")) return kernelPath(field);
+        String path=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(decoded(field.substring(4)))).toString();
+        return kernelPath(path);
     }
     private static Map<Path,String> devices(String text) throws IOException {
         Map<Path,String> result=new HashMap<>();

@@ -427,18 +427,24 @@ class JobExecutionPreparationSqlTest extends Common {
         var prepared=prepare();
         if (state.equals("bound")) { consumeCreation(prepared,prepared.fingerprint());prepared=restoreBound(prepared); }
         var runtime=captureRuntime(prepared);
-        java.util.List<String> command;
-        try {
-            @SuppressWarnings("unchecked") var selected=(java.util.List<String>)runtime.getClass()
-                    .getMethod("observationCommandForBindings").invoke(runtime);
-            command=selected;
-        } catch (NoSuchMethodException absent) {
-            command=org.starexec.backend.storage.BuildExecutionRuntime.observationCommand();
-        }
+        assertObservationTargets(prepared,runtime);held();
+    }
+    @ParameterizedTest @ValueSource(strings={"input with spaces|.p","input\n.p","input-$(echo nope).p","input-é.p"})
+    void ordinaryObservationPreservesScientificInputNames(String name) throws Exception {
+        benchmark=Files.move(benchmark,files.resolve(name));
+        number(connection,"UPDATE starexec.benchmarks SET path=? WHERE id=? RETURNING id",benchmark.toString(),bench);
+        var prepared=prepare();assertObservationTargets(prepared,captureRuntime(prepared));held();
+    }
+    private void assertObservationTargets(JobExecutionPreparation prepared,
+            org.starexec.backend.storage.BuildExecutionRuntime runtime) throws Exception {
+        var command=runtime.observationCommandForBindings();
         assertTrue(command.size()>=7,"The collector still embeds fixed build targets instead of ordinary bindings");
         assertEquals("--",command.get(6));
         assertEquals(prepared.bindings().stream().map(b->b.target().toString()).sorted().toList(),command.subList(7,command.size()));
-        assertEquals(command.size()-7,new java.util.HashSet<>(command.subList(7,command.size())).size());held();
+        assertEquals(command.size()-7,new java.util.HashSet<>(command.subList(7,command.size())).size());
+        var syntax=new ProcessBuilder("/bin/bash","-n","-c",command.get(5)).redirectErrorStream(true).start();
+        String output=new String(syntax.getInputStream().readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(syntax.waitFor(5,java.util.concurrent.TimeUnit.SECONDS));assertEquals(0,syntax.exitValue(),output);
     }
     @ParameterizedTest @ValueSource(strings={"metadata","bytes"})
     void ordinaryRuntimeCaptureRevalidatesItsInputs(String change) throws Exception {

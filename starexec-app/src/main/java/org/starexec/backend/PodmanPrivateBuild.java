@@ -306,8 +306,16 @@ public final class PodmanPrivateBuild {
 
     /** Execute only against the exact verified held resource; zero swap is independently required. */
     public static List<String> observationCommand() {
-        List<String> command=new ArrayList<>(BuildExecutionRuntime.observationCommand());
-        int program=command.size()-1;
+        return withZeroSwap(BuildExecutionRuntime.observationCommand());
+    }
+
+    static List<String> observationCommand(BuildExecutionRuntime runtime) {
+        return withZeroSwap(runtime.observationCommandForBindings());
+    }
+
+    private static List<String> withZeroSwap(List<String> original) {
+        List<String> command=new ArrayList<>(original);
+        int program=5;
         command.set(program,"IFS= read -r starexec_swap_limit < /sys/fs/cgroup/memory.swap.max || exit 76\n"
                 + "[[ \"$starexec_swap_limit\" == 0 ]] || exit 76\n"+command.get(program));
         return List.copyOf(command);
@@ -358,8 +366,16 @@ public final class PodmanPrivateBuild {
     }
 
     private static String collect(DockerClient client, String container) throws IOException, InterruptedException {
+        return collect(client,container,observationCommand());
+    }
+
+    static String collect(DockerClient client,String container,BuildExecutionRuntime runtime) throws IOException,InterruptedException {
+        return collect(client,container,observationCommand(runtime));
+    }
+
+    private static String collect(DockerClient client,String container,List<String> command) throws IOException,InterruptedException {
         String execution=client.execCreateCmd(container).withAttachStdout(true).withAttachStderr(true)
-                .withAttachStdin(false).withUser("0:0").withCmd(observationCommand().toArray(String[]::new)).exec().getId();
+                .withAttachStdin(false).withUser("0:0").withCmd(command.toArray(String[]::new)).exec().getId();
         require(execution!=null && !execution.isBlank(),"Kernel observation execution identity is unavailable");
         var stdout=new LimitedOutput(1024*1024);
         var stderr=new LimitedOutput(64*1024);
