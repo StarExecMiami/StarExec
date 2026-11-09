@@ -105,6 +105,18 @@ The request is bounded by both 16 MiB and the reserved capacity; it is not proof
 of effective mounts, engine creation, payload release, termination or cleanup.
 The ordinary dispatcher remains separate from this durable protocol foundation.
 
+`job_execution_receipts` retains immutable creation, payload-release, stop,
+output and cleanup histories for that same claim and engine. Release requires
+the exact current cancellation locator and a conserved runtime observation;
+cleanup intent fences later creation and release. An uncertain consumed create
+cannot be treated as never created. Cleanup completion requires the original
+operation and observations of an empty resource with the provider absent.
+These SQL shape and ordering checks do not attest physical runtime state or
+enable used-storage release. Trusted provider, filesystem and output verification
+must be coupled before the ordinary dispatcher can use this protocol.
+Creation and phase mutations require a read-committed transaction: an older
+snapshot could otherwise miss newly consumed creation or cleanup intent.
+
 The ordinary-job adapter consumes a one-way storage-use marker before the first
 filesystem mutation. That marker grants no engine admission. Only a never-used,
 independently reobserved empty resource can be reclaimed by this adapter; beginning

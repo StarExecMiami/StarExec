@@ -24,6 +24,9 @@ DECLARE
     _resource starexec.execution_storage_resources%ROWTYPE;
     _usage BIGINT; _quota BIGINT; _payload JSONB;
 BEGIN
+    IF current_setting('transaction_isolation') NOT IN ('read committed','read uncommitted') THEN
+        RAISE EXCEPTION 'Ordinary creation mutation requires a current read-committed snapshot' USING ERRCODE='40001';
+    END IF;
     SELECT * INTO _initial FROM starexec.execution_storage_claims WHERE execution_token=NEW.execution_token;
     IF NOT FOUND OR _initial.lease_kind<>'JOB' OR _initial.origin_pair_id IS DISTINCT FROM NEW.pair_id
         OR _initial.attempt_no IS DISTINCT FROM NEW.attempt_no OR _initial.origin_owner_id IS DISTINCT FROM NEW.owner_id
@@ -46,6 +49,10 @@ BEGIN
     IF NOT FOUND OR _claim IS DISTINCT FROM _initial OR _claim.limit_bytes IS DISTINCT FROM _resource.capacity_bytes
         OR octet_length(NEW.request_payload)>LEAST(_claim.limit_bytes,16777216) THEN
         RAISE EXCEPTION 'Ordinary creation reservation changed or request exceeds its bound';
+    END IF;
+    IF EXISTS (SELECT 1 FROM starexec.job_execution_receipts
+        WHERE execution_token=NEW.execution_token AND receipt_kind='CLEANUP_REQUEST') THEN
+        RAISE EXCEPTION 'Ordinary cleanup intent fences creation';
     END IF;
     IF starexec.job_execution_json_unique(NEW.request_payload::json) IS DISTINCT FROM TRUE THEN
         RAISE EXCEPTION 'Ordinary creation request contains duplicate JSON keys';
