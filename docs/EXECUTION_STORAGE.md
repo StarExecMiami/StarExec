@@ -115,6 +115,13 @@ duplicate targets and altered physical identity. Build collection retains its
 fixed mount roles and the zero-swap check. These command descriptions still
 require observation through the exact held provider before admission.
 
+The ordinary private script protocol keeps authorized input and control names
+unchanged. Its workspace, cache, monitor output and saved-file staging remain
+inside the reserved execution tree; dependency reads use the conserved file
+locator. Bootstrap rejects mismatched modes, layouts and stale helpers. Final
+workspace/control removal is deferred until trusted positive-stop settlement.
+These paths do not implement result promotion or authorize normal dispatch.
+
 `JobExecutionProtocol` reads and writes typed exact-byte creation and phase
 records through owned read-committed transactions. Readback is checked inside the
 transaction; only a first acknowledged insertion is new consumption. Historical

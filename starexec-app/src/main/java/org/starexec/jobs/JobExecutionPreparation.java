@@ -39,6 +39,7 @@ import java.util.regex.Pattern;
  * must remain application-controlled; modes alone do not isolate another same-UID process.
  */
 public final class JobExecutionPreparation {
+    public static final String PRIVATE_VARIABLE="STAREXEC_JOB_PRIVATE_MOUNTS";
     private static final Gson JSON=new GsonBuilder().disableHtmlEscaping().create();
     private static final int MAX_RECEIPT=16*1024*1024;
     private static final String RECEIPT="inputs.json";
@@ -181,6 +182,14 @@ public final class JobExecutionPreparation {
     public Path workingDirectory() { return EXECUTION.resolve("work"); }
     public Path outputDirectory() { return EXECUTION.resolve("monitor"); }
     public Path hostOutputDirectory() { return lease.staging().resolve("execution/monitor"); }
+
+    /** Declares the reserved ordinary namespace; these values do not establish provider admission. */
+    public Map<String,String> environment() {
+        return Map.ofEntries(Map.entry(PRIVATE_VARIABLE,"1"),Map.entry("CONTAINER_MODE","true"),
+                Map.entry("STAREXEC_OUTPUT_DIR",outputDirectory().toString()),
+                Map.entry("HOME",EXECUTION.resolve("home").toString()),Map.entry("TMPDIR","/tmp"),
+                Map.entry("STAREXEC_JOB_DEPENDENCIES",controls.dependencies()==null?"":controls.dependencies().toString()));
+    }
 
     private static Receipt observe(Connection connection,JobStorageLeases.Lease lease,DedicatedStorageResource resource,
             Controls controls,long maxBytes,int maxEntries,boolean hasReceipt) throws SQLException,IOException {

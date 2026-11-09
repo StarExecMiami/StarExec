@@ -446,6 +446,28 @@ class JobExecutionPreparationSqlTest extends Common {
         String output=new String(syntax.getInputStream().readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
         assertTrue(syntax.waitFor(5,java.util.concurrent.TimeUnit.SECONDS));assertEquals(0,syntax.exitValue(),output);
     }
+    @ParameterizedTest @ValueSource(strings={"without-dependencies","with-dependencies"})
+    void ordinaryEnvironmentUsesReservedWritesAndTheConservedDependencyLocator(String kind) throws Exception {
+        Path dependencies=null;
+        if (kind.equals("with-dependencies")) {
+            Path axiom=Files.writeString(files.resolve("theory with spaces.ax"),"fof(ax,axiom,p).\n");
+            int dependency=(int)number(connection,"INSERT INTO starexec.benchmarks(user_id,name,uploaded,path,disk_size)"
+                    +" VALUES (?,'axiom',now(),?,?) RETURNING id",owner,axiom.toString(),Files.size(axiom));
+            number(connection,"INSERT INTO starexec.bench_dependency(primary_bench_id,secondary_bench_id,include_path)"
+                    +" VALUES (?,?,?) RETURNING primary_bench_id",bench,dependency,"../Axioms/theory.ax");
+            dependencies=Files.writeString(files.resolve("dependency file"),axiom+",,,../Axioms/theory.ax\n");
+        }
+        var controls=new JobExecutionPreparation.Controls(script,functions,statuses,dependencies);
+        var prepared=JobExecutionPreparation.prepare(connection,lease,resource,controls,32768,100);
+        var values=prepared.environment();assertEquals(6,values.size());
+        assertEquals("1",values.get(JobExecutionPreparation.PRIVATE_VARIABLE));assertEquals("true",values.get("CONTAINER_MODE"));
+        assertEquals("/starexec/execution/monitor",values.get("STAREXEC_OUTPUT_DIR"));
+        assertEquals("/starexec/execution/home",values.get("HOME"));assertEquals("/tmp",values.get("TMPDIR"));
+        assertEquals(dependencies==null?"":dependencies.toString(),values.get("STAREXEC_JOB_DEPENDENCIES"));
+        if (dependencies!=null) assertTrue(binding(prepared,dependencies).readOnly());
+        assertEquals(script,prepared.script());assertTrue(binding(prepared,benchmark).readOnly());
+        assertThrows(UnsupportedOperationException.class,()->values.put("HOME","/foreign"));held();
+    }
     @ParameterizedTest @ValueSource(strings={"metadata","bytes"})
     void ordinaryRuntimeCaptureRevalidatesItsInputs(String change) throws Exception {
         var prepared=prepare();consumeCreation(prepared,prepared.fingerprint());var bound=restoreBound(prepared);

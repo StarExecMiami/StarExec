@@ -23,6 +23,7 @@ set -euo pipefail
 STATUS_SENT=false
 STAREXEC_BUILD_STAGING_PROTOCOL=1
 STAREXEC_BUILD_PRIVATE_PROTOCOL=1
+STAREXEC_JOB_PRIVATE_PROTOCOL=1
 
 #################################################################################
 # Container Mode Support
@@ -411,7 +412,7 @@ JOB_OUT_DIR="$SHARED_DIR/joboutput"
 # In order for this to work, some global variables need to be changed.#
 #######################################################################
 function adjustForK8s {
-    if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" ]]; then return 0; fi
+    if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" || "${STAREXEC_JOB_PRIVATE_MOUNTS:-}" == "1" ]]; then return 0; fi
     log "adjustForK8s called"
     # A local iterator, deliberately not the global STAGE_INDEX the stage loop owns.
     # This function runs before any stage starts, and `for STAGE_INDEX in ...` left the
@@ -1110,8 +1111,8 @@ function copyOutputIncrementally {
 # $1 0 if we are done with the job and 1 otherwise. Used to decide whether to clean up scripts and locks
 # $2 The name of the user that executed this job. Used to clear out the /tmp directory. Only used if we are done with the job
 function cleanWorkspace {
-	if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" && "$1" == 0 ]]; then
-		log "private build cleanup is reserved for trusted stopped-resource settlement"
+	if [[ ( "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" || "${STAREXEC_JOB_PRIVATE_MOUNTS:-}" == "1" ) && "$1" == 0 ]]; then
+		log "private execution cleanup is reserved for trusted stopped-resource settlement"
 		return 0
 	fi
 	log "cleaning execution host workspace..."
@@ -1784,6 +1785,14 @@ function copyOutput {
 
 #fills arrays from file
 function fillDependArrays {
+	local dependency_file="$JOB_IN_DIR/depend_$PAIR_ID.txt"
+	if [[ "${STAREXEC_JOB_PRIVATE_MOUNTS:-}" == "1" && "$HAS_DEPENDS" == 1 ]]; then
+		dependency_file="${STAREXEC_JOB_DEPENDENCIES:-}"
+		if [[ "$dependency_file" != /* || ! -f "$dependency_file" || -L "$dependency_file" ]]; then
+			printf '%s\n' 'Private ordinary dependency input is unavailable' >&2
+			return 1
+		fi
+	fi
 	#separator
 	sep=',,,'
 
@@ -1796,7 +1805,7 @@ function fillDependArrays {
 		BENCH_DEPENDS_ARRAY[INDEX]=${line//$sep*};
 		LOCAL_DEPENDS_ARRAY[INDEX]=${line//*$sep};
 		INDEX=$(( INDEX + 1 ))
-		done < "$JOB_IN_DIR/depend_$PAIR_ID.txt"
+		done < "$dependency_file"
 	fi
 }
 
@@ -2342,7 +2351,7 @@ function exitJobscript {
 # Every command is therefore failure-tolerant: losing a directory is an operational problem,
 # and misreporting a pair is a scientific one.
 function removePrivateWorkspace {
-	if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" ]]; then return 0; fi
+	if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" || "${STAREXEC_JOB_PRIVATE_MOUNTS:-}" == "1" ]]; then return 0; fi
 	if ! isContainerMode || [ "${STAREXEC_FORCE_SANDBOX:-false}" = "true" ]; then
 		# The non-container sandboxes are a fixed pair of directories governed by the lock
 		# protocol and are meant to persist.

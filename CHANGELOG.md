@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Capture authorized ordinary mount policies with the existing held-runtime kernel verifier.
 - Preserve exact ordinary creation and phase acknowledgements across database reply loss and connection failures.
 - Collect runtime mount identity for the exact prepared inputs, preserving scientific filenames without shell interpolation.
+- Configure private ordinary scripts without shared writable paths and retain final files for trusted cleanup.
 
 - Serialize dedicated storage ownership across solver builds and ordinary job
   attempts, preserving build lease history and booking each job allowance once.

@@ -82,6 +82,31 @@ fi
 # Path to Olivier Roussel's runSolver
 export RUNSOLVER_PATH='$$RUNSOLVER_PATH$$'
 
+# Ordinary private inputs keep their original read-only names; every write stays in the leased tree.
+if [ -n "${STAREXEC_JOB_PRIVATE_MOUNTS:-}" ]; then
+	if [[ "$STAREXEC_JOB_PRIVATE_MOUNTS" != "1" || "$CONTAINER_MODE" != "true" || "$BUILD_JOB" != "false" \
+		|| -n "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" || "${STAREXEC_FORCE_SANDBOX:-false}" != "false" \
+		|| "${STAREXEC_OUTPUT_DIR:-}" != /starexec/execution/monitor \
+		|| "${HOME:-}" != /starexec/execution/home || "${TMPDIR:-}" != /tmp ]]; then
+		printf '%s\n' 'Private ordinary paths require the matching container job protocol' >&2
+		exit 1
+	fi
+	if [[ "$HAS_DEPENDS" == 1 ]]; then
+		if [[ "${STAREXEC_JOB_DEPENDENCIES:-}" != /* || ! -f "$STAREXEC_JOB_DEPENDENCIES" \
+			|| -L "$STAREXEC_JOB_DEPENDENCIES" ]]; then
+			printf '%s\n' 'Private ordinary dependencies require their conserved read-only file' >&2
+			exit 1
+		fi
+	elif [[ "$HAS_DEPENDS" != 0 || -n "${STAREXEC_JOB_DEPENDENCIES:-}" ]]; then
+		printf '%s\n' 'Private ordinary dependency metadata differs' >&2
+		exit 1
+	fi
+	SHARED_DIR=/starexec/execution
+	WORKING_DIR_BASE=/starexec/execution/work
+	BENCH_SAVE_DIR=/starexec/execution/savedoutput
+	PAIR_OUTPUT_DIRECTORY=$(printf '%s' /starexec/execution/monitor | base64 -w0)
+fi
+
 # Private builds use only the provider's fixed input, control and reserved write paths.
 if [ -n "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" ]; then
 	if [[ "$STAREXEC_BUILD_PRIVATE_MOUNTS" != "1" || "$CONTAINER_MODE" != "true" || "$BUILD_JOB" != "true" ]]; then
@@ -109,6 +134,7 @@ fi
 # Include common functions and status codes. The helper must declare its own capability.
 unset STAREXEC_BUILD_STAGING_PROTOCOL
 unset STAREXEC_BUILD_PRIVATE_PROTOCOL
+unset STAREXEC_JOB_PRIVATE_PROTOCOL
 . "$SCRIPT_DIR/functions.bash"
 
 if [ "$CONTAINER_MODE" = "true" ] && [ "$BUILD_JOB" = "true" ]; then
@@ -119,6 +145,10 @@ if [ "$CONTAINER_MODE" = "true" ] && [ "$BUILD_JOB" = "true" ]; then
 fi
 if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" && "${STAREXEC_BUILD_PRIVATE_PROTOCOL:-}" != "1" ]]; then
 	printf '%s\n' 'Build helper and private path protocol are incompatible' >&2
+	exit 1
+fi
+if [[ "${STAREXEC_JOB_PRIVATE_MOUNTS:-}" == "1" && "${STAREXEC_JOB_PRIVATE_PROTOCOL:-}" != "1" ]]; then
+	printf '%s\n' 'Ordinary helper and private path protocol are incompatible' >&2
 	exit 1
 fi
 
