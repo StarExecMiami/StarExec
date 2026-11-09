@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Persist ordinary job creation requests and cancellation locators atomically, retaining exact immutable request bytes across uncertain replies and cancellation.
 - Retain immutable ordinary execution phase receipts and fence late creation or payload release after cleanup intent.
+- Match ordinary creation validation to the prepared execution working directory.
 
 - Serialize dedicated storage ownership across solver builds and ordinary job
   attempts, preserving build lease history and booking each job allowance once.

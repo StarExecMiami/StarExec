@@ -64,7 +64,7 @@ BEGIN
         AND jsonb_typeof(_payload->'Entrypoint')='array'
         AND jsonb_typeof(_payload->'Cmd')='array'
         AND jsonb_typeof(_payload->'Env')='array'
-        AND _payload->'WorkingDir'='"/starexec/execution"'::jsonb
+        AND _payload->'WorkingDir'='"/starexec/execution/work"'::jsonb
         AND _payload->'Labels' @> jsonb_build_object(
             'starexec.managed','true','starexec.label.version','2','starexec.kind','job-pair',
             'starexec.job.layout','private-v1','starexec.job.token',NEW.execution_token::text,

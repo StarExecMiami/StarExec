@@ -104,6 +104,8 @@ Request history cannot be changed or deleted after cancellation or pair removal.
 The request is bounded by both 16 MiB and the reserved capacity; it is not proof
 of effective mounts, engine creation, payload release, termination or cleanup.
 The ordinary dispatcher remains separate from this durable protocol foundation.
+Creation preserves the preparation's working directory, `/starexec/execution/work`;
+the writable execution root is not a substitute for that directory.
 
 `job_execution_receipts` retains immutable creation, payload-release, stop,
 output and cleanup histories for that same claim and engine. Release requires

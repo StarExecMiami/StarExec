@@ -97,7 +97,7 @@ class JobExecutionRequestSqlTest extends Common {
         ObjectNode value = JSON.createObjectNode();
         value.put("Image", IMAGE); value.putObject("HostConfig").put("ReadonlyRootfs", true);
         value.putArray("Entrypoint").add("/bin/bash"); value.putArray("Cmd").add("true"); value.putArray("Env");
-        value.put("WorkingDir", "/starexec/execution");
+        value.put("WorkingDir", "/starexec/execution/work");
         var labels = value.putObject("Labels");
         Map.ofEntries(Map.entry("starexec.managed", "true"), Map.entry("starexec.label.version", "2"),
                 Map.entry("starexec.kind", "job-pair"), Map.entry("starexec.job.layout", "private-v1"),
@@ -156,6 +156,19 @@ class JobExecutionRequestSqlTest extends Common {
 
     @Test void unusedReservationDoesNotAuthorizeCreation() throws Exception {
         assertThrows(SQLException.class, this::consume);
+        assertEquals(0, count()); assertEquals(0, locator()); held();
+    }
+
+    @Test void preparedWorkingDirectoryIsAccepted() throws Exception {
+        use(); ObjectNode value = (ObjectNode) JSON.readTree(payload());
+        value.put("WorkingDir", "/starexec/execution/work");
+        assertTrue(consume(value.toString(), "java")); assertEquals(1001, locator()); held();
+    }
+
+    @Test void executionRootCannotReplaceThePreparedWorkingDirectory() throws Exception {
+        use(); ObjectNode value = (ObjectNode) JSON.readTree(payload());
+        value.put("WorkingDir", "/starexec/execution");
+        assertThrows(SQLException.class, () -> consume(value.toString(), "java"));
         assertEquals(0, count()); assertEquals(0, locator()); held();
     }
 

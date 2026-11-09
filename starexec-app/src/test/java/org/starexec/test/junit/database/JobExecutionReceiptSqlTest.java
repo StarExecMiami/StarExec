@@ -82,7 +82,7 @@ class JobExecutionReceiptSqlTest extends Common {
         ObjectNode value = JSON.createObjectNode();
         value.put("Image", IMAGE); value.putObject("HostConfig").put("ReadonlyRootfs", true);
         value.putArray("Entrypoint").add("/bin/bash"); value.putArray("Cmd").add("true"); value.putArray("Env");
-        value.put("WorkingDir", "/starexec/execution");
+        value.put("WorkingDir", "/starexec/execution/work");
         ObjectNode labels = value.putObject("Labels");
         Map.ofEntries(Map.entry("starexec.managed", "true"), Map.entry("starexec.label.version", "2"),
                 Map.entry("starexec.kind", "job-pair"), Map.entry("starexec.job.layout", "private-v1"),
