@@ -27,7 +27,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-/** Real PostgreSQL and file copies; filesystem capacity is explicitly synthetic. */
+/** Real PostgreSQL and file copies; filesystem capacity and provider facts are explicitly synthetic. */
 class JobExecutionPreparationSqlTest extends Common {
     @TempDir Path files;
     private Connection connection;
@@ -35,6 +35,7 @@ class JobExecutionPreparationSqlTest extends Common {
     private JobStorageLeases.Lease lease;
     private Path benchmark, solverRoot, script, functions, statuses;
     private int owner, pair, job, solver, config, bench;
+    private String consumedHash;
 
     @BeforeAll static void database() {
         DatabaseTestSupport.assumeDatabaseAvailable("JobExecutionPreparationSqlTest");
@@ -138,6 +139,112 @@ class JobExecutionPreparationSqlTest extends Common {
     }
     private JobExecutionPreparation restore(JobExecutionPreparation prepared) throws Exception {
         return JobExecutionPreparation.restore(connection,currentLease(),resource,controls(),32768,100,prepared.fingerprint());
+    }
+    private void consumeCreation(JobExecutionPreparation prepared,String fingerprint) throws Exception {
+        var value=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        value.put("Image","sha256:"+"a".repeat(64));value.putObject("HostConfig").put("ReadonlyRootfs",true);
+        value.putArray("Entrypoint").add("/bin/bash");value.putArray("Cmd").add("true");value.putArray("Env");
+        value.put("WorkingDir",prepared.workingDirectory().toString());
+        var labels=value.putObject("Labels");
+        java.util.Map.ofEntries(java.util.Map.entry("starexec.managed","true"),java.util.Map.entry("starexec.label.version","2"),
+                java.util.Map.entry("starexec.kind","job-pair"),java.util.Map.entry("starexec.job.layout","private-v1"),
+                java.util.Map.entry("starexec.job.token",lease.token().toString()),java.util.Map.entry("starexec.storage.resource",lease.resourceKey()),
+                java.util.Map.entry("starexec.job.inputs",fingerprint),java.util.Map.entry("starexec.pair.id",Integer.toString(pair)),
+                java.util.Map.entry("starexec.attempt","1"),java.util.Map.entry("starexec.exec.id","1001")).forEach(labels::put);
+        String payload=value.toString();
+        assertEquals(1,number(connection,"SELECT starexec.consume_job_execution_request(?,?,?,?,?,?,?,?,?,?,?,"
+                +"encode(sha256(convert_to(?,'UTF8')),'hex'))::integer",lease.token(),pair,1,owner,lease.resourceKey(),
+                lease.resourceIdentity(),1001,"sha256:"+"a".repeat(64),fingerprint,"java",payload,payload));
+        consumedHash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+    private JobExecutionPreparation restoreBound(JobExecutionPreparation prepared) throws Exception {
+        return JobExecutionPreparation.restoreBound(connection,currentLease(),resource,controls(),32768,100,prepared.fingerprint());
+    }
+    @Test void aConsumedRequestRestoresOnlyThroughItsExactBoundFingerprint() throws Exception {
+        var prepared=prepare();var original=currentLease();
+        consumeCreation(prepared,prepared.fingerprint());
+        assertEquals(1001,number(connection,"SELECT sge_id FROM starexec.job_pairs WHERE id=?",pair));
+        assertEquals(original,currentLease());assertThrows(SQLException.class,()->restore(prepared));
+        connection.close();connection=Common.getConnection();
+        var recovered=restoreBound(prepared);
+        assertEquals(prepared.fingerprint(),recovered.fingerprint());assertEquals(prepared.bindings(),recovered.bindings());
+        recovered.requireCurrent(connection);held();
+    }
+    @Test void boundRecoveryRequiresAConservedCreationRequest() throws Exception {
+        var prepared=prepare();assertThrows(SQLException.class,()->restoreBound(prepared));
+        assertEquals(prepared.fingerprint(),restore(prepared).fingerprint());held();
+    }
+    @Test void aDifferentConservedFingerprintCannotAdoptThePreparedTree() throws Exception {
+        var prepared=prepare();consumeCreation(prepared,"0".repeat(64));
+        assertThrows(SQLException.class,()->restoreBound(prepared));held();
+    }
+    @ParameterizedTest @ValueSource(strings={"killed","attempt","locator"})
+    void staleBoundOwnershipCannotRestore(String change) throws Exception {
+        var prepared=prepare();consumeCreation(prepared,prepared.fingerprint());
+        switch (change) {
+            case "killed" -> number(connection,"UPDATE starexec.jobs SET killed=true WHERE id=? RETURNING id",job);
+            case "attempt" -> number(connection,"UPDATE starexec.job_pair_attempts SET current_attempt_no=2 WHERE pair_id=? RETURNING pair_id",pair);
+            case "locator" -> number(connection,"UPDATE starexec.job_pairs SET sge_id=2002 WHERE id=? RETURNING id",pair);
+            default -> throw new AssertionError();
+        }
+        assertThrows(SQLException.class,()->restoreBound(prepared));held();
+    }
+    @ParameterizedTest @ValueSource(strings={"metadata","source","writable","copy"})
+    void boundRecoveryCannotRefreshChangedInputOrDirectoryState(String change) throws Exception {
+        var prepared=prepare();consumeCreation(prepared,prepared.fingerprint());
+        switch (change) {
+            case "metadata" -> number(connection,"UPDATE starexec.configurations SET name='changed' WHERE id=? RETURNING id",config);
+            case "source" -> Files.writeString(benchmark,"changed source\n");
+            case "writable" -> Files.writeString(lease.staging().resolve("execution/monitor/changed"),"unexpected");
+            case "copy" -> {
+                Path copy=binding(prepared,benchmark).source();
+                Files.setPosixFilePermissions(copy,PosixFilePermissions.fromString("rw-------"));
+                Files.writeString(copy,"changed materialized input\n");
+            }
+            default -> throw new AssertionError();
+        }
+        assertThrows(IOException.class,()->restoreBound(prepared));held();
+    }
+    private void recordPhase(JobExecutionPreparation prepared,String kind) throws Exception {
+        var value=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        String container="c".repeat(64),engine="podman:1001:"+container;
+        UUID operation=UUID.randomUUID();
+        value.put("version",1);value.put("kind",kind);value.put("execution_token",lease.token().toString());
+        value.put("pair_id",pair);value.put("attempt_no",1);value.put("owner_id",owner);
+        value.put("resource_key",lease.resourceKey());value.put("resource_identity",lease.resourceIdentity());
+        value.put("operation_token",operation.toString());value.put("engine_identity",engine);
+        value.put("request_sha256",consumedHash);value.put("preparation_sha256",prepared.fingerprint());
+        var facts=value.putObject("facts");
+        switch (kind) {
+            case "CREATED" -> {
+                facts.put("resource_id",container);facts.put("container_name","starexec-pair-"+pair+"-attempt-1");
+                facts.put("image_id","sha256:"+"a".repeat(64));
+            }
+            case "RELEASE" -> facts.put("runtime_payload","{\"version\":1,\"observation\":{\"startTicks\":1,\"memoryBytes\":1024,"
+                    +"\"pids\":16,\"cpus\":\"0\",\"namespaces\":{\"pid\":\"pid:[1]\",\"ipc\":\"ipc:[2]\",\"net\":\"net:[3]\","
+                    +"\"mnt\":\"mnt:[4]\",\"user\":\"user:[5]\",\"cgroup\":\"cgroup:[6]\"}}}");
+            case "STOP" -> {
+                facts.put("resource_id",container);facts.put("image_id","sha256:"+"a".repeat(64));
+                facts.put("status","exited");facts.put("pid",0);facts.put("running",false);facts.put("paused",false);
+                facts.put("restarting",false);facts.put("privileged",false);facts.put("private_pid_namespace",true);
+                facts.put("restart_policy","no");facts.put("started_at","2026-01-01T00:00:01Z");
+                facts.put("finished_at","2026-01-01T00:00:02Z");facts.put("exit_code",0);facts.put("disposition","cancelled");
+            }
+            default -> throw new AssertionError();
+        }
+        String payload=value.toString();
+        assertEquals(1,number(connection,"SELECT starexec.record_job_execution_receipt(?,?,?,?,?,"
+                +"encode(sha256(convert_to(?,'UTF8')),'hex'))::integer",lease.token(),kind,operation,engine,payload,payload));
+    }
+    @Test void conservedCreationAloneDoesNotReplaceInputRevalidation() throws Exception {
+        var prepared=prepare();consumeCreation(prepared,prepared.fingerprint());recordPhase(prepared,"CREATED");
+        assertEquals(prepared.fingerprint(),restoreBound(prepared).fingerprint());held();
+    }
+    @ParameterizedTest @ValueSource(strings={"RELEASE","STOP"})
+    void aReleasedOrStoppedAttemptCannotRestorePrePayloadInputs(String kind) throws Exception {
+        var prepared=prepare();consumeCreation(prepared,prepared.fingerprint());recordPhase(prepared,"CREATED");recordPhase(prepared,kind);
+        assertThrows(SQLException.class,()->restoreBound(prepared));held();
     }
     private JobExecutionPreparation.Binding binding(JobExecutionPreparation prepared,Path target) {
         return prepared.bindings().stream().filter(b->b.target().equals(target)).findFirst().orElseThrow();

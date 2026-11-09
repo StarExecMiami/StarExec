@@ -67,11 +67,18 @@ public final class JobExecutionPreparation {
     private final Receipt receipt;
     private final String text;
     private final List<Binding> bindings;
+    private final String boundFingerprint;
 
     private JobExecutionPreparation(JobStorageLeases.Lease lease,DedicatedStorageResource resource,Controls controls,
                                     long maxBytes,int maxEntries,Receipt receipt,String text) {
+        this(lease,resource,controls,maxBytes,maxEntries,receipt,text,null);
+    }
+
+    private JobExecutionPreparation(JobStorageLeases.Lease lease,DedicatedStorageResource resource,Controls controls,
+                                    long maxBytes,int maxEntries,Receipt receipt,String text,String boundFingerprint) {
         this.lease=lease;this.resource=resource;this.controls=controls;
         this.maxBytes=maxBytes;this.maxEntries=maxEntries;this.receipt=receipt;this.text=text;
+        this.boundFingerprint=boundFingerprint;
         this.bindings=receipt.bindings().stream().map(b->new Binding(lease.staging().resolve(b.source()),Path.of(b.target()),b.readOnly())).toList();
     }
 
@@ -133,26 +140,38 @@ public final class JobExecutionPreparation {
     /** A caller must conserve the fingerprint durably before engine creation; recovery never recreates missing state. */
     public static JobExecutionPreparation restore(Connection connection,JobStorageLeases.Lease expected,
             DedicatedStorageResource resource,Controls controls,long maxBytes,int maxEntries,String fingerprint) throws SQLException,IOException {
+        return restore(connection,expected,resource,controls,maxBytes,maxEntries,fingerprint,false);
+    }
+
+    /** Restores pre-payload inputs through conserved creation; it never creates, starts or releases an engine. */
+    public static JobExecutionPreparation restoreBound(Connection connection,JobStorageLeases.Lease expected,
+            DedicatedStorageResource resource,Controls controls,long maxBytes,int maxEntries,String fingerprint) throws SQLException,IOException {
+        return restore(connection,expected,resource,controls,maxBytes,maxEntries,fingerprint,true);
+    }
+
+    private static JobExecutionPreparation restore(Connection connection,JobStorageLeases.Lease expected,
+            DedicatedStorageResource resource,Controls controls,long maxBytes,int maxEntries,String fingerprint,boolean bound) throws SQLException,IOException {
         limits(expected,resource,maxBytes,maxEntries);
         require(fingerprint!=null && fingerprint.matches("[0-9a-f]{64}"),"Original preparation fingerprint is unavailable");
-        if (JobExecutionInputs.capturePrepared(connection,expected,resource).isEmpty())
+        if ((bound ? JobExecutionInputs.captureBound(connection,expected,resource,fingerprint)
+                : JobExecutionInputs.capturePrepared(connection,expected,resource)).isEmpty())
             throw new SQLException("Current prepared ordinary inputs are unavailable");
         String text=readReceipt(expected.staging());
         require(digest(text).equals(fingerprint),"Conserved input receipt differs");
         Receipt saved;
         try { saved=JSON.fromJson(text,Receipt.class); }
         catch (RuntimeException invalid) { throw new IOException("Invalid ordinary input receipt",invalid); }
-        Receipt actual=observe(connection,expected,resource,controls,maxBytes,maxEntries,true);
+        Receipt actual=observe(connection,expected,resource,controls,maxBytes,maxEntries,true,bound?fingerprint:null);
         require(actual.equals(saved),"Recovered input preparation differs from its original observation");
         require(receiptBytes(actual)<=maxBytes-text.getBytes(StandardCharsets.UTF_8).length,"Recovered receipt exceeds its budget");
-        var prepared=new JobExecutionPreparation(expected,resource,controls,maxBytes,maxEntries,actual,text);
+        var prepared=new JobExecutionPreparation(expected,resource,controls,maxBytes,maxEntries,actual,text,bound?fingerprint:null);
         prepared.requireCurrent(connection);
         return prepared;
     }
 
     /** Pre-engine check only; prepared bytes never establish engine admission or positive termination. */
     public void requireCurrent(Connection connection) throws SQLException,IOException {
-        require(observe(connection,lease,resource,controls,maxBytes,maxEntries,true).equals(receipt),"Prepared input identity changed");
+        require(observe(connection,lease,resource,controls,maxBytes,maxEntries,true,boundFingerprint).equals(receipt),"Prepared input identity changed");
         require(text.equals(readReceipt(lease.staging())),"Prepared receipt changed");
     }
 
@@ -164,7 +183,13 @@ public final class JobExecutionPreparation {
 
     private static Receipt observe(Connection connection,JobStorageLeases.Lease lease,DedicatedStorageResource resource,
             Controls controls,long maxBytes,int maxEntries,boolean hasReceipt) throws SQLException,IOException {
-        var captured=JobExecutionInputs.capturePrepared(connection,lease,resource)
+        return observe(connection,lease,resource,controls,maxBytes,maxEntries,hasReceipt,null);
+    }
+
+    private static Receipt observe(Connection connection,JobStorageLeases.Lease lease,DedicatedStorageResource resource,
+            Controls controls,long maxBytes,int maxEntries,boolean hasReceipt,String boundFingerprint) throws SQLException,IOException {
+        var captured=(boundFingerprint==null ? JobExecutionInputs.capturePrepared(connection,lease,resource)
+                : JobExecutionInputs.captureBound(connection,lease,resource,boundFingerprint))
                 .orElseThrow(()->new SQLException("Current prepared ordinary inputs are unavailable"));
         published(connection,lease);
         List<Source> sources=sources(captured,controls);

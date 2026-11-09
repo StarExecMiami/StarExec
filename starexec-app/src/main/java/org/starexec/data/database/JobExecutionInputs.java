@@ -46,8 +46,20 @@ public final class JobExecutionInputs {
         return capture(connection, expected, resource, true);
     }
 
+    /** Reads pre-payload inputs only through the exact conserved ordinary creation request. */
+    public static Optional<Snapshot> captureBound(Connection connection, JobStorageLeases.Lease expected,
+                                                  DedicatedStorageResource resource, String preparationFingerprint) throws SQLException {
+        if (preparationFingerprint == null || !preparationFingerprint.matches("[0-9a-f]{64}")) return Optional.empty();
+        return capture(connection, expected, resource, true, preparationFingerprint);
+    }
+
     private static Optional<Snapshot> capture(Connection connection, JobStorageLeases.Lease expected,
                                                DedicatedStorageResource resource, boolean prepared) throws SQLException {
+        return capture(connection, expected, resource, prepared, null);
+    }
+
+    private static Optional<Snapshot> capture(Connection connection, JobStorageLeases.Lease expected,
+                                               DedicatedStorageResource resource, boolean prepared, String boundFingerprint) throws SQLException {
         if (!connection.getAutoCommit()) throw new SQLException("Job input capture cannot use a foreign transaction");
         int previous = connection.getTransactionIsolation();
         int isolation = previous == Connection.TRANSACTION_SERIALIZABLE ? previous : Connection.TRANSACTION_REPEATABLE_READ;
@@ -62,7 +74,7 @@ public final class JobExecutionInputs {
                         || expected.inodeLimit() != resource.inodeLimit()) throw new Refused();
                 resource.requireUnchanged();
                 if (prepared) {
-                    lockPrepared(tx, expected);
+                    lockPrepared(tx, expected, boundFingerprint);
                 } else {
                     try (var claim = tx.prepareStatement("SELECT starexec.reserve_job_storage(?,?,?,?,?)")) {
                         claim.setInt(1, expected.pairId()); claim.setInt(2, expected.attemptNo()); claim.setObject(3, expected.token());
@@ -92,10 +104,32 @@ public final class JobExecutionInputs {
         }
     }
 
-    private static void lockPrepared(Connection connection, JobStorageLeases.Lease expected) throws SQLException {
+    private static void lockPrepared(Connection connection, JobStorageLeases.Lease expected, String boundFingerprint) throws SQLException {
+        Integer execution = expected.priorExecutionId();
+        if (boundFingerprint == null) {
+            try (var query = connection.prepareStatement("SELECT 1 FROM starexec.job_execution_requests WHERE execution_token=?")) {
+                query.setObject(1, expected.token());
+                try (var row = query.executeQuery()) { if (row.next()) throw new Refused(); }
+            }
+        } else {
+            try (var query = connection.prepareStatement("SELECT q.execution_id FROM starexec.job_execution_requests q"
+                    + " WHERE q.execution_token=? AND q.pair_id=? AND q.attempt_no=? AND q.owner_id=?"
+                    + " AND q.resource_key=? AND q.resource_identity=? AND q.preparation_sha256=?"
+                    + " AND q.request_sha256=encode(sha256(convert_to(q.request_payload,'UTF8')),'hex')"
+                    + " AND NOT EXISTS (SELECT 1 FROM starexec.job_execution_receipts r WHERE r.execution_token=q.execution_token"
+                    + " AND r.receipt_kind IN ('RELEASE','STOP','CLEANUP_REQUEST','CLEANUP')) FOR SHARE OF q NOWAIT")) {
+                Object[] values = {expected.token(),expected.pairId(),expected.attemptNo(),expected.ownerId(),
+                        expected.resourceKey(),expected.resourceIdentity(),boundFingerprint};
+                for (int i = 0; i < values.length; i++) query.setObject(i + 1, values[i]);
+                try (var row = query.executeQuery()) {
+                    if (!row.next()) throw new Refused();
+                    execution = row.getInt(1);
+                }
+            }
+        }
         try (var query = connection.prepareStatement("SELECT starexec.lock_current_job_storage_pair(?,?,?,?,TRUE)")) {
             query.setInt(1, expected.pairId()); query.setInt(2, expected.attemptNo());
-            query.setInt(3, expected.ownerId()); query.setObject(4, expected.priorExecutionId());
+            query.setInt(3, expected.ownerId()); query.setObject(4, execution);
             try (var row = query.executeQuery()) { if (!row.next() || !row.getBoolean(1)) throw new Refused(); }
         }
         try (var query = connection.prepareStatement("SELECT disk_size,disk_quota,starexec.active_execution_storage_bytes(id)"

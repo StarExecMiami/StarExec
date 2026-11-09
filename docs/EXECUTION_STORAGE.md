@@ -94,6 +94,13 @@ reconciliation rather than recreated or released. `capturePrepared` revalidates
 an already-used reservation without reserving or charging it again; the original
 `capture` remains restricted to unused reservations.
 
+After creation consumption changes the cancellation locator, `restoreBound`
+recovers pre-payload inputs only through that exact request and preparation
+fingerprint. It preserves the original lease, metadata, copied bytes and empty
+writable directories. Release, stop or cleanup history forbids this restoration.
+The original prepared reader remains pre-engine only; neither reader grants
+runtime admission or permission to resend creation.
+
 `job_execution_requests` conserves one exact UTF-8 creation
 request per ordinary attempt, its immutable image and prepared-input digest,
 and the resource incarnation. Consumption requires the current funded used
