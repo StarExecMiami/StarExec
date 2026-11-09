@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Match ordinary creation validation to the prepared execution working directory.
 - Recover prepared ordinary inputs through the exact conserved creation request without rebinding storage ownership.
 - Capture authorized ordinary mount policies with the existing held-runtime kernel verifier.
+- Preserve exact ordinary creation and phase acknowledgements across database reply loss and connection failures.
 
 - Serialize dedicated storage ownership across solver builds and ordinary job
   attempts, preserving build lease history and booking each job allowance once.

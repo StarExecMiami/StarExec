@@ -108,6 +108,14 @@ trusted logical script. Fixed build mount roles and the physical verification
 checks remain separate from that ordinary policy. A captured policy still needs
 observations from the exact held provider before payload admission.
 
+`JobExecutionProtocol` reads and writes typed exact-byte creation and phase
+records through owned read-committed transactions. Readback is checked inside the
+transaction; only a first acknowledged insertion is new consumption. Historical
+reads and replay never authorize another send, and an uncertain commit response
+propagates while ownership stays held. Acknowledged commits remain durable when
+connection restoration fails, following `Common.runTransactional`. Recorded facts
+still require independent verification by the trusted provider observer.
+
 `job_execution_requests` conserves one exact UTF-8 creation
 request per ordinary attempt, its immutable image and prepared-input digest,
 and the resource incarnation. Consumption requires the current funded used

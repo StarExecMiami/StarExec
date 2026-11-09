@@ -12,6 +12,7 @@ import org.starexec.data.database.Common;
 import org.starexec.data.database.ExecutionStorageLeases;
 import org.starexec.data.database.JobStorageLeases;
 import org.starexec.data.database.JobExecutionInputs;
+import org.starexec.data.database.JobExecutionProtocol;
 import org.starexec.jobs.JobExecutionPreparation;
 import org.starexec.test.util.DatabaseTestSupport;
 
@@ -140,7 +141,7 @@ class JobExecutionPreparationSqlTest extends Common {
     private JobExecutionPreparation restore(JobExecutionPreparation prepared) throws Exception {
         return JobExecutionPreparation.restore(connection,currentLease(),resource,controls(),32768,100,prepared.fingerprint());
     }
-    private void consumeCreation(JobExecutionPreparation prepared,String fingerprint) throws Exception {
+    private String creationPayload(JobExecutionPreparation prepared,String fingerprint) {
         var value=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
         value.put("Image","sha256:"+"a".repeat(64));value.putObject("HostConfig").put("ReadonlyRootfs",true);
         value.putArray("Entrypoint").add("/bin/bash");value.putArray("Cmd").add("true");value.putArray("Env");
@@ -151,12 +152,166 @@ class JobExecutionPreparationSqlTest extends Common {
                 java.util.Map.entry("starexec.job.token",lease.token().toString()),java.util.Map.entry("starexec.storage.resource",lease.resourceKey()),
                 java.util.Map.entry("starexec.job.inputs",fingerprint),java.util.Map.entry("starexec.pair.id",Integer.toString(pair)),
                 java.util.Map.entry("starexec.attempt","1"),java.util.Map.entry("starexec.exec.id","1001")).forEach(labels::put);
-        String payload=value.toString();
+        return value.toString();
+    }
+    private void consumeCreation(JobExecutionPreparation prepared,String fingerprint) throws Exception {
+        String payload=creationPayload(prepared,fingerprint);
         assertEquals(1,number(connection,"SELECT starexec.consume_job_execution_request(?,?,?,?,?,?,?,?,?,?,?,"
                 +"encode(sha256(convert_to(?,'UTF8')),'hex'))::integer",lease.token(),pair,1,owner,lease.resourceKey(),
                 lease.resourceIdentity(),1001,"sha256:"+"a".repeat(64),fingerprint,"java",payload,payload));
         consumedHash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
                 .digest(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+    private boolean consumeThroughProtocol(Connection con,JobExecutionPreparation prepared,String transport) throws Exception {
+        String payload=creationPayload(prepared,prepared.fingerprint());
+        boolean consumed=JobExecutionProtocol.consumeCreation(con,currentLease(),resource,prepared,1001,"sha256:"+"a".repeat(64),
+                JobExecutionProtocol.Transport.valueOf(transport.toUpperCase(java.util.Locale.ROOT)),payload);
+        if (consumed) consumedHash=JobExecutionProtocol.digest(payload);
+        return consumed;
+    }
+    @ParameterizedTest @ValueSource(strings={"java","curl"})
+    void typedJournalConservesAFirstCreationAcknowledgement(String transport) throws Exception {
+        var prepared=prepare();var original=currentLease();
+        assertTrue(consumeThroughProtocol(connection,prepared,transport));
+        assertFalse(consumeThroughProtocol(connection,prepared,transport));
+        assertEquals(original,currentLease());assertEquals(1001,number(connection,"SELECT sge_id FROM starexec.job_pairs WHERE id=?",pair));
+        assertEquals(1,number(connection,"SELECT count(*) FROM starexec.job_execution_requests WHERE execution_token=?",lease.token()));held();
+        var saved=JobExecutionProtocol.findCreation(connection,lease.token()).orElseThrow();
+        assertEquals(saved,JobExecutionProtocol.findCreation(connection,pair,1).orElseThrow());
+        assertEquals(saved.payload(),creationPayload(prepared,prepared.fingerprint()));
+        assertEquals(JobExecutionProtocol.digest(saved.payload()),saved.sha256());
+    }
+    private JobExecutionProtocol.Receipt receipt(JobExecutionPreparation prepared,String kind) {
+        UUID operation=UUID.randomUUID();String payload=phasePayload(prepared,kind,operation).toString();
+        return new JobExecutionProtocol.Receipt(lease.token(),JobExecutionProtocol.Phase.valueOf(kind),operation,
+                "podman:1001:"+"c".repeat(64),payload,JobExecutionProtocol.digest(payload));
+    }
+    @ParameterizedTest @ValueSource(strings={"CREATED","RELEASE"})
+    void typedJournalConservesReceiptBytesWithoutGrantingReplay(String kind) throws Exception {
+        var prepared=prepare();assertTrue(consumeThroughProtocol(connection,prepared,"java"));
+        if (kind.equals("RELEASE")) assertTrue(JobExecutionProtocol.recordReceipt(connection,currentLease(),resource,receipt(prepared,"CREATED")));
+        var value=receipt(prepared,kind);
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,currentLease(),resource,value));
+        assertEquals(value,JobExecutionProtocol.findReceipt(connection,lease.token(),value.phase()).orElseThrow());
+        assertFalse(JobExecutionProtocol.recordReceipt(connection,currentLease(),resource,value));held();
+    }
+    @ParameterizedTest @ValueSource(strings={"duplicate","trailing","numeric-label","wrong-working-directory"})
+    void typedJournalRejectsMalformedCreationBeforeConsumption(String change) throws Exception {
+        var prepared=prepare();String payload=creationPayload(prepared,prepared.fingerprint());
+        switch (change) {
+            case "duplicate" -> payload="{\"Image\":\"wrong\","+payload.substring(1);
+            case "trailing" -> payload+="{}";
+            case "numeric-label","wrong-working-directory" -> {
+                var root=(com.fasterxml.jackson.databind.node.ObjectNode)new com.fasterxml.jackson.databind.ObjectMapper().readTree(payload);
+                if (change.equals("numeric-label")) ((com.fasterxml.jackson.databind.node.ObjectNode)root.get("Labels")).put("starexec.exec.id",1001);
+                else root.put("WorkingDir","/starexec/execution");
+                payload=root.toString();
+            }
+            default -> throw new AssertionError();
+        }
+        assertFalse(JobExecutionProtocol.consumeCreation(connection,currentLease(),resource,prepared,1001,"sha256:"+"a".repeat(64),
+                JobExecutionProtocol.Transport.JAVA,payload));
+        assertTrue(JobExecutionProtocol.findCreation(connection,lease.token()).isEmpty());held();
+    }
+    @ParameterizedTest @ValueSource(strings={"creation","receipt"})
+    void typedJournalRefusesForeignTransactions(String kind) throws Exception {
+        var prepared=prepare();
+        if (kind.equals("receipt")) assertTrue(consumeThroughProtocol(connection,prepared,"java"));
+        var observation=kind.equals("receipt")?receipt(prepared,"CREATED"):null;
+        connection.setAutoCommit(false);
+        try {
+            if (kind.equals("creation")) assertThrows(SQLException.class,()->consumeThroughProtocol(connection,prepared,"java"));
+            else assertThrows(SQLException.class,()->JobExecutionProtocol.recordReceipt(connection,currentLease(),resource,observation));
+            assertFalse(connection.getAutoCommit());
+        } finally { connection.rollback();connection.setAutoCommit(true); }
+        held();
+    }
+    @Test void typedJournalRefusesAnOldMutationSnapshot() throws Exception {
+        var prepared=prepare();int isolation=connection.getTransactionIsolation();
+        connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
+        try {
+            SQLException failure=assertThrows(SQLException.class,()->consumeThroughProtocol(connection,prepared,"java"));
+            assertEquals("40001",failure.getSQLState());
+        } finally { connection.setTransactionIsolation(isolation); }
+        assertTrue(JobExecutionProtocol.findCreation(connection,lease.token()).isEmpty());held();
+    }
+    @Test void lostCreationCommitReplyKeepsHistoryWithoutAcknowledgingAnotherSend() throws Exception {
+        var prepared=prepare();var delivered=new java.util.concurrent.atomic.AtomicBoolean();
+        var uncertain=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(connection));
+        doAnswer(call->{
+            boolean consumed=number(connection,"SELECT count(*) FROM starexec.job_execution_requests WHERE execution_token=?",lease.token())>0;
+            connection.commit();
+            if (consumed) { delivered.set(true);throw new SQLException("Synthetic creation commit reply loss"); }
+            return null;
+        }).when(uncertain).commit();
+        assertThrows(SQLException.class,()->consumeThroughProtocol(uncertain,prepared,"java"));assertTrue(delivered.get());
+        assertTrue(JobExecutionProtocol.findCreation(connection,lease.token()).isPresent());
+        assertFalse(consumeThroughProtocol(connection,prepared,"java"));held();
+    }
+    @ParameterizedTest @ValueSource(strings={"CREATED","RELEASE"})
+    void lostReceiptCommitReplyCannotAcknowledgeASecondOperation(String kind) throws Exception {
+        var prepared=prepare();assertTrue(consumeThroughProtocol(connection,prepared,"java"));
+        if (kind.equals("RELEASE")) assertTrue(JobExecutionProtocol.recordReceipt(connection,currentLease(),resource,receipt(prepared,"CREATED")));
+        var value=receipt(prepared,kind);var delivered=new java.util.concurrent.atomic.AtomicBoolean();
+        var uncertain=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(connection));
+        doAnswer(call->{
+            connection.commit();delivered.set(true);throw new SQLException("Synthetic receipt commit reply loss");
+        }).when(uncertain).commit();
+        assertThrows(SQLException.class,()->JobExecutionProtocol.recordReceipt(uncertain,currentLease(),resource,value));assertTrue(delivered.get());
+        assertEquals(value,JobExecutionProtocol.findReceipt(connection,lease.token(),value.phase()).orElseThrow());
+        assertFalse(JobExecutionProtocol.recordReceipt(connection,currentLease(),resource,value));held();
+    }
+    @Test void acknowledgedCreationSurvivesConnectionRestorationFailure() throws Exception {
+        var prepared=prepare();Connection original=connection;var committed=new java.util.concurrent.atomic.AtomicBoolean();
+        var failing=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(original));
+        doAnswer(call->{
+            boolean consumed=number(original,"SELECT count(*) FROM starexec.job_execution_requests WHERE execution_token=?",lease.token())>0;
+            original.commit();if (consumed) committed.set(true);return null;
+        }).when(failing).commit();
+        doAnswer(call->{
+            boolean auto=call.getArgument(0);
+            if (auto && committed.get()) throw new SQLException("Synthetic post-commit restoration failure");
+            original.setAutoCommit(auto);return null;
+        }).when(failing).setAutoCommit(anyBoolean());
+        assertTrue(consumeThroughProtocol(failing,prepared,"java"));assertTrue(committed.get());assertTrue(original.isClosed());
+        connection=Common.getConnection();assertTrue(JobExecutionProtocol.findCreation(connection,lease.token()).isPresent());
+        assertFalse(consumeThroughProtocol(connection,prepared,"java"));held();
+    }
+    @Test void typedHistoryReadsRemainAvailableAfterCancellation() throws Exception {
+        var prepared=prepare();assertTrue(consumeThroughProtocol(connection,prepared,"java"));
+        var created=receipt(prepared,"CREATED");assertTrue(JobExecutionProtocol.recordReceipt(connection,currentLease(),resource,created));
+        number(connection,"UPDATE starexec.jobs SET killed=true WHERE id=? RETURNING id",job);
+        assertTrue(JobExecutionProtocol.findCreation(connection,lease.token()).isPresent());
+        assertEquals(created,JobExecutionProtocol.findReceipt(connection,lease.token(),created.phase()).orElseThrow());
+        assertTrue(JobExecutionProtocol.activeRequests(connection).stream().anyMatch(q->q.token().equals(lease.token())));
+        assertFalse(consumeThroughProtocol(connection,prepared,"java"));held();
+    }
+    @Test void typedHistoryRetainsTheLargestConservedExecutionHandle() throws Exception {
+        var prepared=prepare();int maximum=JobExecutionProtocol.maximumExecutionId(connection);assertTrue(maximum<Integer.MAX_VALUE);
+        int execution=maximum+1;
+        var value=(com.fasterxml.jackson.databind.node.ObjectNode)new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(creationPayload(prepared,prepared.fingerprint()));
+        ((com.fasterxml.jackson.databind.node.ObjectNode)value.get("Labels")).put("starexec.exec.id",Integer.toString(execution));
+        assertTrue(JobExecutionProtocol.consumeCreation(connection,currentLease(),resource,prepared,execution,"sha256:"+"a".repeat(64),
+                JobExecutionProtocol.Transport.JAVA,value.toString()));
+        assertEquals(execution,JobExecutionProtocol.maximumExecutionId(connection));held();
+    }
+    @ParameterizedTest @ValueSource(strings={"overflow-version","wrong-digest"})
+    void typedReceiptDecoderRejectsAlteredIdentityOrBytes(String change) throws Exception {
+        var prepared=prepare();assertTrue(consumeThroughProtocol(connection,prepared,"java"));
+        UUID operation=UUID.randomUUID();var value=phasePayload(prepared,"CREATED",operation);
+        if (change.equals("overflow-version")) value.put("version",4294967297L);
+        String payload=value.toString();String sha=change.equals("wrong-digest")?"0".repeat(64):JobExecutionProtocol.digest(payload);
+        assertThrows(IllegalArgumentException.class,()->new JobExecutionProtocol.Receipt(lease.token(),JobExecutionProtocol.Phase.CREATED,
+                operation,"podman:1001:"+"c".repeat(64),payload,sha));held();
+    }
+    @Test void typedReceiptDecoderPreservesCompatibleNumericVersionBytes() throws Exception {
+        var prepared=prepare();assertTrue(consumeThroughProtocol(connection,prepared,"java"));
+        UUID operation=UUID.randomUUID();var value=phasePayload(prepared,"CREATED",operation);value.put("version",new java.math.BigDecimal("1.0"));
+        String payload=value.toString();var receipt=new JobExecutionProtocol.Receipt(lease.token(),JobExecutionProtocol.Phase.CREATED,
+                operation,"podman:1001:"+"c".repeat(64),payload,JobExecutionProtocol.digest(payload));
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,currentLease(),resource,receipt));
+        assertEquals(payload,JobExecutionProtocol.findReceipt(connection,lease.token(),receipt.phase()).orElseThrow().payload());held();
     }
     private JobExecutionPreparation restoreBound(JobExecutionPreparation prepared) throws Exception {
         return JobExecutionPreparation.restoreBound(connection,currentLease(),resource,controls(),32768,100,prepared.fingerprint());
@@ -206,10 +361,9 @@ class JobExecutionPreparationSqlTest extends Common {
         }
         assertThrows(IOException.class,()->restoreBound(prepared));held();
     }
-    private void recordPhase(JobExecutionPreparation prepared,String kind) throws Exception {
+    private com.fasterxml.jackson.databind.node.ObjectNode phasePayload(JobExecutionPreparation prepared,String kind,UUID operation) {
         var value=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
         String container="c".repeat(64),engine="podman:1001:"+container;
-        UUID operation=UUID.randomUUID();
         value.put("version",1);value.put("kind",kind);value.put("execution_token",lease.token().toString());
         value.put("pair_id",pair);value.put("attempt_no",1);value.put("owner_id",owner);
         value.put("resource_key",lease.resourceKey());value.put("resource_identity",lease.resourceIdentity());
@@ -233,7 +387,11 @@ class JobExecutionPreparationSqlTest extends Common {
             }
             default -> throw new AssertionError();
         }
-        String payload=value.toString();
+        return value;
+    }
+    private void recordPhase(JobExecutionPreparation prepared,String kind) throws Exception {
+        UUID operation=UUID.randomUUID();String engine="podman:1001:"+"c".repeat(64);
+        String payload=phasePayload(prepared,kind,operation).toString();
         assertEquals(1,number(connection,"SELECT starexec.record_job_execution_receipt(?,?,?,?,?,"
                 +"encode(sha256(convert_to(?,'UTF8')),'hex'))::integer",lease.token(),kind,operation,engine,payload,payload));
     }
