@@ -72,6 +72,15 @@ charge. A different token, stale attempt, changed identity, unavailable quota or
 competing build/job claim is refused. Active ownership prevents pair and owner
 deletion; released history remains immutable after the pair is removed.
 
+`JobStorageLeases.find` can recover the conserved token by pair and attempt after
+a controller restart. `JobExecutionInputs` captures the current owner's permitted
+benchmarks, transitive dependencies, solver configurations, processors and
+published solver manifests in one repeatable database snapshot. Capture preserves
+the reservation and storage-use marker and returns immutable metadata with a
+digest of its exact payload bytes. It neither copies inputs nor admits an engine;
+subsequent filesystem preparation must revalidate the captured identities and
+permissions before use.
+
 The ordinary-job adapter consumes a one-way storage-use marker before the first
 filesystem mutation. That marker grants no engine admission. Only a never-used,
 independently reobserved empty resource can be reclaimed by this adapter; beginning

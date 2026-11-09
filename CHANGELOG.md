@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Refuse reclamation after storage use begins or while its contents are unknown.
 
 ### Added
+- **Job input snapshots**: Capture authorized input metadata for reserved ordinary-job attempts and recover their storage tokens after a controller restart. Runtime preparation and admission remain separate.
 - **Build storage admission**: Added dedicated ext4 capacity verification and PostgreSQL storage leases tied to current attempts and booked quotas. Independent staging cleanup preserves published output and settles its own allowance once; private resource roots cannot become asset references. Runtime pool activation still requires private mounts and dispatch integration.
 - **Kubernetes health endpoints**: Added `/starexec/public/health/liveness` and `/starexec/public/health/readiness` so orchestrators can distinguish a live process from one able to serve, and pointed the chart's probes at them.
 - **SMT-aware CPU partitioning**: Added sibling-aware CPU partitioning that keeps SMT siblings within a single partition and rejects explicit partition layouts that split them.

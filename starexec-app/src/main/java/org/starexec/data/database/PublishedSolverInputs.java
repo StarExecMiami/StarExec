@@ -1,6 +1,7 @@
 package org.starexec.data.database;
 
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -12,8 +13,14 @@ public final class PublishedSolverInputs {
     private PublishedSolverInputs() { }
 
     public static List<Input> forPair(int pair,Integer attempt) throws SQLException {
-        if (pair<1 || attempt==null || attempt<1) throw new SQLException("Published inputs require a current pair attempt");
         try (var connection=Common.getConnection()) {
+            return forPair(connection,pair,attempt);
+        }
+    }
+
+    /** Captures catalog metadata in the caller's snapshot without taking transaction ownership. */
+    public static List<Input> forPair(Connection connection,int pair,Integer attempt) throws SQLException {
+        if (pair<1 || attempt==null || attempt<1) throw new SQLException("Published inputs require a current pair attempt");
             if (!Objects.equals(JobPairs.getCurrentAttemptNo(connection,pair),attempt)) throw new SQLException("Published input attempt changed");
             try (var query=connection.prepareStatement("SELECT a.*,s.id AS input_solver,s.user_id AS input_owner,s.path AS input_path,"
                     +"s.deleted AS input_deleted,s.recycled AS input_recycled FROM starexec.jobpair_stage_data sd"
@@ -42,6 +49,5 @@ public final class PublishedSolverInputs {
                 if (!Objects.equals(JobPairs.getCurrentAttemptNo(connection,pair),attempt)) throw new SQLException("Published input attempt changed during capture");
                 return List.copyOf(inputs.values());
             }
-        }
     }
 }

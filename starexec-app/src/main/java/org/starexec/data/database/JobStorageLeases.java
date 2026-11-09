@@ -27,6 +27,19 @@ public final class JobStorageLeases {
         return find(connection, token, false);
     }
 
+    /** Recovers the original token from durable identity, including settled history. */
+    public static Optional<Lease> find(Connection connection, int pairId, int attemptNo) throws SQLException {
+        if (pairId < 1 || attemptNo < 1) return Optional.empty();
+        try (var query = connection.prepareStatement("SELECT execution_token FROM starexec.execution_storage_claims"
+                + " WHERE lease_kind='JOB' AND origin_pair_id=? AND attempt_no=?")) {
+            query.setInt(1, pairId);
+            query.setInt(2, attemptNo);
+            try (var row = query.executeQuery()) {
+                return row.next() ? find(connection, row.getObject(1, UUID.class)) : Optional.empty();
+            }
+        }
+    }
+
     private static Optional<Lease> find(Connection connection, UUID token, boolean lock) throws SQLException {
         try (var query = connection.prepareStatement(
                 "SELECT c.execution_token,c.origin_pair_id,c.attempt_no,c.origin_owner_id,c.prior_execution_id,"
