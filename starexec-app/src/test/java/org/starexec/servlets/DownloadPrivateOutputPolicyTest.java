@@ -92,6 +92,7 @@ class DownloadPrivateOutputPolicyTest extends Common {
     void malformedIncrementalFiltersAreRejectedBeforeAuthorization(String parameter, String value) throws Exception {
         try (Fixture fixture = new Fixture(R.JOB_OUTPUT, true, true, false)) {
             when(fixture.request.getParameter(parameter)).thenReturn(value);
+            fixture.common.clearInvocations();
             var status = Download.validateRequest(fixture.request);
             assertFalse(status.isSuccess());
             assertEquals(400, status.getStatusCode());
