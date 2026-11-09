@@ -284,15 +284,20 @@ public final class BuildExecutionMounts {
      * mounts on the held resource before release; these path declarations grant no launch permission.
      */
     public HostConfig toPodmanHostConfig(HostConfig limits, Map<Path,Path> providerSources) {
+        return privatePodmanHostConfig(limits,providerBindings(providerSources));
+    }
+
+    /** Renders only the caller's validated private mappings; effective identity still requires runtime observation. */
+    public static HostConfig privatePodmanHostConfig(HostConfig limits,List<Binding> rendered) {
         Objects.requireNonNull(limits,"limits");
         String network=limits.getNetworkMode();
         if (network!=null && (network.equals("host") || network.startsWith("container:") || network.startsWith("ns:"))) {
-            throw new IllegalArgumentException("Private builds cannot share another execution's network namespace");
+            throw new IllegalArgumentException("Private executions cannot share another execution's network namespace");
         }
         if (limits.getMemory()==null || limits.getMemory()<=0) {
-            throw new IllegalArgumentException("Private builds require an explicit positive memory limit");
+            throw new IllegalArgumentException("Private executions require an explicit positive memory limit");
         }
-        List<Binding> rendered=providerBindings(providerSources);
+        rendered=List.copyOf(Objects.requireNonNull(rendered,"rendered"));
         return new HostConfig()
                 .withMemory(limits.getMemory()).withMemorySwap(limits.getMemorySwap())
                 .withMemoryReservation(limits.getMemoryReservation()).withMemorySwappiness(limits.getMemorySwappiness())

@@ -122,6 +122,16 @@ locator. Bootstrap rejects mismatched modes, layouts and stale helpers. Final
 workspace/control removal is deferred until trusted positive-stop settlement.
 These paths do not implement result promotion or authorize normal dispatch.
 
+`PodmanJobCreation` verifies the owned local rootless peer, immutable image and
+registered resource before ordinary preparation. It renders only explicitly
+declared provider sources, preserving relative private writes and original input
+targets. Read-only inputs cannot alias writable sources or have writable target
+ancestors. Planning is serialized so a second caller cannot replace the first
+immutable request. The exact request and preparation survive reconnection; restored
+history never grants another create. A first acknowledged claim is only input
+to a later once-only transport. The adapter itself sends no provider requests
+and does not establish effective mounts, payload release or positive termination.
+
 `JobExecutionProtocol` reads and writes typed exact-byte creation and phase
 records through owned read-committed transactions. Readback is checked inside the
 transaction; only a first acknowledged insertion is new consumption. Historical
