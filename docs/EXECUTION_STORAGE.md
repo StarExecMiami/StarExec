@@ -101,6 +101,13 @@ writable directories. Release, stop or cleanup history forbids this restoration.
 The original prepared reader remains pre-engine only; neither reader grants
 runtime admission or permission to resend creation.
 
+`BuildExecutionRuntime.captureJob` captures the ordinary preparation's read-only
+input/control targets and exactly four private writable roots for the existing
+kernel verifier. It revalidates inputs before and after capture and preserves the
+trusted logical script. Fixed build mount roles and the physical verification
+checks remain separate from that ordinary policy. A captured policy still needs
+observations from the exact held provider before payload admission.
+
 `job_execution_requests` conserves one exact UTF-8 creation
 request per ordinary attempt, its immutable image and prepared-input digest,
 and the resource incarnation. Consumption requires the current funded used

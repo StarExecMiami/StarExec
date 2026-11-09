@@ -2,6 +2,7 @@ package org.starexec.backend.storage;
 
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
+import org.starexec.jobs.JobExecutionPreparation;
 import org.starexec.util.DescriptorDirectory;
 
 import java.io.IOException;
@@ -12,6 +13,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -127,22 +130,50 @@ public final class BuildExecutionRuntime {
     public static BuildExecutionRuntime capture(List<BuildExecutionMounts.Binding> bindings,Identity identity,
                                                  Limits limits,Map<String,String> forbiddenNamespaces,int holdSeconds)
             throws IOException {
+        Map<Path,Boolean> required=new HashMap<>();
+        required.put(BuildExecutionMounts.SOURCE,true);required.put(BuildExecutionMounts.HELPER,true);
+        for (String file:List.of("jobscript","functions.bash","status_codes.bash")) required.put(BuildExecutionMounts.CONTROL.resolve(file),true);
+        for (Path path:List.of(BuildExecutionMounts.EXECUTION,Path.of("/tmp"),Path.of("/run"),Path.of("/var/tmp"))) required.put(path,false);
+        return capture(bindings,identity,limits,forbiddenNamespaces,holdSeconds,required,BuildExecutionMounts.CONTROL.resolve("jobscript"));
+    }
+
+    /** Uses only the current authorized preparation; the returned policy is not runtime attestation. */
+    public static BuildExecutionRuntime captureJob(Connection connection,JobExecutionPreparation preparation,
+            Identity identity,Limits limits,Map<String,String> forbiddenNamespaces,int holdSeconds) throws SQLException,IOException {
+        if (preparation==null) throw new IOException("Ordinary runtime preparation is unavailable");
+        preparation.requireCurrent(connection);
+        Map<Path,Boolean> required=new HashMap<>();
+        for (Path path:List.of(BuildExecutionMounts.EXECUTION,Path.of("/tmp"),Path.of("/run"),Path.of("/var/tmp"))) required.put(path,false);
+        List<BuildExecutionMounts.Binding> bindings=new ArrayList<>();
+        for (var binding:preparation.bindings()) {
+            if (binding.readOnly()) {
+                if (required.putIfAbsent(binding.target(),true)!=null) throw new IOException("Ordinary input overlaps a reserved mount target");
+            } else if (!Boolean.FALSE.equals(required.get(binding.target()))) throw new IOException("Unexpected ordinary writable mount");
+            bindings.add(new BuildExecutionMounts.Binding(binding.source(),binding.target(),binding.readOnly()));
+        }
+        if (!Boolean.TRUE.equals(required.get(preparation.script()))) throw new IOException("Trusted ordinary script mount is unavailable");
+        var captured=capture(bindings,identity,limits,forbiddenNamespaces,holdSeconds,required,preparation.script());
+        preparation.requireCurrent(connection);
+        return captured;
+    }
+
+    private static BuildExecutionRuntime capture(List<BuildExecutionMounts.Binding> bindings,Identity identity,
+            Limits limits,Map<String,String> forbiddenNamespaces,int holdSeconds,Map<Path,Boolean> required,Path script) throws IOException {
         if (identity==null || limits==null || forbiddenNamespaces==null
                 || !forbiddenNamespaces.keySet().containsAll(Set.of("pid","ipc","net","mnt","cgroup"))
                 || !NAMESPACES.containsAll(forbiddenNamespaces.keySet())) throw new IOException("Incomplete runtime identity policy");
         cpuSet(limits.cpus());
         for (var entry:forbiddenNamespaces.entrySet()) namespace(entry.getKey(),entry.getValue());
-        Map<Path,Boolean> required=new HashMap<>();
-        required.put(BuildExecutionMounts.SOURCE,true);required.put(BuildExecutionMounts.HELPER,true);
-        for (String file:List.of("jobscript","functions.bash","status_codes.bash")) required.put(BuildExecutionMounts.CONTROL.resolve(file),true);
-        for (Path path:List.of(BuildExecutionMounts.EXECUTION,Path.of("/tmp"),Path.of("/run"),Path.of("/var/tmp"))) required.put(path,false);
         if (bindings==null || bindings.size()!=required.size()) throw new IOException("Incomplete private runtime mount policy");
         List<Expected> expected=new ArrayList<>();Set<Path> seen=new HashSet<>();
         for (var binding:bindings) {
+            Path target=binding.target();
+            if (target==null || !target.isAbsolute() || target.getParent()==null || !target.equals(target.normalize()))
+                throw new IOException("Invalid runtime target path");
             if (!seen.add(binding.target()) || !required.containsKey(binding.target())
                     || required.get(binding.target())!=binding.readOnly()) throw new IOException("Unexpected private runtime mount role");
             Path source=binding.source();
-            if (!source.isAbsolute() || source.getParent()==null || !source.equals(source.normalize())) throw new IOException("Invalid runtime source path");
+            if (source==null || !source.isAbsolute() || source.getParent()==null || !source.equals(source.normalize())) throw new IOException("Invalid runtime source path");
             try (DescriptorDirectory ignored=DescriptorDirectory.open(source.getParent())) {
                 var before=Files.readAttributes(source,"unix:dev,ino,mode,nlink",LinkOption.NOFOLLOW_LINKS);
                 int mode=((Number)before.get("mode")).intValue()&0170000;
@@ -162,7 +193,7 @@ public final class BuildExecutionRuntime {
             }
         }
         List<String> command=new ArrayList<>(BuildExecutionHold.entrypoint(holdSeconds));
-        command.addAll(BuildExecutionHold.command(BuildExecutionMounts.CONTROL.resolve("jobscript")));
+        command.addAll(BuildExecutionHold.command(script));
         return new BuildExecutionRuntime(expected,identity,limits,forbiddenNamespaces,
                 (String.join("\0",command)+"\0").getBytes(StandardCharsets.UTF_8));
     }

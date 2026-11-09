@@ -249,6 +249,28 @@ class JobExecutionPreparationSqlTest extends Common {
     private JobExecutionPreparation.Binding binding(JobExecutionPreparation prepared,Path target) {
         return prepared.bindings().stream().filter(b->b.target().equals(target)).findFirst().orElseThrow();
     }
+    private org.starexec.backend.storage.BuildExecutionRuntime captureRuntime(JobExecutionPreparation prepared) throws Exception {
+        var namespaces=new java.util.LinkedHashMap<String,String>();
+        for (String name:java.util.List.of("pid","ipc","net","mnt","user","cgroup"))
+            namespaces.put(name,Files.readSymbolicLink(Path.of("/proc/self/ns/"+name)).toString());
+        var identity=new org.starexec.backend.storage.BuildExecutionRuntime.Identity(0,0,1000,1000);
+        var limits=new org.starexec.backend.storage.BuildExecutionRuntime.Limits(134217728,64,"2",100000,100000);
+        return org.starexec.backend.storage.BuildExecutionRuntime.captureJob(connection,prepared,identity,limits,namespaces,30);
+    }
+    @ParameterizedTest @ValueSource(strings={"unbound","bound"})
+    void ordinaryRuntimeCaptureUsesPreparedTargets(String state) throws Exception {
+        var prepared=prepare();
+        if (state.equals("bound")) { consumeCreation(prepared,prepared.fingerprint());prepared=restoreBound(prepared); }
+        var runtime=captureRuntime(prepared);assertNotNull(runtime);assertEquals(script,prepared.script());
+        assertThrows(IOException.class,()->runtime.verify(""));held();
+    }
+    @ParameterizedTest @ValueSource(strings={"metadata","bytes"})
+    void ordinaryRuntimeCaptureRevalidatesItsInputs(String change) throws Exception {
+        var prepared=prepare();consumeCreation(prepared,prepared.fingerprint());var bound=restoreBound(prepared);
+        if (change.equals("metadata")) number(connection,"UPDATE starexec.configurations SET name='changed before capture' WHERE id=? RETURNING id",config);
+        else Files.writeString(benchmark,"changed before runtime capture\n");
+        assertThrows(IOException.class,()->captureRuntime(bound));held();
+    }
     private void unused() throws Exception {
         assertNull(currentLease().useStartedAt());
         assertFalse(Files.exists(lease.staging(),LinkOption.NOFOLLOW_LINKS));

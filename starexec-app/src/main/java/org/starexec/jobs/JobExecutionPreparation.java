@@ -177,6 +177,7 @@ public final class JobExecutionPreparation {
 
     public List<Binding> bindings() { return bindings; }
     public String fingerprint() { return digest(text); }
+    public Path script() { return controls.script(); }
     public Path workingDirectory() { return EXECUTION.resolve("work"); }
     public Path outputDirectory() { return EXECUTION.resolve("monitor"); }
     public Path hostOutputDirectory() { return lease.staging().resolve("execution/monitor"); }
