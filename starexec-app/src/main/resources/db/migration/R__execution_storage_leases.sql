@@ -47,8 +47,7 @@ BEGIN
     IF NOT FOUND OR _c.owner_id IS DISTINCT FROM _a.origin_owner_id OR _c.path IS DISTINCT FROM _staging
         OR _c.limit_bytes<=0 OR _c.charged_bytes IS DISTINCT FROM _c.limit_bytes
         OR _c.verified_at IS NOT NULL OR _c.released_at IS NOT NULL THEN RETURN FALSE; END IF;
-    IF _usage<(SELECT COALESCE(sum(charged_bytes),0) FROM starexec.solver_build_storage_charges
-        WHERE owner_id=_a.origin_owner_id AND released_at IS NULL) THEN RETURN FALSE; END IF;
+    IF _usage<starexec.active_execution_storage_bytes(_a.origin_owner_id) THEN RETURN FALSE; END IF;
     SELECT * INTO _r FROM starexec.execution_storage_resources WHERE resource_key=_key FOR UPDATE NOWAIT;
     IF NOT FOUND OR _r.observed_identity IS DISTINCT FROM _identity OR _r.capacity_bytes>_c.limit_bytes
         OR NOT starexec.execution_storage_root_unreferenced(_r.root_path)
@@ -57,7 +56,7 @@ BEGIN
         OR starts_with(_r.root_path,_source || '/') THEN RETURN FALSE; END IF;
     SELECT * INTO _l FROM starexec.solver_build_storage_leases WHERE artifact_id=_artifact FOR UPDATE NOWAIT;
     IF FOUND THEN RETURN _l.execution_token=_token AND _l.resource_key=_key AND _l.released_at IS NULL; END IF;
-    IF _a.engine_identity IS NOT NULL OR EXISTS (SELECT 1 FROM starexec.solver_build_storage_leases
+    IF _a.engine_identity IS NOT NULL OR EXISTS (SELECT 1 FROM starexec.execution_storage_claims
         WHERE resource_key=_key AND released_at IS NULL) THEN RETURN FALSE; END IF;
     INSERT INTO starexec.solver_build_storage_leases(artifact_id,execution_token,resource_key)
         VALUES (_artifact,_token,_key);

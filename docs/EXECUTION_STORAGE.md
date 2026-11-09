@@ -54,13 +54,33 @@ An ambiguous cleanup cannot return a resource to the pool. Multiple executions
 must never share one resource, including through a second path or after restart.
 
 `ExecutionStorageLeases` records immutable resource identity and capacity in
-PostgreSQL. One partial unique index permits only one unreleased build lease per
-resource. Acquisition checks the exact current artifact, attempt, token, source,
+PostgreSQL. One shared partial unique index permits only one unreleased claim per
+resource across builds and ordinary jobs. Build leases are mirrored with their
+original identity and timestamps, including released history; migration does not
+book their allowances again. Acquisition checks the exact current artifact, attempt, token, source,
 staging path and fully booked allowance. The entire observed filesystem must fit
 that allowance. Existing build locks precede nonwaiting account/resource locks;
 contention refuses the operation without a partial engine binding. Standalone
 transactions restore connection state, and refused admission rolls back a newly
 inserted lease. A connection close or controller restart does not release it.
+
+`JobStorageLeases` provides ordinary-job reservations under the same resource
+registry. A reservation binds the current pair, attempt, accounting owner and
+prior backend execution ID, and books the entire observed resource capacity.
+Retrying the same token acknowledges the existing reservation without a second
+charge. A different token, stale attempt, changed identity, unavailable quota or
+competing build/job claim is refused. Active ownership prevents pair and owner
+deletion; released history remains immutable after the pair is removed.
+
+The ordinary-job adapter consumes a one-way storage-use marker before the first
+filesystem mutation. That marker grants no engine admission. Only a never-used,
+independently reobserved empty resource can be reclaimed by this adapter; beginning
+use, an uncertain commit or a changed current attempt retains ownership and its
+charge. A settled retry acknowledges history without inspecting or changing the
+resource's next owner. Positive process termination, private runtime mounts,
+output promotion and cleanup for ordinary jobs still require separate runtime
+wiring. These reservation methods do not replace the existing ordinary dispatcher
+or establish complete solver-run isolation.
 
 `SolverBuildStaging.prepareLeased` commits resource registration, the exact
 positive staging allowance and the exclusive lease together before its first

@@ -559,7 +559,11 @@ class ExecutionStorageLeaseSqlTest extends Common {
     @Test void settledCleanupAndPositiveEmptyObservationReleaseOnceAndPermitReuse() throws Exception {
         assertTrue(ExecutionStorageLeases.reserve(connection, build, resource)); cleaned();
         assertEquals(1, leases());
+        assertEquals(1, number(connection, "SELECT count(*) FROM starexec.execution_storage_claims WHERE resource_key=? AND released_at IS NULL", key));
         assertTrue(ExecutionStorageLeases.release(connection, build, resource)); assertEquals(0, leases());
+        assertEquals(0, number(connection, "SELECT count(*) FROM starexec.execution_storage_claims WHERE resource_key=? AND released_at IS NULL", key));
+        assertEquals(1, number(connection, "SELECT count(*) FROM starexec.execution_storage_claims c JOIN starexec.solver_build_storage_leases l"
+                + " ON l.artifact_id=c.build_artifact_id WHERE l.artifact_id=? AND c.released_at=l.released_at", build.artifactId()));
         long released = number(connection, "SELECT (extract(epoch from released_at)*1000000)::bigint FROM starexec.solver_build_storage_leases WHERE artifact_id=?", build.artifactId());
         assertTrue(ExecutionStorageLeases.release(connection, build, resource));
         assertEquals(released, number(connection, "SELECT (extract(epoch from released_at)*1000000)::bigint FROM starexec.solver_build_storage_leases WHERE artifact_id=?", build.artifactId()));

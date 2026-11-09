@@ -339,7 +339,7 @@ public final class ExecutionStorageLeases {
                 + " FROM starexec.execution_storage_resources r JOIN starexec.users u ON u.id=?"
                 + " WHERE r.capacity_bytes<=CASE WHEN u.disk_size>=0 AND u.disk_quota>=u.disk_size"
                 + " THEN u.disk_quota-u.disk_size END"
-                + " AND NOT EXISTS (SELECT 1 FROM starexec.solver_build_storage_leases l"
+                + " AND NOT EXISTS (SELECT 1 FROM starexec.execution_storage_claims l"
                 + " WHERE l.resource_key=r.resource_key AND l.released_at IS NULL)"
                 + " ORDER BY r.capacity_bytes,r.resource_key")) {
             statement.setInt(1, owner);
