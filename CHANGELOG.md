@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Collect runtime mount identity for the exact prepared inputs, preserving scientific filenames without shell interpolation.
 - Configure private ordinary scripts without shared writable paths and retain final files for trusted cleanup.
 - Bind private ordinary creation policies to exact prepared inputs and durable ownership without replay permission.
+- Preserve real provider zero timestamps when recording a positively never-started ordinary container, without granting payload release or storage settlement.
 
 - Serialize dedicated storage ownership across solver builds and ordinary job
   attempts, preserving build lease history and booking each job allowance once.

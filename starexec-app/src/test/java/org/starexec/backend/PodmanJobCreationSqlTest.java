@@ -127,6 +127,122 @@ class PodmanJobCreationSqlTest extends Common {
         return adapter.plan(connection,JobExecutionProtocol.maximumExecutionId(connection)+1,limits(),sources(adapter),
                 Map.of("starexec.partition.index","0"),transport);
     }
+
+    private JobExecutionProtocol.Receipt receipt(JobExecutionProtocol.Creation saved,JobExecutionProtocol.Phase phase,
+            com.fasterxml.jackson.databind.node.ObjectNode facts) {
+        var value=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        var operation=UUID.randomUUID();String engine="podman:"+saved.executionId()+":"+"c".repeat(64);
+        value.put("version",1);value.put("kind",phase.name());value.put("execution_token",saved.token().toString());
+        value.put("pair_id",saved.pairId());value.put("attempt_no",saved.attemptNo());value.put("owner_id",saved.ownerId());
+        value.put("resource_key",saved.resourceKey());value.put("resource_identity",saved.resourceIdentity());
+        value.put("operation_token",operation.toString());value.put("engine_identity",engine);
+        value.put("request_sha256",saved.sha256());value.put("preparation_sha256",saved.preparationFingerprint());
+        value.set("facts",facts);String payload=value.toString();
+        return new JobExecutionProtocol.Receipt(saved.token(),phase,operation,engine,payload,JobExecutionProtocol.digest(payload));
+    }
+
+    private com.fasterxml.jackson.databind.node.ObjectNode neverStartedFacts() {
+        var facts=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        facts.put("resource_id","c".repeat(64));facts.put("image_id",IMAGE);
+        facts.put("status","created");facts.put("pid",0);facts.put("running",false);facts.put("paused",false);
+        facts.put("restarting",false);facts.put("privileged",false);facts.put("private_pid_namespace",true);
+        facts.put("restart_policy","no");facts.put("started_at","0001-01-01T00:00:00Z");
+        facts.put("finished_at","0001-01-01T00:00:00Z");facts.put("exit_code",0);facts.put("disposition","never_started");
+        return facts;
+    }
+
+    private com.github.dockerjava.api.command.InspectContainerResponse neverStartedInspection(JobExecutionProtocol.Creation request)
+            throws Exception {
+        var mapper=com.github.dockerjava.core.DockerClientConfig.getDefaultObjectMapper();
+        var declared=mapper.readTree(request.payload());var tree=mapper.createObjectNode();
+        tree.put("Id","c".repeat(64));tree.put("Name","/"+request.name());tree.put("Image",request.image());
+        var state=tree.putObject("State");state.put("Status","created");state.put("Pid",0);state.put("ExitCode",0);
+        state.put("Running",false);state.put("Paused",false);state.put("Restarting",false);
+        state.put("StartedAt","0001-01-01T00:00:00Z");state.put("FinishedAt","0001-01-01T00:00:00Z");
+        com.fasterxml.jackson.databind.node.ObjectNode host=declared.path("HostConfig").deepCopy();
+        // These effective provider facts are not implied by omitted request fields.
+        host.put("PidMode","private");
+        host.putObject("RestartPolicy").put("Name","no");tree.set("HostConfig",host);
+        var config=tree.putObject("Config");
+        for (String name:new String[]{"Labels","User","Entrypoint","Cmd","WorkingDir","Healthcheck"})
+            config.set(name,declared.path(name));
+        config.put("StopSignal","15");
+        var result=mapper.treeToValue(tree,com.github.dockerjava.api.command.InspectContainerResponse.class);
+        assertEquals("15",((Map<?,?>)result.getRawValues().get("Config")).get("StopSignal"));
+        return result;
+    }
+
+    @Test void neverStartedCreationConservesRawTimesWithoutReleasingPayload() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();
+        var facts=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        facts.put("resource_id","c".repeat(64));facts.put("image_id",IMAGE);facts.put("container_name",saved.name());
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt(saved,JobExecutionProtocol.Phase.CREATED,facts)));
+        var stop=receipt(saved,JobExecutionProtocol.Phase.STOP,neverStartedFacts());
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,stop));
+        assertFalse(JobExecutionProtocol.recordReceipt(connection,active,resource,stop));
+        assertEquals(stop,JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).orElseThrow());
+        assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.RELEASE).isEmpty());
+        assertNull(JobStorageLeases.find(connection,lease.token()).orElseThrow().releasedAt());
+        assertFalse(adapter.claimCreation(connection));verify(client,never()).startContainerCmd(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"running","paused","restarting","pid","privileged","private_pid_namespace",
+            "restart_policy","image_id","resource_id","started_at","finished_at","exit_code","status","disposition","null_disposition"})
+    void incompleteNeverStartedScopesCannotBypassStopGuards(String field) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();
+        var facts=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        facts.put("resource_id","c".repeat(64));facts.put("image_id",IMAGE);facts.put("container_name",saved.name());
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt(saved,JobExecutionProtocol.Phase.CREATED,facts)));
+        var invalid=neverStartedFacts();
+        switch(field) {
+            case "running","paused","restarting","privileged" -> invalid.put(field,true);
+            case "pid","exit_code" -> invalid.put(field,1);
+            case "private_pid_namespace" -> invalid.put(field,false);
+            case "restart_policy" -> invalid.put(field,"always");
+            case "image_id","resource_id" -> invalid.put(field,"different");
+            case "started_at","finished_at" -> invalid.put(field,"2026-01-01T00:00:01Z");
+            case "status" -> invalid.put(field,"running");
+            case "disposition" -> invalid.remove(field);
+            case "null_disposition" -> invalid.putNull("disposition");
+            default -> throw new AssertionError(field);
+        }
+        var stop=receipt(saved,JobExecutionProtocol.Phase.STOP,invalid);
+        assertThrows(SQLException.class,()->JobExecutionProtocol.recordReceipt(connection,active,resource,stop));
+        assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).isEmpty());
+        assertNull(JobStorageLeases.find(connection,lease.token()).orElseThrow().releasedAt());
+    }
+
+    @Test void typedNeverStartedObservationPersistsWithoutGrantingRelease() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();
+        var facts=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        facts.put("resource_id","c".repeat(64));facts.put("image_id",IMAGE);facts.put("container_name",saved.name());
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt(saved,JobExecutionProtocol.Phase.CREATED,facts)));
+        var stop=PodmanJobNonExecution.observe(saved,"c".repeat(64),neverStartedInspection(saved),UUID.randomUUID());
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,stop));
+        assertEquals(stop,JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).orElseThrow());
+        var release=receipt(saved,JobExecutionProtocol.Phase.RELEASE,new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode());
+        assertThrows(SQLException.class,()->JobExecutionProtocol.recordReceipt(connection,active,resource,release));
+        assertNull(JobStorageLeases.find(connection,lease.token()).orElseThrow().releasedAt());
+    }
+
+    @Test void releasedPayloadCannotBeReclassifiedAsNeverStarted() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();
+        var facts=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        facts.put("resource_id","c".repeat(64));facts.put("image_id",IMAGE);facts.put("container_name",saved.name());
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt(saved,JobExecutionProtocol.Phase.CREATED,facts)));
+        var runtime=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        runtime.put("runtime_payload","{\"version\":1,\"observation\":{\"startTicks\":1,\"memoryBytes\":1024,"
+                +"\"pids\":16,\"cpus\":\"0\",\"namespaces\":{\"pid\":\"pid:[1]\",\"ipc\":\"ipc:[2]\","
+                +"\"net\":\"net:[3]\",\"mnt\":\"mnt:[4]\",\"user\":\"user:[5]\",\"cgroup\":\"cgroup:[6]\"}}}");
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt(saved,JobExecutionProtocol.Phase.RELEASE,runtime)));
+        var stop=receipt(saved,JobExecutionProtocol.Phase.STOP,neverStartedFacts());
+        assertThrows(SQLException.class,()->JobExecutionProtocol.recordReceipt(connection,active,resource,stop));
+        assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).isEmpty());
+    }
     @ParameterizedTest @ValueSource(strings={"JAVA","CURL"})
     void privateCreationConservesTheFirstAcknowledgementAndRecovers(String transport) throws Exception {
         var adapter=prepare();var prepared=adapter.preparation(connection);

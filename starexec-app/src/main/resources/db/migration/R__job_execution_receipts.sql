@@ -85,18 +85,32 @@ BEGIN
         IF (_facts @> jsonb_build_object('resource_id',split_part(NEW.engine_identity,':',3),
             'image_id',_request.image_identity,'pid',0,'running',FALSE,'paused',FALSE,'restarting',FALSE,
             'privileged',FALSE,'private_pid_namespace',TRUE,'restart_policy','no')
-            AND _facts->>'status' IN ('exited','dead')
             AND jsonb_typeof(_facts->'finished_at')='string'
             AND jsonb_typeof(_facts->'started_at')='string'
             AND jsonb_typeof(_facts->'exit_code')='number'
             AND (_facts->>'exit_code') ~ '^-?[0-9]+$') IS DISTINCT FROM TRUE THEN
             RAISE EXCEPTION 'Ordinary stop requires a complete positively stopped provider scope';
         END IF;
-        _finished := (_facts->>'finished_at')::timestamptz;
-        IF _finished IS NULL OR NOT isfinite(_finished) OR _finished<='epoch'::timestamptz
-            OR NOT isfinite((_facts->>'started_at')::timestamptz)
-            OR (_facts->>'started_at')::timestamptz>_finished THEN
-            RAISE EXCEPTION 'Ordinary stop time observations are invalid';
+        IF _facts->>'status'='created' THEN
+            -- A never-started provider retains zero dates; they are not completion times.
+            IF _facts->>'disposition' IS DISTINCT FROM 'never_started'
+                OR (_facts->>'started_at')::timestamptz IS DISTINCT FROM '0001-01-01T00:00:00Z'::timestamptz
+                OR (_facts->>'finished_at')::timestamptz IS DISTINCT FROM '0001-01-01T00:00:00Z'::timestamptz
+                OR (_facts->>'exit_code')::numeric<>0
+                OR EXISTS (SELECT 1 FROM starexec.job_execution_receipts
+                    WHERE execution_token=NEW.execution_token AND receipt_kind='RELEASE') THEN
+                RAISE EXCEPTION 'Ordinary created stop requires an unreleased positively never-started scope';
+            END IF;
+        ELSE
+            IF (_facts->>'status' IN ('exited','dead')) IS DISTINCT FROM TRUE THEN
+                RAISE EXCEPTION 'Ordinary stop requires a complete positively stopped provider scope';
+            END IF;
+            _finished := (_facts->>'finished_at')::timestamptz;
+            IF _finished IS NULL OR NOT isfinite(_finished) OR _finished<='epoch'::timestamptz
+                OR NOT isfinite((_facts->>'started_at')::timestamptz)
+                OR (_facts->>'started_at')::timestamptz>_finished THEN
+                RAISE EXCEPTION 'Ordinary stop time observations are invalid';
+            END IF;
         END IF;
         IF _facts ? 'disposition' AND (jsonb_typeof(_facts->'disposition')='string'
             AND _facts->>'disposition' IN ('cancelled','never_started')) IS DISTINCT FROM TRUE THEN

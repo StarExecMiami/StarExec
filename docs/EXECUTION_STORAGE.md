@@ -165,6 +165,16 @@ must be coupled before the ordinary dispatcher can use this protocol.
 Creation and phase mutations require a read-committed transaction: an older
 snapshot could otherwise miss newly consumed creation or cleanup intent.
 
+`PodmanJobNonExecution` validates a never-started ordinary container against the
+conserved name, image, ownership labels and trusted launcher. It requires the
+provider's `created` state, zero process ID, false execution flags, private process
+namespace, no restart and unchanged zero start/finish timestamps. The stop receipt
+preserves those raw timestamps; its observation time is separate. The SQL protocol
+accepts this case only with `never_started` disposition and no consumed payload
+release. Normal execution still requires a positively stopped terminal state and
+valid completion times. This observation alone neither removes a provider resource,
+settles used storage nor authorizes scientific output or a replacement execution.
+
 The ordinary-job adapter consumes a one-way storage-use marker before the first
 filesystem mutation. That marker grants no engine admission. Only a never-used,
 independently reobserved empty resource can be reclaimed by this adapter; beginning
