@@ -498,7 +498,11 @@ class ExecutionStorageLeaseSqlTest extends Common {
                 try (Connection observer = Common.getConnection()) {
                     ready.countDown(); assertTrue(go.await(5, TimeUnit.SECONDS));
                     try { return ExecutionStorageLeases.reserve(observer, context, resource); }
-                    catch (SQLException busy) { assertEquals("55P03", busy.getSQLState()); return false; }
+                    catch (SQLException busy) {
+                        assertEquals("55P03", busy.getSQLState(), () -> busy+"; cause="+busy.getCause()
+                                +"; suppressed="+java.util.Arrays.toString(busy.getSuppressed()));
+                        return false;
+                    }
                 }
             })).toList();
             assertTrue(ready.await(5, TimeUnit.SECONDS)); go.countDown();

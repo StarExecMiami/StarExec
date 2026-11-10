@@ -419,9 +419,14 @@ class JobStorageLeaseSqlTest extends Common {
     @Test void contendedResourceRefusesWithoutLeavingAJobCharge() throws Exception {
         try (var holder = Common.getConnection()) {
             holder.setAutoCommit(false);
-            number(holder, "SELECT capacity_bytes FROM starexec.execution_storage_resources WHERE resource_key=? FOR UPDATE", key);
-            assertThrows(SQLException.class, this::reserve);
-            assertEquals(20, usage()); assertEquals(0, active()); holder.rollback();
+            try {
+                number(holder, "SELECT capacity_bytes FROM starexec.execution_storage_resources WHERE resource_key=? FOR UPDATE", key);
+                assertThrows(SQLException.class, this::reserve);
+                assertEquals(20, usage()); assertEquals(0, active());
+            } finally {
+                try { holder.rollback(); }
+                finally { holder.setAutoCommit(true); }
+            }
         }
     }
 
