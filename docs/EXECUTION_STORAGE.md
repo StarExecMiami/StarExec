@@ -206,6 +206,14 @@ verified copy. The existing attempt fence still rejects stale reports first.
 Unregistered pairs, including other pairs of the same job, keep the legacy
 statistics and difference-based accounting behavior.
 
+Legacy pair refunds and reruns, job deletion and size replacement refuse an
+unsettled ordinary storage claim or output allocation in their scope. Whole-user
+reconciliation also refuses these allocations instead of discarding their booked
+allowances. A rerun protects job and owner versions even when stage disk usage is
+zero, so an older repeatable-read snapshot cannot overlook a new admission.
+Unrelated legacy jobs and settled ordinary claims keep their existing behavior;
+pair deletion remains protected by its atomic storage-ownership guard.
+
 `JobOutputReservations` verifies typed allocation readback against the immutable
 request. Pending allocations remain charged and prevent owner/pair deletion,
 including after execution storage is reclaimed. A reservation is neither a

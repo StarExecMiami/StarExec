@@ -1321,6 +1321,131 @@ class PodmanJobCreationSqlTest extends Common {
         assertEquals(0,number("SELECT count(*) FROM starexec.nodes WHERE name=?",node));
     }
 
+    private void legacyDiskMutation(String operation,int selectedPair,int selectedJob,int selectedOwner) throws SQLException {
+        String sql=switch(operation) {
+            case "pair-refund" -> "SELECT starexec.RemoveJobPairDiskSize(?)";
+            case "delete-job" -> "SELECT starexec.DeleteJob(?)";
+            case "job-usage" -> "SELECT starexec.UpdateJobDiskSize(?,0)";
+            case "rerun" -> "SELECT starexec.RerunJobPairsBatchCore(ARRAY[?]::integer[])";
+            case "user-usage" -> "SELECT starexec.UpdateUserDiskUsage(?)";
+            case "delete-pair" -> "SELECT starexec.DeleteJobPair(?)";
+            default -> throw new IllegalArgumentException("Unknown legacy accounting operation");
+        };
+        try(var query=connection.prepareStatement(sql)) {
+            query.setInt(1,operation.equals("user-usage")?selectedOwner:
+                    operation.equals("delete-job") || operation.equals("job-usage")?selectedJob:selectedPair);
+            Common.executeAndDrain(query);
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings={"pair-refund","delete-job","job-usage","rerun","user-usage","delete-pair"})
+    void unsettledOrdinaryOutputRefusesLegacyRefundOrReset(String operation) throws Exception {
+        var fixture=nonemptyRetentionFixture();Path parent=outputParent();
+        assertTrue(PodmanJobOutput.retainStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+        var allocation=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        var beforeFiles=org.starexec.jobs.JobOutputCopy.verify(allocation);long originalUsage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        long[] measured={-1,-1,-1,-1};connection.setAutoCommit(false);
+        try {
+            // Project the planned job/statistics bridge from measured bytes without a second owner charge.
+            number("UPDATE starexec.jobs SET disk_size=? WHERE id=? RETURNING id",allocation.chargedBytes(),job);
+            number("UPDATE starexec.jobpair_stage_data SET disk_size=? WHERE jobpair_id=? AND stage_number=1 RETURNING jobpair_id",allocation.chargedBytes(),pair);
+            long assets=number("SELECT COALESCE((SELECT sum(disk_size) FROM starexec.solvers WHERE user_id=?),0)+COALESCE((SELECT sum(disk_size) FROM starexec.benchmarks WHERE user_id=?),0)",owner,owner);
+            number("UPDATE starexec.users SET disk_size=disk_size+? WHERE id=? RETURNING id",assets,owner);
+            if(operation.equals("rerun")) {
+                number("UPDATE starexec.job_pairs SET status_code=7 WHERE id=? RETURNING id",pair);
+                number("SELECT id FROM starexec.job_pairs WHERE id=? FOR UPDATE",pair);
+            }
+            var refused=assertThrows(SQLException.class,()->{
+                legacyDiskMutation(operation,pair,job,owner);
+                measured[0]=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+                measured[1]=number("SELECT starexec.active_execution_storage_bytes(?)",owner);
+                measured[2]=number("SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",pair);
+                measured[3]=org.starexec.jobs.JobOutputCopy.verify(allocation).byteSize();
+            },()->"Legacy "+operation+" returned while bytes remain: user="+measured[0]+", managed minimum="+measured[1]+", attempt="+measured[2]+", retained bytes="+measured[3]);
+            assertEquals(operation.equals("delete-pair")?"P0001":"55000",refused.getSQLState());
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(originalUsage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertEquals(0,number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
+        assertEquals(1,number("SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",pair));
+        assertEquals(allocation,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(beforeFiles,org.starexec.jobs.JobOutputCopy.verify(allocation));
+    }
+
+    @Test void oldSnapshotRerunCannotMissNewOrdinaryStorageAdmission() throws Exception {
+        int otherOwner=(int)number("INSERT INTO starexec.users(email,first_name,last_name,institution,created,password,disk_quota,job_pair_quota,disk_size)"
+                +" VALUES (?,'Reset','Fixture','synthetic',now(),'synthetic',1024,100,0) RETURNING id","reset-"+UUID.randomUUID()+"@example.invalid");
+        int otherJob=(int)number("INSERT INTO starexec.jobs(user_id,name,total_pairs,disk_size,buildjob) VALUES (?,'reset snapshot',1,0,false) RETURNING id",otherOwner);
+        int otherPair=(int)number("INSERT INTO starexec.job_pairs(job_id,bench_id,status_code,primary_jobpair_data) VALUES (?,?,1,1) RETURNING id",otherJob,bench);
+        number("INSERT INTO starexec.jobpair_stage_data(jobpair_id,stage_number,status_code,solver_id,config_id,disk_size) VALUES (?,1,1,?,?,0) RETURNING jobpair_id",otherPair,solver,config);
+        try(var query=connection.prepareStatement("INSERT INTO starexec.job_pair_attempts(pair_id,current_attempt_no,updated_at) VALUES (?,1,now()) ON CONFLICT(pair_id) DO NOTHING")) {
+            query.setInt(1,otherPair);query.executeUpdate();
+        }
+        Path root=Files.createDirectory(files.resolve("reset-slot"),PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+        var otherResource=mock(DedicatedStorageResource.class);when(otherResource.root()).thenReturn(root);
+        when(otherResource.filesystemKey()).thenReturn(UUID.randomUUID().toString().replace("-",""));when(otherResource.identity()).thenReturn("synthetic-reset-resource");
+        when(otherResource.capacityBytes()).thenReturn(64L);when(otherResource.inodeLimit()).thenReturn(16L);
+        assertTrue(ExecutionStorageLeases.register(connection,otherResource));UUID token=UUID.randomUUID();
+        try(var snapshot=Common.getConnection()) {
+            int previous=snapshot.getTransactionIsolation();snapshot.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);snapshot.setAutoCommit(false);
+            try {
+                assertEquals(0,connectionNumber(snapshot,"SELECT disk_size FROM starexec.users WHERE id=?",otherOwner));
+                assertTrue(JobStorageLeases.reserve(connection,otherPair,1,token,otherResource));
+                assertEquals(64,number("SELECT disk_size FROM starexec.users WHERE id=?",otherOwner));
+                connectionNumber(snapshot,"SELECT id FROM starexec.job_pairs WHERE id=? FOR UPDATE",otherPair);
+                long[] attempted={-1};
+                var refused=assertThrows(SQLException.class,()->{
+                    try(var query=snapshot.prepareStatement("SELECT starexec.RerunJobPairsBatchCore(ARRAY[?]::integer[])")) {query.setInt(1,otherPair);Common.executeAndDrain(query);}
+                    attempted[0]=connectionNumber(snapshot,"SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",otherPair);
+                },()->"Old snapshot reset an admitted pair to attempt "+attempted[0]);
+                assertEquals("40001",refused.getSQLState());
+            } finally {
+                try {snapshot.rollback();} finally {snapshot.setAutoCommit(true);snapshot.setTransactionIsolation(previous);}
+            }
+        }
+        assertEquals(1,number("SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",otherPair));
+        assertEquals(64,number("SELECT disk_size FROM starexec.users WHERE id=?",otherOwner));
+        var saved=JobStorageLeases.find(connection,token).orElseThrow();assertNull(saved.releasedAt());assertNull(saved.useStartedAt());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"pair-refund","delete-job","job-usage","rerun","user-usage","delete-pair"})
+    void settledOrdinaryStoragePreservesLegacyRefundOrReset(String operation) throws Exception {
+        assertTrue(JobStorageLeases.releaseUnstarted(connection,lease.token(),resource));
+        assertEquals(0,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        connection.setAutoCommit(false);
+        try {
+            number("UPDATE starexec.jobs SET disk_size=5 WHERE id=? RETURNING id",job);
+            number("UPDATE starexec.jobpair_stage_data SET disk_size=5 WHERE jobpair_id=? AND stage_number=1 RETURNING jobpair_id",pair);
+            long assets=number("SELECT COALESCE((SELECT sum(disk_size) FROM starexec.solvers WHERE user_id=?),0)+COALESCE((SELECT sum(disk_size) FROM starexec.benchmarks WHERE user_id=?),0)",owner,owner);
+            number("UPDATE starexec.users SET disk_size=? WHERE id=? RETURNING id",assets+5,owner);
+            if(operation.equals("rerun")) number("SELECT id FROM starexec.job_pairs WHERE id=? FOR UPDATE",pair);
+            legacyDiskMutation(operation,pair,job,owner);
+            assertEquals(assets+(operation.equals("user-usage")?5:0),number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+            assertEquals(operation.equals("user-usage")?5:0,number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
+            assertNotNull(JobStorageLeases.find(connection,lease.token()).orElseThrow().releasedAt());
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(0,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertEquals(1,number("SELECT count(*) FROM starexec.job_pairs WHERE id=?",pair));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"pair-refund","delete-job","job-usage","rerun","delete-pair"})
+    void unrelatedLegacyJobPreservesRefundOrResetForTheSameOwner(String operation) throws Exception {
+        long originalUsage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        connection.setAutoCommit(false);
+        try {
+            int otherJob=(int)number("INSERT INTO starexec.jobs(user_id,name,total_pairs,disk_size,buildjob) VALUES (?,'unmanaged accounting',1,5,false) RETURNING id",owner);
+            int otherPair=(int)number("INSERT INTO starexec.job_pairs(job_id,bench_id,status_code,primary_jobpair_data) VALUES (?,?,7,1) RETURNING id",otherJob,bench);
+            number("INSERT INTO starexec.jobpair_stage_data(jobpair_id,stage_number,status_code,solver_id,config_id,disk_size) VALUES (?,1,7,?,?,5) RETURNING jobpair_id",otherPair,solver,config);
+            number("UPDATE starexec.users SET disk_size=disk_size+5 WHERE id=? RETURNING id",owner);
+            if(operation.equals("rerun")) number("SELECT id FROM starexec.job_pairs WHERE id=? FOR UPDATE",otherPair);
+            legacyDiskMutation(operation,otherPair,otherJob,owner);
+            assertEquals(originalUsage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+            assertEquals(0,number("SELECT disk_size FROM starexec.jobs WHERE id=?",otherJob));
+            assertEquals(1,number("SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",pair));
+            assertEquals(lease,JobStorageLeases.find(connection,lease.token()).orElseThrow());
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(originalUsage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+    }
+
     private StoppedOutputFixture stoppedOutputFixture() throws Exception {
         var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);var kernel=kernelPacket(adapter,saved);
         assertTrue(adapter.claimCreation(connection));assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));

@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Refuse premature legacy refunds, resets and quota reconciliation while ordinary execution storage remains unsettled.
 - Refuse legacy statistics accounting for registered ordinary executions while preserving unmanaged and stale-attempt behavior.
 - Retain bounded stopped ordinary output in immutable reserved copies and bind completion to exact bytes and directory ownership.
 - Conserve once-only ordinary output-copy claims and immutable copy-directory bindings before retained writes.

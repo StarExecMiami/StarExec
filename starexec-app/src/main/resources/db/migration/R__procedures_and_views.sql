@@ -1848,6 +1848,14 @@ BEGIN
             MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
     END IF;
 
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims
+        WHERE lease_kind='JOB' AND origin_pair_id=_jobPairId AND released_at IS NULL)
+        OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations
+            WHERE origin_pair_id=_jobPairId AND released_at IS NULL) THEN
+        RAISE EXCEPTION 'Ordinary storage must settle before legacy pair refunds'
+            USING ERRCODE='55000';
+    END IF;
+
 	SELECT SUM(disk_size) FROM starexec.jobpair_stage_data WHERE jobpair_id=_jobPairId INTO _sumDiskSize;
     _sumDiskSize := COALESCE(_sumDiskSize, 0);
 
@@ -3590,6 +3598,16 @@ BEGIN
             MESSAGE = format('Job %s not found', _jobId);
     END IF;
 
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims c
+        JOIN starexec.job_pairs p ON p.id=c.origin_pair_id
+        WHERE c.lease_kind='JOB' AND c.released_at IS NULL AND p.job_id=_jobId)
+        OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations r
+            JOIN starexec.job_pairs p ON p.id=r.origin_pair_id
+            WHERE r.released_at IS NULL AND p.job_id=_jobId) THEN
+        RAISE EXCEPTION 'Ordinary storage must settle before legacy job deletion'
+            USING ERRCODE='55000';
+    END IF;
+
     UPDATE jobs SET deleted = true, total_pairs = 0, disk_size = 0
     WHERE id = _jobId;
     IF NOT FOUND THEN
@@ -3626,6 +3644,16 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims c
+        JOIN starexec.job_pairs p ON p.id=c.origin_pair_id
+        WHERE c.lease_kind='JOB' AND c.released_at IS NULL AND p.job_id=_jobId)
+        OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations r
+            JOIN starexec.job_pairs p ON p.id=r.origin_pair_id
+            WHERE r.released_at IS NULL AND p.job_id=_jobId) THEN
+        RAISE EXCEPTION 'Ordinary storage must settle before legacy job accounting'
+            USING ERRCODE='55000';
     END IF;
 
     UPDATE jobs SET disk_size = _diskSize
@@ -9591,6 +9619,14 @@ BEGIN
     SELECT disk_size INTO _userDiskSize FROM starexec.users
     WHERE id = _userID FOR NO KEY UPDATE;
 
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims
+        WHERE lease_kind='JOB' AND origin_owner_id=_userID AND released_at IS NULL)
+        OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations
+            WHERE origin_owner_id=_userID AND released_at IS NULL) THEN
+        RAISE EXCEPTION 'Ordinary storage must settle before legacy user reconciliation'
+            USING ERRCODE='55000';
+    END IF;
+
     SELECT COALESCE(SUM(disk_size), 0) INTO _sumDiskSize FROM
     (SELECT disk_size FROM starexec.solvers WHERE user_id = _userID AND deleted = false
      UNION ALL
@@ -10523,6 +10559,11 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION starexec.RerunJobPairsBatchCore(_pairIds INT[])
 RETURNS VOID AS $$
 BEGIN
+    -- Zero-byte reruns still protect job ownership before locking user accounting.
+    PERFORM j.id FROM starexec.jobs j
+    WHERE j.id IN (SELECT p.job_id FROM starexec.job_pairs p WHERE p.id=ANY(_pairIds))
+    ORDER BY j.id FOR NO KEY UPDATE;
+
     -- 1. Identify pairs and reclaim disk size from jobs
     UPDATE starexec.jobs j
     SET disk_size = GREATEST(j.disk_size - sub.reclaim, 0)
@@ -10546,6 +10587,21 @@ BEGIN
        SET completed = NULL
      WHERE j.completed IS NOT NULL
        AND j.id IN (SELECT jp.job_id FROM starexec.job_pairs jp WHERE jp.id = ANY(_pairIds));
+
+    -- A new storage admission changes this row even when no stage bytes exist.
+    -- Locking it also rejects an older repeatable-read snapshot before the reset.
+    PERFORM u.id FROM starexec.users u
+    WHERE u.id IN (SELECT j.user_id FROM starexec.jobs j
+        JOIN starexec.job_pairs p ON p.job_id=j.id WHERE p.id=ANY(_pairIds))
+    ORDER BY u.id FOR NO KEY UPDATE;
+
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims
+        WHERE lease_kind='JOB' AND origin_pair_id=ANY(_pairIds) AND released_at IS NULL)
+        OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations
+            WHERE origin_pair_id=ANY(_pairIds) AND released_at IS NULL) THEN
+        RAISE EXCEPTION 'Ordinary storage must settle before a legacy rerun'
+            USING ERRCODE='55000';
+    END IF;
 
     -- 2. Reclaim disk size from users
     UPDATE starexec.users u
