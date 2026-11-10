@@ -132,12 +132,18 @@ class PodmanJobCreationSqlTest extends Common {
         final java.util.concurrent.atomic.AtomicInteger posts=new java.util.concurrent.atomic.AtomicInteger();
         final java.util.concurrent.atomic.AtomicReference<byte[]> bytes=new java.util.concurrent.atomic.AtomicReference<>();
         final java.util.concurrent.atomic.AtomicBoolean durable=new java.util.concurrent.atomic.AtomicBoolean();
+        final java.util.concurrent.atomic.AtomicInteger inspections=new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger starts=new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicBoolean startDurable=new java.util.concurrent.atomic.AtomicBoolean();
         final java.util.concurrent.atomic.AtomicReference<Throwable> failure=new java.util.concurrent.atomic.AtomicReference<>();
         private final Thread thread;
         private volatile boolean closed;
         private volatile java.nio.channels.SocketChannel current;
 
         CreateServer(JobExecutionProtocol.Creation expected,String outcome) throws Exception {
+            this(expected,outcome,false);
+        }
+        CreateServer(JobExecutionProtocol.Creation expected,String outcome,boolean lifecycle) throws Exception {
             peer.configureBlocking(false);
             thread=new Thread(()->{
                 while (!closed) {
@@ -155,11 +161,15 @@ class PodmanJobCreationSqlTest extends Common {
                             }
                             if (header.size()==0) continue;
                             String text=header.toString(java.nio.charset.StandardCharsets.US_ASCII);
-                            assertTrue(text.startsWith("POST /v1.41/containers/create?name="+expected.name()+" HTTP/1.1\r\n"));
+                            boolean creating=text.startsWith("POST /v1.41/containers/create?name="+expected.name()+" HTTP/1.1\r\n");
+                            boolean inspecting=lifecycle && text.startsWith("GET /v1.41/containers/"+"c".repeat(64)+"/json HTTP/1.1\r\n");
+                            boolean starting=lifecycle && text.startsWith("POST /v1.41/containers/"+"c".repeat(64)+"/start HTTP/1.1\r\n");
+                            assertTrue(creating || inspecting || starting);
                             if(text.toLowerCase(java.util.Locale.ROOT).contains("\r\nexpect: 100-continue\r\n")) {
                                 var output=java.nio.channels.Channels.newOutputStream(accepted);
                                 output.write("HTTP/1.1 100 Continue\r\n\r\n".getBytes(java.nio.charset.StandardCharsets.US_ASCII));output.flush();
                             }
+                            byte[] requestBody;
                             if(text.toLowerCase(java.util.Locale.ROOT).contains("\r\ntransfer-encoding: chunked\r\n")) {
                                 var body=new java.io.ByteArrayOutputStream();
                                 while(true) {
@@ -169,36 +179,58 @@ class PodmanJobCreationSqlTest extends Common {
                                     byte[] chunk=input.readNBytes(length);assertEquals(length,chunk.length);body.write(chunk);
                                     assertEquals('\r',input.read());assertEquals('\n',input.read());
                                 }
-                                bytes.set(body.toByteArray());
+                                requestBody=body.toByteArray();
                             } else {
-                                int length=-1;
+                                int length=inspecting?0:-1;
                                 for (String line:text.split("\r\n")) if (line.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:"))
                                     length=Integer.parseInt(line.substring(line.indexOf(':')+1).strip());
-                                assertTrue(length>=0 && length<=16777216);bytes.set(input.readNBytes(length));
+                                assertTrue(length>=0 && length<=16777216);requestBody=input.readNBytes(length);
                             }
-                            posts.incrementAndGet();
+                            if(creating) bytes.set(requestBody);else assertEquals(0,requestBody.length);
+                            if(creating) posts.incrementAndGet();
+                            if(inspecting) inspections.incrementAndGet();
+                            if(starting) starts.incrementAndGet();
                             try (var observer=Common.getConnection()) {
-                                durable.set(expected.equals(JobExecutionProtocol.findCreation(observer,expected.token()).orElse(null)));
+                                if(creating) durable.set(expected.equals(JobExecutionProtocol.findCreation(observer,expected.token()).orElse(null)));
+                                if(starting) {
+                                    var saved=JobExecutionProtocol.findReceipt(observer,expected.token(),JobExecutionProtocol.Phase.CREATED).orElseThrow();
+                                    startDurable.set(new com.fasterxml.jackson.databind.ObjectMapper().readTree(saved.payload()).path("facts").path("start_requested").booleanValue());
+                                }
+                                if(creating && outcome.equals("cancel")) try(var update=observer.prepareStatement("UPDATE starexec.jobs SET killed=true WHERE id=?")) {
+                                    update.setInt(1,job);assertEquals(1,update.executeUpdate());
+                                }
                             }
-                            if (outcome.equals("lost")) continue;
-                            if (outcome.equals("timeout")) {while(!closed) Thread.sleep(5);continue;}
+                            String responseOutcome=outcome;
+                            if(lifecycle) {
+                                String prefix=creating?"create-":inspecting?"inspect-":"start-";
+                                responseOutcome=outcome.startsWith(prefix)?outcome.substring(prefix.length()):"success";
+                            }
+                            if (responseOutcome.equals("lost")) continue;
+                            if (responseOutcome.equals("timeout")) {while(!closed) Thread.sleep(5);continue;}
                             String body="{\"Id\":\""+"c".repeat(64)+"\"}";
-                            if (outcome.equals("duplicate")) body="{\"Id\":\""+"c".repeat(64)+"\",\"Id\":\""+"d".repeat(64)+"\"}";
-                            if (outcome.equals("oversize")) body="x".repeat(20000);
-                            int status=outcome.equals("503")?503:outcome.equals("429")?429:outcome.equals("redirect")?302:201;
+                            if(inspecting) {
+                                var fields=createdInspectionTree(expected);
+                                if(responseOutcome.equals("wrong")) fields.put("Image","sha256:"+"d".repeat(64));
+                                body=fields.toString();
+                            }
+                            if(starting) body="";
+                            if (responseOutcome.equals("duplicate")) body="{\"Id\":\""+"c".repeat(64)+"\",\"Id\":\""+"d".repeat(64)+"\"}";
+                            if (responseOutcome.equals("oversize")) body="x".repeat(inspecting?16777217:20000);
+                            int status=responseOutcome.equals("503")?503:responseOutcome.equals("429")?429:responseOutcome.equals("redirect")?302:
+                                    responseOutcome.equals("already-running")?304:creating?201:inspecting?200:204;
                             byte[] reply=body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
                             String headers="HTTP/1.1 "+status+" Fixture\r\nContent-Type: application/json\r\nConnection: close\r\n"
-                                    +(outcome.equals("redirect")?"Location: /another\r\n":"")+"Content-Length: "+reply.length+"\r\n\r\n";
+                                    +(responseOutcome.equals("redirect")?"Location: /another\r\n":"")+"Content-Length: "+reply.length+"\r\n\r\n";
                             var output=java.nio.channels.Channels.newOutputStream(accepted);
                             output.write(headers.getBytes(java.nio.charset.StandardCharsets.US_ASCII));output.flush();
-                            if(outcome.equals("body-timeout")) {
+                            if(responseOutcome.equals("body-timeout")) {
                                 output.write('{');output.flush();while(!closed) Thread.sleep(5);
-                            } else if(outcome.equals("dribble")) {
+                            } else if(responseOutcome.equals("dribble")) {
                                 for(byte part:reply) {output.write(part);output.flush();Thread.sleep(400);}
                             } else {output.write(reply);output.flush();}
                         } finally {current=null;}
                     } catch(Throwable error) {
-                        boolean expectedAbort=posts.get()>0 && (outcome.equals("body-timeout") || outcome.equals("dribble")) && error instanceof IOException;
+                        boolean expectedAbort=posts.get()>0 && (outcome.endsWith("body-timeout") || outcome.endsWith("dribble") || outcome.equals("inspect-oversize")) && error instanceof IOException;
                         if(!closed && !expectedAbort) failure.compareAndSet(null,error);
                     }
                 }
@@ -270,6 +302,92 @@ class PodmanJobCreationSqlTest extends Common {
             return children.filter(path->path.getFileName().toString().startsWith("starexec-ordinary-create-"))
                     .collect(java.util.stream.Collectors.toSet());
         }
+    }
+
+    private static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> heldOutcomes() {
+        return java.util.Arrays.stream(JobExecutionProtocol.Transport.values()).flatMap(transport->
+                java.util.stream.Stream.of("success","create-lost","inspect-lost","inspect-wrong","inspect-oversize","inspect-body-timeout","cancel",
+                        "start-lost","start-503","start-429","start-redirect","start-already-running","start-timeout")
+                        .map(outcome->org.junit.jupiter.params.provider.Arguments.of(transport,outcome)));
+    }
+
+    @ParameterizedTest @org.junit.jupiter.params.provider.MethodSource("heldOutcomes")
+    @org.junit.jupiter.api.Timeout(30)
+    void freshCreationStartsAHoldOnceOnlyAfterBothAcknowledgements(JobExecutionProtocol.Transport transport,String outcome) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,transport);var staging=transportStaging();
+        try(var server=new CreateServer(saved,outcome,true)) {
+            if(outcome.equals("success")) assertEquals(java.util.Optional.of("c".repeat(64)),
+                    PodmanJobTransport.createAndStartHeldOnce(connection,adapter,client,peerFiles.resolve("peer.sock").toString(),1,1));
+            else if(outcome.equals("cancel")) assertThrows(SQLException.class,
+                    ()->PodmanJobTransport.createAndStartHeldOnce(connection,adapter,client,peerFiles.resolve("peer.sock").toString(),1,1));
+            else assertThrows(IOException.class,
+                    ()->PodmanJobTransport.createAndStartHeldOnce(connection,adapter,client,peerFiles.resolve("peer.sock").toString(),1,1));
+            assertEquals(1,server.posts.get());assertTrue(server.durable.get());
+            assertArrayEquals(saved.payload().getBytes(java.nio.charset.StandardCharsets.UTF_8),server.bytes.get());
+            assertEquals(outcome.equals("create-lost")?0:1,server.inspections.get());
+            int starts=outcome.equals("success") || outcome.startsWith("start-")?1:0;
+            assertEquals(starts,server.starts.get());assertEquals(starts==1,server.startDurable.get());
+            assertTrue(PodmanJobTransport.createAndStartHeldOnce(connection,adapter,client,peerFiles.resolve("peer.sock").toString(),1,1).isEmpty());
+            assertEquals(1,server.posts.get());assertEquals(starts,server.starts.get());
+            assertTrue(JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.RELEASE).isEmpty());
+            assertNull(JobStorageLeases.find(connection,saved.token()).orElseThrow().releasedAt());
+            noTransportWorker();
+        }
+        assertEquals(staging,transportStaging());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"JAVA","CURL"})
+    void unknownStartClaimCommitCannotSendAStart(String transport) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.valueOf(transport));
+        var uncertain=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(connection));
+        var committed=new java.util.concurrent.atomic.AtomicBoolean();
+        doAnswer(call->{
+            boolean consumed=number("SELECT count(*) FROM starexec.job_execution_receipts WHERE execution_token=? AND receipt_kind='CREATED'",saved.token())>0;
+            connection.commit();if(consumed) {committed.set(true);throw new SQLException("Synthetic held-start reply loss");}return null;
+        }).when(uncertain).commit();
+        try(var server=new CreateServer(saved,"success",true)) {
+            assertThrows(SQLException.class,()->PodmanJobTransport.createAndStartHeldOnce(uncertain,adapter,client,peerFiles.resolve("peer.sock").toString(),1,1));
+            assertTrue(committed.get());assertEquals(1,server.posts.get());assertEquals(1,server.inspections.get());assertEquals(0,server.starts.get());
+            assertTrue(PodmanJobTransport.createAndStartHeldOnce(connection,adapter,client,peerFiles.resolve("peer.sock").toString(),1,1).isEmpty());
+            assertEquals(0,server.starts.get());noTransportWorker();
+        }
+    }
+
+    private static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> heldHistories() {
+        return java.util.Arrays.stream(JobExecutionProtocol.Transport.values()).flatMap(transport->java.util.stream.Stream.of(false,true)
+                .map(restored->org.junit.jupiter.params.provider.Arguments.of(transport,restored)));
+    }
+    @ParameterizedTest @org.junit.jupiter.params.provider.MethodSource("heldHistories")
+    void consumedCreationNeverRestartsFromWarmOrColdHistory(JobExecutionProtocol.Transport transport,boolean restored) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,transport);assertTrue(adapter.claimCreation(connection));
+        if(restored) adapter=PodmanJobCreation.restore(client,connection,saved,peerFiles.resolve("peer.sock").toString());
+        try(var server=new CreateServer(saved,"success",true)) {
+            assertTrue(PodmanJobTransport.createAndStartHeldOnce(connection,adapter,client,peerFiles.resolve("peer.sock").toString(),1,1).isEmpty());
+            assertEquals(0,server.posts.get());assertEquals(0,server.inspections.get());assertEquals(0,server.starts.get());noTransportWorker();
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings={"JAVA","CURL"})
+    @org.junit.jupiter.api.Timeout(30)
+    void interruptedHeldStartCannotLeaveAWorkerOrReplay(String transport) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.valueOf(transport));var staging=transportStaging();
+        var failure=new java.util.concurrent.atomic.AtomicReference<Throwable>();var interrupted=new java.util.concurrent.atomic.AtomicBoolean();
+        try(var server=new CreateServer(saved,"start-timeout",true)) {
+            Thread operation=new Thread(()->{
+                try {PodmanJobTransport.createAndStartHeldOnce(connection,adapter,client,peerFiles.resolve("peer.sock").toString(),1,10);}
+                catch(Throwable error) {failure.set(error);interrupted.set(Thread.currentThread().isInterrupted());}
+            },"synthetic-held-operation");
+            operation.start();
+            try {
+                long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+                while(!server.startDurable.get() && operation.isAlive() && System.nanoTime()<deadline) Thread.sleep(5);
+                assertTrue(server.startDurable.get());operation.interrupt();operation.join(7000);
+                assertFalse(operation.isAlive());assertInstanceOf(IOException.class,failure.get());assertTrue(interrupted.get());
+                assertTrue(PodmanJobTransport.createAndStartHeldOnce(connection,adapter,client,peerFiles.resolve("peer.sock").toString(),1,1).isEmpty());
+                assertEquals(1,server.starts.get());noTransportWorker();
+            } finally {operation.interrupt();operation.join(7000);assertFalse(operation.isAlive());}
+        }
+        assertEquals(staging,transportStaging());
     }
 
     @ParameterizedTest @org.junit.jupiter.params.provider.MethodSource("transportClaims")

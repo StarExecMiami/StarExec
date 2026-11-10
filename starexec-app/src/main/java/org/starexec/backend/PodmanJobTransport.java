@@ -22,26 +22,38 @@ import java.util.concurrent.TimeoutException;
 /** One acknowledged request permits one send; an uncertain response never permits another. */
 final class PodmanJobTransport {
     private static final int MAX_REPLY=16*1024;
+    private static final int MAX_INSPECTION=16*1024*1024;
     private static final ObjectMapper JSON=new ObjectMapper().enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final ObjectMapper PROVIDER_JSON=com.github.dockerjava.core.DockerClientConfig.getDefaultObjectMapper().copy()
+            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+
+    @FunctionalInterface private interface Decision {boolean consume() throws IOException,SQLException;}
+    @FunctionalInterface private interface Reply<T> {T read(com.github.dockerjava.transport.DockerHttpClient.Response response) throws IOException;}
 
     private PodmanJobTransport() { }
 
     static Optional<String> createOnce(Connection connection,PodmanJobCreation policy,DockerClient provider,
             String socket,int connectSeconds,int responseSeconds) throws IOException,SQLException {
         var request=check(policy,JobExecutionProtocol.Transport.CURL,provider,socket,connectSeconds,responseSeconds);
+        return curlPost(socket,connectSeconds,responseSeconds,"/v1.41/containers/create?name="+request.name(),request.payload(),201,
+                ()->policy.claimCreation(connection));
+    }
+
+    private static Optional<String> curlPost(String socket,int connectSeconds,int responseSeconds,String path,String payload,
+            int expectedStatus,Decision first) throws IOException,SQLException {
         String endpoint=socket.startsWith("unix://")?socket.substring(7):socket;
         Path directory=Files.createTempDirectory("starexec-ordinary-create-");Path input=directory.resolve("request.json");
         Process child=null;Thread reader=null;
         try {
-            Files.write(input,request.payload().getBytes(StandardCharsets.UTF_8));
-            if (!policy.claimCreation(connection)) return Optional.empty();
+            Files.write(input,payload.getBytes(StandardCharsets.UTF_8));
+            if (!first.consume()) return Optional.empty();
             long started=System.nanoTime();long timeout=TimeUnit.SECONDS.toNanos((long)responseSeconds+1);
             child=new ProcessBuilder("curl","-q","--silent","--noproxy","*","--retry","0","--proto","=http",
                     "--connect-timeout",Integer.toString(connectSeconds),"--max-time",Integer.toString(responseSeconds),
                     "--request","POST","--unix-socket",endpoint,"--header","Content-Type: application/json",
                     "--data-binary","@-","--write-out","\n%{http_code}",
-                    "http://localhost/v1.41/containers/create?name="+request.name())
+                    "http://localhost"+path)
                     .redirectInput(input.toFile()).redirectError(ProcessBuilder.Redirect.DISCARD).start();
             Process process=child;
             var receive=new FutureTask<byte[]>(()->{
@@ -57,9 +69,9 @@ final class PodmanJobTransport {
                 if (reply.length>MAX_REPLY+4) throw new IOException("Ordinary creation response exceeds its bound; outcome is unresolved");
                 if (process.exitValue()!=0) throw new IOException("Ordinary creation transport exited with code "+process.exitValue()+"; outcome is unresolved");
                 if (reply.length<4 || reply[reply.length-4]!='\n'
-                        || !"201".equals(new String(reply,reply.length-3,3,StandardCharsets.US_ASCII)))
-                    throw new IOException("Ordinary creation did not return HTTP 201; outcome is unresolved");
-                return Optional.of(identity(Arrays.copyOf(reply,reply.length-4)));
+                        || !Integer.toString(expectedStatus).equals(new String(reply,reply.length-3,3,StandardCharsets.US_ASCII)))
+                    throw new IOException("Ordinary lifecycle request did not return HTTP "+expectedStatus+"; outcome is unresolved");
+                return Optional.of(acknowledgement(Arrays.copyOf(reply,reply.length-4),expectedStatus));
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 throw new IOException("Ordinary creation was interrupted; provider outcome is unresolved",interrupted);
@@ -72,25 +84,30 @@ final class PodmanJobTransport {
     static Optional<String> createJavaOnce(Connection connection,PodmanJobCreation policy,DockerClient provider,
             String socket,int connectSeconds,int responseSeconds) throws IOException,SQLException {
         var request=check(policy,JobExecutionProtocol.Transport.JAVA,provider,socket,connectSeconds,responseSeconds);
+        return javaExchange(socket,connectSeconds,responseSeconds,"POST","/v1.41/containers/create?name="+request.name(),
+                request.payload().getBytes(StandardCharsets.UTF_8),()->policy.claimCreation(connection),response->postReply(response,201));
+    }
+
+    private static <T> Optional<T> javaExchange(String socket,int connectSeconds,int responseSeconds,String method,String path,
+            byte[] body,Decision first,Reply<T> reply) throws IOException,SQLException {
         String endpoint=socket.startsWith("unix://")?socket.substring(7):socket;
         final java.net.URI address;
         try {address=new java.net.URI("unix",null,endpoint,null,null);}
         catch(java.net.URISyntaxException invalid) {throw new IOException("Ordinary provider socket address is invalid",invalid);}
-        var message=com.github.dockerjava.transport.DockerHttpClient.Request.builder().method("POST")
-                .path("/v1.41/containers/create?name="+request.name()).putHeader("Content-Type","application/json")
-                .bodyBytes(request.payload().getBytes(StandardCharsets.UTF_8)).build();
+        var builder=com.github.dockerjava.transport.DockerHttpClient.Request.builder().method(method).path(path);
+        if(body!=null) builder.putHeader("Content-Type","application/json").bodyBytes(body);
+        // An empty non-repeatable entity prevents automatic replay of a lost inspection response.
+        else builder.body(new java.io.ByteArrayInputStream(new byte[0]));
+        var message=builder.build();
         var http=new PodmanCreateOnceHttpClient(new com.github.dockerjava.httpclient5.ApacheDockerHttpClient.Builder()
                 .dockerHost(address).maxConnections(1).connectionTimeout(java.time.Duration.ofSeconds(connectSeconds))
                 .responseTimeout(java.time.Duration.ofSeconds(responseSeconds)).build());
         Thread worker=null;
         try {
-            if(!policy.claimCreation(connection)) return Optional.empty();
-            var operation=new FutureTask<String>(()->{
+            if(!first.consume()) return Optional.empty();
+            var operation=new FutureTask<T>(()->{
                 try(var response=http.execute(message)) {
-                    if(response.getStatusCode()!=201)
-                        throw new IOException("Ordinary Java creation did not return HTTP 201; outcome is unresolved");
-                    if(response.getBody()==null) throw new IOException("Ordinary Java creation response is unavailable");
-                    return identity(response.getBody().readNBytes(MAX_REPLY+1));
+                    return reply.read(response);
                 }
             });
             worker=new Thread(operation,"ordinary-java-create");worker.setDaemon(true);worker.start();
@@ -102,6 +119,43 @@ final class PodmanJobTransport {
                 throw new IOException("Ordinary Java creation response is unresolved",unknown);
             }
         } finally {cleanup(http,worker);}
+    }
+
+    /** Direct acknowledgements may start only the trusted hold; historical requests never permit replay. */
+    static Optional<String> createAndStartHeldOnce(Connection connection,PodmanJobCreation policy,DockerClient provider,
+            String socket,int connectSeconds,int responseSeconds) throws IOException,SQLException {
+        if(policy==null) throw new IOException("Ordinary creation policy is unavailable");
+        var request=policy.creation();boolean curl=request.transport()==JobExecutionProtocol.Transport.CURL;
+        var created=curl?createOnce(connection,policy,provider,socket,connectSeconds,responseSeconds)
+                :createJavaOnce(connection,policy,provider,socket,connectSeconds,responseSeconds);
+        if(created.isEmpty()) return Optional.empty();
+        String container=created.orElseThrow();
+        var inspection=javaExchange(socket,connectSeconds,responseSeconds,"GET","/v1.41/containers/"+container+"/json",null,()->true,response->{
+            if(response.getStatusCode()!=200 || response.getBody()==null) throw new IOException("Ordinary created inspection is unavailable");
+            byte[] bytes=response.getBody().readNBytes(MAX_INSPECTION+1);
+            if(bytes.length>MAX_INSPECTION) throw new IOException("Ordinary created inspection exceeds its bound");
+            return PROVIDER_JSON.readValue(bytes,com.github.dockerjava.api.command.InspectContainerResponse.class);
+        }).orElseThrow(()->new IOException("Ordinary created inspection is unavailable"));
+        Decision claim=()->policy.claimStart(connection,container,inspection);
+        String path="/v1.41/containers/"+container+"/start";
+        var started=curl?curlPost(socket,connectSeconds,responseSeconds,path,"",204,claim)
+                :javaExchange(socket,connectSeconds,responseSeconds,"POST",path,new byte[0],claim,response->postReply(response,204));
+        if(started.isEmpty()) throw new IOException("No first acknowledged ordinary hold-start claim is available");
+        return created;
+    }
+
+    private static String postReply(com.github.dockerjava.transport.DockerHttpClient.Response response,int expectedStatus) throws IOException {
+        if(response.getStatusCode()!=expectedStatus)
+            throw new IOException("Ordinary lifecycle request did not return HTTP "+expectedStatus+"; outcome is unresolved");
+        if(response.getBody()==null && expectedStatus!=204) throw new IOException("Ordinary lifecycle response is unavailable");
+        byte[] bytes=response.getBody()==null?new byte[0]:response.getBody().readNBytes(MAX_REPLY+1);
+        return acknowledgement(bytes,expectedStatus);
+    }
+
+    private static String acknowledgement(byte[] bytes,int status) throws IOException {
+        if(status==201) return identity(bytes);
+        if(status!=204 || bytes.length!=0) throw new IOException("Ordinary hold start did not return an empty acknowledgement; outcome is unresolved");
+        return "";
     }
 
     private static JobExecutionProtocol.Creation check(PodmanJobCreation policy,JobExecutionProtocol.Transport transport,

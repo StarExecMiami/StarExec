@@ -180,6 +180,16 @@ It does not load Docker credential configuration or switch transports after a
 consumed claim. Neither leg starts the container, releases a payload or settles
 its storage; the coupled ordinary provider lifecycle remains separate.
 
+The ordinary transport coordinator couples a direct fresh creation response to a
+bounded same-socket inspection and the first explicit hold-start claim. Its owned
+Java metadata reader preserves SDK raw fields, rejects oversized responses and
+uses an overall deadline with positive worker cleanup. Mutating requests retain
+the conserved Java or curl selection. Start requires HTTP 204 and never falls
+back, retries or sends a payload-release signal after uncertainty. An existing
+creation request returns without any new inspection or start. This coordinator
+starts only the trusted hold; effective kernel verification, payload release,
+positive stop and used-storage cleanup remain separate requirements.
+
 `PodmanJobObservation` conserves a created container's configuration only after
 matching its never-started identity, trusted launcher, requested environment,
 memory/swap/CPU/process limits and exact bind set, including read-only access and
