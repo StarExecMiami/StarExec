@@ -172,6 +172,11 @@ The allocation and its additional quota charge commit atomically, before any
 retained-copy write. Nested manifest digests and file/count totals must agree;
 malformed, stale, cancelled, unfunded or oversized requests are refused.
 Replaying a request cannot book another allowance or authorize another write.
+The protected parent is excluded from writable execution resources in both
+registration orders. Output reservation and new resource registration serialize
+through the existing storage-policy lock, including when their paths are siblings
+under that parent. Contention refuses the operation without partial registration
+or a quota change.
 
 `JobOutputReservations` verifies typed allocation readback against the immutable
 request. Pending allocations remain charged and prevent owner/pair deletion,

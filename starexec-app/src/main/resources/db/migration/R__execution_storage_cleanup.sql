@@ -31,7 +31,9 @@ RETURNS BOOLEAN AS $$
         WHERE starexec.execution_storage_paths_overlap(_root,b.path))
     AND NOT EXISTS (SELECT 1 FROM starexec.solver_build_artifacts a,
         unnest(ARRAY[a.source_path,a.storage_root,a.artifact_path]) p
-        WHERE a.state<>'DELETED' AND starexec.execution_storage_paths_overlap(_root,p));
+        WHERE a.state<>'DELETED' AND starexec.execution_storage_paths_overlap(_root,p))
+    AND NOT EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations o
+        WHERE o.released_at IS NULL AND starexec.execution_storage_paths_overlap(_root,o.parent_path));
 $$ LANGUAGE SQL;
 
 -- Version the shared policy row so repeatable-read asset writers cannot miss a new resource.

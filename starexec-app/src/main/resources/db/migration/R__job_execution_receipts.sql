@@ -137,6 +137,8 @@ BEGIN
             RAISE EXCEPTION 'An unreleased hold cannot produce a normal execution result';
         END IF;
     WHEN 'OUTPUT_REQUEST' THEN
+        PERFORM singleton FROM starexec.execution_storage_policy WHERE singleton FOR SHARE NOWAIT;
+        IF NOT FOUND THEN RAISE EXCEPTION 'Ordinary output reservation policy is unavailable'; END IF;
         IF _stop.execution_token IS NULL OR _stop.receipt_payload::jsonb->'facts' ? 'disposition'
             OR _facts->>'stop_sha256' IS DISTINCT FROM _stop.receipt_sha256
             OR EXISTS (SELECT 1 FROM starexec.job_execution_receipts WHERE execution_token=NEW.execution_token AND receipt_kind='OUTPUT')
@@ -173,7 +175,7 @@ BEGIN
             OR _parent ~ '(^|/)[.]{1,2}(/|$)' OR strpos(_parent,'//')>0
             OR _target IS DISTINCT FROM _parent || '/job-' || NEW.execution_token::text
             OR EXISTS (SELECT 1 FROM starexec.execution_storage_resources r WHERE
-                _target=r.root_path OR starts_with(_target,r.root_path || '/') OR starts_with(r.root_path,_target || '/')) THEN
+                starexec.execution_storage_paths_overlap(_parent,r.root_path)) THEN
             RAISE EXCEPTION 'Ordinary output reservation exceeds its conserved source or destination bounds';
         END IF;
     WHEN 'OUTPUT' THEN

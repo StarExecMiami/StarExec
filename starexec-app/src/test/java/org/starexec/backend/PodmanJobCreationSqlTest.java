@@ -799,6 +799,77 @@ class PodmanJobCreationSqlTest extends Common {
         assertEquals(before,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
         assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
     }
+    @ParameterizedTest @ValueSource(strings={"parent","target","sibling"})
+    void ordinaryOutputParentRefusesLaterWritableResource(String location) throws Exception {
+        var value=outputReservationPayload(stoppedOutputFixture(),8);assertEquals(1,recordOutputReservation(value));
+        var saved=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        Path root=switch(location) {
+            case "parent" -> saved.parent();
+            case "target" -> saved.target();
+            case "sibling" -> saved.parent().resolve("runner");
+            default -> throw new AssertionError();
+        };
+        String key=UUID.randomUUID().toString().replace("-","");
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        connection.setAutoCommit(false);
+        try {
+            var refused=assertThrows(SQLException.class,()->number("SELECT CASE WHEN starexec.register_execution_storage_resource(?,?,?,?,?) THEN 1 ELSE 0 END",
+                    key,root.toString(),"synthetic-output-overlap",1048576L,128L));
+            assertEquals("23514",refused.getSQLState());
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(0,number("SELECT count(*) FROM starexec.execution_storage_resources WHERE resource_key=?",key));
+        assertEquals(0,number("SELECT CASE WHEN starexec.execution_storage_root_unreferenced(?) THEN 1 ELSE 0 END",root.toString()));
+        assertEquals(saved,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertFalse(Files.exists(saved.target()));
+    }
+
+    @Test void ordinaryOutputParentRefusesAnExistingWritableResourceBelowIt() throws Exception {
+        var value=outputReservationPayload(stoppedOutputFixture(),8);
+        var facts=(com.fasterxml.jackson.databind.node.ObjectNode)value.get("facts");
+        facts.put("parent_path",files.toString()).put("parent_identity",Files.readAttributes(files,java.nio.file.attribute.BasicFileAttributes.class).fileKey().toString())
+                .put("target_path",files.resolve("job-"+lease.token()).toString());
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        connection.setAutoCommit(false);
+        try {
+            var refused=assertThrows(SQLException.class,()->recordOutputReservation(value));
+            assertTrue(refused.getMessage().contains("Ordinary output reservation"),refused::getMessage);
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertTrue(org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).isEmpty());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertFalse(Files.exists(files.resolve("job-"+lease.token())));
+    }
+
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void ordinaryOutputParentSerializesResourceRegistration(boolean reservationFirst) throws Exception {
+        var value=outputReservationPayload(stoppedOutputFixture(),8);
+        String key=UUID.randomUUID().toString().replace("-","");
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        try(var other=Common.getConnection()) {
+            connection.setAutoCommit(false);other.setAutoCommit(false);
+            try {
+                if(reservationFirst) {
+                    assertEquals(1,recordOutputReservation(value));
+                    var refused=assertThrows(SQLException.class,()->connectionNumber(other,
+                            "SELECT CASE WHEN starexec.register_execution_storage_resource(?,?,?,?,?) THEN 1 ELSE 0 END",
+                            key,files.resolve("unrelated").toString(),"synthetic-output-policy",1048576L,128L));
+                    assertEquals("55P03",refused.getSQLState());
+                } else {
+                    assertEquals(1,connectionNumber(other,"SELECT CASE WHEN starexec.register_execution_storage_resource(?,?,?,?,?) THEN 1 ELSE 0 END",
+                            key,files.resolve("unrelated").toString(),"synthetic-output-policy",1048576L,128L));
+                    var refused=assertThrows(SQLException.class,()->recordOutputReservation(value));
+                    assertEquals("55P03",refused.getSQLState());
+                }
+            } finally {
+                try {connection.rollback();other.rollback();}
+                finally {connection.setAutoCommit(true);other.setAutoCommit(true);}
+            }
+        }
+        assertTrue(org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).isEmpty());
+        assertEquals(0,number("SELECT count(*) FROM starexec.execution_storage_resources WHERE resource_key=?",key));
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+    }
+
     private StoppedOutputFixture stoppedOutputFixture() throws Exception {
         var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);var kernel=kernelPacket(adapter,saved);
         assertTrue(adapter.claimCreation(connection));assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));
