@@ -805,6 +805,25 @@ decision history. Apply migrations to a disposable database for both fresh and
 upgrade checks. Their capacity and provider observations remain synthetic; no
 provider signal or deployed application is exercised by those database cases.
 
+For bounded transitive input preparation, run the focused cases against each
+disposable fresh and upgrade database:
+
+```sh
+mvn -B -pl starexec-app '-Dtest=JobExecutionPreparationSqlTest#transitiveScientificLayoutsRemainCompleteAtMeasuredScale+oversizedScientificGraphIsRefusedBeforeUseWithoutTrimming' -Dskip.installnodenpm=true -Dskip.npm=true -Dskip.sass=true test
+```
+
+These cases construct complete 32- and 64-node dependency graphs, with 47 and 95
+edges respectively, using chains and shared dependencies. They check exact input
+bytes and relative include names, read-only copies, the complete rendered provider
+request, recovery through its conserved preparation, collector arguments and Bash
+syntax. They measure receipt, request, argument and synthetic kernel-packet sizes;
+the kernel packet must fit the collector's existing read limit. A complete
+129-node graph exceeds the declared 128-entry bound and must be refused before
+storage use, without trimming the graph or altering the original inputs.
+PostgreSQL and file operations are real; capacity, provider and kernel facts are
+synthetic. This coverage does not establish arbitrary graph scale, native mount
+scaffolding, scientific parser/solver correctness or physical runtime isolation.
+
 Before qualifying a deployment, verify block and inode exhaustion on an owned
 provisioned resource without OOM or eviction, persistence after matching stop and
 restart, denial of input/foreign-data writes, exclusive concurrent leases and

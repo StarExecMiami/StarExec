@@ -30,7 +30,8 @@ import static org.mockito.Mockito.*;
 
 /** Real PostgreSQL and file copies; filesystem capacity and provider facts are explicitly synthetic. */
 class JobExecutionPreparationSqlTest extends Common {
-    @TempDir Path files;
+    @TempDir(factory=MavenInputDirectory.class) Path files;
+    @TempDir Path peers;
     private Connection connection;
     private DedicatedStorageResource resource;
     private JobStorageLeases.Lease lease;
@@ -486,6 +487,118 @@ class JobExecutionPreparationSqlTest extends Common {
         assertEquals(resource.capacityBytes(),number(connection,"SELECT disk_size FROM starexec.users WHERE id=?",owner));
         assertFalse(JobStorageLeases.releaseUnstarted(connection,lease.token(),resource));
     }
+    public static final class MavenInputDirectory implements org.junit.jupiter.api.io.TempDirFactory {
+        @Override public Path createTempDirectory(org.junit.jupiter.api.extension.AnnotatedElementContext element,
+                org.junit.jupiter.api.extension.ExtensionContext context) throws IOException {
+            return Files.createTempDirectory(Path.of("target").toAbsolutePath(),"job-input-");
+        }
+    }
+    private record ScientificGraph(java.util.Map<Path,String> sources,Path dependencies,int edges) { }
+    private ScientificGraph scientificGraph(int count) throws Exception {
+        Path axioms=Files.createDirectory(files.resolve("Axioms"));var sources=new java.util.LinkedHashMap<Path,String>();
+        var ids=new java.util.ArrayList<Integer>();var paths=new java.util.ArrayList<Path>();
+        for(int i=0;i<count;i++) {
+            String name=String.format(java.util.Locale.ROOT,"node [%03d].ax",i);
+            String next=i+1<count?"include('"+String.format(java.util.Locale.ROOT,"node [%03d].ax",i+1)+"').\n":"";
+            String text=next+"fof(ax_"+i+",axiom,p).\n";Path path=Files.writeString(axioms.resolve(name),text);
+            paths.add(path);sources.put(path,text);
+            ids.add((int)number(connection,"INSERT INTO starexec.benchmarks(user_id,name,uploaded,path,disk_size)"
+                    +" VALUES (?,'scaled axiom',now(),?,?) RETURNING id",owner,path.toString(),Files.size(path)));
+        }
+        var primary=new StringBuilder("include('Axioms/"+paths.get(0).getFileName()+"').\n");int edges=0;
+        for(int i=0;i<count;i++) {
+            int parent=i==0?bench:ids.get(i-1);String relative=i==0?"Axioms/"+paths.get(i).getFileName():paths.get(i).getFileName().toString();
+            number(connection,"INSERT INTO starexec.bench_dependency(primary_bench_id,secondary_bench_id,include_path) VALUES (?,?,?) RETURNING primary_bench_id",
+                    parent,ids.get(i),relative);edges++;
+            if(i>0 && i%2==0) {
+                String shared="Axioms/"+paths.get(i).getFileName();primary.append("include('").append(shared).append("').\n");
+                number(connection,"INSERT INTO starexec.bench_dependency(primary_bench_id,secondary_bench_id,include_path) VALUES (?,?,?) RETURNING primary_bench_id",
+                        bench,ids.get(i),shared);edges++;
+            }
+        }
+        primary.append("fof(root,axiom,p).\n");Files.writeString(benchmark,primary.toString());sources.put(benchmark,primary.toString());
+        number(connection,"UPDATE starexec.benchmarks SET disk_size=? WHERE id=? RETURNING id",Files.size(benchmark),bench);
+        var dependencies=new StringBuilder();
+        for(Path path:paths) dependencies.append(path).append(",,,Axioms/").append(path.getFileName()).append('\n');
+        return new ScientificGraph(java.util.Map.copyOf(sources),Files.writeString(files.resolve("scaled-dependencies"),dependencies.toString()),edges);
+    }
+
+    private org.starexec.backend.PodmanJobCreation prepareScientificCreation(JobExecutionPreparation.Controls controls) throws Exception {
+        String image="sha256:"+"a".repeat(64);var client=mock(com.github.dockerjava.api.DockerClient.class,RETURNS_DEEP_STUBS);
+        when(client.infoCmd().exec().getSecurityOptions()).thenReturn(java.util.List.of("name=rootless"));
+        when(client.inspectImageCmd(image).exec().getId()).thenReturn(image);
+        when(client.inspectImageCmd(image).exec().getConfig().getVolumes()).thenReturn(null);
+        Path socket=peers.resolve("provider.sock"),root=resource.root();
+        var storageLimits=new DedicatedStorageResource.Limits(resource.capacityBytes(),resource.inodeLimit());
+        try(var peer=java.nio.channels.ServerSocketChannel.open(java.net.StandardProtocolFamily.UNIX);
+            var capacity=mockStatic(DedicatedStorageResource.class,call->call.getMethod().getName().equals("inspect")?null:call.callRealMethod())) {
+            peer.bind(java.net.UnixDomainSocketAddress.of(socket));
+            capacity.when(()->DedicatedStorageResource.inspect(eq(root),eq(storageLimits),anyList())).thenReturn(resource);
+            return org.starexec.backend.PodmanJobCreation.prepare(client,connection,currentLease(),controls,
+                    resource.capacityBytes(),Math.toIntExact(resource.inodeLimit()),image,socket.toString());
+        }
+    }
+
+    @ParameterizedTest @ValueSource(ints={32,64})
+    void transitiveScientificLayoutsRemainCompleteAtMeasuredScale(int count) throws Exception {
+        var graph=scientificGraph(count);var controls=new JobExecutionPreparation.Controls(script,functions,statuses,graph.dependencies());
+        var policy=prepareScientificCreation(controls);var prepared=policy.preparation(connection);
+        var captured=org.starexec.data.database.JobExecutionInputs.capturePrepared(connection,currentLease(),resource).orElseThrow();
+        var metadata=com.google.gson.JsonParser.parseString(captured.payload()).getAsJsonObject();
+        assertEquals(count+1,metadata.getAsJsonArray("benchmarks").size());
+        assertEquals(graph.edges(),metadata.getAsJsonArray("benchmarkDependencies").size());
+        assertEquals(count+1,prepared.bindings().stream().filter(b->graph.sources().containsKey(b.target())).count());
+        for(var input:graph.sources().entrySet()) {
+            var copy=binding(prepared,input.getKey());assertTrue(copy.readOnly());
+            assertEquals(input.getValue(),Files.readString(copy.source()));assertEquals(input.getValue(),Files.readString(input.getKey()));
+        }
+        assertEquals(Files.readString(graph.dependencies()),Files.readString(binding(prepared,graph.dependencies()).source()));
+        var mounts=new java.util.LinkedHashMap<Path,Path>();prepared.bindings().forEach(b->mounts.put(b.source(),b.source()));
+        var requestedLimits=new com.github.dockerjava.api.model.HostConfig().withMemory(134217728L).withMemorySwap(134217728L)
+                .withPidsLimit(64L).withCpusetCpus("2").withCpuQuota(100000L).withCpuPeriod(100000L).withNetworkMode("none");
+        var request=policy.plan(connection,org.starexec.data.database.JobExecutionProtocol.maximumExecutionId(connection)+1,
+                requestedLimits,mounts,java.util.Map.of(),org.starexec.data.database.JobExecutionProtocol.Transport.JAVA);
+        assertTrue(policy.claimCreation(connection));
+        var recovered=JobExecutionPreparation.restoreBound(connection,currentLease(),resource,controls,resource.capacityBytes(),
+                Math.toIntExact(resource.inodeLimit()),prepared.fingerprint());
+        assertEquals(prepared.fingerprint(),recovered.fingerprint());assertEquals(prepared.bindings(),recovered.bindings());
+        var body=new com.fasterxml.jackson.databind.ObjectMapper().readTree(request.payload());
+        assertEquals(prepared.bindings().size(),body.path("HostConfig").path("Mounts").size());
+        var limits=new com.fasterxml.jackson.databind.ObjectMapper().treeToValue(body.path("HostConfig"),com.github.dockerjava.api.model.HostConfig.class);
+        var namespaces=new java.util.LinkedHashMap<String,String>();
+        for(String name:java.util.List.of("pid","ipc","net","mnt","user","cgroup"))
+            namespaces.put(name,Files.readSymbolicLink(Path.of("/proc/self/ns/"+name)).toString());
+        var identity=new org.starexec.backend.storage.BuildExecutionRuntime.Identity(0,0,1000,1000);
+        var runtimeLimits=new org.starexec.backend.storage.BuildExecutionRuntime.Limits(limits.getMemory(),limits.getPidsLimit(),
+                limits.getCpusetCpus(),limits.getCpuQuota(),limits.getCpuPeriod());
+        var entrypoint=body.path("Entrypoint");int wait=Integer.parseInt(entrypoint.get(entrypoint.size()-1).textValue());
+        var runtime=org.starexec.backend.storage.BuildExecutionRuntime.captureJob(connection,recovered,identity,runtimeLimits,namespaces,wait);
+        assertObservationTargets(recovered,runtime);
+        var command=new java.util.ArrayList<String>();entrypoint.forEach(v->command.add(v.textValue()));body.path("Cmd").forEach(v->command.add(v.textValue()));
+        var packet=org.starexec.backend.storage.RuntimeObservationFixture.fields(runtime,identity,runtimeLimits,namespaces,command,true);
+        String kernel=new com.google.gson.Gson().toJson(packet);assertNotNull(runtime.verify(kernel));
+        long kernelBytes=kernel.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;assertTrue(kernelBytes<1024*1024);
+        long receiptBytes=Files.size(lease.staging().resolve("inputs.json"));
+        long requestBytes=request.payload().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        long commandBytes=String.join("\0",runtime.observationCommandForBindings()).getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        assertTrue(receiptBytes<resource.capacityBytes());assertTrue(requestBytes<resource.capacityBytes());
+        System.out.println("Scientific input scale: "+new com.google.gson.Gson().toJson(java.util.Map.of("nodes",count,"edges",graph.edges(),
+                "benchmarks",count+1,"bindings",prepared.bindings().size(),"receiptBytes",receiptBytes,"requestBytes",requestBytes,
+                "collectorArgumentBytes",commandBytes,"syntheticKernelBytes",kernelBytes)));
+        held();
+    }
+
+    @Test void oversizedScientificGraphIsRefusedBeforeUseWithoutTrimming() throws Exception {
+        var graph=scientificGraph(129);var controls=new JobExecutionPreparation.Controls(script,functions,statuses,graph.dependencies());
+        long links=number(connection,"SELECT count(*) FROM starexec.bench_dependency d JOIN starexec.benchmarks b ON b.id=d.primary_bench_id WHERE b.user_id=?",owner);
+        assertEquals(graph.edges(),links);assertTrue(links>resource.inodeLimit());
+        assertThrows(SQLException.class,()->JobExecutionPreparation.prepare(connection,lease,resource,controls,
+                resource.capacityBytes(),Math.toIntExact(resource.inodeLimit())));
+        assertEquals(links,number(connection,"SELECT count(*) FROM starexec.bench_dependency d JOIN starexec.benchmarks b ON b.id=d.primary_bench_id WHERE b.user_id=?",owner));
+        for(var input:graph.sources().entrySet()) assertEquals(input.getValue(),Files.readString(input.getKey()));
+        unused();
+    }
+
     @Test void materializesAuthorizedBytesAtTheirOriginalLogicalTargets() throws Exception {
         var prepared=prepare();
         var binding=binding(prepared,benchmark);
@@ -642,7 +755,7 @@ class JobExecutionPreparationSqlTest extends Common {
                 case "tree-escape" -> Files.createSymbolicLink(solverRoot.resolve("escape"),Files.writeString(files.resolve("outside"),"outside"));
                 case "hardlink" -> Files.createLink(files.resolve("benchmark-alias"),benchmark);
                 case "controls-from-solver" -> selected=new JobExecutionPreparation.Controls(solverRoot.resolve("bin/starexec_run_default"),functions,statuses,null);
-                case "special-file" -> { Files.delete(benchmark); socket=java.nio.channels.ServerSocketChannel.open(java.net.StandardProtocolFamily.UNIX); socket.bind(java.net.UnixDomainSocketAddress.of(benchmark)); }
+                case "special-file" -> { Files.delete(benchmark); socket=java.nio.channels.ServerSocketChannel.open(java.net.StandardProtocolFamily.UNIX); socket.bind(java.net.UnixDomainSocketAddress.of(Path.of("").toAbsolutePath().relativize(benchmark))); }
                 case "dirty-resource" -> Files.writeString(resource.root().resolve("unknown"),"keep");
                 case "reserved-target" -> number(connection,"UPDATE starexec.benchmarks SET path='/proc/self/status' WHERE id=? RETURNING id",bench);
                 default -> throw new AssertionError(condition);
