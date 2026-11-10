@@ -55,6 +55,15 @@ public final class SolverArtifactTree {
         }
     }
 
+    /** Observes optional output, including empty scopes; it never authorizes artifact publication. */
+    public static Snapshot inspectOutputDirectory(Path directory, long maxBytes, int maxEntries) throws IOException {
+        if (maxBytes < 0 || maxEntries < 0) throw new IllegalArgumentException("Invalid output observation limits");
+        Path input=directory.toAbsolutePath();
+        try (DescriptorDirectory ignored=DescriptorDirectory.open(input)) {
+            return scan(input.toRealPath(),null,maxBytes,maxEntries,false,false);
+        }
+    }
+
     /** Creates a new destination; an existing directory or link is never reused. */
     public static Snapshot copy(Path source, Path destination, long maxBytes, int maxEntries) throws IOException {
         return copy(source, destination, maxBytes, maxEntries, false, true);

@@ -63,6 +63,34 @@ public class SolverArtifactTreeTest {
     }
 
     @Test
+    void observesEmptyOutputWithoutAuthorizingEmptyPublication() throws Exception {
+        Files.delete(source.resolve("solver"));
+        var observed=SolverArtifactTree.inspectOutputDirectory(source,0,0);
+        assertEquals(0,observed.byteSize());assertEquals(0,observed.entryCount());
+        assertThrows(IOException.class,()->SolverArtifactTree.inspectInputDirectory(source,1,1));
+        assertThrows(IOException.class,()->SolverArtifactTree.copy(source,target,1,1));
+        assertFalse(Files.exists(target));
+    }
+
+    @Test
+    void outputObservationPreservesSourceBytesAndModes() throws Exception {
+        var mode=Files.getPosixFilePermissions(source.resolve("solver"));
+        var observed=SolverArtifactTree.inspectOutputDirectory(source,5,1);
+        assertEquals(SolverArtifactTree.inspectInputDirectory(source,5,1),observed);
+        assertEquals("BUILT",Files.readString(source.resolve("solver")));
+        assertEquals(mode,Files.getPosixFilePermissions(source.resolve("solver")));
+    }
+
+    @Test
+    void outputObservationBoundsEmptyDirectoriesAndFileBytes() throws Exception {
+        Files.createDirectory(source.resolve("empty"));
+        assertEquals(2,SolverArtifactTree.inspectOutputDirectory(source,5,2).entryCount());
+        assertThrows(IOException.class,()->SolverArtifactTree.inspectOutputDirectory(source,4,2));
+        assertThrows(IOException.class,()->SolverArtifactTree.inspectOutputDirectory(source,5,1));
+        assertThrows(IllegalArgumentException.class,()->SolverArtifactTree.inspectOutputDirectory(source,-1,2));
+    }
+
+    @Test
     void preservesExecutableScriptsAndUtf8Paths() throws Exception {
         Path bin = Files.createDirectory(source.resolve("bin"));
         Path executable = Files.writeString(bin.resolve("starexec_run_é"), "#!/bin/sh\nexit 0\n");

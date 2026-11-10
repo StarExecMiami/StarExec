@@ -636,6 +636,76 @@ class PodmanJobCreationSqlTest extends Common {
         verify(client,never()).removeContainerCmd(anyString());
     }
 
+    private record StoppedOutputFixture(JobExecutionProtocol.Creation request,com.github.dockerjava.api.command.InspectContainerResponse inspection) { }
+    private StoppedOutputFixture stoppedOutputFixture() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);var kernel=kernelPacket(adapter,saved);
+        assertTrue(adapter.claimCreation(connection));assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));
+        var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+        var runtime=mapper.createObjectNode().put("version",1);
+        runtime.set("observation",mapper.valueToTree(kernel.runtime().verify(new com.google.gson.Gson().toJson(kernel.fields()))));
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,
+                receipt(saved,JobExecutionProtocol.Phase.RELEASE,mapper.createObjectNode().put("runtime_payload",runtime.toString()))));
+        var inspection=stoppedInspection(saved,"exited");
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,
+                PodmanJobStopObservation.observe(saved,"c".repeat(64),inspection,UUID.randomUUID(),false)));
+        return new StoppedOutputFixture(saved,inspection);
+    }
+
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void stoppedOutputSnapshotConservesExactBytesWithoutGrantingRetention(boolean empty) throws Exception {
+        var fixture=stoppedOutputFixture();
+        if(!empty) {
+            Files.writeString(lease.staging().resolve("execution/monitor/stdout.txt"),"abc");
+            Files.writeString(lease.staging().resolve("execution/savedoutput/answer.p"),"de");
+        }
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        var result=PodmanJobOutput.captureStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),empty?0:5,empty?2:4);
+        assertEquals(empty?0:5,result.byteSize());assertEquals(empty?2:4,result.entryCount());
+        assertEquals(JobExecutionProtocol.digest(result.payload()),result.sha256());
+        var manifest=new com.fasterxml.jackson.databind.ObjectMapper().readTree(result.payload());
+        assertEquals(fixture.request().sha256(),manifest.path("request_sha256").textValue());
+        assertEquals(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).orElseThrow().sha256(),
+                manifest.path("stop_sha256").textValue());
+        for(String name:List.of("monitor","savedoutput")) assertEquals(JobExecutionProtocol.digest(manifest.path(name).path("manifest_payload").textValue()),
+                manifest.path(name).path("manifest_sha256").textValue());
+        assertEquals(result,PodmanJobOutput.captureStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),empty?0:5,empty?2:4));
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).isEmpty());
+        assertEquals(3,number("SELECT count(*) FROM starexec.job_execution_receipts WHERE execution_token=?",lease.token()));
+        assertNull(JobStorageLeases.find(connection,lease.token()).orElseThrow().releasedAt());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"aggregate-bytes","aggregate-entries","monitor-link","saved-link","monitor-hardlink","saved-hardlink",
+            "fifo","byte-reservation","entry-reservation","missing-scope"})
+    @org.junit.jupiter.api.Timeout(20)
+    void stoppedOutputSnapshotRefusesUnsafeFilesAndAggregateBudgets(String change) throws Exception {
+        var fixture=stoppedOutputFixture();Path monitor=lease.staging().resolve("execution/monitor"),saved=lease.staging().resolve("execution/savedoutput");
+        Files.writeString(monitor.resolve("stdout.txt"),"abc");Files.writeString(saved.resolve("answer.p"),"de");
+        long maxBytes=64;int maxEntries=8;
+        switch(change) {
+            case "aggregate-bytes" -> maxBytes=4;
+            case "aggregate-entries" -> maxEntries=3;
+            case "monitor-link" -> Files.createSymbolicLink(monitor.resolve("alias"),Path.of("stdout.txt"));
+            case "saved-link" -> Files.createSymbolicLink(saved.resolve("alias"),Path.of("answer.p"));
+            case "monitor-hardlink" -> Files.createLink(files.resolve("output-alias"),monitor.resolve("stdout.txt"));
+            case "saved-hardlink" -> Files.createLink(files.resolve("output-alias"),saved.resolve("answer.p"));
+            case "fifo" -> {
+                var child=new ProcessBuilder("/usr/bin/mkfifo",monitor.resolve("pipe").toString()).start();
+                try {assertTrue(child.waitFor(5,java.util.concurrent.TimeUnit.SECONDS));assertEquals(0,child.exitValue());}
+                finally {if(child.isAlive()) {child.destroyForcibly();assertTrue(child.waitFor(5,java.util.concurrent.TimeUnit.SECONDS));}}
+            }
+            case "byte-reservation" -> maxBytes=lease.limitBytes()+1;
+            case "entry-reservation" -> maxEntries=Math.toIntExact(lease.inodeLimit()+1);
+            case "missing-scope" -> {Files.delete(saved.resolve("answer.p"));Files.delete(saved);}
+            default -> throw new AssertionError(change);
+        }
+        long bytes=maxBytes;int entries=maxEntries;
+        assertThrows(IOException.class,()->PodmanJobOutput.captureStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),bytes,entries));
+        assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).isEmpty());
+        assertEquals(3,number("SELECT count(*) FROM starexec.job_execution_receipts WHERE execution_token=?",lease.token()));
+        assertNull(JobStorageLeases.find(connection,lease.token()).orElseThrow().releasedAt());
+    }
+
     private static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> heldOutcomes() {
         return java.util.Arrays.stream(JobExecutionProtocol.Transport.values()).flatMap(transport->
                 java.util.stream.Stream.of("success","create-lost","inspect-lost","inspect-wrong","inspect-oversize","inspect-body-timeout","cancel",

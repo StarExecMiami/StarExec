@@ -210,6 +210,14 @@ disappeared after execution; the retained copies remain authoritative. Cleanup
 intent, cancelled output or replaced layout prevents this recovery. Locating the
 directory alone does not ingest files, conserve an output manifest or settle quota.
 
+The stopped-output observer scans the monitor and saved-output scopes with one
+aggregate byte/entry budget bounded by the active reservation. Both scope roots
+count toward the entry budget; empty optional output is observable. It refuses
+output links, rescans exact bytes and revalidates the original layout before
+returning a manifest bound to creation and normal stop. This read-only observation
+does not persist `OUTPUT`, publish a copy or permit cleanup. Artifact publication
+still requires its existing nonempty-file and immutable-copy checks.
+
 `PodmanJobObservation` conserves a created container's configuration only after
 matching its never-started identity, trusted launcher, requested environment,
 memory/swap/CPU/process limits and exact bind set, including read-only access and
