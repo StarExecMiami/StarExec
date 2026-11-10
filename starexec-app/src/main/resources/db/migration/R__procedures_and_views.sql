@@ -1685,6 +1685,11 @@ BEGIN
     END IF;
     PERFORM starexec.EnforcePairAttempt(_jobPairId, _attemptNo);
 
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims
+        WHERE lease_kind='JOB' AND origin_pair_id=_jobPairId) THEN
+        RAISE EXCEPTION 'Managed ordinary statistics require the conserved retained-output path' USING ERRCODE='55000';
+    END IF;
+
     SELECT id INTO _nodeId FROM starexec.nodes WHERE name = _nodeName;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING

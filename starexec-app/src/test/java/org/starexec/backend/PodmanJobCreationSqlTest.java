@@ -1263,6 +1263,64 @@ class PodmanJobCreationSqlTest extends Common {
         assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).isEmpty());
     }
 
+    private void legacyStatistics(int pairId,String node,String mode,long disk) throws SQLException {
+        String placeholders=mode.equals("legacy-default")?"?,?,?,?,?,?,?,?,?,?":"?,?,?,?,?,?,?,?,?,?,?";
+        try(var query=connection.prepareStatement("CALL starexec.UpdatePairRunSolverStats("+placeholders+")")) {
+            query.setInt(1,pairId);query.setString(2,node);query.setDouble(3,0.5);query.setDouble(4,0.3);
+            query.setDouble(5,0.2);query.setDouble(6,0.1);query.setDouble(7,1024);query.setLong(8,512);
+            query.setInt(9,1);query.setLong(10,disk);
+            if(!mode.equals("legacy-default")) {
+                if(mode.equals("unfenced")) query.setNull(11,java.sql.Types.INTEGER);
+                else query.setInt(11,mode.equals("stale")?2:1);
+            }
+            Common.executeAndDrain(query);
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings={"legacy-default","unfenced","fenced","before-output","stale"})
+    void registeredOrdinaryOutputRefusesLegacyStatisticsAccounting(String mode) throws Exception {
+        var fixture=nonemptyRetentionFixture();
+        if(!mode.equals("before-output")) assertTrue(PodmanJobOutput.retainStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),outputParent(),8,8));
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        long jobBytes=number("SELECT disk_size FROM starexec.jobs WHERE id=?",job);
+        String node="ordinary-stats-"+UUID.randomUUID();long[] observed={-1,-1,-1};connection.setAutoCommit(false);
+        try {
+            number("INSERT INTO starexec.nodes(name,status) VALUES (?,'ACTIVE') RETURNING id",node);
+            var refused=assertThrows(SQLException.class,()->{
+                legacyStatistics(pair,node,mode.equals("before-output")?"fenced":mode,999999);
+                observed[0]=number("SELECT disk_size FROM starexec.users WHERE id=?",owner)-usage;
+                observed[1]=number("SELECT disk_size FROM starexec.jobs WHERE id=?",job)-jobBytes;
+                observed[2]=number("SELECT disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id=? AND stage_number=1",pair);
+            },()->"Legacy reported size was accepted: user delta="+observed[0]+", job delta="+observed[1]+", stage bytes="+observed[2]);
+            assertEquals(mode.equals("stale")?"SX185":"55000",refused.getSQLState());
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertEquals(jobBytes,number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
+        assertEquals(0,number("SELECT disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id=? AND stage_number=1",pair));
+        assertEquals(0,number("SELECT count(*) FROM starexec.nodes WHERE name=?",node));
+    }
+
+    @Test void legacyStatisticsRemainIdempotentForAnUnregisteredSiblingPair() throws Exception {
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        long jobBytes=number("SELECT disk_size FROM starexec.jobs WHERE id=?",job);
+        String node="ordinary-sibling-"+UUID.randomUUID();connection.setAutoCommit(false);
+        try {
+            number("INSERT INTO starexec.nodes(name,status) VALUES (?,'ACTIVE') RETURNING id",node);
+            int sibling=(int)number("INSERT INTO starexec.job_pairs(job_id,bench_id,status_code,primary_jobpair_data) VALUES (?,?,1,1) RETURNING id",job,bench);
+            number("INSERT INTO starexec.jobpair_stage_data(jobpair_id,stage_number,status_code,solver_id,config_id,disk_size) VALUES (?,1,1,?,?,0) RETURNING jobpair_id",sibling,solver,config);
+            for(String mode:List.of("legacy-default","fenced","unfenced")) {
+                legacyStatistics(sibling,node,mode,7);
+                assertEquals(usage+7,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+                assertEquals(jobBytes+7,number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
+                assertEquals(7,number("SELECT disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id=? AND stage_number=1",sibling));
+            }
+            try(var query=connection.prepareStatement("SELECT starexec.RemoveJobPairDiskSize(?)")) {query.setInt(1,sibling);query.execute();}
+            assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+            assertEquals(jobBytes,number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(0,number("SELECT count(*) FROM starexec.nodes WHERE name=?",node));
+    }
+
     private StoppedOutputFixture stoppedOutputFixture() throws Exception {
         var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);var kernel=kernelPacket(adapter,saved);
         assertTrue(adapter.claimCreation(connection));assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));

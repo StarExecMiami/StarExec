@@ -199,6 +199,12 @@ refund it again. Generic source observations cannot establish completed output.
 The controller does not apply scientific statistics or retire storage. Stage
 accounting, positive provider absence and registered used-resource cleanup remain
 separate prerequisites for enabling the normal dispatcher.
+Registered ordinary executions cannot use the legacy quota-changing statistics
+routine, including its unfenced form. Their measurements require the conserved
+retained-output path; a reported disk size cannot add another charge to the
+verified copy. The existing attempt fence still rejects stale reports first.
+Unregistered pairs, including other pairs of the same job, keep the legacy
+statistics and difference-based accounting behavior.
 
 `JobOutputReservations` verifies typed allocation readback against the immutable
 request. Pending allocations remain charged and prevent owner/pair deletion,
