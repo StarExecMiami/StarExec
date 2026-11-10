@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve real provider zero timestamps when recording a positively never-started ordinary container, without granting payload release or storage settlement.
 - Send conserved ordinary creation requests once over the local curl transport, preserving uncertain outcomes and bounding response handling and child cleanup.
 - Send the same conserved ordinary request through the selected Java transport without automatic replay, with bounded slow-response handling and verified worker cleanup.
+- Conserve exact ordinary created-container configuration after validating its immutable request, launcher, limits, environment and bind access, without treating configuration as execution admission.
 
 - Serialize dedicated storage ownership across solver builds and ordinary job
   attempts, preserving build lease history and booking each job allowance once.

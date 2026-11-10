@@ -334,6 +334,89 @@ class PodmanJobCreationSqlTest extends Common {
         assertEquals(staging,transportStaging());
     }
 
+    private com.fasterxml.jackson.databind.node.ObjectNode createdInspectionTree(JobExecutionProtocol.Creation request) throws Exception {
+        var mapper=com.github.dockerjava.core.DockerClientConfig.getDefaultObjectMapper();
+        com.fasterxml.jackson.databind.node.ObjectNode tree=mapper.valueToTree(neverStartedInspection(request).getRawValues());
+        var declared=mapper.readTree(request.payload());
+        ((com.fasterxml.jackson.databind.node.ObjectNode)tree.get("Config")).set("Env",declared.get("Env"));
+        var mounts=tree.putArray("Mounts");
+        for(var binding:declared.path("HostConfig").path("Mounts")) {
+            var mount=mounts.addObject();mount.put("Type","bind");mount.put("Source",binding.path("Source").textValue());
+            mount.put("Destination",binding.path("Target").textValue());mount.put("RW",!binding.path("ReadOnly").booleanValue());
+        }
+        return tree;
+    }
+
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void exactCreatedObservationConservesConfigurationWithoutGrantingStart(boolean cancelled) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        if(cancelled) number("UPDATE starexec.jobs SET killed=true WHERE id=? RETURNING id",job);
+        var mapper=com.github.dockerjava.core.DockerClientConfig.getDefaultObjectMapper();
+        var inspected=mapper.treeToValue(createdInspectionTree(saved),com.github.dockerjava.api.command.InspectContainerResponse.class);
+        var receipt=PodmanJobObservation.created(saved,"c".repeat(64),inspected,UUID.randomUUID());
+        var facts=mapper.readTree(receipt.payload()).path("facts");
+        assertEquals(JobExecutionProtocol.Phase.CREATED,receipt.phase());assertFalse(facts.has("start_requested"));
+        assertEquals(JobExecutionProtocol.digest(facts.path("configuration_payload").textValue()),facts.path("configuration_sha256").textValue());
+        var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt));
+        assertFalse(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt));
+        assertEquals(receipt,JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.CREATED).orElseThrow());
+        assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.RELEASE).isEmpty());
+        verify(client,never()).startContainerCmd(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"memory","swap","cpu","quota","period","pids","pids-null","network","source","target","writable",
+            "extra","missing","duplicate","type","environment","duplicate-environment","image","launcher"})
+    void changedCreatedConfigurationCannotProduceAReceipt(String change) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.CURL);assertTrue(adapter.claimCreation(connection));
+        var mapper=com.github.dockerjava.core.DockerClientConfig.getDefaultObjectMapper();var tree=createdInspectionTree(saved);
+        var host=(com.fasterxml.jackson.databind.node.ObjectNode)tree.get("HostConfig");
+        var config=(com.fasterxml.jackson.databind.node.ObjectNode)tree.get("Config");
+        var mounts=(com.fasterxml.jackson.databind.node.ArrayNode)tree.get("Mounts");
+        var first=(com.fasterxml.jackson.databind.node.ObjectNode)mounts.get(0);
+        switch(change) {
+            case "memory" -> host.put("Memory",67108864);
+            case "swap" -> host.put("MemorySwap",-1);
+            case "cpu" -> host.put("CpusetCpus","3");
+            case "quota" -> host.put("CpuQuota",-1);
+            case "period" -> host.put("CpuPeriod",200000);
+            case "pids" -> host.put("PidsLimit",-1);
+            case "pids-null" -> host.putNull("PidsLimit");
+            case "network" -> host.put("NetworkMode","host");
+            case "source" -> first.put("Source","/other");
+            case "target" -> first.put("Destination","/other");
+            case "writable" -> first.put("RW",!first.path("RW").booleanValue());
+            case "extra" -> mounts.add(first.deepCopy().put("Destination","/other"));
+            case "missing" -> mounts.remove(0);
+            case "duplicate" -> mounts.set(1,first.deepCopy());
+            case "type" -> first.put("Type","volume");
+            case "environment" -> config.putArray("Env").add("STAREXEC_JOB_PRIVATE_MOUNTS=0");
+            case "duplicate-environment" -> ((com.fasterxml.jackson.databind.node.ArrayNode)config.get("Env")).add(config.path("Env").get(0));
+            case "image" -> tree.put("Image","sha256:"+"d".repeat(64));
+            case "launcher" -> config.putArray("Cmd").add("other");
+            default -> throw new AssertionError(change);
+        }
+        var inspected=mapper.treeToValue(tree,com.github.dockerjava.api.command.InspectContainerResponse.class);
+        assertThrows(IOException.class,()->PodmanJobObservation.created(saved,"c".repeat(64),inspected,UUID.randomUUID()));
+        assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.CREATED).isEmpty());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"period","pids"})
+    void unspecifiedLimitsMatchBoundedProviderDefaults(String change) throws Exception {
+        var adapter=prepare();var limits=limits();
+        if(change.equals("period")) limits.withCpuQuota(-1L).withCpuPeriod(0L);
+        else limits.withPidsLimit(null);
+        var saved=adapter.plan(connection,JobExecutionProtocol.maximumExecutionId(connection)+1,limits,sources(adapter),Map.of(),JobExecutionProtocol.Transport.JAVA);
+        assertTrue(adapter.claimCreation(connection));var tree=createdInspectionTree(saved);
+        var host=(com.fasterxml.jackson.databind.node.ObjectNode)tree.get("HostConfig");
+        if(change.equals("period")) host.put("CpuQuota",0).put("CpuPeriod",100000);
+        else host.put("PidsLimit",512);
+        var mapper=com.github.dockerjava.core.DockerClientConfig.getDefaultObjectMapper();
+        var inspected=mapper.treeToValue(tree,com.github.dockerjava.api.command.InspectContainerResponse.class);
+        var receipt=PodmanJobObservation.created(saved,"c".repeat(64),inspected,UUID.randomUUID());
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,JobStorageLeases.find(connection,lease.token()).orElseThrow(),resource,receipt));
+    }
+
     private JobExecutionProtocol.Receipt receipt(JobExecutionProtocol.Creation saved,JobExecutionProtocol.Phase phase,
             com.fasterxml.jackson.databind.node.ObjectNode facts) {
         var value=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();

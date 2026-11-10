@@ -180,6 +180,16 @@ It does not load Docker credential configuration or switch transports after a
 consumed claim. Neither leg starts the container, releases a payload or settles
 its storage; the coupled ordinary provider lifecycle remains separate.
 
+`PodmanJobObservation` conserves a created container's configuration only after
+matching its never-started identity, trusted launcher, requested environment,
+memory/swap/CPU/process limits and exact bind set, including read-only access and
+the absence of additional mounts. It stores selected configuration bytes and
+their digest through the common ordinary receipt envelope. It does not copy
+arbitrary image environment values into history. A cancelled attempt can still
+conserve this observation for reconciliation; neither a new nor a historical
+`CREATED` observation grants start or payload-release permission. Effective kernel
+and filesystem verification remain required separately for the held process.
+
 `PodmanJobNonExecution` validates a never-started ordinary container against the
 conserved name, image, ownership labels and trusted launcher. It requires the
 provider's `created` state, zero process ID, false execution flags, private process

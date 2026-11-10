@@ -17,9 +17,7 @@ final class PodmanJobNonExecution {
 
     private PodmanJobNonExecution() { }
 
-    /** The caller must bind this observation to persisted ownership before any retirement. */
-    static JobExecutionProtocol.Receipt observe(JobExecutionProtocol.Creation request,String container,
-            InspectContainerResponse inspection,UUID operation) throws IOException {
+    static void requireCreated(JobExecutionProtocol.Creation request,String container,InspectContainerResponse inspection) throws IOException {
         require(request!=null && inspection!=null && container!=null && container.matches("[0-9a-f]{64}")
                 && container.equals(inspection.getId()) && request.image().equals(inspection.getImageId())
                 && (request.name().equals(inspection.getName()) || ("/"+request.name()).equals(inspection.getName())),
@@ -56,6 +54,13 @@ final class PodmanJobNonExecution {
                 && config.getHealthcheck()!=null && List.of("NONE").equals(config.getHealthcheck().getTest()),
                 "Ordinary non-execution launcher differs");
         PodmanPrivateBuild.requireStopPolicy(inspection);
+    }
+
+    /** The caller must bind this observation to persisted ownership before any retirement. */
+    static JobExecutionProtocol.Receipt observe(JobExecutionProtocol.Creation request,String container,
+            InspectContainerResponse inspection,UUID operation) throws IOException {
+        requireCreated(request,container,inspection);
+        var state=inspection.getState();var host=inspection.getHostConfig();
         var facts=JSON.createObjectNode();
         facts.put("disposition","never_started");facts.put("resource_id",container);facts.put("image_id",inspection.getImageId());
         facts.put("status",state.getStatus());facts.put("pid",state.getPidLong());facts.put("running",state.getRunning());
@@ -63,16 +68,7 @@ final class PodmanJobNonExecution {
         facts.put("private_pid_namespace",true);facts.put("restart_policy",host.getRestartPolicy().getName());
         facts.put("started_at",state.getStartedAt());facts.put("finished_at",state.getFinishedAt());facts.put("exit_code",state.getExitCodeLong());
         facts.put("observed_at",Instant.now().toString());
-        var value=JSON.createObjectNode();
-        String engine="podman:"+request.executionId()+":"+container;
-        value.put("version",1);value.put("kind","STOP");value.put("execution_token",request.token().toString());
-        value.put("pair_id",request.pairId());value.put("attempt_no",request.attemptNo());value.put("owner_id",request.ownerId());
-        value.put("resource_key",request.resourceKey());value.put("resource_identity",request.resourceIdentity());
-        value.put("operation_token",operation==null?null:operation.toString());value.put("engine_identity",engine);
-        value.put("request_sha256",request.sha256());value.put("preparation_sha256",request.preparationFingerprint());
-        value.set("facts",facts);String payload=value.toString();
-        try { return new JobExecutionProtocol.Receipt(request.token(),JobExecutionProtocol.Phase.STOP,operation,engine,payload,JobExecutionProtocol.digest(payload)); }
-        catch (IllegalArgumentException invalid) { throw new IOException("Ordinary non-execution receipt is invalid",invalid); }
+        return PodmanJobReceipts.observed(request,JobExecutionProtocol.Phase.STOP,container,operation,facts);
     }
 
     private static void require(boolean condition,String message) throws IOException { if(!condition) throw new IOException(message); }
