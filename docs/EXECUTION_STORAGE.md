@@ -165,6 +165,17 @@ must be coupled before the ordinary dispatcher can use this protocol.
 Creation and phase mutations require a read-committed transaction: an older
 snapshot could otherwise miss newly consumed creation or cleanup intent.
 
+`PodmanJobTransport` sends a preselected curl creation only after the first
+acknowledged request consumption. It uses the exact conserved UTF-8 bytes over an
+owned local Unix socket, with implicit curl configuration, proxies, redirects and
+retries disabled. A bounded concurrent reply reader and transport/parent deadlines
+cover oversized responses, disconnection and interruption. The owned child and
+reader must terminate before temporary request cleanup. Only HTTP 201 with one
+valid container identity returns an acknowledgement; every uncertain reply retains
+the consumed request and cannot authorize another POST. This creation leg does
+not start the container, release a payload or settle its storage. Java creation
+and the coupled ordinary provider lifecycle remain separate from this adapter.
+
 `PodmanJobNonExecution` validates a never-started ordinary container against the
 conserved name, image, ownership labels and trusted launcher. It requires the
 provider's `created` state, zero process ID, false execution flags, private process
