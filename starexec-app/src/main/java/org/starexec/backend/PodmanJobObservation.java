@@ -22,6 +22,16 @@ final class PodmanJobObservation {
 
     static JobExecutionProtocol.Receipt created(JobExecutionProtocol.Creation request,String container,
             InspectContainerResponse inspection,UUID operation) throws IOException {
+        return created(request,container,inspection,operation,false);
+    }
+
+    static JobExecutionProtocol.Receipt startClaim(JobExecutionProtocol.Creation request,String container,
+            InspectContainerResponse inspection,UUID operation) throws IOException {
+        return created(request,container,inspection,operation,true);
+    }
+
+    private static JobExecutionProtocol.Receipt created(JobExecutionProtocol.Creation request,String container,
+            InspectContainerResponse inspection,UUID operation,boolean start) throws IOException {
         PodmanJobNonExecution.requireCreated(request,container,inspection);
         var declared=JSON.readTree(request.payload());var expected=JSON.treeToValue(declared.path("HostConfig"),HostConfig.class);
         var actual=inspection.getHostConfig();
@@ -68,6 +78,7 @@ final class PodmanJobObservation {
         String payload=configuration.toString();var facts=JSON.createObjectNode();
         facts.put("resource_id",container);facts.put("container_name",request.name());facts.put("image_id",inspection.getImageId());
         facts.put("configuration_payload",payload);facts.put("configuration_sha256",JobExecutionProtocol.digest(payload));
+        if(start) facts.put("start_requested",true);
         facts.put("observed_at",Instant.now().toString());
         return PodmanJobReceipts.observed(request,JobExecutionProtocol.Phase.CREATED,container,operation,facts);
     }

@@ -9,6 +9,7 @@ DECLARE
     _stop starexec.job_execution_receipts%ROWTYPE;
     _cleanup starexec.job_execution_receipts%ROWTYPE;
     _payload JSONB; _facts JSONB; _usage BIGINT; _finished TIMESTAMPTZ;
+    _start BOOLEAN := FALSE;
 BEGIN
     IF current_setting('transaction_isolation') NOT IN ('read committed','read uncommitted') THEN
         RAISE EXCEPTION 'Ordinary phase mutations require a current read-committed snapshot' USING ERRCODE='40001';
@@ -18,10 +19,16 @@ BEGIN
         RAISE EXCEPTION 'Ordinary phase requires an active used job reservation';
     END IF;
     SELECT * INTO _request FROM starexec.job_execution_requests WHERE execution_token=NEW.execution_token;
-    IF NEW.receipt_kind='RELEASE' AND (_request.execution_token IS NULL
+    IF NEW.receipt_kind='CREATED' AND NEW.receipt_payload::jsonb->'facts' ? 'start_requested' THEN
+        IF jsonb_typeof(NEW.receipt_payload::jsonb->'facts'->'start_requested') IS DISTINCT FROM 'boolean' THEN
+            RAISE EXCEPTION 'Ordinary start claim requires a boolean request';
+        END IF;
+        _start := (NEW.receipt_payload::jsonb->'facts'->>'start_requested')::boolean;
+    END IF;
+    IF (NEW.receipt_kind='RELEASE' OR _start) AND (_request.execution_token IS NULL
         OR NOT starexec.lock_current_job_storage_pair(_request.pair_id,_request.attempt_no,
             _request.owner_id,_request.execution_id,TRUE)) THEN
-        RAISE EXCEPTION 'Ordinary release requires the exact current admitted locator';
+        RAISE EXCEPTION 'Ordinary action requires the exact current admitted locator';
     END IF;
     SELECT disk_size INTO _usage FROM starexec.users WHERE id=_initial.origin_owner_id FOR UPDATE NOWAIT;
     IF NOT FOUND OR _usage IS NULL OR _usage<starexec.active_execution_storage_bytes(_initial.origin_owner_id) THEN
@@ -75,6 +82,13 @@ BEGIN
         IF (_facts @> jsonb_build_object('resource_id',split_part(NEW.engine_identity,':',3),
             'container_name',_request.container_name,'image_id',_request.image_identity)) IS DISTINCT FROM TRUE THEN
             RAISE EXCEPTION 'Ordinary creation observation identity differs';
+        END IF;
+        IF _start AND (_stop.execution_token IS NOT NULL
+            OR jsonb_typeof(_facts->'configuration_payload') IS DISTINCT FROM 'string'
+            OR jsonb_typeof((_facts->>'configuration_payload')::jsonb) IS DISTINCT FROM 'object'
+            OR starexec.job_execution_json_unique((_facts->>'configuration_payload')::json) IS DISTINCT FROM TRUE
+            OR _facts->>'configuration_sha256' IS DISTINCT FROM encode(sha256(convert_to(_facts->>'configuration_payload','UTF8')),'hex')) THEN
+            RAISE EXCEPTION 'Ordinary start claim requires exact configured identity before stop';
         END IF;
     WHEN 'RELEASE' THEN
         IF _stop.execution_token IS NOT NULL OR jsonb_typeof(_facts->'runtime_payload') IS DISTINCT FROM 'string'

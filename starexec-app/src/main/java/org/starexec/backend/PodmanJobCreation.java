@@ -155,6 +155,15 @@ public final class PodmanJobCreation {
         return planned;
     }
 
+    /** Only the first acknowledged claim permits a later trusted hold start; readback never does. */
+    boolean claimStart(Connection connection,String container,com.github.dockerjava.api.command.InspectContainerResponse inspection)
+            throws IOException,SQLException {
+        var request=planned;
+        if(recovered || request==null || !request.equals(JobExecutionProtocol.findCreation(connection,lease.token()).orElse(null))) return false;
+        var receipt=PodmanJobObservation.startClaim(request,container,inspection,java.util.UUID.randomUUID());
+        return JobExecutionProtocol.recordReceipt(connection,lease,resource,receipt);
+    }
+
     public JobExecutionPreparation preparation(Connection connection) throws IOException,SQLException {
         if (JobExecutionProtocol.findCreation(connection,lease.token()).isEmpty()) {
             prepared.requireCurrent(connection);return prepared;

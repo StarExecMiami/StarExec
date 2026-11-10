@@ -187,7 +187,13 @@ the absence of additional mounts. It stores selected configuration bytes and
 their digest through the common ordinary receipt envelope. It does not copy
 arbitrary image environment values into history. A cancelled attempt can still
 conserve this observation for reconciliation; neither a new nor a historical
-`CREATED` observation grants start or payload-release permission. Effective kernel
+`CREATED` observation grants start or payload-release permission. An explicit
+`start_requested` claim is distinct: its first acknowledged insertion revalidates
+the current job, attempt, owner and already-bound cancellation locator, and
+conserves the exact configured identity before one later trusted hold start.
+Restored policies, existing observations and uncertain commit replies cannot
+authorize that action. This claim sends nothing and cannot release solver code.
+Effective kernel
 and filesystem verification remain required separately for the held process.
 
 `PodmanJobNonExecution` validates a never-started ordinary container against the
