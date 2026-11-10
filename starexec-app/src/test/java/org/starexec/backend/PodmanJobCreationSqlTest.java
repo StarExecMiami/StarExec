@@ -681,7 +681,8 @@ class PodmanJobCreationSqlTest extends Common {
                 .put("reservation_sha256",allocation.request().sha256()).put("source_manifest_sha256",original.path("source_manifest_sha256").textValue())
                 .put("parent_path",allocation.parent().toString()).put("parent_identity",allocation.parentIdentity())
                 .put("target_path",target.toString()).put("directory_identity",identity)
-                .put("manifest_payload",original.path("source_manifest_payload").textValue()).put("manifest_sha256",original.path("source_manifest_sha256").textValue());
+                .put("manifest_payload",original.path("source_manifest_payload").textValue()).put("manifest_sha256",original.path("source_manifest_sha256").textValue())
+                .put("job_id",fixture.request().originalJobId().orElseThrow()).put("job_bytes",manifest.path("byte_size").longValue()).put("job_accounted",true);
         var envelope=value.deepCopy().put("kind","OUTPUT");envelope.set("facts",facts);String payload=envelope.toString();
         var output=new JobExecutionProtocol.Receipt(lease.token(),JobExecutionProtocol.Phase.OUTPUT,allocation.request().operation(),
                 allocation.request().engine(),payload,JobExecutionProtocol.digest(payload));
@@ -1080,7 +1081,7 @@ class PodmanJobCreationSqlTest extends Common {
         assertEquals(usage+source.byteSize(),number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
         assertEquals(source,PodmanJobOutput.captureStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),8,8));
         assertEquals(0,number("SELECT disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id=? AND stage_number=1",pair));
-        assertEquals(0,number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
+        assertEquals(source.byteSize(),number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
         assertNull(JobStorageLeases.find(connection,lease.token()).orElseThrow().releasedAt());
         verify(client,never()).removeContainerCmd(anyString());
     }
@@ -1233,7 +1234,8 @@ class PodmanJobCreationSqlTest extends Common {
         var facts=mapper.createObjectNode().put("stop_sha256",original.path("stop_sha256").textValue()).put("reservation_sha256",saved.request().sha256())
                 .put("source_manifest_sha256",original.path("source_manifest_sha256").textValue()).put("parent_path",saved.parent().toString())
                 .put("parent_identity",saved.parentIdentity()).put("target_path",saved.target().toString()).put("directory_identity",allocation.directoryIdentity()==null?"unbound":allocation.directoryIdentity())
-                .put("manifest_payload",original.path("source_manifest_payload").textValue()).put("manifest_sha256",original.path("source_manifest_sha256").textValue());
+                .put("manifest_payload",original.path("source_manifest_payload").textValue()).put("manifest_sha256",original.path("source_manifest_sha256").textValue())
+                .put("job_id",job).put("job_bytes",mapper.readTree(original.path("source_manifest_payload").textValue()).path("byte_size").longValue()).put("job_accounted",true);
         var envelope=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.readTree(saved.request().payload());envelope.put("kind","OUTPUT");envelope.set("facts",facts);
         long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);connection.setAutoCommit(false);
         try {
@@ -1365,7 +1367,7 @@ class PodmanJobCreationSqlTest extends Common {
             assertEquals(operation.equals("delete-pair")?"P0001":"55000",refused.getSQLState());
         } finally {connection.rollback();connection.setAutoCommit(true);}
         assertEquals(originalUsage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
-        assertEquals(0,number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
+        assertEquals(allocation.chargedBytes(),number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
         assertEquals(1,number("SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?",pair));
         assertEquals(allocation,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
         assertEquals(beforeFiles,org.starexec.jobs.JobOutputCopy.verify(allocation));
