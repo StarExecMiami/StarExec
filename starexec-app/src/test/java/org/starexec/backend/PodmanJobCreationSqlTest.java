@@ -417,6 +417,152 @@ class PodmanJobCreationSqlTest extends Common {
         assertTrue(JobExecutionProtocol.recordReceipt(connection,JobStorageLeases.find(connection,lease.token()).orElseThrow(),resource,receipt));
     }
 
+    private JobExecutionProtocol.Receipt startClaim(JobExecutionProtocol.Creation saved) throws Exception {
+        var mapper=com.github.dockerjava.core.DockerClientConfig.getDefaultObjectMapper();
+        var observed=mapper.treeToValue(createdInspectionTree(saved),com.github.dockerjava.api.command.InspectContainerResponse.class);
+        var original=PodmanJobObservation.created(saved,"c".repeat(64),observed,UUID.randomUUID());
+        var value=mapper.readTree(original.payload());
+        ((com.fasterxml.jackson.databind.node.ObjectNode)value.get("facts")).put("start_requested",true);
+        String payload=value.toString();
+        return new JobExecutionProtocol.Receipt(saved.token(),original.phase(),original.operation(),original.engine(),payload,JobExecutionProtocol.digest(payload));
+    }
+
+    @Test void startClaimBindsLocatorInItsFirstCommittedReceipt() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        var receipt=startClaim(saved);var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt));
+        assertEquals(saved.executionId(),number("SELECT sge_id FROM starexec.job_pairs WHERE id=?",pair));
+        assertFalse(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt));
+        assertEquals(receipt,JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.CREATED).orElseThrow());
+        assertTrue(JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.RELEASE).isEmpty());
+        verify(client,never()).startContainerCmd(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"killed","paused","deleted"})
+    void stoppedJobCannotClaimAnOrdinaryStart(String flag) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.CURL);assertTrue(adapter.claimCreation(connection));
+        var receipt=startClaim(saved);var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();
+        number("UPDATE starexec.jobs SET "+flag+"=true WHERE id=? RETURNING id",job);
+        assertThrows(SQLException.class,()->JobExecutionProtocol.recordReceipt(connection,active,resource,receipt));
+        assertTrue(JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.CREATED).isEmpty());
+        assertEquals(saved.executionId(),number("SELECT sge_id FROM starexec.job_pairs WHERE id=?",pair));
+    }
+
+    @Test void textStartFlagCannotClaimAdmission() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        var original=startClaim(saved);var mapper=new com.fasterxml.jackson.databind.ObjectMapper();var value=mapper.readTree(original.payload());
+        ((com.fasterxml.jackson.databind.node.ObjectNode)value.get("facts")).put("start_requested","true");String payload=value.toString();
+        var invalid=new JobExecutionProtocol.Receipt(saved.token(),original.phase(),original.operation(),original.engine(),payload,JobExecutionProtocol.digest(payload));
+        var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();
+        assertThrows(SQLException.class,()->JobExecutionProtocol.recordReceipt(connection,active,resource,invalid));
+        assertTrue(JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.CREATED).isEmpty());
+    }
+
+    private com.github.dockerjava.api.command.InspectContainerResponse createdInspection(JobExecutionProtocol.Creation saved) throws Exception {
+        return com.github.dockerjava.core.DockerClientConfig.getDefaultObjectMapper().treeToValue(createdInspectionTree(saved),
+                com.github.dockerjava.api.command.InspectContainerResponse.class);
+    }
+
+    @ParameterizedTest @ValueSource(strings={"JAVA","CURL"})
+    void warmPolicyClaimsOnlyOneHoldStart(String transport) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.valueOf(transport));assertTrue(adapter.claimCreation(connection));
+        assertEquals(saved.executionId(),number("SELECT sge_id FROM starexec.job_pairs WHERE id=?",pair));
+        assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));
+        var first=JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.CREATED).orElseThrow();
+        assertTrue(new com.fasterxml.jackson.databind.ObjectMapper().readTree(first.payload()).path("facts").path("start_requested").booleanValue());
+        assertFalse(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));
+        assertEquals(first,JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.CREATED).orElseThrow());
+        assertTrue(JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.RELEASE).isEmpty());
+        verify(client,never()).startContainerCmd(anyString());verify(client,never()).killContainerCmd(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"unconsumed","restored","observed"})
+    void historyOrMissingCreationCannotClaimAHoldStart(String state) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);
+        if(!state.equals("unconsumed")) assertTrue(adapter.claimCreation(connection));
+        if(state.equals("observed")) {
+            var observation=PodmanJobObservation.created(saved,"c".repeat(64),createdInspection(saved),UUID.randomUUID());
+            assertTrue(JobExecutionProtocol.recordReceipt(connection,JobStorageLeases.find(connection,lease.token()).orElseThrow(),resource,observation));
+        }
+        if(state.equals("restored")) adapter=PodmanJobCreation.restore(client,connection,saved,peerFiles.resolve("peer.sock").toString());
+        assertFalse(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));
+        verify(client,never()).startContainerCmd(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"attempt","owner","locator","running","terminal","funding","resource"})
+    void changedAdmissionCannotClaimAHoldStart(String change) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        var inspection=createdInspection(saved);
+        switch(change) {
+            case "attempt" -> number("UPDATE starexec.job_pair_attempts SET current_attempt_no=2 WHERE pair_id=? RETURNING pair_id",pair);
+            case "owner" -> {
+                long other=number("INSERT INTO starexec.users(email,first_name,last_name,institution,created,password,disk_quota,job_pair_quota,disk_size)"
+                        +" VALUES (?,'Other','Fixture','synthetic',now(),'synthetic',4194304,100,0) RETURNING id","preparation-"+UUID.randomUUID()+"@example.invalid");
+                number("UPDATE starexec.jobs SET user_id=? WHERE id=? RETURNING id",other,job);
+            }
+            case "locator" -> number("UPDATE starexec.job_pairs SET sge_id=? WHERE id=? RETURNING id",saved.executionId()+1,pair);
+            case "running" -> number("UPDATE starexec.job_pairs SET status_code=4 WHERE id=? RETURNING id",pair);
+            case "terminal" -> number("UPDATE starexec.job_pairs SET status_code=7 WHERE id=? RETURNING id",pair);
+            case "funding" -> number("UPDATE starexec.users SET disk_size=0 WHERE id=? RETURNING id",owner);
+            case "resource" -> doThrow(new IOException("Synthetic resource replacement")).when(resource).requireUnchanged();
+            default -> throw new AssertionError(change);
+        }
+        try {assertThrows(SQLException.class,()->adapter.claimStart(connection,"c".repeat(64),inspection));}
+        finally {if(change.equals("funding")) number("UPDATE starexec.users SET disk_size=1048576 WHERE id=? RETURNING id",owner);}
+        assertTrue(JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.CREATED).isEmpty());
+        assertNull(JobStorageLeases.find(connection,lease.token()).orElseThrow().releasedAt());
+    }
+
+    @Test void lostStartClaimReplyCannotAuthorizeAnotherStart() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        var inspection=createdInspection(saved);var uncertain=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(connection));
+        var committed=new java.util.concurrent.atomic.AtomicBoolean();
+        doAnswer(call->{
+            boolean consumed=number("SELECT count(*) FROM starexec.job_execution_receipts WHERE execution_token=? AND receipt_kind='CREATED'",saved.token())>0;
+            connection.commit();if(consumed) {committed.set(true);throw new SQLException("Synthetic start claim reply loss");}return null;
+        }).when(uncertain).commit();
+        assertThrows(SQLException.class,()->adapter.claimStart(uncertain,"c".repeat(64),inspection));assertTrue(committed.get());
+        try(var observer=Common.getConnection()) {assertTrue(JobExecutionProtocol.findReceipt(observer,saved.token(),JobExecutionProtocol.Phase.CREATED).isPresent());}
+        assertFalse(adapter.claimStart(connection,"c".repeat(64),inspection));verify(client,never()).startContainerCmd(anyString());
+    }
+
+    @Test void contendedStartClaimRollsBackBeforeAdmission() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        var inspection=createdInspection(saved);
+        try(var blocker=Common.getConnection()) {
+            Common.runTransactional(blocker,tx->{
+                try(var statement=tx.prepareStatement("SELECT id FROM starexec.jobs WHERE id=? FOR UPDATE")) {
+                    statement.setInt(1,job);try(var row=statement.executeQuery()) {assertTrue(row.next());}
+                }
+                var failure=assertThrows(SQLException.class,()->adapter.claimStart(connection,"c".repeat(64),inspection));
+                assertEquals("55P03",failure.getSQLState());
+                assertTrue(JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.CREATED).isEmpty());
+                return null;
+            });
+            assertTrue(blocker.getAutoCommit());
+        }
+        assertTrue(adapter.claimStart(connection,"c".repeat(64),inspection));
+    }
+
+    @Test void parallelWarmClaimsConserveOnlyOneStartDecision() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        var inspection=createdInspection(saved);var barrier=new java.util.concurrent.CyclicBarrier(2);
+        var executor=java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Callable<Boolean> claim=()->{
+                try(var contender=Common.getConnection()) {
+                    barrier.await(5,java.util.concurrent.TimeUnit.SECONDS);
+                    try {return adapter.claimStart(contender,"c".repeat(64),inspection);}
+                    catch(SQLException refused) {if("55P03".equals(refused.getSQLState())) return false;throw refused;}
+                }
+            };
+            var first=executor.submit(claim);var second=executor.submit(claim);
+            int acknowledged=(first.get(10,java.util.concurrent.TimeUnit.SECONDS)?1:0)+(second.get(10,java.util.concurrent.TimeUnit.SECONDS)?1:0);
+            assertEquals(1,acknowledged);
+            assertEquals(1,number("SELECT count(*) FROM starexec.job_execution_receipts WHERE execution_token=? AND receipt_kind='CREATED'",saved.token()));
+        } finally {executor.shutdownNow();assertTrue(executor.awaitTermination(5,java.util.concurrent.TimeUnit.SECONDS));}
+    }
+
     private JobExecutionProtocol.Receipt receipt(JobExecutionProtocol.Creation saved,JobExecutionProtocol.Phase phase,
             com.fasterxml.jackson.databind.node.ObjectNode facts) {
         var value=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
