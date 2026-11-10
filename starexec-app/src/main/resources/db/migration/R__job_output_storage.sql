@@ -71,7 +71,8 @@ BEGIN
     IF NOT FOUND OR NOT starexec.lock_current_job_storage_pair(_request.pair_id,_request.attempt_no,
         _request.owner_id,_request.execution_id,FALSE) THEN RETURN FALSE; END IF;
     IF NOT EXISTS (SELECT 1 FROM starexec.job_pairs p JOIN starexec.jobs j ON j.id=p.job_id
-        WHERE p.id=_request.pair_id AND p.status_code IS DISTINCT FROM 21
+        WHERE p.id=_request.pair_id AND p.job_id=starexec.job_execution_original_job(_token)
+            AND p.status_code IS DISTINCT FROM 21
             AND j.deleted IS NOT TRUE AND j.killed IS NOT TRUE) THEN RETURN FALSE; END IF;
     SELECT disk_size INTO _usage FROM starexec.users WHERE id=_request.owner_id FOR UPDATE NOWAIT;
     IF NOT FOUND OR _usage IS NULL OR _usage<starexec.active_execution_storage_bytes(_request.owner_id) THEN RETURN FALSE; END IF;
@@ -99,14 +100,19 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION starexec.job_output_completion_matches(
     _token UUID,_operation UUID,_engine TEXT,_payload TEXT) RETURNS BOOLEAN AS $$
 DECLARE _output starexec.job_output_storage_reservations%ROWTYPE; _phase starexec.job_execution_receipts%ROWTYPE;
-    _facts JSONB; _source JSONB;
+    _facts JSONB; _source JSONB; _job INTEGER;
 BEGIN
     SELECT * INTO _output FROM starexec.job_output_storage_reservations WHERE execution_token=_token;
     SELECT * INTO _phase FROM starexec.job_execution_receipts WHERE execution_token=_token AND receipt_kind='OUTPUT_REQUEST';
     IF _output.execution_token IS NULL OR _phase.execution_token IS NULL OR _output.copy_started_at IS NULL
         OR _output.directory_identity IS NULL OR _output.released_at IS NOT NULL THEN RETURN FALSE; END IF;
     _facts:=_payload::jsonb->'facts';_source:=_phase.receipt_payload::jsonb->'facts';
-    RETURN (_operation=_output.operation_token AND _engine=_phase.engine_identity
+    _job:=starexec.job_execution_original_job(_token);
+    RETURN (_job IS NOT NULL AND _operation=_output.operation_token AND _engine=_phase.engine_identity
+        AND jsonb_typeof(_facts->'job_id')='number' AND _facts->>'job_id'=_job::text
+        AND jsonb_typeof(_facts->'job_bytes')='number'
+        AND _facts->>'job_bytes'=((_facts->>'manifest_payload')::jsonb->>'byte_size')
+        AND _facts->'job_accounted'='true'::jsonb
         AND jsonb_typeof(_facts->'reservation_sha256')='string' AND _facts->>'reservation_sha256'=_phase.receipt_sha256
         AND jsonb_typeof(_facts->'source_manifest_sha256')='string' AND _facts->>'source_manifest_sha256'=_output.source_manifest_sha256
         AND jsonb_typeof(_facts->'parent_path')='string' AND _facts->>'parent_path'=_output.parent_path
@@ -238,10 +244,22 @@ CREATE TRIGGER job_output_storage_accounting AFTER INSERT OR UPDATE ON starexec.
 
 -- Both history and booked destination commit together before a caller may attempt copying.
 CREATE OR REPLACE FUNCTION starexec.allocate_job_output_storage() RETURNS trigger AS $$
-DECLARE _request starexec.job_execution_requests%ROWTYPE; _facts JSONB; _bytes BIGINT;
+DECLARE _request starexec.job_execution_requests%ROWTYPE; _facts JSONB; _bytes BIGINT; _job INTEGER;
 BEGIN
     IF NEW.receipt_kind='OUTPUT' THEN
         _facts:=NEW.receipt_payload::jsonb->'facts';_bytes:=((_facts->>'manifest_payload')::jsonb->>'byte_size')::bigint;
+        _job:=starexec.job_execution_original_job(NEW.execution_token);
+        SELECT * INTO _request FROM starexec.job_execution_requests WHERE execution_token=NEW.execution_token;
+        IF _job IS NULL OR NOT starexec.job_output_completion_matches(NEW.execution_token,
+            NEW.operation_token,NEW.engine_identity,NEW.receipt_payload) THEN
+            RAISE EXCEPTION 'Ordinary output job accounting requires its conserved original job';
+        END IF;
+        -- The first immutable receipt books the job before reconciling owner allowance.
+        UPDATE starexec.jobs SET disk_size=disk_size+_bytes
+            WHERE id=_job AND user_id=_request.owner_id AND buildjob IS FALSE
+                AND deleted IS NOT TRUE AND killed IS NOT TRUE AND _bytes>=0
+                AND disk_size>=0 AND disk_size<=9223372036854775807-_bytes;
+        IF NOT FOUND THEN RAISE EXCEPTION 'Ordinary output job accounting is unavailable or overflows'; END IF;
         UPDATE starexec.job_output_storage_reservations SET verified_bytes=_bytes,charged_bytes=_bytes,verified_at=NEW.recorded_at
             WHERE execution_token=NEW.execution_token AND verified_at IS NULL;
         IF NOT FOUND THEN RAISE EXCEPTION 'Ordinary output completion allocation is unavailable'; END IF;

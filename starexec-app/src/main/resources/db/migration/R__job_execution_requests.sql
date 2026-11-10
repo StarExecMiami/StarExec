@@ -84,6 +84,20 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Read only the conserved creation witness; absent historical identity is unknown.
+CREATE OR REPLACE FUNCTION starexec.job_execution_original_job(_token UUID) RETURNS INTEGER AS $$
+DECLARE _labels JSONB; _job TEXT;
+BEGIN
+    SELECT request_payload::jsonb->'Labels' INTO _labels
+        FROM starexec.job_execution_requests WHERE execution_token=_token;
+    IF jsonb_typeof(_labels->'starexec.job.id') IS DISTINCT FROM 'string' THEN RETURN NULL; END IF;
+    _job:=_labels->>'starexec.job.id';
+    IF _job !~ '^[1-9][0-9]{0,9}$' THEN RETURN NULL; END IF;
+    RETURN _job::integer;
+EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN RETURN NULL;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
 -- Conserve the cancellation locator in the same transaction as first consumption.
 CREATE OR REPLACE FUNCTION starexec.bind_job_execution_request() RETURNS trigger AS $$
 DECLARE _prior INTEGER;

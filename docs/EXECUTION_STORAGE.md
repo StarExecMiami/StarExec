@@ -196,6 +196,14 @@ existing regular-file requirement.
 target paths, and bound directory identity. Its first insertion reconciles only
 the unused copy allowance, retaining the measured byte charge; replay cannot
 refund it again. Generic source observations cannot establish completed output.
+New completion receipts also bind `job_id` and `job_bytes` to the immutable
+creation witness and verified copy, with `job_accounted=true`. The first receipt,
+job byte increment and allocation settlement commit together, in job-before-owner
+lock order. Replay or a lost commit acknowledgement cannot book the bytes again;
+the owner retains one measured copy charge. An unknown or reassigned original
+job, malformed accounting facts or counter overflow refuses completion and keeps
+the copied files and allowance for reconciliation. Earlier completions are never
+backfilled or treated as proof that job accounting occurred.
 The controller does not apply scientific statistics or retire storage. Stage
 accounting, positive provider absence and registered used-resource cleanup remain
 separate prerequisites for enabling the normal dispatcher.

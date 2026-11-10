@@ -3599,11 +3599,13 @@ BEGIN
     END IF;
 
     IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims c
-        JOIN starexec.job_pairs p ON p.id=c.origin_pair_id
-        WHERE c.lease_kind='JOB' AND c.released_at IS NULL AND p.job_id=_jobId)
+        LEFT JOIN starexec.job_pairs p ON p.id=c.origin_pair_id
+        WHERE c.lease_kind='JOB' AND c.released_at IS NULL
+            AND (p.job_id=_jobId OR starexec.job_execution_original_job(c.execution_token)=_jobId))
         OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations r
-            JOIN starexec.job_pairs p ON p.id=r.origin_pair_id
-            WHERE r.released_at IS NULL AND p.job_id=_jobId) THEN
+            LEFT JOIN starexec.job_pairs p ON p.id=r.origin_pair_id
+            WHERE r.released_at IS NULL
+                AND (p.job_id=_jobId OR starexec.job_execution_original_job(r.execution_token)=_jobId)) THEN
         RAISE EXCEPTION 'Ordinary storage must settle before legacy job deletion'
             USING ERRCODE='55000';
     END IF;
@@ -3647,11 +3649,13 @@ BEGIN
     END IF;
 
     IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims c
-        JOIN starexec.job_pairs p ON p.id=c.origin_pair_id
-        WHERE c.lease_kind='JOB' AND c.released_at IS NULL AND p.job_id=_jobId)
+        LEFT JOIN starexec.job_pairs p ON p.id=c.origin_pair_id
+        WHERE c.lease_kind='JOB' AND c.released_at IS NULL
+            AND (p.job_id=_jobId OR starexec.job_execution_original_job(c.execution_token)=_jobId))
         OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations r
-            JOIN starexec.job_pairs p ON p.id=r.origin_pair_id
-            WHERE r.released_at IS NULL AND p.job_id=_jobId) THEN
+            LEFT JOIN starexec.job_pairs p ON p.id=r.origin_pair_id
+            WHERE r.released_at IS NULL
+                AND (p.job_id=_jobId OR starexec.job_execution_original_job(r.execution_token)=_jobId)) THEN
         RAISE EXCEPTION 'Ordinary storage must settle before legacy job accounting'
             USING ERRCODE='55000';
     END IF;

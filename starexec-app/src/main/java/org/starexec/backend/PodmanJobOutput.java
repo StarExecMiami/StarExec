@@ -59,7 +59,8 @@ final class PodmanJobOutput {
         var facts=JSON.createObjectNode().put("stop_sha256",stop.sha256()).put("reservation_sha256",allocation.request().sha256())
                 .put("source_manifest_sha256",source.sha256()).put("parent_path",parent.toString()).put("parent_identity",parentIdentity)
                 .put("target_path",allocation.target().toString()).put("directory_identity",copied.directoryIdentity())
-                .put("manifest_payload",copied.payload()).put("manifest_sha256",copied.sha256());
+                .put("manifest_payload",copied.payload()).put("manifest_sha256",copied.sha256())
+                .put("job_id",request.originalJobId().orElseThrow()).put("job_bytes",copied.byteSize()).put("job_accounted",true);
         var completed=phase(request,JobExecutionProtocol.Phase.OUTPUT,allocation.request().operation(),stop.engine(),facts);
         var stored=JobExecutionProtocol.findReceipt(connection,request.token(),JobExecutionProtocol.Phase.OUTPUT).orElse(null);
         if(stored==null) {
@@ -67,7 +68,7 @@ final class PodmanJobOutput {
             stored=JobExecutionProtocol.findReceipt(connection,request.token(),JobExecutionProtocol.Phase.OUTPUT).orElse(null);
         }
         if(stored==null || !stored.operation().equals(completed.operation()) || !stored.engine().equals(completed.engine())
-                || !JSON.readTree(stored.payload()).path("facts").equals(facts)) return false;
+                || !JSON.readTree(stored.payload()).path("facts").equals(JSON.readTree(completed.payload()).path("facts"))) return false;
         var conserved=JobOutputReservations.find(connection,request.token()).orElseThrow();
         require(conserved.verifiedAt()!=null && Long.valueOf(copied.byteSize()).equals(conserved.verifiedBytes())
                 && conserved.chargedBytes()==copied.byteSize(),"Ordinary output retained-byte settlement is unavailable");
@@ -87,10 +88,12 @@ final class PodmanJobOutput {
     }
 
     private static boolean currentNormalPair(Connection connection,JobExecutionProtocol.Creation request) throws SQLException {
+        if(request.originalJobId().isEmpty()) return false;
         try(var query=connection.prepareStatement("SELECT EXISTS (SELECT 1 FROM starexec.job_pairs p JOIN starexec.jobs j ON j.id=p.job_id"
                 +" JOIN starexec.job_pair_attempts a ON a.pair_id=p.id WHERE p.id=? AND p.sge_id=? AND a.current_attempt_no=?"
-                +" AND j.user_id=? AND j.buildjob IS FALSE AND j.killed IS NOT TRUE AND j.deleted IS NOT TRUE AND p.status_code IS DISTINCT FROM 21)")) {
+                +" AND j.user_id=? AND j.id=? AND j.buildjob IS FALSE AND j.killed IS NOT TRUE AND j.deleted IS NOT TRUE AND p.status_code IS DISTINCT FROM 21)")) {
             query.setInt(1,request.pairId());query.setInt(2,request.executionId());query.setInt(3,request.attemptNo());query.setInt(4,request.ownerId());
+            query.setInt(5,request.originalJobId().orElseThrow());
             try(var rows=query.executeQuery()) {return rows.next() && rows.getBoolean(1);}
         }
     }

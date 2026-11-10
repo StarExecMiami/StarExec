@@ -139,11 +139,13 @@ BEGIN
     WHEN 'OUTPUT_REQUEST' THEN
         PERFORM singleton FROM starexec.execution_storage_policy WHERE singleton FOR SHARE NOWAIT;
         IF NOT FOUND THEN RAISE EXCEPTION 'Ordinary output reservation policy is unavailable'; END IF;
-        IF _stop.execution_token IS NULL OR _stop.receipt_payload::jsonb->'facts' ? 'disposition'
+        IF starexec.job_execution_original_job(NEW.execution_token) IS NULL
+            OR _stop.execution_token IS NULL OR _stop.receipt_payload::jsonb->'facts' ? 'disposition'
             OR _facts->>'stop_sha256' IS DISTINCT FROM _stop.receipt_sha256
             OR EXISTS (SELECT 1 FROM starexec.job_execution_receipts WHERE execution_token=NEW.execution_token AND receipt_kind='OUTPUT')
             OR NOT EXISTS (SELECT 1 FROM starexec.job_pairs p JOIN starexec.jobs j ON j.id=p.job_id
-                WHERE p.id=_request.pair_id AND p.status_code IS DISTINCT FROM 21
+                WHERE p.id=_request.pair_id AND p.job_id=starexec.job_execution_original_job(NEW.execution_token)
+                    AND p.status_code IS DISTINCT FROM 21
                     AND j.deleted IS NOT TRUE AND j.killed IS NOT TRUE) THEN
             RAISE EXCEPTION 'Ordinary output reservation requires the current normal stopped execution';
         END IF;
