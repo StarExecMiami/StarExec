@@ -796,6 +796,53 @@ class PodmanJobCreationSqlTest extends Common {
         assertThrows(SQLException.class,()->JobExecutionProtocol.recordReceipt(connection,active,resource,stop));
         assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).isEmpty());
     }
+
+    private static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> stoppedOutcomes() {
+        return java.util.stream.Stream.of("exited","dead").flatMap(state->java.util.stream.Stream.of(false,true)
+                .map(cancelled->org.junit.jupiter.params.provider.Arguments.of(state,cancelled)));
+    }
+    private com.github.dockerjava.api.command.InspectContainerResponse stoppedInspection(JobExecutionProtocol.Creation saved,String status) throws Exception {
+        var tree=createdInspectionTree(saved);((com.fasterxml.jackson.databind.node.ObjectNode)tree.get("State"))
+                .put("Status",status).put("ExitCode",137).put("StartedAt","2026-01-01T00:00:01Z").put("FinishedAt","2026-01-01T00:00:02Z");
+        return com.github.dockerjava.core.DockerClientConfig.getDefaultObjectMapper().treeToValue(tree,com.github.dockerjava.api.command.InspectContainerResponse.class);
+    }
+
+    @ParameterizedTest @org.junit.jupiter.params.provider.MethodSource("stoppedOutcomes")
+    void stoppedOrdinaryObservationRoundTripsWithoutReleasingStorage(String status,boolean cancelled) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));
+        var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();
+        if(cancelled) number("UPDATE starexec.jobs SET killed=true WHERE id=? RETURNING id",job);
+        else {
+            var runtime=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+            runtime.put("runtime_payload","{\"version\":1,\"observation\":{\"startTicks\":1,\"memoryBytes\":1024,"
+                    +"\"pids\":16,\"cpus\":\"0\",\"namespaces\":{\"pid\":\"pid:[1]\",\"ipc\":\"ipc:[2]\","
+                    +"\"net\":\"net:[3]\",\"mnt\":\"mnt:[4]\",\"user\":\"user:[5]\",\"cgroup\":\"cgroup:[6]\"}}}");
+            assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt(saved,JobExecutionProtocol.Phase.RELEASE,runtime)));
+        }
+        var inspection=stoppedInspection(saved,status);
+        var observed=PodmanJobStopObservation.observe(saved,"c".repeat(64),inspection,UUID.randomUUID(),cancelled);
+        long before=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,observed));
+        var stored=JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.STOP).orElseThrow();
+        assertEquals(observed,stored);assertFalse(JobExecutionProtocol.recordReceipt(connection,active,resource,observed));
+        assertDoesNotThrow(()->PodmanJobStopObservation.requireSameStopped(saved,"c".repeat(64),inspection,stored));
+        assertEquals(before,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertNull(JobStorageLeases.find(connection,saved.token()).orElseThrow().releasedAt());
+        assertTrue(JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.OUTPUT).isEmpty());
+        assertTrue(JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.CLEANUP).isEmpty());
+        verify(client,never()).removeContainerCmd(anyString());
+    }
+
+    @Test void anUnreleasedNormalStopCannotBecomeAResult() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);assertTrue(adapter.claimCreation(connection));
+        assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));
+        var observation=PodmanJobStopObservation.observe(saved,"c".repeat(64),stoppedInspection(saved,"exited"),UUID.randomUUID(),false);
+        var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();
+        assertThrows(SQLException.class,()->JobExecutionProtocol.recordReceipt(connection,active,resource,observation));
+        assertTrue(JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.STOP).isEmpty());
+        assertNull(JobStorageLeases.find(connection,saved.token()).orElseThrow().releasedAt());
+    }
     @ParameterizedTest @ValueSource(strings={"JAVA","CURL"})
     void privateCreationConservesTheFirstAcknowledgementAndRecovers(String transport) throws Exception {
         var adapter=prepare();var prepared=adapter.preparation(connection);

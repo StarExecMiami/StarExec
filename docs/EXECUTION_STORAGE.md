@@ -216,6 +216,15 @@ release. Normal execution still requires a positively stopped terminal state and
 valid completion times. This observation alone neither removes a provider resource,
 settles used storage nor authorizes scientific output or a replacement execution.
 
+`PodmanJobStopObservation` separately validates a retained ordinary provider in
+`exited` or `dead` state, with zero PID, false execution flags and the same private
+identity, launcher and stop policy. It conserves raw start/finish times and exit
+code; a finish must be later than the epoch and not before the start. Cancellation
+is explicit, and SQL still refuses an unreleased normal result. Reinspection must
+match every conserved ownership/stop fact while retaining the original observation
+time. This observer performs no removal, output ingestion or used-storage release;
+those operations still require the complete runtime and cleanup protocol.
+
 The ordinary-job adapter consumes a one-way storage-use marker before the first
 filesystem mutation. That marker grants no engine admission. Only a never-used,
 independently reobserved empty resource can be reclaimed by this adapter; beginning

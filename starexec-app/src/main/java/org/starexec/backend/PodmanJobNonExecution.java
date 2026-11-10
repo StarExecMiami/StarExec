@@ -17,22 +17,12 @@ final class PodmanJobNonExecution {
 
     private PodmanJobNonExecution() { }
 
-    static void requireCreated(JobExecutionProtocol.Creation request,String container,InspectContainerResponse inspection) throws IOException {
+    static void requireIdentity(JobExecutionProtocol.Creation request,String container,InspectContainerResponse inspection) throws IOException {
         require(request!=null && inspection!=null && container!=null && container.matches("[0-9a-f]{64}")
                 && container.equals(inspection.getId()) && request.image().equals(inspection.getImageId())
                 && (request.name().equals(inspection.getName()) || ("/"+request.name()).equals(inspection.getName())),
                 "Ordinary non-execution resource identity differs");
-        var state=inspection.getState();var host=inspection.getHostConfig();var config=inspection.getConfig();
-        require(state!=null && "created".equals(state.getStatus()) && Long.valueOf(0).equals(state.getPidLong())
-                && Boolean.FALSE.equals(state.getRunning()) && Boolean.FALSE.equals(state.getPaused())
-                && Boolean.FALSE.equals(state.getRestarting()) && Long.valueOf(0).equals(state.getExitCodeLong()),
-                "Ordinary resource may already have executed");
-        try {
-            require(ZERO_TIME.equals(Instant.parse(state.getStartedAt())) && ZERO_TIME.equals(Instant.parse(state.getFinishedAt())),
-                    "Ordinary resource has a previous start or finish");
-        } catch (java.time.DateTimeException | NullPointerException invalid) {
-            throw new IOException("Ordinary non-execution timestamps are unavailable",invalid);
-        }
+        var host=inspection.getHostConfig();var config=inspection.getConfig();
         require(host!=null && Boolean.FALSE.equals(host.getPrivileged()) && Boolean.TRUE.equals(host.getReadonlyRootfs())
                 && Boolean.FALSE.equals(host.getAutoRemove()) && "private".equals(host.getPidMode())
                 && host.getRestartPolicy()!=null && "no".equals(host.getRestartPolicy().getName())
@@ -54,6 +44,21 @@ final class PodmanJobNonExecution {
                 && config.getHealthcheck()!=null && List.of("NONE").equals(config.getHealthcheck().getTest()),
                 "Ordinary non-execution launcher differs");
         PodmanPrivateBuild.requireStopPolicy(inspection);
+    }
+
+    static void requireCreated(JobExecutionProtocol.Creation request,String container,InspectContainerResponse inspection) throws IOException {
+        requireIdentity(request,container,inspection);
+        var state=inspection.getState();
+        require(state!=null && "created".equals(state.getStatus()) && Long.valueOf(0).equals(state.getPidLong())
+                && Boolean.FALSE.equals(state.getRunning()) && Boolean.FALSE.equals(state.getPaused())
+                && Boolean.FALSE.equals(state.getRestarting()) && Long.valueOf(0).equals(state.getExitCodeLong()),
+                "Ordinary resource may already have executed");
+        try {
+            require(ZERO_TIME.equals(Instant.parse(state.getStartedAt())) && ZERO_TIME.equals(Instant.parse(state.getFinishedAt())),
+                    "Ordinary resource has a previous start or finish");
+        } catch (java.time.DateTimeException | NullPointerException invalid) {
+            throw new IOException("Ordinary non-execution timestamps are unavailable",invalid);
+        }
     }
 
     /** The caller must bind this observation to persisted ownership before any retirement. */

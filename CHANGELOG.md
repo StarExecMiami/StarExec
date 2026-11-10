@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Conserve exact ordinary created-container configuration after validating its immutable request, launcher, limits, environment and bind access, without treating configuration as execution admission.
 - Require a first acknowledged ordinary hold-start claim against the current job, attempt, owner and cancellation locator; historical observations cannot authorize another start.
 - Couple ordinary creation to bounded same-socket inspection and one acknowledged trusted hold start, preserving transport selection and uncertain outcomes without payload release.
+- Conserve exact ordinary stopped-provider facts and revalidate them before retirement, preserving cancellation and never-started distinctions without releasing used storage.
 
 - Serialize dedicated storage ownership across solver builds and ordinary job
   attempts, preserving build lease history and booking each job allowance once.

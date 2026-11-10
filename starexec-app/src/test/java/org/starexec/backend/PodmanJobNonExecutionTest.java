@@ -130,4 +130,91 @@ class PodmanJobNonExecutionTest {
         assertThrows(IOException.class,()->PodmanJobNonExecution.observe(request,CONTAINER,inspection,null));
         assertThrows(IOException.class,()->PodmanJobNonExecution.observe(request,CONTAINER,inspection,new UUID(0,0)));
     }
+
+    private static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> stoppedStates() {
+        return java.util.stream.Stream.of("exited","dead").flatMap(state->java.util.stream.Stream.of(false,true)
+                .map(cancelled->org.junit.jupiter.params.provider.Arguments.of(state,cancelled)));
+    }
+    private ObjectNode stoppedTree(JobExecutionProtocol.Creation request,String status) throws Exception {
+        var tree=inspectionTree(request);var state=(ObjectNode)tree.get("State");
+        state.put("Status",status).put("ExitCode",137).put("StartedAt","2026-01-01T00:00:01.000000000Z")
+                .put("FinishedAt","2026-01-01T00:00:02.000000000Z");return tree;
+    }
+
+    @ParameterizedTest @org.junit.jupiter.params.provider.MethodSource("stoppedStates")
+    void stoppedFactsPreserveRawTimesAndCancellation(String status,boolean cancelled) throws Exception {
+        var request=creation();var operation=UUID.randomUUID();var tree=stoppedTree(request,status);
+        var inspected=JSON.treeToValue(tree,InspectContainerResponse.class);
+        var receipt=PodmanJobStopObservation.observe(request,CONTAINER,inspected,operation,cancelled);
+        var facts=JSON.readTree(receipt.payload()).path("facts");
+        assertEquals(status,facts.path("status").textValue());assertEquals(137,facts.path("exit_code").longValue());
+        assertEquals("2026-01-01T00:00:01.000000000Z",facts.path("started_at").textValue());
+        assertEquals("2026-01-01T00:00:02.000000000Z",facts.path("finished_at").textValue());
+        assertEquals(cancelled,facts.has("disposition"));if(cancelled) assertEquals("cancelled",facts.path("disposition").textValue());
+        assertEquals(JobExecutionProtocol.Phase.STOP,receipt.phase());assertEquals(operation,receipt.operation());
+        assertEquals(JobExecutionProtocol.digest(receipt.payload()),receipt.sha256());
+        assertDoesNotThrow(()->PodmanJobStopObservation.requireSameStopped(request,CONTAINER,inspected,receipt));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"created","running-status","pid","running","paused","restarting","missing-running","missing-exit",
+            "zero-finish","missing-finish","missing-start","backwards","shared-pid","restart","privileged","auto-remove","capabilities","label","missing-state","missing-status","readonly"})
+    void incompleteStoppedScopesCannotProduceOrdinaryReceipts(String change) throws Exception {
+        var request=creation();var tree=stoppedTree(request,"exited");var state=(ObjectNode)tree.get("State");
+        var host=(ObjectNode)tree.get("HostConfig");
+        switch(change) {
+            case "created" -> state.put("Status","created");
+            case "running-status" -> state.put("Status","running");
+            case "pid" -> state.put("Pid",23);
+            case "running" -> state.put("Running",true);
+            case "paused" -> state.put("Paused",true);
+            case "restarting" -> state.put("Restarting",true);
+            case "missing-running" -> state.remove("Running");
+            case "missing-exit" -> state.remove("ExitCode");
+            case "zero-finish" -> state.put("FinishedAt","0001-01-01T00:00:00Z");
+            case "missing-finish" -> state.remove("FinishedAt");
+            case "missing-start" -> state.remove("StartedAt");
+            case "backwards" -> state.put("FinishedAt","2026-01-01T00:00:00Z");
+            case "shared-pid" -> host.put("PidMode","host");
+            case "restart" -> ((ObjectNode)host.get("RestartPolicy")).put("Name","always");
+            case "privileged" -> host.put("Privileged",true);
+            case "auto-remove" -> host.put("AutoRemove",true);
+            case "capabilities" -> host.putArray("CapAdd").add("SYS_ADMIN");
+            case "label" -> ((ObjectNode)tree.path("Config").path("Labels")).put("starexec.job.token",UUID.randomUUID().toString());
+            case "missing-state" -> tree.remove("State");
+            case "missing-status" -> state.remove("Status");
+            case "readonly" -> host.put("ReadonlyRootfs",false);
+            default -> throw new AssertionError(change);
+        }
+        var inspection=JSON.treeToValue(tree,InspectContainerResponse.class);
+        assertThrows(IOException.class,()->PodmanJobStopObservation.observe(request,CONTAINER,inspection,UUID.randomUUID(),true));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"id","status","time","exit","pid","image","kind"})
+    void historicalStopCannotReplaceFreshProviderVerification(String change) throws Exception {
+        var request=creation();var tree=stoppedTree(request,"exited");
+        var receipt=PodmanJobStopObservation.observe(request,CONTAINER,JSON.treeToValue(tree,InspectContainerResponse.class),UUID.randomUUID(),true);
+        var state=(ObjectNode)tree.get("State");
+        switch(change) {
+            case "id" -> tree.put("Id","d".repeat(64));
+            case "status" -> state.put("Status","dead");
+            case "time" -> state.put("FinishedAt","2026-01-01T00:00:03Z");
+            case "exit" -> state.put("ExitCode",1);
+            case "pid" -> state.put("Pid",23);
+            case "image" -> tree.put("Image","sha256:"+"d".repeat(64));
+            case "kind" -> {
+                var value=JSON.readTree(receipt.payload());((ObjectNode)value).put("kind","CREATED");String payload=value.toString();
+                receipt=new JobExecutionProtocol.Receipt(request.token(),JobExecutionProtocol.Phase.CREATED,receipt.operation(),receipt.engine(),payload,JobExecutionProtocol.digest(payload));
+            }
+            default -> throw new AssertionError(change);
+        }
+        var saved=receipt;var inspection=JSON.treeToValue(tree,InspectContainerResponse.class);
+        assertThrows(IOException.class,()->PodmanJobStopObservation.requireSameStopped(request,CONTAINER,inspection,saved));
+    }
+
+    @Test void cancelledFailedStartPreservesItsProviderZeroStartTime() throws Exception {
+        var request=creation();var tree=stoppedTree(request,"dead");
+        ((ObjectNode)tree.get("State")).put("StartedAt","0001-01-01T00:00:00Z");
+        var receipt=PodmanJobStopObservation.observe(request,CONTAINER,JSON.treeToValue(tree,InspectContainerResponse.class),UUID.randomUUID(),true);
+        assertEquals("0001-01-01T00:00:00Z",JSON.readTree(receipt.payload()).path("facts").path("started_at").textValue());
+    }
 }
