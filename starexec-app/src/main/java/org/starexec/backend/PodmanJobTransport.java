@@ -130,18 +130,46 @@ final class PodmanJobTransport {
                 :createJavaOnce(connection,policy,provider,socket,connectSeconds,responseSeconds);
         if(created.isEmpty()) return Optional.empty();
         String container=created.orElseThrow();
-        var inspection=javaExchange(socket,connectSeconds,responseSeconds,"GET","/v1.41/containers/"+container+"/json",null,()->true,response->{
-            if(response.getStatusCode()!=200 || response.getBody()==null) throw new IOException("Ordinary created inspection is unavailable");
-            byte[] bytes=response.getBody().readNBytes(MAX_INSPECTION+1);
-            if(bytes.length>MAX_INSPECTION) throw new IOException("Ordinary created inspection exceeds its bound");
-            return PROVIDER_JSON.readValue(bytes,com.github.dockerjava.api.command.InspectContainerResponse.class);
-        }).orElseThrow(()->new IOException("Ordinary created inspection is unavailable"));
+        var inspection=inspectOnce(socket,connectSeconds,responseSeconds,container);
         Decision claim=()->policy.claimStart(connection,container,inspection);
         String path="/v1.41/containers/"+container+"/start";
         var started=curl?curlPost(socket,connectSeconds,responseSeconds,path,"",204,claim)
                 :javaExchange(socket,connectSeconds,responseSeconds,"POST",path,new byte[0],claim,response->postReply(response,204));
         if(started.isEmpty()) throw new IOException("No first acknowledged ordinary hold-start claim is available");
         return created;
+    }
+
+    private static com.github.dockerjava.api.command.InspectContainerResponse inspectOnce(String socket,int connectSeconds,int responseSeconds,
+            String container) throws IOException,SQLException {
+        return javaExchange(socket,connectSeconds,responseSeconds,"GET","/v1.41/containers/"+container+"/json",null,()->true,response->{
+            if(response.getStatusCode()!=200 || response.getBody()==null) throw new IOException("Ordinary created inspection is unavailable");
+            byte[] bytes=response.getBody().readNBytes(MAX_INSPECTION+1);
+            if(bytes.length>MAX_INSPECTION) throw new IOException("Ordinary created inspection exceeds its bound");
+            return PROVIDER_JSON.readValue(bytes,com.github.dockerjava.api.command.InspectContainerResponse.class);
+        }).orElseThrow(()->new IOException("Ordinary created inspection is unavailable"));
+    }
+
+    static boolean releaseHeldOnce(Connection connection,PodmanJobCreation policy,DockerClient provider,String socket,String container,
+            org.starexec.backend.storage.BuildExecutionRuntime.Identity identity,java.util.Map<String,String> forbiddenNamespaces,
+            int connectSeconds,int responseSeconds) throws IOException,SQLException,InterruptedException {
+        if(policy==null || !policy.unreleasedHold(connection,container)) return false;
+        var request=check(policy,policy.creation().transport(),provider,socket,connectSeconds,responseSeconds);
+        var before=inspectOnce(socket,connectSeconds,responseSeconds,container);
+        var held=PodmanJobObservation.held(request,container,before);
+        var runtime=policy.captureRuntime(connection,container,before,identity,forbiddenNamespaces);
+        final String response;
+        try {response=PodmanPrivateBuild.collect(provider,container,runtime);}
+        catch(RuntimeException invalid) {throw new IOException("Ordinary runtime observation failed",invalid);}
+        var observation=runtime.verify(response);
+        policy.preparation(connection).requireCurrent(connection);
+        var after=PodmanJobObservation.held(request,container,inspectOnce(socket,connectSeconds,responseSeconds,container));
+        if(!held.equals(after)) throw new IOException("Ordinary held provider changed during kernel observation");
+        Decision claim=()->policy.claimRelease(connection,container,observation,held);
+        String path="/v1.41/containers/"+container+"/kill?signal=USR2";
+        var sent=request.transport()==JobExecutionProtocol.Transport.CURL
+                ?curlPost(socket,connectSeconds,responseSeconds,path,"",204,claim)
+                :javaExchange(socket,connectSeconds,responseSeconds,"POST",path,new byte[0],claim,result->postReply(result,204));
+        return sent.isPresent();
     }
 
     private static String postReply(com.github.dockerjava.transport.DockerHttpClient.Response response,int expectedStatus) throws IOException {

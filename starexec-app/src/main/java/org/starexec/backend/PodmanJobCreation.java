@@ -164,6 +164,48 @@ public final class PodmanJobCreation {
         return JobExecutionProtocol.recordReceipt(connection,lease,resource,receipt);
     }
 
+    boolean unreleasedHold(Connection connection,String container) throws IOException,SQLException {
+        var request=planned;
+        if(request==null || container==null || !container.matches("[0-9a-f]{64}")
+                || !request.equals(JobExecutionProtocol.findCreation(connection,lease.token()).orElse(null))) return false;
+        var created=JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.CREATED);
+        if(created.isEmpty() || !("podman:"+request.executionId()+":"+container).equals(created.get().engine())) return false;
+        var requested=JSON.readTree(created.get().payload()).path("facts").path("start_requested");
+        if(!requested.isBoolean() || !requested.booleanValue()) return false;
+        for(var phase:List.of(JobExecutionProtocol.Phase.RELEASE,JobExecutionProtocol.Phase.STOP,
+                JobExecutionProtocol.Phase.CLEANUP_REQUEST,JobExecutionProtocol.Phase.CLEANUP))
+            if(JobExecutionProtocol.findReceipt(connection,lease.token(),phase).isPresent()) return false;
+        return true;
+    }
+
+    org.starexec.backend.storage.BuildExecutionRuntime captureRuntime(Connection connection,String container,
+            com.github.dockerjava.api.command.InspectContainerResponse inspection,
+            org.starexec.backend.storage.BuildExecutionRuntime.Identity identity,Map<String,String> forbiddenNamespaces)
+            throws IOException,SQLException {
+        require(unreleasedHold(connection,container),"Ordinary runtime has no unreleased admitted hold");
+        var held=PodmanJobObservation.held(creation(),container,inspection);
+        var recorded=JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.CREATED).orElseThrow();
+        require(held.configurationSha256().equals(JSON.readTree(recorded.payload()).path("facts").path("configuration_sha256").textValue()),
+                "Ordinary held configuration changed after creation");
+        require(identity!=null && identity.insideUid()==0 && identity.insideGid()==0,"Ordinary runtime identity differs from its launcher");
+        var requested=JSON.treeToValue(JSON.readTree(creation().payload()).path("HostConfig"),HostConfig.class);
+        var limits=new org.starexec.backend.storage.BuildExecutionRuntime.Limits(requested.getMemory(),inspection.getHostConfig().getPidsLimit(),
+                requested.getCpusetCpus(),quota(requested.getCpuQuota()),period(requested.getCpuPeriod()));
+        return org.starexec.backend.storage.BuildExecutionRuntime.captureJob(connection,preparation(connection),identity,limits,forbiddenNamespaces,HOLD_SECONDS);
+    }
+
+    /** A first cold decision requires fresh proof; existing or uncertain releases cannot grant another signal. */
+    boolean claimRelease(Connection connection,String container,org.starexec.backend.storage.BuildExecutionRuntime.Observation observation,
+            PodmanJobObservation.Held held) throws IOException,SQLException {
+        if(observation==null || held==null || !unreleasedHold(connection,container)) return false;
+        preparation(connection).requireCurrent(connection);
+        var runtime=JSON.createObjectNode();runtime.put("version",1);runtime.set("observation",JSON.valueToTree(observation));
+        var facts=JSON.createObjectNode();facts.put("runtime_payload",runtime.toString());facts.put("held_pid",held.pid());
+        facts.put("held_started_at",held.startedAt());facts.put("configuration_sha256",held.configurationSha256());
+        var receipt=PodmanJobReceipts.observed(creation(),JobExecutionProtocol.Phase.RELEASE,container,java.util.UUID.randomUUID(),facts);
+        return JobExecutionProtocol.recordReceipt(connection,lease,resource,receipt);
+    }
+
     public JobExecutionPreparation preparation(Connection connection) throws IOException,SQLException {
         if (JobExecutionProtocol.findCreation(connection,lease.token()).isEmpty()) {
             prepared.requireCurrent(connection);return prepared;

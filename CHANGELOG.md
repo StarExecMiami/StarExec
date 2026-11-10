@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Require a first acknowledged ordinary hold-start claim against the current job, attempt, owner and cancellation locator; historical observations cannot authorize another start.
 - Couple ordinary creation to bounded same-socket inspection and one acknowledged trusted hold start, preserving transport selection and uncertain outcomes without payload release.
 - Conserve exact ordinary stopped-provider facts and revalidate them before retirement, preserving cancellation and never-started distinctions without releasing used storage.
+- Verify the ordinary held runtime and current inputs before one durable payload-release decision and a non-repeatable signal; historical releases cannot authorize another send.
 
 - Serialize dedicated storage ownership across solver builds and ordinary job
   attempts, preserving build lease history and booking each job allowance once.

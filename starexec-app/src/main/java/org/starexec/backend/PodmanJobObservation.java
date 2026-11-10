@@ -33,6 +33,31 @@ final class PodmanJobObservation {
     private static JobExecutionProtocol.Receipt created(JobExecutionProtocol.Creation request,String container,
             InspectContainerResponse inspection,UUID operation,boolean start) throws IOException {
         PodmanJobNonExecution.requireCreated(request,container,inspection);
+        var configuration=configuration(request,inspection);String payload=configuration.toString();var facts=JSON.createObjectNode();
+        facts.put("resource_id",container);facts.put("container_name",request.name());facts.put("image_id",inspection.getImageId());
+        facts.put("configuration_payload",payload);facts.put("configuration_sha256",JobExecutionProtocol.digest(payload));
+        if(start) facts.put("start_requested",true);
+        facts.put("observed_at",Instant.now().toString());
+        return PodmanJobReceipts.observed(request,JobExecutionProtocol.Phase.CREATED,container,operation,facts);
+    }
+
+    record Held(long pid,String startedAt,String configurationSha256) { }
+
+    static Held held(JobExecutionProtocol.Creation request,String container,InspectContainerResponse inspection) throws IOException {
+        PodmanJobNonExecution.requireIdentity(request,container,inspection);var state=inspection.getState();
+        require(state!=null && "running".equals(state.getStatus()) && Boolean.TRUE.equals(state.getRunning())
+                && Boolean.FALSE.equals(state.getPaused()) && Boolean.FALSE.equals(state.getRestarting())
+                && state.getPidLong()!=null && state.getPidLong()>0 && Long.valueOf(0).equals(state.getExitCodeLong()),
+                "Ordinary provider is not held in a live private scope");
+        try {
+            require(Instant.parse(state.getStartedAt()).isAfter(Instant.EPOCH)
+                    && Instant.parse("0001-01-01T00:00:00Z").equals(Instant.parse(state.getFinishedAt())),"Ordinary held process times differ");
+        } catch(java.time.DateTimeException | NullPointerException invalid) {throw new IOException("Ordinary held process times are unavailable",invalid);}
+        return new Held(state.getPidLong(),state.getStartedAt(),JobExecutionProtocol.digest(configuration(request,inspection).toString()));
+    }
+
+    private static com.fasterxml.jackson.databind.node.ObjectNode configuration(JobExecutionProtocol.Creation request,
+            InspectContainerResponse inspection) throws IOException {
         var declared=JSON.readTree(request.payload());var expected=JSON.treeToValue(declared.path("HostConfig"),HostConfig.class);
         var actual=inspection.getHostConfig();
         require(expected.getMemory()!=null && expected.getMemory()>0 && Objects.equals(expected.getMemory(),actual.getMemory())
@@ -75,12 +100,7 @@ final class PodmanJobObservation {
         configuration.set("command",JSON.valueToTree(inspection.getConfig().getCmd()));
         configuration.put("working_directory",inspection.getConfig().getWorkingDir());
         var env=configuration.putObject("requested_environment");wanted.forEach((key,value)->env.put(key,observed.get(key)));
-        String payload=configuration.toString();var facts=JSON.createObjectNode();
-        facts.put("resource_id",container);facts.put("container_name",request.name());facts.put("image_id",inspection.getImageId());
-        facts.put("configuration_payload",payload);facts.put("configuration_sha256",JobExecutionProtocol.digest(payload));
-        if(start) facts.put("start_requested",true);
-        facts.put("observed_at",Instant.now().toString());
-        return PodmanJobReceipts.observed(request,JobExecutionProtocol.Phase.CREATED,container,operation,facts);
+        return configuration;
     }
 
     private static Map<String,String> environment(String[] values) throws IOException {

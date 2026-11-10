@@ -190,6 +190,17 @@ creation request returns without any new inspection or start. This coordinator
 starts only the trusted hold; effective kernel verification, payload release,
 positive stop and used-storage cleanup remain separate requirements.
 
+Payload release requires a matching explicit hold-start decision and no prior
+release, stop or cleanup. The ordinary coordinator captures the current prepared
+inputs and requested limits, executes the existing bounded kernel collector against
+the same provider, and uses the shared effective-runtime verifier. It rechecks
+inputs and the held process/configuration after collection before conserving one
+versioned runtime observation in `RELEASE`. Only its first acknowledged commit
+permits one `USR2` request on the selected transport. A cold first decision requires
+the same fresh proof; a historical or uncertain release cannot permit another
+signal. Provider retirement, output ingestion and used-storage settlement remain
+separate requirements before normal dispatch activation.
+
 `PodmanJobObservation` conserves a created container's configuration only after
 matching its never-started identity, trusted launcher, requested environment,
 memory/swap/CPU/process limits and exact bind set, including read-only access and
