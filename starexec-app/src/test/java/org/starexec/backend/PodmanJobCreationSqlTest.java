@@ -1660,6 +1660,202 @@ class PodmanJobCreationSqlTest extends Common {
         assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).isEmpty());
     }
 
+    private record RetainedStatisticsFixture(StoppedOutputFixture stopped,JobExecutionProtocol.Receipt output,String node,String payload,long bytes) { }
+
+    private RetainedStatisticsFixture retainedStatisticsFixture(String change) throws Exception {
+        var stopped=nonemptyRetentionFixture();String node="retained-statistics-"+UUID.randomUUID();
+        number("INSERT INTO starexec.nodes(name,status) VALUES (?,'ACTIVE') RETURNING id",node);
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper();var data=mapper.createObjectNode().put("pairId",pair).put("stageNumber",1)
+                .put("wallclockTime",1.5).put("cpuTime",1.0).put("userTime",0.75).put("systemTime",0.25)
+                .put("maxVirtualMemory",128.0).put("maxResidentSetSize",2048L).put("diskSize",999999L).put("hostname",node);
+        switch(change) {
+            case "valid" -> { }
+            case "zero" -> {for(String field:List.of("wallclockTime","cpuTime","userTime","systemTime","maxVirtualMemory","maxResidentSetSize","diskSize")) data.put(field,0);}
+            case "no-host" -> data.remove("hostname");
+            case "integral-decimal" -> data.put("diskSize",new java.math.BigDecimal("5.0"));
+            case "wrong-pair" -> data.put("pairId",pair+1);
+            case "wrong-stage" -> data.put("stageNumber",2);
+            case "missing" -> data.remove("cpuTime");
+            case "string" -> data.put("cpuTime","1");
+            case "negative" -> data.put("wallclockTime",-1);
+            case "fractional-count" -> data.put("diskSize",new java.math.BigDecimal("1.25"));
+            case "large-count" -> data.put("maxResidentSetSize",new java.math.BigDecimal("9223372036854775808"));
+            case "large-time" -> data.put("cpuTime",new java.math.BigDecimal("1E+309"));
+            case "other-host" -> data.put("hostname","unverified-node");
+            case "duplicate","malformed" -> { }
+            default -> throw new AssertionError();
+        }
+        String payload=data.toString();
+        if(change.equals("duplicate")) payload=payload.replaceFirst("\\{","{\"pairId\":"+pair+",");
+        if(change.equals("malformed")) payload="not-json";
+        Path directory=Files.createDirectory(lease.staging().resolve("execution/monitor/stage-stats"));
+        Files.writeString(directory.resolve("1.json"),payload);
+        assertTrue(PodmanJobOutput.retainStoppedOutput(connection,stopped.request(),stopped.inspection(),"c".repeat(64),outputParent(),4096,16));
+        var output=JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).orElseThrow();
+        var allocation=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        var manifest=mapper.readTree(mapper.readTree(output.payload()).path("facts").path("manifest_payload").textValue());
+        var entries=mapper.readTree(manifest.path("monitor").path("manifest_payload").textValue()).path("entries");int matches=0;
+        for(var entry:entries) if(entry.path("path").asText().equals("stage-stats/1.json")) {
+            assertEquals("file",entry.path("kind").textValue());assertEquals(JobExecutionProtocol.digest(payload),entry.path("sha256").textValue());
+            assertEquals(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8).length,entry.path("size").longValue());matches++;
+        }
+        assertEquals(1,matches);assertEquals(allocation.chargedBytes(),number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
+        return new RetainedStatisticsFixture(stopped,output,node,payload,allocation.chargedBytes());
+    }
+
+    private boolean recordRetainedStatistics(RetainedStatisticsFixture fixture) throws Exception {
+        return number("SELECT CASE WHEN starexec.record_job_output_stage_statistics(?,?,?,?,?,?) THEN 1 ELSE 0 END",lease.token(),fixture.output().sha256(),
+                1,fixture.node(),fixture.payload(),JobExecutionProtocol.digest(fixture.payload()))==1;
+    }
+
+    @Test void retainedStageMeasurementsDoNotDebitQuotaAgain() throws Exception {
+        var fixture=retainedStatisticsFixture("valid");long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        assertTrue(recordRetainedStatistics(fixture));
+        try(var query=connection.prepareStatement("SELECT wallclock,cpu,user_time,system_time,max_vmem,max_res_set,disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id=? AND stage_number=1")) {
+            query.setInt(1,pair);try(var row=query.executeQuery()) {
+                assertTrue(row.next());assertEquals(1.5,row.getDouble(1));assertEquals(1.0,row.getDouble(2));assertEquals(0.75,row.getDouble(3));
+                assertEquals(0.25,row.getDouble(4));assertEquals(128.0,row.getDouble(5));assertEquals(2048,row.getLong(6));assertEquals(999999,row.getLong(7));
+            }
+        }
+        assertEquals(fixture.bytes(),number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertTrue(recordRetainedStatistics(fixture));
+        assertEquals(fixture.bytes(),number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+    }
+
+    private String retainedStatisticsState() throws SQLException {
+        try(var query=connection.prepareStatement("SELECT jsonb_build_object('node',(SELECT node_id FROM starexec.job_pairs WHERE id=?),"
+                +"'stages',(SELECT jsonb_agg(to_jsonb(s) ORDER BY stage_number) FROM starexec.jobpair_stage_data s WHERE jobpair_id=?),"
+                +"'jobBytes',(SELECT disk_size FROM starexec.jobs WHERE id=?),'ownerBytes',(SELECT disk_size FROM starexec.users WHERE id=?))::text")) {
+            query.setInt(1,pair);query.setInt(2,pair);query.setInt(3,job);query.setInt(4,owner);
+            try(var row=query.executeQuery()) {assertTrue(row.next());return row.getString(1);}
+        }
+    }
+
+    private boolean retainedStatisticsMutation(Object...args) throws Exception {
+        return number("SELECT CASE WHEN starexec.record_job_output_stage_statistics(?,?,?,?,?,?) THEN 1 ELSE 0 END",args)==1;
+    }
+
+    @ParameterizedTest @ValueSource(strings={"zero","no-host","integral-decimal"})
+    void retainedStageMeasurementsPreserveZeroAndExactCounts(String change) throws Exception {
+        var fixture=retainedStatisticsFixture(change);long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        assertTrue(recordRetainedStatistics(fixture));
+        assertEquals(change.equals("zero")?0:change.equals("integral-decimal")?5:999999,
+                number("SELECT disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id=? AND stage_number=1",pair));
+        assertEquals(change.equals("zero")?0:2048,number("SELECT max_res_set FROM starexec.jobpair_stage_data WHERE jobpair_id=? AND stage_number=1",pair));
+        assertEquals(fixture.bytes(),number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        String after=retainedStatisticsState();assertTrue(recordRetainedStatistics(fixture));assertEquals(after,retainedStatisticsState());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"wrong-pair","wrong-stage","missing","string","negative","fractional-count","large-count","large-time","other-host","duplicate","malformed"})
+    void retainedStageMeasurementsRefuseUnqualifiedFileData(String change) throws Exception {
+        var fixture=retainedStatisticsFixture(change);String before=retainedStatisticsState();
+        assertFalse(recordRetainedStatistics(fixture));assertEquals(before,retainedStatisticsState());
+        assertEquals(fixture.output(),JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).orElseThrow());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"token","output","payload","sha","stage","node","inventory"})
+    void retainedStageMeasurementsBindTheirExactRequest(String change) throws Exception {
+        var fixture=retainedStatisticsFixture(change.equals("inventory")?"no-host":"valid");String before=retainedStatisticsState();
+        UUID token=change.equals("token")?UUID.randomUUID():lease.token();String output=change.equals("output")?"0".repeat(64):fixture.output().sha256();
+        String payload=fixture.payload()+(change.equals("payload")?" ":"");String digest=change.equals("sha")?"0".repeat(64):JobExecutionProtocol.digest(payload);
+        String node=change.equals("node")?null:change.equals("inventory")?"unregistered-node":fixture.node();
+        assertFalse(retainedStatisticsMutation(token,output,change.equals("stage")?0:1,node,payload,digest));assertEquals(before,retainedStatisticsState());
+    }
+
+    @Test void retainedMeasurementsCannotUseAnotherStageFile() throws Exception {
+        var fixture=retainedStatisticsFixture("wrong-stage");
+        number("INSERT INTO starexec.jobpair_stage_data(jobpair_id,stage_number,status_code,solver_id,config_id,disk_size) VALUES (?,2,1,?,?,0) RETURNING jobpair_id",pair,solver,config);
+        String before=retainedStatisticsState();
+        assertFalse(retainedStatisticsMutation(lease.token(),fixture.output().sha256(),2,fixture.node(),fixture.payload(),JobExecutionProtocol.digest(fixture.payload())));
+        assertEquals(before,retainedStatisticsState());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"attempt","execution","owner","cancelled","pair-cancelled","funding","cleanup","missing-stage"})
+    void retainedStatisticsRefuseChangedOwnershipOrCleanup(String change) throws Exception {
+        var fixture=retainedStatisticsFixture("valid");String before=retainedStatisticsState();connection.setAutoCommit(false);
+        try {
+            switch(change) {
+                case "attempt" -> number("UPDATE starexec.job_pair_attempts SET current_attempt_no=2 WHERE pair_id=? RETURNING pair_id",pair);
+                case "execution" -> number("UPDATE starexec.job_pairs SET sge_id=sge_id+1 WHERE id=? RETURNING id",pair);
+                case "owner" -> {
+                    int other=(int)number("INSERT INTO starexec.users(email,first_name,last_name,institution,created,password,disk_quota,disk_size) VALUES (?,'Other','Fixture','synthetic',now(),'synthetic',4194304,0) RETURNING id","statistics-"+UUID.randomUUID()+"@example.invalid");
+                    number("UPDATE starexec.jobs SET user_id=? WHERE id=? RETURNING id",other,job);
+                }
+                case "cancelled" -> number("UPDATE starexec.jobs SET killed=true WHERE id=? RETURNING id",job);
+                case "pair-cancelled" -> number("UPDATE starexec.job_pairs SET status_code=21 WHERE id=? RETURNING id",pair);
+                case "funding" -> number("UPDATE starexec.users SET disk_size=disk_size-1 WHERE id=? RETURNING id",owner);
+                case "missing-stage" -> number("DELETE FROM starexec.jobpair_stage_data WHERE jobpair_id=? AND stage_number=1 RETURNING jobpair_id",pair);
+                case "cleanup" -> {
+                    var stop=JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).orElseThrow();
+                    var cleanup=receipt(fixture.stopped().request(),JobExecutionProtocol.Phase.CLEANUP_REQUEST,new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
+                            .put("stop_sha256",stop.sha256()).put("staging_identity","statistics-guard"));
+                    assertEquals(1,number("SELECT CASE WHEN starexec.record_job_execution_receipt(?,?,?,?,?,?) THEN 1 ELSE 0 END",lease.token(),"CLEANUP_REQUEST",cleanup.operation(),cleanup.engine(),cleanup.payload(),cleanup.sha256()));
+                }
+                default -> throw new AssertionError();
+            }
+            String mutated=retainedStatisticsState();assertFalse(recordRetainedStatistics(fixture));assertEquals(mutated,retainedStatisticsState());
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(before,retainedStatisticsState());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"snapshot","owner"})
+    void retainedStatisticsRefuseStaleSnapshotAndOwnerContention(String change) throws Exception {
+        var fixture=retainedStatisticsFixture("valid");String before=retainedStatisticsState();
+        if(change.equals("snapshot")) {
+            int prior=connection.getTransactionIsolation();connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);connection.setAutoCommit(false);
+            try {
+                number("SELECT id FROM starexec.users WHERE id=?",owner);
+                assertEquals("40001",assertThrows(SQLException.class,()->recordRetainedStatistics(fixture)).getSQLState());
+            } finally {try {connection.rollback();} finally {connection.setAutoCommit(true);connection.setTransactionIsolation(prior);}}
+            assertEquals(before,retainedStatisticsState());
+        } else try(var other=Common.getConnection()) {
+            other.setAutoCommit(false);
+            try {
+                connectionNumber(other,"SELECT id FROM starexec.users WHERE id=? FOR UPDATE",owner);
+                assertEquals("55P03",assertThrows(SQLException.class,()->recordRetainedStatistics(fixture)).getSQLState());
+                assertEquals(before,retainedStatisticsState());
+            } finally {other.rollback();other.setAutoCommit(true);}
+            long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);assertTrue(recordRetainedStatistics(fixture));
+            assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));assertEquals(fixture.bytes(),number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
+        }
+    }
+
+    @Test void retainedStatisticsCommitReplyLossDoesNotBillAgain() throws Exception {
+        var fixture=retainedStatisticsFixture("valid");long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        var uncertain=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(connection));
+        doAnswer(call->{connection.commit();throw new SQLException("Lost scientific statistics acknowledgement","08006");}).when(uncertain).commit();
+        var lost=assertThrows(SQLException.class,()->Common.runTransactional(uncertain,tx->{
+            try(var query=tx.prepareStatement("SELECT starexec.record_job_output_stage_statistics(?,?,?,?,?,?)")) {
+                Object[] args={lease.token(),fixture.output().sha256(),1,fixture.node(),fixture.payload(),JobExecutionProtocol.digest(fixture.payload())};
+                for(int i=0;i<args.length;i++) query.setObject(i+1,args[i]);
+                try(var row=query.executeQuery()) {assertTrue(row.next());return row.getBoolean(1);}
+            }
+        }));
+        assertEquals("08006",lost.getSQLState());assertTrue(connection.getAutoCommit());String after=retainedStatisticsState();
+        assertEquals(999999,number("SELECT disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id=? AND stage_number=1",pair));
+        assertTrue(recordRetainedStatistics(fixture));assertEquals(after,retainedStatisticsState());
+        assertEquals(fixture.bytes(),number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"pair-refund","rerun","delete-pair","user-usage","legacy-stats"})
+    void rawStageDiskReportsNeverAuthorizeLegacyCredits(String operation) throws Exception {
+        var fixture=retainedStatisticsFixture("valid");assertTrue(recordRetainedStatistics(fixture));String before=retainedStatisticsState();
+        connection.setAutoCommit(false);
+        try {
+            if(operation.equals("rerun")) number("SELECT id FROM starexec.job_pairs WHERE id=? FOR UPDATE",pair);
+            var refused=assertThrows(SQLException.class,()->{
+                if(!operation.equals("legacy-stats")) legacyDiskMutation(operation,pair,job,owner);
+                else try(var query=connection.prepareStatement("CALL starexec.UpdatePairRunSolverStats(?,?,?,?,?,?,?,?,?,?,?)")) {
+                    Object[] args={pair,fixture.node(),1.5,1.0,0.75,0.25,128.0,2048L,1,888888L,1};
+                    for(int i=0;i<args.length;i++) query.setObject(i+1,args[i]);Common.executeAndDrain(query);
+                }
+            });
+            assertEquals(operation.equals("delete-pair")?"P0001":"55000",refused.getSQLState());
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(before,retainedStatisticsState());
+    }
+
     private StoppedOutputFixture stoppedOutputFixture() throws Exception {
         var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);var kernel=kernelPacket(adapter,saved);
         assertTrue(adapter.claimCreation(connection));assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));

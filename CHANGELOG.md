@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Ingest conserved per-stage scientific measurements through a fenced SQL path without changing measured disk charges.
 - Account verified ordinary output bytes to the immutable original job once, atomically with completion and without a second owner charge.
 - Conserve the original job in new ordinary creation payloads and reject mismatched admission labels without rewriting historical requests.
 - Refuse premature legacy refunds, resets and quota reconciliation while ordinary execution storage remains unsettled.

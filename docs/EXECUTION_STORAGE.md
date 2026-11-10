@@ -214,6 +214,19 @@ verified copy. The existing attempt fence still rejects stale reports first.
 Unregistered pairs, including other pairs of the same job, keep the legacy
 statistics and difference-based accounting behavior.
 
+`record_job_output_stage_statistics` accepts only the exact bytes of one
+`monitor/stage-stats/<stage>.json` entry in accounted retained output. It checks
+the OUTPUT digest, file digest/length, pair/stage, current attempt/original job,
+funded held storage and expected node before updating measurements. Zero is valid;
+missing, malformed, non-finite or inexact integral counts are refused. Repeated
+ingestion preserves the same values and never changes user or job byte charges.
+Reported `diskSize` remains a reported byte count in the stage row, independently
+of the measured retained-copy charge. Existing active-storage guards still refuse
+legacy refunds of those reports. Registered used cleanup must preserve this
+separation before releasing storage; this routine grants no cleanup permission.
+The SQL boundary does not replace trusted file observation, finished-stage
+selection, status/result ingestion or physical CPU/runtime verification.
+
 Legacy pair refunds and reruns, job deletion and size replacement refuse an
 unsettled ordinary storage claim or output allocation in their scope. Whole-user
 reconciliation also refuses these allocations instead of discarding their booked
