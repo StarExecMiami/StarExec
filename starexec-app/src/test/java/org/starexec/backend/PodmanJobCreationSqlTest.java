@@ -590,10 +590,8 @@ class PodmanJobCreationSqlTest extends Common {
             assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,stopped));
         }
         if(change.equals("cleanup-started")) {
-            String manifest="{\"synthetic\":true}";
-            var facts=mapper.createObjectNode().put("stop_sha256",stopped.sha256()).put("manifest_payload",manifest)
-                    .put("manifest_sha256",JobExecutionProtocol.digest(manifest));
-            assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt(saved,JobExecutionProtocol.Phase.OUTPUT,facts)));
+            var fixture=new StoppedOutputFixture(saved,inspection);
+            conserveCopiedOutputFixture(fixture,outputReservationPayload(fixture,8));
             assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt(saved,JobExecutionProtocol.Phase.CLEANUP_REQUEST,
                     mapper.createObjectNode().put("staging_identity","synthetic-staging").put("stop_sha256",stopped.sha256()))));
         }
@@ -661,6 +659,35 @@ class PodmanJobCreationSqlTest extends Common {
         return number("SELECT CASE WHEN starexec.record_job_execution_receipt(?,?,?,?,?,?) THEN 1 ELSE 0 END",lease.token(),"OUTPUT_REQUEST",
                 UUID.fromString(value.path("operation_token").textValue()),value.path("engine_identity").textValue(),payload,JobExecutionProtocol.digest(payload));
     }
+    private JobExecutionProtocol.Receipt conserveCopiedOutputFixture(StoppedOutputFixture fixture,
+            com.fasterxml.jackson.databind.node.ObjectNode value) throws Exception {
+        assertEquals(1,recordOutputReservation(value));
+        var allocation=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        assertTrue(org.starexec.data.database.JobOutputReservations.claimCopy(connection,allocation));
+        Path target=Files.createDirectory(allocation.target(),PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+        String identity=Files.readAttributes(target,java.nio.file.attribute.BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS).fileKey().toString();
+        assertTrue(org.starexec.data.database.JobOutputReservations.bindCopy(connection,allocation,identity));
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper();var original=value.path("facts");
+        var manifest=mapper.readTree(original.path("source_manifest_payload").textValue());
+        for(String scope:List.of("monitor","savedoutput")) {
+            var copied=org.starexec.jobs.SolverArtifactTree.copy(lease.staging().resolve("execution/"+scope),target.resolve(scope),8,6);
+            assertEquals(manifest.path(scope).path("manifest_payload").textValue(),copied.payload());
+        }
+        Files.setPosixFilePermissions(target,PosixFilePermissions.fromString("r-xr-xr-x"));
+        try(var directory=org.starexec.util.DescriptorDirectory.open(target);var parent=org.starexec.util.DescriptorDirectory.open(target.getParent())) {
+            directory.force();parent.force();
+        }
+        var facts=mapper.createObjectNode().put("stop_sha256",original.path("stop_sha256").textValue())
+                .put("reservation_sha256",allocation.request().sha256()).put("source_manifest_sha256",original.path("source_manifest_sha256").textValue())
+                .put("parent_path",allocation.parent().toString()).put("parent_identity",allocation.parentIdentity())
+                .put("target_path",target.toString()).put("directory_identity",identity)
+                .put("manifest_payload",original.path("source_manifest_payload").textValue()).put("manifest_sha256",original.path("source_manifest_sha256").textValue());
+        var envelope=value.deepCopy().put("kind","OUTPUT");envelope.set("facts",facts);String payload=envelope.toString();
+        var output=new JobExecutionProtocol.Receipt(lease.token(),JobExecutionProtocol.Phase.OUTPUT,allocation.request().operation(),
+                allocation.request().engine(),payload,JobExecutionProtocol.digest(payload));
+        assertTrue(JobExecutionProtocol.recordReceipt(connection,JobStorageLeases.find(connection,lease.token()).orElseThrow(),resource,output));
+        return output;
+    }
     @Test void ordinaryOutputReservationBooksBoundedBytesBeforeAnyCopy() throws Exception {
         var fixture=stoppedOutputFixture();var value=outputReservationPayload(fixture,8);
         long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
@@ -696,7 +723,7 @@ class PodmanJobCreationSqlTest extends Common {
     }
     @ParameterizedTest @ValueSource(strings={"wrong-stop","wrong-source-sha","missing-parent","relative-parent","parent-traversal",
             "wrong-target","empty-parent-identity","entry-limit","entry-budget","byte-budget","byte-limit","fractional-limit",
-            "quota","funding","cancelled","stale-attempt","stale-execution","wrong-engine","missing-scope","completed-output","cleanup-intent"})
+            "quota","funding","cancelled","stale-attempt","stale-execution","wrong-engine","missing-scope"})
     void ordinaryOutputReservationRefusesInvalidOrUnfundedOwnership(String change) throws Exception {
         var fixture=stoppedOutputFixture();var value=outputReservationPayload(fixture,8);
         var facts=(com.fasterxml.jackson.databind.node.ObjectNode)value.get("facts");long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
@@ -725,19 +752,6 @@ class PodmanJobCreationSqlTest extends Common {
                     var manifest=(com.fasterxml.jackson.databind.node.ObjectNode)new com.fasterxml.jackson.databind.ObjectMapper().readTree(facts.path("source_manifest_payload").textValue());
                     manifest.remove("monitor");facts.put("source_manifest_payload",manifest.toString()).put("source_manifest_sha256",JobExecutionProtocol.digest(manifest.toString()));
                 }
-                case "completed-output","cleanup-intent" -> {
-                    var mapper=new com.fasterxml.jackson.databind.ObjectMapper();var stop=JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).orElseThrow();
-                    var output=receipt(fixture.request(),JobExecutionProtocol.Phase.OUTPUT,mapper.createObjectNode().put("stop_sha256",stop.sha256())
-                            .put("manifest_payload","{}").put("manifest_sha256",JobExecutionProtocol.digest("{}")));
-                    assertEquals(1,number("SELECT CASE WHEN starexec.record_job_execution_receipt(?,?,?,?,?,?) THEN 1 ELSE 0 END",
-                            output.token(),output.phase().name(),output.operation(),output.engine(),output.payload(),output.sha256()));
-                    if(change.equals("cleanup-intent")) {
-                        var cleanup=receipt(fixture.request(),JobExecutionProtocol.Phase.CLEANUP_REQUEST,
-                                mapper.createObjectNode().put("stop_sha256",stop.sha256()).put("staging_identity","fixture-directory"));
-                        assertEquals(1,number("SELECT CASE WHEN starexec.record_job_execution_receipt(?,?,?,?,?,?) THEN 1 ELSE 0 END",
-                                cleanup.token(),cleanup.phase().name(),cleanup.operation(),cleanup.engine(),cleanup.payload(),cleanup.sha256()));
-                    }
-                }
                 default -> throw new AssertionError();
             }
             var refused=assertThrows(SQLException.class,()->recordOutputReservation(value));
@@ -746,6 +760,29 @@ class PodmanJobCreationSqlTest extends Common {
         assertTrue(org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).isEmpty());
         assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
         assertFalse(Files.exists(Path.of(facts.path("target_path").textValue())));
+    }
+    @ParameterizedTest @ValueSource(strings={"completed-output","cleanup-intent"})
+    void ordinaryOutputReservationCannotReplaceCompletedCopy(String change) throws Exception {
+        var fixture=stoppedOutputFixture();var value=outputReservationPayload(fixture,8);
+        var output=conserveCopiedOutputFixture(fixture,value);
+        if(change.equals("cleanup-intent")) {
+            var mapper=new com.fasterxml.jackson.databind.ObjectMapper();var stop=JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).orElseThrow();
+            assertTrue(JobExecutionProtocol.recordReceipt(connection,JobStorageLeases.find(connection,lease.token()).orElseThrow(),resource,
+                    receipt(fixture.request(),JobExecutionProtocol.Phase.CLEANUP_REQUEST,mapper.createObjectNode()
+                            .put("stop_sha256",stop.sha256()).put("staging_identity","fixture-directory"))));
+        }
+        var before=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        assertEquals(0,recordOutputReservation(value));value.put("operation_token",UUID.randomUUID().toString());assertEquals(0,recordOutputReservation(value));
+        assertEquals(before,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(output,JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).orElseThrow());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        var manifest=new com.fasterxml.jackson.databind.ObjectMapper().readTree(value.path("facts").path("source_manifest_payload").textValue());
+        for(String scope:List.of("monitor","savedoutput")) {
+            var saved=manifest.path(scope);
+            org.starexec.jobs.SolverArtifactTree.verify(before.target().resolve(scope),new org.starexec.jobs.SolverArtifactTree.Snapshot(
+                    saved.path("manifest_payload").textValue(),saved.path("manifest_sha256").textValue(),saved.path("byte_size").longValue(),saved.path("entry_count").intValue()));
+        }
     }
     @ParameterizedTest @ValueSource(strings={"first","lost-commit","foreign-transaction","cancelled-replay","owner-contention"})
     void ordinaryOutputReservationPreservesFirstAcknowledgementAndTransactionOwnership(String change) throws Exception {
