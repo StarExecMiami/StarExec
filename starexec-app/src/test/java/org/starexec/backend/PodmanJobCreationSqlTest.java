@@ -89,7 +89,9 @@ class PodmanJobCreationSqlTest extends Common {
             when(client.inspectImageCmd(name).exec().getConfig().getVolumes()).thenReturn(null);
         }
         peer=ServerSocketChannel.open(StandardProtocolFamily.UNIX);peer.bind(UnixDomainSocketAddress.of(peerFiles.resolve("peer.sock")));
-        physical=mockStatic(DedicatedStorageResource.class);
+        // Capacity is synthetic; mount topology must still come from the kernel.
+        physical=mockStatic(DedicatedStorageResource.class, invocation ->
+                invocation.getMethod().getName().equals("inspect") ? null : invocation.callRealMethod());
         physical.when(()->DedicatedStorageResource.inspect(eq(lease.root()),eq(new DedicatedStorageResource.Limits(lease.limitBytes(),lease.inodeLimit())),anyList())).thenReturn(resource);
     }
     private JobExecutionPreparation.Controls controls() { return new JobExecutionPreparation.Controls(script,functions,statuses,null); }
