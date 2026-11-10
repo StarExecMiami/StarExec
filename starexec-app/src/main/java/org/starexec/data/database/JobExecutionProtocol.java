@@ -61,6 +61,15 @@ public final class JobExecutionProtocol {
             for (var entry : expected.entrySet())
                 require(entry.getValue().equals(text(root.path("Labels"), entry.getKey())), "Ordinary request ownership differs");
         }
+
+        /** Missing historical attribution stays unknown; current pair metadata is not a substitute. */
+        public java.util.OptionalInt originalJobId() {
+            var label=parse(payload,sha256).path("Labels").get("starexec.job.id");
+            if(label==null) return java.util.OptionalInt.empty();
+            require(label.isTextual() && label.textValue().matches("[1-9][0-9]{0,9}"),"Ordinary original job is invalid");
+            try {return java.util.OptionalInt.of(Integer.parseInt(label.textValue()));}
+            catch(NumberFormatException invalid) {throw new IllegalArgumentException("Ordinary original job is invalid",invalid);}
+        }
     }
 
     /** Conserved data is not a new physical observation; trusted observers must verify facts before recording them. */

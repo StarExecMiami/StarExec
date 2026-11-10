@@ -73,6 +73,12 @@ BEGIN
             'starexec.exec.id',NEW.execution_id::text)) IS DISTINCT FROM TRUE THEN
         RAISE EXCEPTION 'Ordinary creation request shape or ownership differs';
     END IF;
+    IF _payload->'Labels' ? 'starexec.job.id' AND NOT EXISTS (
+        SELECT 1 FROM starexec.job_pairs p WHERE p.id=NEW.pair_id
+            AND jsonb_typeof(_payload->'Labels'->'starexec.job.id')='string'
+            AND p.job_id::text=_payload->'Labels'->>'starexec.job.id') THEN
+        RAISE EXCEPTION 'Ordinary original job differs from current admission';
+    END IF;
     NEW.consumed_at := clock_timestamp();
     RETURN NEW;
 END;

@@ -221,6 +221,13 @@ filesystem-ownership witness nor completed retained output. Unresolved copies
 must retain their allocation; completion verification and registered cleanup
 must precede charge settlement or ordinary runtime dispatch.
 
+New private ordinary creation payloads reserve the `starexec.job.id` label.
+Admission validates it against the current pair's job under the existing job and
+pair locks. The immutable request then preserves the original job without looking
+it up through a later mutable pair mapping. Requests predating this label remain
+unchanged and have unknown original-job attribution; they cannot establish new
+job accounting by inference. A present malformed or mismatched label is refused.
+
 `PodmanJobTransport` sends a preselected curl creation only after the first
 acknowledged request consumption. It uses the exact conserved UTF-8 bytes over an
 owned local Unix socket, with implicit curl configuration, proxies, redirects and

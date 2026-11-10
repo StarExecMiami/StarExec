@@ -108,10 +108,20 @@ public final class PodmanJobCreation {
         final HostConfig host;
         try { host=BuildExecutionMounts.privatePodmanHostConfig(limits,providerBindings(providerSources)); }
         catch (IllegalArgumentException | NullPointerException invalid) { throw new IOException("Ordinary private mappings are invalid",invalid); }
+        final int originalJob;
+        try(var query=connection.prepareStatement("SELECT j.id FROM starexec.jobs j JOIN starexec.job_pairs p ON p.job_id=j.id"
+                +" WHERE p.id=? AND j.user_id=? AND j.buildjob IS FALSE")) {
+            query.setInt(1,lease.pairId());query.setInt(2,lease.ownerId());
+            try(var rows=query.executeQuery()) {
+                require(rows.next(),"Ordinary original job is unavailable");originalJob=rows.getInt(1);
+                require(originalJob>0,"Ordinary original job is invalid");
+            }
+        }
         Map<String,String> labels=new TreeMap<>(Map.ofEntries(
                 Map.entry("starexec.managed","true"),Map.entry("starexec.label.version","2"),Map.entry("starexec.kind","job-pair"),
                 Map.entry("starexec.job.layout","private-v1"),Map.entry("starexec.job.token",lease.token().toString()),
                 Map.entry("starexec.storage.resource",lease.resourceKey()),Map.entry("starexec.job.inputs",prepared.fingerprint()),
+                Map.entry("starexec.job.id",Integer.toString(originalJob)),
                 Map.entry("starexec.pair.id",Integer.toString(lease.pairId())),Map.entry("starexec.attempt",Integer.toString(lease.attemptNo())),
                 Map.entry("starexec.exec.id",Integer.toString(execution)),Map.entry(SCRIPT,controls.script().toString()),
                 Map.entry(FUNCTIONS,controls.functions().toString()),Map.entry(STATUS,controls.statusCodes().toString()),

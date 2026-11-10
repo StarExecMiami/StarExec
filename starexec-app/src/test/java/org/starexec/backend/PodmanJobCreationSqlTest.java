@@ -1446,6 +1446,110 @@ class PodmanJobCreationSqlTest extends Common {
         assertEquals(originalUsage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
     }
 
+    @ParameterizedTest @ValueSource(strings={"JAVA","CURL"})
+    void newOrdinaryPlanCapturesItsOriginalJob(String transport) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.valueOf(transport));
+        var body=new com.fasterxml.jackson.databind.ObjectMapper().readTree(saved.payload());
+        assertEquals(Integer.toString(job),body.path("Labels").path("starexec.job.id").textValue());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"owned-job","foreign-job","numeric","null","leading-zero"})
+    void originalJobLabelCannotForgeCreationAdmission(String change) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);
+        var body=(com.fasterxml.jackson.databind.node.ObjectNode)new com.fasterxml.jackson.databind.ObjectMapper().readTree(saved.payload());
+        var labels=(com.fasterxml.jackson.databind.node.ObjectNode)body.path("Labels");
+        connection.setAutoCommit(false);
+        try {
+            switch(change) {
+                case "owned-job","foreign-job" -> {
+                    int selectedOwner=owner;
+                    if(change.equals("foreign-job")) selectedOwner=(int)number("INSERT INTO starexec.users(email,first_name,last_name,institution,created,password,disk_quota,disk_size)"
+                            +" VALUES (?,'Foreign','Fixture','synthetic',now(),'synthetic',1024,0) RETURNING id","foreign-"+UUID.randomUUID()+"@example.invalid");
+                    int other=(int)number("INSERT INTO starexec.jobs(user_id,name,total_pairs,disk_size,buildjob) VALUES (?,'different job',0,0,false) RETURNING id",selectedOwner);
+                    labels.put("starexec.job.id",Integer.toString(other));
+                }
+                case "numeric" -> labels.put("starexec.job.id",job);
+                case "null" -> labels.putNull("starexec.job.id");
+                case "leading-zero" -> labels.put("starexec.job.id","0"+job);
+                default -> throw new AssertionError();
+            }
+            String payload=body.toString();boolean[] accepted={false};
+            var refused=assertThrows(SQLException.class,()->{
+                try(var query=connection.prepareStatement("SELECT starexec.consume_job_execution_request(?,?,?,?,?,?,?,?,?,?,?,?)")) {
+                    Object[] args={saved.token(),saved.pairId(),saved.attemptNo(),saved.ownerId(),saved.resourceKey(),saved.resourceIdentity(),saved.executionId(),
+                            saved.image(),saved.preparationFingerprint(),saved.transport().name().toLowerCase(java.util.Locale.ROOT),payload,JobExecutionProtocol.digest(payload)};
+                    for(int i=0;i<args.length;i++) query.setObject(i+1,args[i]);
+                    try(var rows=query.executeQuery()) {assertTrue(rows.next());accepted[0]=rows.getBoolean(1);}
+                }
+            },()->"Creation admitted forged original job "+change+": "+accepted[0]);
+            assertEquals("P0001",refused.getSQLState());
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertTrue(JobExecutionProtocol.findCreation(connection,lease.token()).isEmpty());
+        assertEquals(lease.priorExecutionId()==null?0:lease.priorExecutionId(),number("SELECT sge_id FROM starexec.job_pairs WHERE id=?",pair));
+        verify(client,never()).createContainerCmd(anyString());
+    }
+
+    private JobExecutionProtocol.Creation creationPayload(JobExecutionProtocol.Creation saved,String payload) {
+        return new JobExecutionProtocol.Creation(saved.token(),saved.pairId(),saved.attemptNo(),saved.ownerId(),saved.resourceKey(),saved.resourceIdentity(),
+                saved.executionId(),saved.name(),saved.image(),saved.preparationFingerprint(),saved.transport(),payload,JobExecutionProtocol.digest(payload));
+    }
+
+    @Test void originalJobWitnessSurvivesColdReadbackAndPairReassignment() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);
+        assertEquals(job,saved.originalJobId().orElseThrow());assertTrue(adapter.claimCreation(connection));
+        connection.close();connection=Common.getConnection();
+        assertEquals(saved,JobExecutionProtocol.findCreation(connection,lease.token()).orElseThrow());
+        var restored=PodmanJobCreation.restore(client,connection,saved,peerFiles.resolve("peer.sock").toString());
+        assertEquals(job,restored.creation().originalJobId().orElseThrow());assertFalse(restored.claimCreation(connection));
+        connection.setAutoCommit(false);
+        try {
+            int other=(int)number("INSERT INTO starexec.jobs(user_id,name,total_pairs,disk_size,buildjob) VALUES (?,'changed mapping',1,0,false) RETURNING id",owner);
+            number("UPDATE starexec.job_pairs SET job_id=? WHERE id=? RETURNING id",other,pair);
+            assertEquals(other,number("SELECT job_id FROM starexec.job_pairs WHERE id=?",pair));
+            assertEquals(job,JobExecutionProtocol.findCreation(connection,lease.token()).orElseThrow().originalJobId().orElseThrow());
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(saved,JobExecutionProtocol.findCreation(connection,lease.token()).orElseThrow());
+    }
+
+    @Test void missingHistoricalJobWitnessStaysUnknown() throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);
+        var body=(com.fasterxml.jackson.databind.node.ObjectNode)new com.fasterxml.jackson.databind.ObjectMapper().readTree(saved.payload());
+        ((com.fasterxml.jackson.databind.node.ObjectNode)body.path("Labels")).remove("starexec.job.id");
+        String payload=body.toString();var legacy=creationPayload(saved,payload);
+        assertTrue(legacy.originalJobId().isEmpty());
+        assertTrue(JobExecutionProtocol.consumeCreation(connection,JobStorageLeases.find(connection,lease.token()).orElseThrow(),resource,
+                adapter.preparation(connection),saved.executionId(),saved.image(),saved.transport(),payload));
+        var stored=JobExecutionProtocol.findCreation(connection,lease.token()).orElseThrow();
+        assertEquals(legacy,stored);assertTrue(stored.originalJobId().isEmpty());
+        assertEquals(payload,stored.payload());assertEquals(JobExecutionProtocol.digest(payload),stored.sha256());
+        assertEquals(job,number("SELECT job_id FROM starexec.job_pairs WHERE id=?",pair));
+        verify(client,never()).createContainerCmd(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"null","numeric","leading-zero","overflow"})
+    void malformedOriginalJobWitnessIsNeverReportedAsUnknown(String change) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);
+        var body=(com.fasterxml.jackson.databind.node.ObjectNode)new com.fasterxml.jackson.databind.ObjectMapper().readTree(saved.payload());
+        var labels=(com.fasterxml.jackson.databind.node.ObjectNode)body.path("Labels");
+        switch(change) {
+            case "null" -> labels.putNull("starexec.job.id");
+            case "numeric" -> labels.put("starexec.job.id",job);
+            case "leading-zero" -> labels.put("starexec.job.id","0"+job);
+            case "overflow" -> labels.put("starexec.job.id","2147483648");
+            default -> throw new AssertionError();
+        }
+        var altered=creationPayload(saved,body.toString());
+        assertThrows(IllegalArgumentException.class,altered::originalJobId);
+        assertTrue(JobExecutionProtocol.findCreation(connection,lease.token()).isEmpty());
+    }
+
+    @Test void supplementaryLabelsCannotReplaceOriginalJob() throws Exception {
+        var adapter=prepare();
+        assertThrows(IOException.class,()->adapter.plan(connection,JobExecutionProtocol.maximumExecutionId(connection)+1,limits(),sources(adapter),
+                Map.of("starexec.job.id","0"),JobExecutionProtocol.Transport.JAVA));
+        assertTrue(JobExecutionProtocol.findCreation(connection,lease.token()).isEmpty());
+    }
+
     private StoppedOutputFixture stoppedOutputFixture() throws Exception {
         var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);var kernel=kernelPacket(adapter,saved);
         assertTrue(adapter.claimCreation(connection));assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));
