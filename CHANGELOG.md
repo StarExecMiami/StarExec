@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Conserve once-only ordinary output-copy claims and immutable copy-directory bindings before retained writes.
 - Exclude reserved ordinary output parents from writable execution resources and serialize concurrent registration.
 - Add durable ordinary output-copy reservations with exact source manifests, bounded quota booking and immutable allocation readback.
 - Persist ordinary job creation requests and cancellation locators atomically, retaining exact immutable request bytes across uncertain replies and cancellation.

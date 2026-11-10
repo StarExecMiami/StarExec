@@ -28,6 +28,35 @@ public final class JobOutputReservations {
         return JobExecutionProtocol.recordReceipt(connection,lease,resource,request);
     }
 
+    /** Only the first confirmed claim permits a copy; a lost reply must preserve the registered allowance. */
+    public static boolean claimCopy(Connection connection,Reservation expected) throws SQLException {
+        return mutateCopy(connection,expected,null,false);
+    }
+
+    /** Conserve the freshly created copy root before writing its contents; replay cannot replace it. */
+    public static boolean bindCopy(Connection connection,Reservation expected,String directoryIdentity) throws SQLException {
+        if(directoryIdentity==null || directoryIdentity.isBlank()) return false;
+        return mutateCopy(connection,expected,directoryIdentity,true);
+    }
+
+    private static boolean mutateCopy(Connection connection,Reservation expected,String directoryIdentity,boolean bind) throws SQLException {
+        if(!connection.getAutoCommit()) throw new SQLException("Ordinary output copy cannot use a foreign transaction");
+        if(expected==null || expected.request()==null || expected.request().phase()!=JobExecutionProtocol.Phase.OUTPUT_REQUEST) return false;
+        return Common.runTransactional(connection,tx->{
+            var actual=find(tx,expected.request().token()).orElse(null);
+            if(actual==null || !actual.request().equals(expected.request()) || !actual.parent().equals(expected.parent())
+                    || !actual.parentIdentity().equals(expected.parentIdentity()) || !actual.target().equals(expected.target())
+                    || actual.limitBytes()!=expected.limitBytes() || actual.entryLimit()!=expected.entryLimit()) return false;
+            String sql=bind?"SELECT starexec.bind_job_output_copy(?,?,?,?,?)":"SELECT starexec.claim_job_output_copy(?,?,?,?)";
+            try(var query=tx.prepareStatement(sql)) {
+                query.setObject(1,expected.request().token());query.setObject(2,expected.request().operation());
+                query.setString(3,expected.request().sha256());query.setString(4,expected.parentIdentity());
+                if(bind) query.setString(5,directoryIdentity);
+                try(var rows=query.executeQuery()) {return rows.next() && rows.getBoolean(1);}
+            }
+        });
+    }
+
     public static Optional<Reservation> find(Connection connection,UUID token) throws SQLException {
         try(var query=connection.prepareStatement("SELECT * FROM starexec.job_output_storage_reservations WHERE execution_token=?")) {
             query.setObject(1,token);

@@ -50,12 +50,75 @@ EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN RE
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
--- Allocation rows mirror the immutable phase; neither replay nor direct insertion can invent ownership.
+-- Copy mutations retain the same current job, funded resource and normal stop.
+CREATE OR REPLACE FUNCTION starexec.lock_job_output_copy(
+    _token UUID,_operation UUID,_request_sha TEXT,_parent_identity TEXT) RETURNS BOOLEAN AS $$
+DECLARE
+    _request starexec.job_execution_requests%ROWTYPE;
+    _phase starexec.job_execution_receipts%ROWTYPE;
+    _claim starexec.execution_storage_claims%ROWTYPE;
+    _resource starexec.execution_storage_resources%ROWTYPE;
+    _output starexec.job_output_storage_reservations%ROWTYPE;
+    _usage BIGINT;
+BEGIN
+    IF current_setting('transaction_isolation') NOT IN ('read committed','read uncommitted') THEN
+        RAISE EXCEPTION 'Ordinary output copy requires a current read-committed snapshot' USING ERRCODE='40001';
+    END IF;
+    SELECT * INTO _phase FROM starexec.job_execution_receipts WHERE execution_token=_token AND receipt_kind='OUTPUT_REQUEST';
+    IF NOT FOUND OR _phase.operation_token IS DISTINCT FROM _operation OR _phase.receipt_sha256 IS DISTINCT FROM _request_sha
+        OR _phase.receipt_payload::jsonb->'facts'->>'parent_identity' IS DISTINCT FROM _parent_identity THEN RETURN FALSE; END IF;
+    SELECT * INTO _request FROM starexec.job_execution_requests WHERE execution_token=_token;
+    IF NOT FOUND OR NOT starexec.lock_current_job_storage_pair(_request.pair_id,_request.attempt_no,
+        _request.owner_id,_request.execution_id,FALSE) THEN RETURN FALSE; END IF;
+    IF NOT EXISTS (SELECT 1 FROM starexec.job_pairs p JOIN starexec.jobs j ON j.id=p.job_id
+        WHERE p.id=_request.pair_id AND p.status_code IS DISTINCT FROM 21
+            AND j.deleted IS NOT TRUE AND j.killed IS NOT TRUE) THEN RETURN FALSE; END IF;
+    SELECT disk_size INTO _usage FROM starexec.users WHERE id=_request.owner_id FOR UPDATE NOWAIT;
+    IF NOT FOUND OR _usage IS NULL OR _usage<starexec.active_execution_storage_bytes(_request.owner_id) THEN RETURN FALSE; END IF;
+    SELECT * INTO _resource FROM starexec.execution_storage_resources WHERE resource_key=_request.resource_key FOR UPDATE NOWAIT;
+    IF NOT FOUND OR _resource.observed_identity IS DISTINCT FROM _request.resource_identity
+        OR starexec.execution_storage_root_unreferenced(_resource.root_path) IS DISTINCT FROM TRUE THEN RETURN FALSE; END IF;
+    SELECT * INTO _claim FROM starexec.execution_storage_claims WHERE execution_token=_token FOR UPDATE NOWAIT;
+    IF NOT FOUND OR _claim.lease_kind<>'JOB' OR _claim.resource_key IS DISTINCT FROM _request.resource_key
+        OR _claim.origin_owner_id IS DISTINCT FROM _request.owner_id OR _claim.origin_pair_id IS DISTINCT FROM _request.pair_id
+        OR _claim.attempt_no IS DISTINCT FROM _request.attempt_no OR _claim.limit_bytes IS DISTINCT FROM _resource.capacity_bytes
+        OR _claim.use_started_at IS NULL OR _claim.released_at IS NOT NULL THEN RETURN FALSE; END IF;
+    IF NOT EXISTS (SELECT 1 FROM starexec.job_execution_receipts s WHERE s.execution_token=_token AND s.receipt_kind='STOP'
+        AND s.engine_identity=_phase.engine_identity AND NOT (s.receipt_payload::jsonb->'facts' ? 'disposition')
+        AND s.receipt_sha256=_phase.receipt_payload::jsonb->'facts'->>'stop_sha256')
+        OR EXISTS (SELECT 1 FROM starexec.job_execution_receipts WHERE execution_token=_token
+            AND receipt_kind IN ('OUTPUT','CLEANUP_REQUEST','CLEANUP')) THEN RETURN FALSE; END IF;
+    SELECT * INTO _output FROM starexec.job_output_storage_reservations WHERE execution_token=_token FOR UPDATE NOWAIT;
+    RETURN FOUND AND _output.operation_token IS NOT DISTINCT FROM _operation
+        AND _output.parent_identity IS NOT DISTINCT FROM _parent_identity
+        AND _output.verified_at IS NULL AND _output.released_at IS NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Allocation rows mirror the immutable phase; only the first copy and binding can advance.
 CREATE OR REPLACE FUNCTION starexec.guard_job_output_storage_reservation() RETURNS trigger AS $$
 DECLARE _phase starexec.job_execution_receipts%ROWTYPE; _request starexec.job_execution_requests%ROWTYPE; _facts JSONB;
 BEGIN
     IF TG_OP<>'INSERT' THEN
         IF TG_OP='UPDATE' AND NEW IS NOT DISTINCT FROM OLD THEN RETURN NEW; END IF;
+        IF TG_OP='UPDATE' AND (NEW.execution_token,NEW.receipt_kind,NEW.operation_token,NEW.origin_owner_id,NEW.origin_pair_id,
+            NEW.parent_path,NEW.parent_identity,NEW.target_path,NEW.source_manifest_sha256,NEW.limit_bytes,NEW.entry_limit,
+            NEW.charged_bytes,NEW.verified_bytes,NEW.verified_at,NEW.released_at,NEW.created_at)
+            IS NOT DISTINCT FROM (OLD.execution_token,OLD.receipt_kind,OLD.operation_token,OLD.origin_owner_id,OLD.origin_pair_id,
+            OLD.parent_path,OLD.parent_identity,OLD.target_path,OLD.source_manifest_sha256,OLD.limit_bytes,OLD.entry_limit,
+            OLD.charged_bytes,OLD.verified_bytes,OLD.verified_at,OLD.released_at,OLD.created_at) THEN
+            SELECT * INTO _phase FROM starexec.job_execution_receipts
+                WHERE execution_token=OLD.execution_token AND receipt_kind='OUTPUT_REQUEST';
+            IF starexec.lock_job_output_copy(OLD.execution_token,OLD.operation_token,_phase.receipt_sha256,OLD.parent_identity) THEN
+                IF OLD.copy_started_at IS NULL AND NEW.copy_started_at IS NOT NULL
+                    AND NEW.directory_identity IS NOT DISTINCT FROM OLD.directory_identity THEN
+                    NEW.copy_started_at:=clock_timestamp();RETURN NEW;
+                ELSIF OLD.copy_started_at IS NOT NULL AND NEW.copy_started_at IS NOT DISTINCT FROM OLD.copy_started_at
+                    AND OLD.directory_identity IS NULL AND NEW.directory_identity IS NOT NULL AND btrim(NEW.directory_identity)<>'' THEN
+                    RETURN NEW;
+                END IF;
+            END IF;
+        END IF;
         RAISE EXCEPTION 'Ordinary output reservation requires conserved completion or registered cleanup';
     END IF;
     SELECT * INTO _phase FROM starexec.job_execution_receipts
@@ -78,6 +141,28 @@ BEGIN
     END IF;
     NEW.created_at:=clock_timestamp();
     RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- A historical TRUE is never another write permission after a lost response.
+CREATE OR REPLACE FUNCTION starexec.claim_job_output_copy(
+    _token UUID,_operation UUID,_request_sha TEXT,_parent_identity TEXT) RETURNS BOOLEAN AS $$
+BEGIN
+    IF NOT starexec.lock_job_output_copy(_token,_operation,_request_sha,_parent_identity) THEN RETURN FALSE; END IF;
+    UPDATE starexec.job_output_storage_reservations SET copy_started_at=clock_timestamp()
+        WHERE execution_token=_token AND copy_started_at IS NULL AND directory_identity IS NULL;
+    RETURN FOUND;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION starexec.bind_job_output_copy(
+    _token UUID,_operation UUID,_request_sha TEXT,_parent_identity TEXT,_directory_identity TEXT) RETURNS BOOLEAN AS $$
+BEGIN
+    IF _directory_identity IS NULL OR btrim(_directory_identity)='' OR
+        NOT starexec.lock_job_output_copy(_token,_operation,_request_sha,_parent_identity) THEN RETURN FALSE; END IF;
+    UPDATE starexec.job_output_storage_reservations SET directory_identity=_directory_identity
+        WHERE execution_token=_token AND copy_started_at IS NOT NULL AND directory_identity IS NULL;
+    RETURN FOUND;
 END;
 $$ LANGUAGE plpgsql;
 

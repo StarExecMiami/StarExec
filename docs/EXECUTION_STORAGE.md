@@ -177,6 +177,12 @@ registration orders. Output reservation and new resource registration serialize
 through the existing storage-policy lock, including when their paths are siblings
 under that parent. Contention refuses the operation without partial registration
 or a quota change.
+Copying consumes a separate first confirmed claim against the same current
+attempt, funded resource and normal stop. A repeated or uncertain claim never
+permits another writer. The freshly created copy directory is bound once before
+its contents are written; another incarnation cannot replace that binding.
+Claiming and binding leave the complete allowance charged. Neither establishes
+retained-byte verification, completed output or permission to retire storage.
 
 `JobOutputReservations` verifies typed allocation readback against the immutable
 request. Pending allocations remain charged and prevent owner/pair deletion,

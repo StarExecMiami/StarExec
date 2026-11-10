@@ -870,6 +870,147 @@ class PodmanJobCreationSqlTest extends Common {
         assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
     }
 
+    @Test void ordinaryOutputCopyClaimRequiresItsFirstAcknowledgement() throws Exception {
+        var value=outputReservationPayload(stoppedOutputFixture(),8);assertEquals(1,recordOutputReservation(value));
+        var saved=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        assertEquals(1,number("SELECT CASE WHEN starexec.claim_job_output_copy(?,?,?,?) THEN 1 ELSE 0 END",
+                lease.token(),saved.request().operation(),saved.request().sha256(),saved.parentIdentity()));
+        var claimed=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        assertNotNull(claimed.copyStartedAt());assertNull(claimed.directoryIdentity());
+        assertEquals(0,number("SELECT CASE WHEN starexec.claim_job_output_copy(?,?,?,?) THEN 1 ELSE 0 END",
+                lease.token(),saved.request().operation(),saved.request().sha256(),saved.parentIdentity()));
+        assertEquals(claimed,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertFalse(Files.exists(saved.target()));
+    }
+
+    private org.starexec.data.database.JobOutputReservations.Reservation outputCopyReservation() throws Exception {
+        assertEquals(1,recordOutputReservation(outputReservationPayload(stoppedOutputFixture(),8)));
+        return org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+    }
+
+    @Test void ordinaryOutputCopyBindingRetainsItsFirstDirectoryIdentity() throws Exception {
+        var saved=outputCopyReservation();long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        assertFalse(org.starexec.data.database.JobOutputReservations.bindCopy(connection,saved,"synthetic-copy-directory"));
+        assertTrue(org.starexec.data.database.JobOutputReservations.claimCopy(connection,saved));
+        assertFalse(org.starexec.data.database.JobOutputReservations.bindCopy(connection,saved," "));
+        assertTrue(org.starexec.data.database.JobOutputReservations.bindCopy(connection,saved,"synthetic-copy-directory"));
+        var bound=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        assertEquals("synthetic-copy-directory",bound.directoryIdentity());assertNotNull(bound.copyStartedAt());
+        assertFalse(org.starexec.data.database.JobOutputReservations.claimCopy(connection,saved));
+        assertFalse(org.starexec.data.database.JobOutputReservations.bindCopy(connection,saved,"synthetic-copy-directory"));
+        assertFalse(org.starexec.data.database.JobOutputReservations.bindCopy(connection,saved,"other-copy-directory"));
+        assertEquals(bound,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertNull(bound.verifiedAt());assertNull(bound.releasedAt());assertEquals(8,bound.chargedBytes());
+        assertFalse(Files.exists(bound.target()));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"token","operation","request-sha","parent","cancelled","deleted","attempt","execution","funding"})
+    void ordinaryOutputCopyRefusesInvalidCurrentOwnership(String change) throws Exception {
+        var saved=outputCopyReservation();long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        UUID token=lease.token(),operation=saved.request().operation();String digest=saved.request().sha256(),parentIdentity=saved.parentIdentity();
+        connection.setAutoCommit(false);
+        try {
+            switch(change) {
+                case "token" -> token=UUID.randomUUID();
+                case "operation" -> operation=UUID.randomUUID();
+                case "request-sha" -> digest="0".repeat(64);
+                case "parent" -> parentIdentity="other-parent";
+                case "cancelled" -> number("UPDATE starexec.jobs SET killed=true WHERE id=? RETURNING id",job);
+                case "deleted" -> number("UPDATE starexec.jobs SET deleted=true WHERE id=? RETURNING id",job);
+                case "attempt" -> number("UPDATE starexec.job_pair_attempts SET current_attempt_no=2 WHERE pair_id=? RETURNING pair_id",pair);
+                case "execution" -> number("UPDATE starexec.job_pairs SET sge_id=sge_id+1 WHERE id=? RETURNING id",pair);
+                case "funding" -> number("UPDATE starexec.users SET disk_size=? WHERE id=? RETURNING id",usage-1,owner);
+                default -> throw new AssertionError();
+            }
+            assertEquals(0,number("SELECT CASE WHEN starexec.claim_job_output_copy(?,?,?,?) THEN 1 ELSE 0 END",token,operation,digest,parentIdentity));
+            assertEquals(0,number("SELECT CASE WHEN starexec.bind_job_output_copy(?,?,?,?,?) THEN 1 ELSE 0 END",token,operation,digest,parentIdentity,"synthetic-directory"));
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(saved,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));assertFalse(Files.exists(saved.target()));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"parent","target","bytes","entries"})
+    void ordinaryOutputCopyRefusesAlteredAllocationReadback(String change) throws Exception {
+        var saved=outputCopyReservation();
+        var altered=new org.starexec.data.database.JobOutputReservations.Reservation(saved.request(),
+                change.equals("parent")?saved.parent().resolve("other"):saved.parent(),saved.parentIdentity(),
+                change.equals("target")?saved.target().resolve("other"):saved.target(),change.equals("bytes")?7:saved.limitBytes(),
+                change.equals("entries")?7:saved.entryLimit(),saved.chargedBytes(),null,null,null,null,null);
+        assertFalse(org.starexec.data.database.JobOutputReservations.claimCopy(connection,altered));
+        assertEquals(saved,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"start","directory","parent","operation","charge","verified","release","delete","truncate"})
+    void ordinaryOutputCopyKeepsBoundStateAndAllowanceImmutable(String change) throws Exception {
+        var saved=outputCopyReservation();assertTrue(org.starexec.data.database.JobOutputReservations.claimCopy(connection,saved));
+        assertTrue(org.starexec.data.database.JobOutputReservations.bindCopy(connection,saved,"synthetic-directory"));
+        var bound=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);String sql;
+        sql=switch(change) {
+            case "start" -> "UPDATE starexec.job_output_storage_reservations SET copy_started_at=copy_started_at+interval '1 second'";
+            case "directory" -> "UPDATE starexec.job_output_storage_reservations SET directory_identity='other-directory'";
+            case "parent" -> "UPDATE starexec.job_output_storage_reservations SET parent_identity='other-parent'";
+            case "operation" -> "UPDATE starexec.job_output_storage_reservations SET operation_token='"+UUID.randomUUID()+"'::uuid";
+            case "charge" -> "UPDATE starexec.job_output_storage_reservations SET charged_bytes=0";
+            case "verified" -> "UPDATE starexec.job_output_storage_reservations SET verified_bytes=0,charged_bytes=0,verified_at=clock_timestamp()";
+            case "release" -> "UPDATE starexec.job_output_storage_reservations SET released_at=clock_timestamp()";
+            case "delete" -> "DELETE FROM starexec.job_output_storage_reservations";
+            case "truncate" -> "TRUNCATE starexec.job_output_storage_reservations";
+            default -> throw new AssertionError();
+        };
+        if(!change.equals("truncate")) sql+=" WHERE execution_token='"+lease.token()+"'::uuid";
+        connection.setAutoCommit(false);
+        try(var statement=connection.createStatement()) {
+            String mutation=sql;var refused=assertThrows(SQLException.class,()->statement.execute(mutation));
+            assertTrue(refused.getMessage().contains("Ordinary output reservation"),refused::getMessage);
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(bound,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+    }
+
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void ordinaryOutputCopyRetainsAmbiguousClaimOrBinding(boolean binding) throws Exception {
+        var saved=outputCopyReservation();long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        if(binding) assertTrue(org.starexec.data.database.JobOutputReservations.claimCopy(connection,saved));
+        var uncertain=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(connection));
+        doAnswer(call->{connection.commit();throw new SQLException("Synthetic lost copy acknowledgement");}).when(uncertain).commit();
+        assertThrows(SQLException.class,()->{
+            if(binding) org.starexec.data.database.JobOutputReservations.bindCopy(uncertain,saved,"synthetic-directory");
+            else org.starexec.data.database.JobOutputReservations.claimCopy(uncertain,saved);
+        });
+        assertTrue(connection.getAutoCommit());var actual=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        assertNotNull(actual.copyStartedAt());assertEquals(binding?"synthetic-directory":null,actual.directoryIdentity());
+        assertFalse(org.starexec.data.database.JobOutputReservations.claimCopy(connection,saved));
+        if(binding) assertFalse(org.starexec.data.database.JobOutputReservations.bindCopy(connection,saved,"synthetic-directory"));
+        assertEquals(actual,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));assertFalse(Files.exists(actual.target()));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"foreign","isolation","owner-lock"})
+    void ordinaryOutputCopyHonorsTransactionOwnershipAndContention(String change) throws Exception {
+        var saved=outputCopyReservation();
+        if(change.equals("foreign")) {
+            connection.setAutoCommit(false);
+            try {assertThrows(SQLException.class,()->org.starexec.data.database.JobOutputReservations.claimCopy(connection,saved));assertFalse(connection.getAutoCommit());}
+            finally {connection.rollback();connection.setAutoCommit(true);}
+        } else if(change.equals("isolation")) {
+            int previous=connection.getTransactionIsolation();connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
+            try {assertEquals("40001",assertThrows(SQLException.class,()->org.starexec.data.database.JobOutputReservations.claimCopy(connection,saved)).getSQLState());}
+            finally {connection.setTransactionIsolation(previous);}
+        } else try(var other=Common.getConnection()) {
+            other.setAutoCommit(false);
+            try {
+                connectionNumber(other,"SELECT id FROM starexec.users WHERE id=? FOR UPDATE",owner);
+                assertEquals("55P03",assertThrows(SQLException.class,()->org.starexec.data.database.JobOutputReservations.claimCopy(connection,saved)).getSQLState());
+            } finally {try {other.rollback();} finally {other.setAutoCommit(true);}}
+        }
+        assertTrue(connection.getAutoCommit());assertEquals(saved,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertFalse(Files.exists(saved.target()));
+    }
+
     private StoppedOutputFixture stoppedOutputFixture() throws Exception {
         var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);var kernel=kernelPacket(adapter,saved);
         assertTrue(adapter.claimCreation(connection));assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));
