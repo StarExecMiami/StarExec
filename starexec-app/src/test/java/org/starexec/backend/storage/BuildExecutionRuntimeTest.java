@@ -85,6 +85,12 @@ class BuildExecutionRuntimeTest {
         assertThrows(UnsupportedOperationException.class,()->result.namespaces().clear());
     }
 
+    @Test void sharedKernelPacketMatchesTheIndependentReference() {
+        var command=new ArrayList<>(BuildExecutionHold.entrypoint(30));command.addAll(BuildExecutionHold.command(BuildExecutionMounts.CONTROL.resolve("jobscript")));
+        assertEquals(data,RuntimeObservationFixture.fields(runtime,new BuildExecutionRuntime.Identity(0,0,1000,1000),
+                new BuildExecutionRuntime.Limits(134217728,64,"2",100000,100000),forbidden,command,false));
+    }
+
     @Test void encodedMountTargetsPreserveTheSamePhysicalIdentity() throws Exception {
         StringBuilder nodes=new StringBuilder();
         for (String line:decoded(data.get("nodes")).lines().toList()) {
