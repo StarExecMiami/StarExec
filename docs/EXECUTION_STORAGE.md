@@ -201,6 +201,15 @@ the same fresh proof; a historical or uncertain release cannot permit another
 signal. Provider retirement, output ingestion and used-storage settlement remain
 separate requirements before normal dispatch activation.
 
+Stopped ordinary output uses its conserved creation, payload release, exact normal
+stop, original configuration and active private-storage ownership. Recovery checks
+the original preparation fingerprint, immutable copies and directory identities;
+it permits actual contents in the existing writable directories without relaxing
+the pre-payload empty-directory guards. Current source files may have changed or
+disappeared after execution; the retained copies remain authoritative. Cleanup
+intent, cancelled output or replaced layout prevents this recovery. Locating the
+directory alone does not ingest files, conserve an output manifest or settle quota.
+
 `PodmanJobObservation` conserves a created container's configuration only after
 matching its never-started identity, trusted launcher, requested environment,
 memory/swap/CPU/process limits and exact bind set, including read-only access and

@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Couple ordinary creation to bounded same-socket inspection and one acknowledged trusted hold start, preserving transport selection and uncertain outcomes without payload release.
 - Conserve exact ordinary stopped-provider facts and revalidate them before retirement, preserving cancellation and never-started distinctions without releasing used storage.
 - Verify the ordinary held runtime and current inputs before one durable payload-release decision and a non-repeatable signal; historical releases cannot authorize another send.
+- Recover stopped ordinary output from its conserved private layout and immutable inputs without reusing pre-payload empty-directory assumptions.
 
 - Serialize dedicated storage ownership across solver builds and ordinary job
   attempts, preserving build lease history and booking each job allowance once.

@@ -56,7 +56,7 @@ final class PodmanJobObservation {
         return new Held(state.getPidLong(),state.getStartedAt(),JobExecutionProtocol.digest(configuration(request,inspection).toString()));
     }
 
-    private static com.fasterxml.jackson.databind.node.ObjectNode configuration(JobExecutionProtocol.Creation request,
+    static com.fasterxml.jackson.databind.node.ObjectNode configuration(JobExecutionProtocol.Creation request,
             InspectContainerResponse inspection) throws IOException {
         var declared=JSON.readTree(request.payload());var expected=JSON.treeToValue(declared.path("HostConfig"),HostConfig.class);
         var actual=inspection.getHostConfig();

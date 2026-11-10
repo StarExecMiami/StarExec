@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParser;
 import org.starexec.backend.storage.DedicatedStorageResource;
 import org.starexec.data.database.JobExecutionInputs;
+import org.starexec.data.database.JobExecutionProtocol;
 import org.starexec.data.database.JobStorageLeases;
 import org.starexec.data.database.PublishedSolverInputs;
 import org.starexec.util.DescriptorDirectory;
@@ -182,6 +183,57 @@ public final class JobExecutionPreparation {
     public Path workingDirectory() { return EXECUTION.resolve("work"); }
     public Path outputDirectory() { return EXECUTION.resolve("monitor"); }
     public Path hostOutputDirectory() { return lease.staging().resolve("execution/monitor"); }
+
+    /** Recover immutable preparation after execution; the caller must first verify the exact stopped provider. */
+    public static Path retainedOutputDirectory(Connection connection,JobStorageLeases.Lease lease,
+            DedicatedStorageResource resource,JobExecutionProtocol.Creation request) throws SQLException,IOException {
+        require(lease!=null && lease.equals(JobStorageLeases.find(connection,lease.token()).orElse(null))
+                && lease.useStartedAt()!=null && lease.releasedAt()==null && request!=null
+                && request.token().equals(lease.token()) && request.pairId()==lease.pairId()
+                && request.attemptNo()==lease.attemptNo() && request.ownerId()==lease.ownerId()
+                && request.resourceKey().equals(lease.resourceKey()) && request.resourceIdentity().equals(lease.resourceIdentity())
+                && request.equals(JobExecutionProtocol.findCreation(connection,lease.token()).orElse(null)),
+                "Retained ordinary preparation ownership differs");
+        require(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.RELEASE).isPresent()
+                && JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).isPresent()
+                && JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.CLEANUP_REQUEST).isEmpty()
+                && JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.CLEANUP).isEmpty(),
+                "Retained ordinary output is not stopped before cleanup");
+        String text=readReceipt(lease.staging());
+        require(digest(text).equals(request.preparationFingerprint()),"Retained ordinary input receipt differs");
+        final Receipt saved;
+        try {saved=JSON.fromJson(text,Receipt.class);}
+        catch(RuntimeException invalid) {throw new IOException("Retained ordinary input receipt is invalid",invalid);}
+        require(saved!=null && saved.version()==1 && lease.token().toString().equals(saved.token())
+                && saved.pair()==lease.pairId() && saved.attempt()==lease.attemptNo() && saved.owner()==lease.ownerId()
+                && lease.resourceKey().equals(saved.resource()) && lease.resourceIdentity().equals(saved.identity())
+                && lease.useStartedAt().toString().equals(saved.started()) && saved.copies()!=null && saved.directories()!=null,
+                "Retained ordinary preparation identity differs");
+        limits(lease,resource,saved.maxBytes(),saved.maxEntries());
+        Path staging=lease.staging();resource.requireUnchanged();requireNoNestedMounts(staging,true);
+        requireNames(resource.root(),List.of(staging.getFileName().toString()));
+        requireNames(staging,List.of("inputs","control","execution",RECEIPT));
+        var directories=new java.util.HashSet<>(DIRECTORIES);directories.add(".");
+        require(saved.directories().keySet().equals(directories),"Retained private directory set differs");
+        for(String name:directories) require(directoryIdentity(name.equals(".")?staging:staging.resolve(name),name.equals("inputs") || name.equals("control")?READ_EXEC:PRIVATE)
+                .equals(saved.directories().get(name)),"Retained private directory identity changed");
+        requireNames(staging.resolve("execution"),List.of("work","tmp","home","monitor","run","var-tmp","savedoutput"));
+        long bytes=text.getBytes(StandardCharsets.UTF_8).length;int entries=DIRECTORIES.size()+2;
+        for(Copy copy:saved.copies()) {
+            Path relative=Path.of(copy.destination());
+            require(!relative.isAbsolute() && relative.equals(relative.normalize()) && relative.getNameCount()==2
+                    && List.of("inputs","control").contains(relative.getName(0).toString()),"Retained input locator differs");
+            Witness observed=witness(staging.resolve(relative),copy.materialized().directory(),saved.maxBytes()-bytes,saved.maxEntries()-entries,true);
+            require(observed.equals(copy.materialized()),"Retained immutable input identity changed");
+            bytes=Math.addExact(bytes,observed.bytes());entries=Math.addExact(entries,observed.entries());
+        }
+        for(String name:List.of("inputs","control")) requireNames(staging.resolve(name),saved.copies().stream()
+                .filter(c->c.destination().startsWith(name+"/")).map(c->Path.of(c.destination()).getFileName().toString()).toList());
+        require(text.equals(readReceipt(staging)),"Retained input receipt changed during recovery");
+        resource.requireUnchanged();
+        require(lease.equals(JobStorageLeases.find(connection,lease.token()).orElse(null)),"Retained ordinary ownership changed during recovery");
+        return staging.resolve("execution/monitor");
+    }
 
     /** Declares the reserved ordinary namespace; these values do not establish provider admission. */
     public Map<String,String> environment() {

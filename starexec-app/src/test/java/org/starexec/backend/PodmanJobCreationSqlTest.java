@@ -546,6 +546,96 @@ class PodmanJobCreationSqlTest extends Common {
         assertEquals(staging,transportStaging());
     }
 
+    @ParameterizedTest @org.junit.jupiter.params.provider.EnumSource(JobExecutionProtocol.Transport.class)
+    @org.junit.jupiter.api.Timeout(40)
+    void stoppedOrdinaryOutputRecoversNonemptyConservedFiles(JobExecutionProtocol.Transport transport) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,transport);var kernel=kernelPacket(adapter,saved);var staging=transportStaging();
+        try(var server=new CreateServer(saved,"success",true,kernel);var observer=wireClient()) {
+            assertTrue(PodmanJobTransport.createAndStartHeldOnce(connection,adapter,client,peerFiles.resolve("peer.sock").toString(),1,1).isPresent());
+            assertTrue(PodmanJobTransport.releaseHeldOnce(connection,adapter,observer,peerFiles.resolve("peer.sock").toString(),"c".repeat(64),
+                    kernel.identity(),kernel.forbidden(),1,1));
+            Path output=lease.staging().resolve("execution/monitor");
+            Files.writeString(output.resolve("status.json"),"{\"fixture\":true}\n");
+            Files.writeString(lease.staging().resolve("execution/work/result.txt"),"SZS status Theorem\n");
+            Files.delete(benchmark);Files.writeString(functions,"changed after payload\n");
+            var inspection=stoppedInspection(saved,"exited");
+            var stopped=PodmanJobStopObservation.observe(saved,"c".repeat(64),inspection,UUID.randomUUID(),false);
+            assertTrue(JobExecutionProtocol.recordReceipt(connection,JobStorageLeases.find(connection,lease.token()).orElseThrow(),resource,stopped));
+            assertThrows(SQLException.class,()->adapter.preparation(connection));
+            assertEquals(output,PodmanJobOutput.stoppedOutputDirectory(connection,saved,inspection,"c".repeat(64)));
+            assertEquals("{\"fixture\":true}\n",Files.readString(output.resolve("status.json")));
+            assertTrue(JobExecutionProtocol.findReceipt(connection,saved.token(),JobExecutionProtocol.Phase.OUTPUT).isEmpty());
+            assertNull(JobStorageLeases.find(connection,saved.token()).orElseThrow().releasedAt());noTransportWorker();
+        }
+        assertEquals(staging,transportStaging());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"missing-release","missing-stop","cancelled-stop","provider-id","provider-config","provider-state",
+            "changed-stop","receipt","control","input","staging","monitor-symlink","monitor-replaced","cleanup-started","input-hardlink","extra-directory"})
+    void stoppedOrdinaryOutputRefusesUnverifiedStateOrLayout(String change) throws Exception {
+        var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);var kernel=kernelPacket(adapter,saved);
+        assertTrue(adapter.claimCreation(connection));assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));
+        var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+        if(!change.equals("missing-release")) {
+            var runtime=mapper.createObjectNode().put("version",1);
+            runtime.set("observation",mapper.valueToTree(kernel.runtime().verify(new com.google.gson.Gson().toJson(kernel.fields()))));
+            assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,
+                    receipt(saved,JobExecutionProtocol.Phase.RELEASE,mapper.createObjectNode().put("runtime_payload",runtime.toString()))));
+        }
+        var inspection=stoppedInspection(saved,"exited");
+        JobExecutionProtocol.Receipt stopped=null;
+        if(!change.equals("missing-release") && !change.equals("missing-stop")) {
+            if(change.equals("cancelled-stop")) number("UPDATE starexec.jobs SET killed=true WHERE id=? RETURNING id",job);
+            stopped=PodmanJobStopObservation.observe(saved,"c".repeat(64),inspection,UUID.randomUUID(),change.equals("cancelled-stop"));
+            assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,stopped));
+        }
+        if(change.equals("cleanup-started")) {
+            String manifest="{\"synthetic\":true}";
+            var facts=mapper.createObjectNode().put("stop_sha256",stopped.sha256()).put("manifest_payload",manifest)
+                    .put("manifest_sha256",JobExecutionProtocol.digest(manifest));
+            assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt(saved,JobExecutionProtocol.Phase.OUTPUT,facts)));
+            assertTrue(JobExecutionProtocol.recordReceipt(connection,active,resource,receipt(saved,JobExecutionProtocol.Phase.CLEANUP_REQUEST,
+                    mapper.createObjectNode().put("staging_identity","synthetic-staging").put("stop_sha256",stopped.sha256()))));
+        }
+        if(change.startsWith("provider-") || change.equals("changed-stop")) {
+            var providerMapper=com.github.dockerjava.core.DockerClientConfig.getDefaultObjectMapper();
+            var fields=(com.fasterxml.jackson.databind.node.ObjectNode)providerMapper.valueToTree(inspection);
+            if(change.equals("provider-id")) fields.put("Id","d".repeat(64));
+            if(change.equals("provider-config")) ((com.fasterxml.jackson.databind.node.ObjectNode)fields.get("HostConfig")).put("Memory",268435456L);
+            if(change.equals("provider-state")) ((com.fasterxml.jackson.databind.node.ObjectNode)fields.get("State")).put("Status","running").put("Running",true).put("Pid",321);
+            if(change.equals("changed-stop")) ((com.fasterxml.jackson.databind.node.ObjectNode)fields.get("State")).put("ExitCode",1);
+            inspection=providerMapper.treeToValue(fields,com.github.dockerjava.api.command.InspectContainerResponse.class);
+        }
+        if(change.equals("staging")) {
+            Files.move(lease.staging(),files.resolve("original-staging"));Files.createDirectory(lease.staging());
+        }
+        if(change.equals("monitor-symlink") || change.equals("monitor-replaced")) {
+            Path monitor=lease.staging().resolve("execution/monitor");Files.move(monitor,files.resolve("original-monitor"));
+            if(change.equals("monitor-symlink")) Files.createSymbolicLink(monitor,Files.createDirectory(files.resolve("outside-output")));
+            else {Files.createDirectory(monitor);Files.setPosixFilePermissions(monitor,PosixFilePermissions.fromString("rwx------"));
+                assertFalse(Files.isSameFile(monitor,files.resolve("original-monitor")));}
+        }
+        if(change.equals("extra-directory")) Files.createDirectory(lease.staging().resolve("execution/unregistered"));
+        if(change.equals("receipt") || change.equals("input") || change.equals("control") || change.equals("input-hardlink")) {
+            Path selected;
+            if(change.equals("receipt")) selected=lease.staging().resolve("inputs.json");
+            else try(var paths=Files.walk(lease.staging().resolve(change.equals("control")?"control":"inputs"))) {
+                selected=paths.filter(f->Files.isRegularFile(f,LinkOption.NOFOLLOW_LINKS)).findFirst().orElseThrow();
+            }
+            if(change.equals("input-hardlink")) Files.createLink(files.resolve("input-alias"),selected);
+            else {
+                var permissions=Files.getPosixFilePermissions(selected);String before=Files.readString(selected);
+                Files.setPosixFilePermissions(selected,PosixFilePermissions.fromString("rw-------"));Files.writeString(selected,before+" ");
+                Files.setPosixFilePermissions(selected,permissions);
+            }
+        }
+        var observed=inspection;
+        var error=assertThrows(Exception.class,()->PodmanJobOutput.stoppedOutputDirectory(connection,saved,observed,"c".repeat(64)));
+        assertTrue(error instanceof IOException || error instanceof SQLException,error::toString);
+        assertNull(JobStorageLeases.find(connection,saved.token()).orElseThrow().releasedAt());
+        verify(client,never()).removeContainerCmd(anyString());
+    }
+
     private static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> heldOutcomes() {
         return java.util.Arrays.stream(JobExecutionProtocol.Transport.values()).flatMap(transport->
                 java.util.stream.Stream.of("success","create-lost","inspect-lost","inspect-wrong","inspect-oversize","inspect-body-timeout","cancel",
