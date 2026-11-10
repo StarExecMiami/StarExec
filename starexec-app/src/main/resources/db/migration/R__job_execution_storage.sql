@@ -20,7 +20,9 @@ CREATE OR REPLACE FUNCTION starexec.active_execution_storage_bytes(_owner INTEGE
     SELECT (SELECT COALESCE(sum(charged_bytes),0) FROM starexec.solver_build_storage_charges
         WHERE owner_id=_owner AND released_at IS NULL)
         +(SELECT COALESCE(sum(limit_bytes),0) FROM starexec.execution_storage_claims
-        WHERE lease_kind='JOB' AND origin_owner_id=_owner AND released_at IS NULL);
+        WHERE lease_kind='JOB' AND origin_owner_id=_owner AND released_at IS NULL)
+        +(SELECT COALESCE(sum(charged_bytes),0) FROM starexec.job_output_storage_reservations
+        WHERE origin_owner_id=_owner AND released_at IS NULL);
 $$ LANGUAGE sql STABLE;
 
 CREATE OR REPLACE FUNCTION starexec.guard_execution_storage_claim() RETURNS trigger AS $$
@@ -162,6 +164,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION starexec.guard_active_job_storage_deletion() RETURNS trigger AS $$
 BEGIN
     IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims WHERE lease_kind='JOB' AND released_at IS NULL
+        AND (TG_TABLE_NAME='users' AND origin_owner_id=OLD.id OR TG_TABLE_NAME='job_pairs' AND origin_pair_id=OLD.id))
+        OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations WHERE released_at IS NULL
         AND (TG_TABLE_NAME='users' AND origin_owner_id=OLD.id OR TG_TABLE_NAME='job_pairs' AND origin_pair_id=OLD.id)) THEN
         RAISE EXCEPTION 'Active job storage must be settled before deletion';
     END IF;

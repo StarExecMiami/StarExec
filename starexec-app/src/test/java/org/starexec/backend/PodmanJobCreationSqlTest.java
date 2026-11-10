@@ -637,6 +637,168 @@ class PodmanJobCreationSqlTest extends Common {
     }
 
     private record StoppedOutputFixture(JobExecutionProtocol.Creation request,com.github.dockerjava.api.command.InspectContainerResponse inspection) { }
+    private static long connectionNumber(Connection connection,String sql,Object...args) throws SQLException {
+        try(var query=connection.prepareStatement(sql)) {
+            for(int i=0;i<args.length;i++) query.setObject(i+1,args[i]);
+            try(var row=query.executeQuery()) {assertTrue(row.next());return row.getLong(1);}
+        }
+    }
+    private com.fasterxml.jackson.databind.node.ObjectNode outputReservationPayload(StoppedOutputFixture fixture,long limit) throws Exception {
+        Files.writeString(lease.staging().resolve("execution/monitor/stdout.txt"),"abc");
+        Files.writeString(lease.staging().resolve("execution/savedoutput/answer.p"),"de");
+        var snapshot=PodmanJobOutput.captureStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),64,8);
+        Path parent=Files.createDirectory(files.resolve("retained"),PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+        var facts=mapper.createObjectNode().put("stop_sha256",JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).orElseThrow().sha256())
+                .put("source_manifest_payload",snapshot.payload()).put("source_manifest_sha256",snapshot.sha256())
+                .put("parent_path",parent.toString()).put("parent_identity",Files.readAttributes(parent,java.nio.file.attribute.BasicFileAttributes.class).fileKey().toString())
+                .put("target_path",parent.resolve("job-"+lease.token()).toString()).put("limit_bytes",limit).put("entry_limit",8);
+        var value=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.readTree(receipt(fixture.request(),JobExecutionProtocol.Phase.OUTPUT,facts).payload());
+        return value.put("kind","OUTPUT_REQUEST");
+    }
+    private long recordOutputReservation(com.fasterxml.jackson.databind.node.ObjectNode value) throws Exception {
+        String payload=value.toString();
+        return number("SELECT CASE WHEN starexec.record_job_execution_receipt(?,?,?,?,?,?) THEN 1 ELSE 0 END",lease.token(),"OUTPUT_REQUEST",
+                UUID.fromString(value.path("operation_token").textValue()),value.path("engine_identity").textValue(),payload,JobExecutionProtocol.digest(payload));
+    }
+    @Test void ordinaryOutputReservationBooksBoundedBytesBeforeAnyCopy() throws Exception {
+        var fixture=stoppedOutputFixture();var value=outputReservationPayload(fixture,8);
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        assertEquals(1,recordOutputReservation(value));
+        assertEquals(usage+8,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertEquals(8,number("SELECT charged_bytes FROM starexec.job_output_storage_reservations WHERE execution_token=?",lease.token()));
+        var allocation=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        assertEquals(value.toString(),allocation.request().payload());assertEquals(8,allocation.limitBytes());
+        assertEquals(8,allocation.chargedBytes());assertNull(allocation.copyStartedAt());assertNull(allocation.directoryIdentity());
+        assertNull(allocation.verifiedAt());assertNull(allocation.releasedAt());
+        assertFalse(Files.exists(Path.of(value.path("facts").path("target_path").textValue())));
+        assertEquals(0,recordOutputReservation(value));
+        assertFalse(org.starexec.data.database.JobOutputReservations.reserve(connection,
+                JobStorageLeases.find(connection,lease.token()).orElseThrow(),resource,allocation.request()));
+        assertEquals(usage+8,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+    }
+    @ParameterizedTest @ValueSource(strings={"entry-count","scope-hash","byte-count"})
+    void ordinaryOutputReservationRefusesInconsistentSourceManifest(String change) throws Exception {
+        var fixture=stoppedOutputFixture();var value=outputReservationPayload(fixture,8);
+        var facts=(com.fasterxml.jackson.databind.node.ObjectNode)value.get("facts");var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+        var manifest=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.readTree(facts.path("source_manifest_payload").textValue());
+        switch(change) {
+            case "entry-count" -> manifest.put("entry_count",0);
+            case "byte-count" -> manifest.put("byte_size",0);
+            case "scope-hash" -> ((com.fasterxml.jackson.databind.node.ObjectNode)manifest.get("monitor")).put("manifest_sha256","0".repeat(64));
+            default -> throw new AssertionError();
+        }
+        facts.put("source_manifest_payload",manifest.toString()).put("source_manifest_sha256",JobExecutionProtocol.digest(manifest.toString()));
+        connection.setAutoCommit(false);
+        try { assertThrows(SQLException.class,()->recordOutputReservation(value)); }
+        finally {connection.rollback();connection.setAutoCommit(true);}
+        assertTrue(org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).isEmpty());
+    }
+    @ParameterizedTest @ValueSource(strings={"wrong-stop","wrong-source-sha","missing-parent","relative-parent","parent-traversal",
+            "wrong-target","empty-parent-identity","entry-limit","entry-budget","byte-budget","byte-limit","fractional-limit",
+            "quota","funding","cancelled","stale-attempt","stale-execution","wrong-engine","missing-scope","completed-output","cleanup-intent"})
+    void ordinaryOutputReservationRefusesInvalidOrUnfundedOwnership(String change) throws Exception {
+        var fixture=stoppedOutputFixture();var value=outputReservationPayload(fixture,8);
+        var facts=(com.fasterxml.jackson.databind.node.ObjectNode)value.get("facts");long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        connection.setAutoCommit(false);
+        try {
+            switch(change) {
+                case "wrong-stop" -> facts.put("stop_sha256","0".repeat(64));
+                case "wrong-source-sha" -> facts.put("source_manifest_sha256","0".repeat(64));
+                case "missing-parent" -> facts.remove("parent_identity");
+                case "relative-parent" -> facts.put("parent_path","relative").put("target_path","relative/job-"+lease.token());
+                case "parent-traversal" -> {String parent=facts.path("parent_path").textValue()+"/../other";facts.put("parent_path",parent).put("target_path",parent+"/job-"+lease.token());}
+                case "wrong-target" -> facts.put("target_path",facts.path("target_path").textValue()+"-other");
+                case "empty-parent-identity" -> facts.put("parent_identity","");
+                case "entry-limit" -> facts.put("entry_limit",1);
+                case "entry-budget" -> facts.put("entry_limit",resource.inodeLimit()+1);
+                case "byte-budget" -> facts.put("limit_bytes",resource.capacityBytes()+1);
+                case "byte-limit" -> facts.put("limit_bytes",4);
+                case "fractional-limit" -> facts.put("limit_bytes",8.5);
+                case "quota" -> number("UPDATE starexec.users SET disk_quota=? WHERE id=? RETURNING id",usage+7,owner);
+                case "funding" -> number("UPDATE starexec.users SET disk_size=? WHERE id=? RETURNING id",usage-1,owner);
+                case "cancelled" -> number("UPDATE starexec.jobs SET killed=true WHERE id=? RETURNING id",job);
+                case "stale-attempt" -> number("UPDATE starexec.job_pair_attempts SET current_attempt_no=2 WHERE pair_id=? RETURNING pair_id",pair);
+                case "stale-execution" -> number("UPDATE starexec.job_pairs SET sge_id=sge_id+1 WHERE id=? RETURNING id",pair);
+                case "wrong-engine" -> value.put("engine_identity","podman:"+fixture.request().executionId()+":"+"d".repeat(64));
+                case "missing-scope" -> {
+                    var manifest=(com.fasterxml.jackson.databind.node.ObjectNode)new com.fasterxml.jackson.databind.ObjectMapper().readTree(facts.path("source_manifest_payload").textValue());
+                    manifest.remove("monitor");facts.put("source_manifest_payload",manifest.toString()).put("source_manifest_sha256",JobExecutionProtocol.digest(manifest.toString()));
+                }
+                case "completed-output","cleanup-intent" -> {
+                    var mapper=new com.fasterxml.jackson.databind.ObjectMapper();var stop=JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.STOP).orElseThrow();
+                    var output=receipt(fixture.request(),JobExecutionProtocol.Phase.OUTPUT,mapper.createObjectNode().put("stop_sha256",stop.sha256())
+                            .put("manifest_payload","{}").put("manifest_sha256",JobExecutionProtocol.digest("{}")));
+                    assertEquals(1,number("SELECT CASE WHEN starexec.record_job_execution_receipt(?,?,?,?,?,?) THEN 1 ELSE 0 END",
+                            output.token(),output.phase().name(),output.operation(),output.engine(),output.payload(),output.sha256()));
+                    if(change.equals("cleanup-intent")) {
+                        var cleanup=receipt(fixture.request(),JobExecutionProtocol.Phase.CLEANUP_REQUEST,
+                                mapper.createObjectNode().put("stop_sha256",stop.sha256()).put("staging_identity","fixture-directory"));
+                        assertEquals(1,number("SELECT CASE WHEN starexec.record_job_execution_receipt(?,?,?,?,?,?) THEN 1 ELSE 0 END",
+                                cleanup.token(),cleanup.phase().name(),cleanup.operation(),cleanup.engine(),cleanup.payload(),cleanup.sha256()));
+                    }
+                }
+                default -> throw new AssertionError();
+            }
+            var refused=assertThrows(SQLException.class,()->recordOutputReservation(value));
+            assertTrue(refused.getMessage().contains("Ordinary"),refused.getMessage());
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertTrue(org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).isEmpty());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertFalse(Files.exists(Path.of(facts.path("target_path").textValue())));
+    }
+    @ParameterizedTest @ValueSource(strings={"first","lost-commit","foreign-transaction","cancelled-replay","owner-contention"})
+    void ordinaryOutputReservationPreservesFirstAcknowledgementAndTransactionOwnership(String change) throws Exception {
+        var fixture=stoppedOutputFixture();var value=outputReservationPayload(fixture,8);String payload=value.toString();
+        var request=new JobExecutionProtocol.Receipt(lease.token(),JobExecutionProtocol.Phase.OUTPUT_REQUEST,
+                UUID.fromString(value.path("operation_token").textValue()),value.path("engine_identity").textValue(),payload,JobExecutionProtocol.digest(payload));
+        var active=JobStorageLeases.find(connection,lease.token()).orElseThrow();long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        if(change.equals("foreign-transaction")) {
+            connection.setAutoCommit(false);
+            try {assertThrows(SQLException.class,()->org.starexec.data.database.JobOutputReservations.reserve(connection,active,resource,request));assertFalse(connection.getAutoCommit());}
+            finally {connection.rollback();connection.setAutoCommit(true);}
+        } else if(change.equals("owner-contention")) {
+            try(var other=Common.getConnection()) {
+                other.setAutoCommit(false);connectionNumber(other,"SELECT id FROM starexec.users WHERE id=? FOR UPDATE",owner);
+                try {assertThrows(SQLException.class,()->org.starexec.data.database.JobOutputReservations.reserve(connection,active,resource,request));}
+                finally {try {other.rollback();} finally {other.setAutoCommit(true);}}
+            }
+        } else {
+            if(change.equals("lost-commit")) {
+                var uncertain=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(connection));
+                doAnswer(call->{connection.commit();throw new SQLException("Synthetic lost output reservation reply");}).when(uncertain).commit();
+                assertThrows(SQLException.class,()->org.starexec.data.database.JobOutputReservations.reserve(uncertain,active,resource,request));
+            } else assertTrue(org.starexec.data.database.JobOutputReservations.reserve(connection,active,resource,request));
+            if(change.equals("cancelled-replay")) number("UPDATE starexec.jobs SET killed=true WHERE id=? RETURNING id",job);
+            assertEquals(request,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow().request());
+            assertFalse(org.starexec.data.database.JobOutputReservations.reserve(connection,active,resource,request));
+            try(var other=Common.getConnection()) {assertEquals(usage+8,connectionNumber(other,"SELECT disk_size FROM starexec.users WHERE id=?",owner));}
+        }
+        boolean booked=!change.equals("foreign-transaction") && !change.equals("owner-contention");
+        assertEquals(booked,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).isPresent());
+        assertEquals(usage+(booked?8:0),number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertFalse(Files.exists(Path.of(value.path("facts").path("target_path").textValue())));
+    }
+    @ParameterizedTest @ValueSource(strings={"charge","release","delete","truncate"})
+    void ordinaryOutputReservationRetainsItsAllocationAndCharge(String change) throws Exception {
+        var fixture=stoppedOutputFixture();var value=outputReservationPayload(fixture,8);assertEquals(1,recordOutputReservation(value));
+        var before=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        connection.setAutoCommit(false);
+        try(var statement=connection.createStatement()) {
+            String predicate=" WHERE execution_token='"+lease.token()+"'::uuid";
+            String sql=switch(change) {
+                case "charge" -> "UPDATE starexec.job_output_storage_reservations SET charged_bytes=0"+predicate;
+                case "release" -> "UPDATE starexec.job_output_storage_reservations SET released_at=clock_timestamp()"+predicate;
+                case "delete" -> "DELETE FROM starexec.job_output_storage_reservations"+predicate;
+                case "truncate" -> "TRUNCATE starexec.job_output_storage_reservations";
+                default -> throw new AssertionError();
+            };
+            var refused=assertThrows(SQLException.class,()->statement.execute(sql));assertTrue(refused.getMessage().contains("Ordinary output reservation"));
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(before,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+    }
     private StoppedOutputFixture stoppedOutputFixture() throws Exception {
         var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);var kernel=kernelPacket(adapter,saved);
         assertTrue(adapter.claimCreation(connection));assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));

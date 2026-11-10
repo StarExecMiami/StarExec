@@ -9,6 +9,7 @@ DECLARE
     _stop starexec.job_execution_receipts%ROWTYPE;
     _cleanup starexec.job_execution_receipts%ROWTYPE;
     _payload JSONB; _facts JSONB; _usage BIGINT; _finished TIMESTAMPTZ;
+    _manifest JSONB; _limit BIGINT; _entries INTEGER; _parent TEXT; _target TEXT;
     _start BOOLEAN := FALSE;
 BEGIN
     IF current_setting('transaction_isolation') NOT IN ('read committed','read uncommitted') THEN
@@ -25,9 +26,9 @@ BEGIN
         END IF;
         _start := (NEW.receipt_payload::jsonb->'facts'->>'start_requested')::boolean;
     END IF;
-    IF (NEW.receipt_kind='RELEASE' OR _start) AND (_request.execution_token IS NULL
+    IF (NEW.receipt_kind IN ('RELEASE','OUTPUT_REQUEST') OR _start) AND (_request.execution_token IS NULL
         OR NOT starexec.lock_current_job_storage_pair(_request.pair_id,_request.attempt_no,
-            _request.owner_id,_request.execution_id,TRUE)) THEN
+            _request.owner_id,_request.execution_id,NEW.receipt_kind<>'OUTPUT_REQUEST')) THEN
         RAISE EXCEPTION 'Ordinary action requires the exact current admitted locator';
     END IF;
     SELECT disk_size INTO _usage FROM starexec.users WHERE id=_initial.origin_owner_id FOR UPDATE NOWAIT;
@@ -134,6 +135,46 @@ BEGIN
             WHERE execution_token=NEW.execution_token AND receipt_kind='RELEASE')
             AND COALESCE(_facts->>'disposition','') NOT IN ('cancelled','never_started') THEN
             RAISE EXCEPTION 'An unreleased hold cannot produce a normal execution result';
+        END IF;
+    WHEN 'OUTPUT_REQUEST' THEN
+        IF _stop.execution_token IS NULL OR _stop.receipt_payload::jsonb->'facts' ? 'disposition'
+            OR _facts->>'stop_sha256' IS DISTINCT FROM _stop.receipt_sha256
+            OR EXISTS (SELECT 1 FROM starexec.job_execution_receipts WHERE execution_token=NEW.execution_token AND receipt_kind='OUTPUT')
+            OR NOT EXISTS (SELECT 1 FROM starexec.job_pairs p JOIN starexec.jobs j ON j.id=p.job_id
+                WHERE p.id=_request.pair_id AND p.status_code IS DISTINCT FROM 21
+                    AND j.deleted IS NOT TRUE AND j.killed IS NOT TRUE) THEN
+            RAISE EXCEPTION 'Ordinary output reservation requires the current normal stopped execution';
+        END IF;
+        IF (jsonb_typeof(_facts->'source_manifest_payload')='string'
+            AND jsonb_typeof(_facts->'source_manifest_sha256')='string'
+            AND jsonb_typeof(_facts->'parent_path')='string' AND jsonb_typeof(_facts->'parent_identity')='string'
+            AND btrim(_facts->>'parent_identity')<>'' AND jsonb_typeof(_facts->'target_path')='string'
+            AND jsonb_typeof(_facts->'limit_bytes')='number' AND (_facts->>'limit_bytes') ~ '^[0-9]+$'
+            AND jsonb_typeof(_facts->'entry_limit')='number' AND (_facts->>'entry_limit') ~ '^[0-9]+$') IS DISTINCT FROM TRUE THEN
+            RAISE EXCEPTION 'Ordinary output reservation requires complete destination and budget facts';
+        END IF;
+        _limit:=(_facts->>'limit_bytes')::bigint; _entries:=(_facts->>'entry_limit')::integer;
+        _parent:=_facts->>'parent_path'; _target:=_facts->>'target_path';
+        _manifest:=(_facts->>'source_manifest_payload')::jsonb;
+        IF (jsonb_typeof(_manifest)='object'
+            AND starexec.job_execution_json_unique((_facts->>'source_manifest_payload')::json)
+            AND _facts->>'source_manifest_sha256'=encode(sha256(convert_to(_facts->>'source_manifest_payload','UTF8')),'hex')
+            AND _manifest @> jsonb_build_object('version',1,'kind','ordinary-output',
+                'execution_token',NEW.execution_token::text,'pair_id',_request.pair_id,'attempt_no',_request.attempt_no,
+                'request_sha256',_request.request_sha256,'preparation_sha256',_request.preparation_sha256,
+                'stop_sha256',_stop.receipt_sha256,'engine_identity',NEW.engine_identity)
+            AND jsonb_typeof(_manifest->'monitor')='object' AND jsonb_typeof(_manifest->'savedoutput')='object'
+            AND jsonb_typeof(_manifest->'byte_size')='number' AND (_manifest->>'byte_size') ~ '^[0-9]+$'
+            AND jsonb_typeof(_manifest->'entry_count')='number' AND (_manifest->>'entry_count') ~ '^[0-9]+$') IS DISTINCT FROM TRUE
+            OR _limit>_claim.limit_bytes OR _entries<2 OR _entries>_resource.inode_limit
+            OR (_manifest->>'byte_size')::numeric>_limit OR (_manifest->>'entry_count')::numeric>_entries
+            OR starexec.job_output_source_manifest_valid(_facts->>'source_manifest_payload',_limit,_entries) IS DISTINCT FROM TRUE
+            OR left(_parent,1)<>'/' OR _parent='/' OR right(_parent,1)='/'
+            OR _parent ~ '(^|/)[.]{1,2}(/|$)' OR strpos(_parent,'//')>0
+            OR _target IS DISTINCT FROM _parent || '/job-' || NEW.execution_token::text
+            OR EXISTS (SELECT 1 FROM starexec.execution_storage_resources r WHERE
+                _target=r.root_path OR starts_with(_target,r.root_path || '/') OR starts_with(r.root_path,_target || '/')) THEN
+            RAISE EXCEPTION 'Ordinary output reservation exceeds its conserved source or destination bounds';
         END IF;
     WHEN 'OUTPUT' THEN
         IF _stop.execution_token IS NULL OR _facts->>'stop_sha256' IS DISTINCT FROM _stop.receipt_sha256

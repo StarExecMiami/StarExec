@@ -165,6 +165,21 @@ must be coupled before the ordinary dispatcher can use this protocol.
 Creation and phase mutations require a read-committed transaction: an older
 snapshot could otherwise miss newly consumed creation or cleanup intent.
 
+`OUTPUT_REQUEST` records ordinary output-copy intent separately from completed
+`OUTPUT`. Its exact source manifests, normal stop, destination parent identity,
+deterministic target and bounded byte/entry allowance are conserved together.
+The allocation and its additional quota charge commit atomically, before any
+retained-copy write. Nested manifest digests and file/count totals must agree;
+malformed, stale, cancelled, unfunded or oversized requests are refused.
+Replaying a request cannot book another allowance or authorize another write.
+
+`JobOutputReservations` verifies typed allocation readback against the immutable
+request. Pending allocations remain charged and prevent owner/pair deletion,
+including after execution storage is reclaimed. A reservation is neither a
+filesystem-ownership witness nor completed retained output. Unresolved copies
+must retain their allocation; completion verification and registered cleanup
+must precede charge settlement or ordinary runtime dispatch.
+
 `PodmanJobTransport` sends a preselected curl creation only after the first
 acknowledged request consumption. It uses the exact conserved UTF-8 bytes over an
 owned local Unix socket, with implicit curl configuration, proxies, redirects and

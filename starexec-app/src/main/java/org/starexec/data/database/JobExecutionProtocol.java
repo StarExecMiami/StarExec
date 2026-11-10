@@ -26,7 +26,7 @@ import java.util.UUID;
 /** Exact ordinary protocol history; replay and uncertain commit responses never authorize another send. */
 public final class JobExecutionProtocol {
     public enum Transport { JAVA, CURL }
-    public enum Phase { CREATED, RELEASE, STOP, OUTPUT, CLEANUP_REQUEST, CLEANUP }
+    public enum Phase { CREATED, RELEASE, STOP, OUTPUT, CLEANUP_REQUEST, CLEANUP, OUTPUT_REQUEST }
     private static final int MAX_PAYLOAD = 16 * 1024 * 1024;
     private static final UUID ZERO = new UUID(0, 0);
     private static final ObjectMapper JSON = new ObjectMapper()
