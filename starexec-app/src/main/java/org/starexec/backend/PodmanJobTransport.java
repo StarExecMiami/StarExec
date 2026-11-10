@@ -29,12 +29,7 @@ final class PodmanJobTransport {
 
     static Optional<String> createOnce(Connection connection,PodmanJobCreation policy,DockerClient provider,
             String socket,int connectSeconds,int responseSeconds) throws IOException,SQLException {
-        if (policy==null || connectSeconds<1 || responseSeconds<1)
-            throw new IOException("Ordinary creation policy or transport deadlines are unavailable");
-        var request=policy.creation();
-        if (request.transport()!=JobExecutionProtocol.Transport.CURL)
-            throw new IOException("Ordinary creation requires the preselected curl transport");
-        PodmanPrivateBuild.requireLocalRootlessProvider(provider,socket);
+        var request=check(policy,JobExecutionProtocol.Transport.CURL,provider,socket,connectSeconds,responseSeconds);
         String endpoint=socket.startsWith("unix://")?socket.substring(7):socket;
         Path directory=Files.createTempDirectory("starexec-ordinary-create-");Path input=directory.resolve("request.json");
         Process child=null;Thread reader=null;
@@ -64,10 +59,7 @@ final class PodmanJobTransport {
                 if (reply.length<4 || reply[reply.length-4]!='\n'
                         || !"201".equals(new String(reply,reply.length-3,3,StandardCharsets.US_ASCII)))
                     throw new IOException("Ordinary creation did not return HTTP 201; outcome is unresolved");
-                var value=JSON.readTree(Arrays.copyOf(reply,reply.length-4));var id=value==null?null:value.get("Id");
-                if (value==null || !value.isObject() || id==null || !id.isTextual() || !id.textValue().matches("[0-9a-f]{64}"))
-                    throw new IOException("Ordinary creation returned no immutable provider identity; outcome is unresolved");
-                return Optional.of(id.textValue());
+                return Optional.of(identity(Arrays.copyOf(reply,reply.length-4)));
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 throw new IOException("Ordinary creation was interrupted; provider outcome is unresolved",interrupted);
@@ -75,6 +67,76 @@ final class PodmanJobTransport {
                 throw new IOException("Ordinary creation response is unavailable; provider outcome is unresolved",unknown);
             }
         } finally {cleanup(child,reader,input,directory);}
+    }
+
+    static Optional<String> createJavaOnce(Connection connection,PodmanJobCreation policy,DockerClient provider,
+            String socket,int connectSeconds,int responseSeconds) throws IOException,SQLException {
+        var request=check(policy,JobExecutionProtocol.Transport.JAVA,provider,socket,connectSeconds,responseSeconds);
+        String endpoint=socket.startsWith("unix://")?socket.substring(7):socket;
+        final java.net.URI address;
+        try {address=new java.net.URI("unix",null,endpoint,null,null);}
+        catch(java.net.URISyntaxException invalid) {throw new IOException("Ordinary provider socket address is invalid",invalid);}
+        var message=com.github.dockerjava.transport.DockerHttpClient.Request.builder().method("POST")
+                .path("/v1.41/containers/create?name="+request.name()).putHeader("Content-Type","application/json")
+                .bodyBytes(request.payload().getBytes(StandardCharsets.UTF_8)).build();
+        var http=new PodmanCreateOnceHttpClient(new com.github.dockerjava.httpclient5.ApacheDockerHttpClient.Builder()
+                .dockerHost(address).maxConnections(1).connectionTimeout(java.time.Duration.ofSeconds(connectSeconds))
+                .responseTimeout(java.time.Duration.ofSeconds(responseSeconds)).build());
+        Thread worker=null;
+        try {
+            if(!policy.claimCreation(connection)) return Optional.empty();
+            var operation=new FutureTask<String>(()->{
+                try(var response=http.execute(message)) {
+                    if(response.getStatusCode()!=201)
+                        throw new IOException("Ordinary Java creation did not return HTTP 201; outcome is unresolved");
+                    if(response.getBody()==null) throw new IOException("Ordinary Java creation response is unavailable");
+                    return identity(response.getBody().readNBytes(MAX_REPLY+1));
+                }
+            });
+            worker=new Thread(operation,"ordinary-java-create");worker.setDaemon(true);worker.start();
+            try {return Optional.of(operation.get((long)responseSeconds+1,TimeUnit.SECONDS));}
+            catch(InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Ordinary Java creation was interrupted; outcome is unresolved",interrupted);
+            } catch(ExecutionException | TimeoutException unknown) {
+                throw new IOException("Ordinary Java creation response is unresolved",unknown);
+            }
+        } finally {cleanup(http,worker);}
+    }
+
+    private static JobExecutionProtocol.Creation check(PodmanJobCreation policy,JobExecutionProtocol.Transport transport,
+            DockerClient provider,String socket,int connectSeconds,int responseSeconds) throws IOException {
+        if(policy==null || connectSeconds<1 || responseSeconds<1)
+            throw new IOException("Ordinary creation policy or transport deadlines are unavailable");
+        var request=policy.creation();
+        if(request.transport()!=transport) throw new IOException("Ordinary creation transport differs from its conserved selection");
+        PodmanPrivateBuild.requireLocalRootlessProvider(provider,socket);return request;
+    }
+
+    private static String identity(byte[] reply) throws IOException {
+        if(reply.length>MAX_REPLY) throw new IOException("Ordinary creation response exceeds its bound; outcome is unresolved");
+        var value=JSON.readTree(reply);var id=value==null?null:value.get("Id");
+        if(value==null || !value.isObject() || id==null || !id.isTextual() || !id.textValue().matches("[0-9a-f]{64}"))
+            throw new IOException("Ordinary creation returned no immutable provider identity; outcome is unresolved");
+        return id.textValue();
+    }
+
+    private static void cleanup(com.github.dockerjava.transport.DockerHttpClient http,Thread worker) throws IOException {
+        boolean interrupted=Thread.interrupted();IOException closeFailure=null;
+        try {
+            try {http.close();} catch(IOException failure) {closeFailure=failure;}
+            if(worker!=null) {
+                worker.interrupt();long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+                while(worker.isAlive() && System.nanoTime()<deadline) {
+                    try {worker.join(50);} catch(InterruptedException signal) {interrupted=true;}
+                }
+                if(worker.isAlive()) {
+                    var unresolved=new IOException("Ordinary Java transport worker remains unresolved");
+                    if(closeFailure!=null) unresolved.addSuppressed(closeFailure);throw unresolved;
+                }
+            }
+            if(closeFailure!=null) throw closeFailure;
+        } finally {if(interrupted) Thread.currentThread().interrupt();}
     }
 
     private static void cleanup(Process child,Thread reader,Path input,Path directory) throws IOException {

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bind private ordinary creation policies to exact prepared inputs and durable ownership without replay permission.
 - Preserve real provider zero timestamps when recording a positively never-started ordinary container, without granting payload release or storage settlement.
 - Send conserved ordinary creation requests once over the local curl transport, preserving uncertain outcomes and bounding response handling and child cleanup.
+- Send the same conserved ordinary request through the selected Java transport without automatic replay, with bounded slow-response handling and verified worker cleanup.
 
 - Serialize dedicated storage ownership across solver builds and ordinary job
   attempts, preserving build lease history and booking each job allowance once.

@@ -172,9 +172,13 @@ retries disabled. A bounded concurrent reply reader and transport/parent deadlin
 cover oversized responses, disconnection and interruption. The owned child and
 reader must terminate before temporary request cleanup. Only HTTP 201 with one
 valid container identity returns an acknowledgement; every uncertain reply retains
-the consumed request and cannot authorize another POST. This creation leg does
-not start the container, release a payload or settle its storage. Java creation
-and the coupled ordinary provider lifecycle remain separate from this adapter.
+the consumed request and cannot authorize another POST. The selected Java leg
+sends the same exact bytes through a non-repeatable HTTP body on its owned Unix
+client. A separate overall deadline covers slow body delivery as well as response
+headers; closing the client and joining its worker are required on every outcome.
+It does not load Docker credential configuration or switch transports after a
+consumed claim. Neither leg starts the container, releases a payload or settles
+its storage; the coupled ordinary provider lifecycle remains separate.
 
 `PodmanJobNonExecution` validates a never-started ordinary container against the
 conserved name, image, ownership labels and trusted launcher. It requires the
