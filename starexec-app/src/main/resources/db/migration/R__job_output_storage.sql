@@ -95,9 +95,36 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Allocation rows mirror the immutable phase; only the first copy and binding can advance.
+-- Exact database bindings complement, but do not replace, trusted physical copy verification.
+CREATE OR REPLACE FUNCTION starexec.job_output_completion_matches(
+    _token UUID,_operation UUID,_engine TEXT,_payload TEXT) RETURNS BOOLEAN AS $$
+DECLARE _output starexec.job_output_storage_reservations%ROWTYPE; _phase starexec.job_execution_receipts%ROWTYPE;
+    _facts JSONB; _source JSONB;
+BEGIN
+    SELECT * INTO _output FROM starexec.job_output_storage_reservations WHERE execution_token=_token;
+    SELECT * INTO _phase FROM starexec.job_execution_receipts WHERE execution_token=_token AND receipt_kind='OUTPUT_REQUEST';
+    IF _output.execution_token IS NULL OR _phase.execution_token IS NULL OR _output.copy_started_at IS NULL
+        OR _output.directory_identity IS NULL OR _output.released_at IS NOT NULL THEN RETURN FALSE; END IF;
+    _facts:=_payload::jsonb->'facts';_source:=_phase.receipt_payload::jsonb->'facts';
+    RETURN (_operation=_output.operation_token AND _engine=_phase.engine_identity
+        AND jsonb_typeof(_facts->'reservation_sha256')='string' AND _facts->>'reservation_sha256'=_phase.receipt_sha256
+        AND jsonb_typeof(_facts->'source_manifest_sha256')='string' AND _facts->>'source_manifest_sha256'=_output.source_manifest_sha256
+        AND jsonb_typeof(_facts->'parent_path')='string' AND _facts->>'parent_path'=_output.parent_path
+        AND jsonb_typeof(_facts->'parent_identity')='string' AND _facts->>'parent_identity'=_output.parent_identity
+        AND jsonb_typeof(_facts->'target_path')='string' AND _facts->>'target_path'=_output.target_path
+        AND jsonb_typeof(_facts->'directory_identity')='string' AND _facts->>'directory_identity'=_output.directory_identity
+        AND jsonb_typeof(_facts->'manifest_payload')='string' AND _facts->>'manifest_payload'=_source->>'source_manifest_payload'
+        AND jsonb_typeof(_facts->'manifest_sha256')='string' AND _facts->>'manifest_sha256'=_output.source_manifest_sha256
+        AND _facts->>'stop_sha256'=_source->>'stop_sha256'
+        AND starexec.job_output_source_manifest_valid(_facts->>'manifest_payload',_output.limit_bytes,_output.entry_limit)) IS TRUE;
+EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Allocation rows mirror the immutable phase; only exact copy, binding and completion can advance.
 CREATE OR REPLACE FUNCTION starexec.guard_job_output_storage_reservation() RETURNS trigger AS $$
-DECLARE _phase starexec.job_execution_receipts%ROWTYPE; _request starexec.job_execution_requests%ROWTYPE; _facts JSONB;
+DECLARE _phase starexec.job_execution_receipts%ROWTYPE; _request starexec.job_execution_requests%ROWTYPE;
+    _completed starexec.job_execution_receipts%ROWTYPE; _facts JSONB; _bytes BIGINT;
 BEGIN
     IF TG_OP<>'INSERT' THEN
         IF TG_OP='UPDATE' AND NEW IS NOT DISTINCT FROM OLD THEN RETURN NEW; END IF;
@@ -116,6 +143,22 @@ BEGIN
                 ELSIF OLD.copy_started_at IS NOT NULL AND NEW.copy_started_at IS NOT DISTINCT FROM OLD.copy_started_at
                     AND OLD.directory_identity IS NULL AND NEW.directory_identity IS NOT NULL AND btrim(NEW.directory_identity)<>'' THEN
                     RETURN NEW;
+                END IF;
+            END IF;
+        END IF;
+        IF TG_OP='UPDATE' AND OLD.verified_at IS NULL AND NEW.verified_at IS NOT NULL
+            AND (NEW.execution_token,NEW.receipt_kind,NEW.operation_token,NEW.origin_owner_id,NEW.origin_pair_id,
+            NEW.parent_path,NEW.parent_identity,NEW.target_path,NEW.source_manifest_sha256,NEW.limit_bytes,NEW.entry_limit,
+            NEW.copy_started_at,NEW.directory_identity,NEW.released_at,NEW.created_at)
+            IS NOT DISTINCT FROM (OLD.execution_token,OLD.receipt_kind,OLD.operation_token,OLD.origin_owner_id,OLD.origin_pair_id,
+            OLD.parent_path,OLD.parent_identity,OLD.target_path,OLD.source_manifest_sha256,OLD.limit_bytes,OLD.entry_limit,
+            OLD.copy_started_at,OLD.directory_identity,OLD.released_at,OLD.created_at) THEN
+            SELECT * INTO _completed FROM starexec.job_execution_receipts WHERE execution_token=OLD.execution_token AND receipt_kind='OUTPUT';
+            IF FOUND AND starexec.job_output_completion_matches(OLD.execution_token,_completed.operation_token,
+                _completed.engine_identity,_completed.receipt_payload) THEN
+                _bytes:=((_completed.receipt_payload::jsonb->'facts'->>'manifest_payload')::jsonb->>'byte_size')::bigint;
+                IF NEW.verified_bytes IS NOT DISTINCT FROM _bytes AND NEW.charged_bytes IS NOT DISTINCT FROM _bytes THEN
+                    NEW.verified_at:=_completed.recorded_at;RETURN NEW;
                 END IF;
             END IF;
         END IF;
@@ -176,20 +219,34 @@ CREATE TRIGGER job_output_storage_truncate BEFORE TRUNCATE ON starexec.job_outpu
 -- Charge only an inserted row; conflict-discarded writes must never debit quota.
 CREATE OR REPLACE FUNCTION starexec.account_job_output_storage_reservation() RETURNS trigger AS $$
 BEGIN
-    UPDATE starexec.users SET disk_size=disk_size+NEW.limit_bytes WHERE id=NEW.origin_owner_id
-        AND disk_size>=0 AND disk_quota>=disk_size AND NEW.limit_bytes<=disk_quota-disk_size;
-    IF NOT FOUND THEN RAISE EXCEPTION 'Ordinary output copy allowance exceeds available quota'; END IF;
+    IF TG_OP='INSERT' THEN
+        UPDATE starexec.users SET disk_size=disk_size+NEW.limit_bytes WHERE id=NEW.origin_owner_id
+            AND disk_size>=0 AND disk_quota>=disk_size AND NEW.limit_bytes<=disk_quota-disk_size;
+        IF NOT FOUND THEN RAISE EXCEPTION 'Ordinary output copy allowance exceeds available quota'; END IF;
+    ELSIF OLD.verified_at IS NULL AND NEW.verified_at IS NOT NULL THEN
+        UPDATE starexec.users SET disk_size=disk_size-(OLD.charged_bytes-NEW.charged_bytes) WHERE id=NEW.origin_owner_id
+            AND OLD.charged_bytes>=NEW.charged_bytes AND disk_size>=OLD.charged_bytes-NEW.charged_bytes
+            AND disk_size-(OLD.charged_bytes-NEW.charged_bytes)>=starexec.active_execution_storage_bytes(id);
+        IF NOT FOUND THEN RAISE EXCEPTION 'Ordinary output settlement exceeds conserved funded usage'; END IF;
+    END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS job_output_storage_accounting ON starexec.job_output_storage_reservations;
-CREATE TRIGGER job_output_storage_accounting AFTER INSERT ON starexec.job_output_storage_reservations
+CREATE TRIGGER job_output_storage_accounting AFTER INSERT OR UPDATE ON starexec.job_output_storage_reservations
     FOR EACH ROW EXECUTE FUNCTION starexec.account_job_output_storage_reservation();
 
 -- Both history and booked destination commit together before a caller may attempt copying.
 CREATE OR REPLACE FUNCTION starexec.allocate_job_output_storage() RETURNS trigger AS $$
-DECLARE _request starexec.job_execution_requests%ROWTYPE; _facts JSONB;
+DECLARE _request starexec.job_execution_requests%ROWTYPE; _facts JSONB; _bytes BIGINT;
 BEGIN
+    IF NEW.receipt_kind='OUTPUT' THEN
+        _facts:=NEW.receipt_payload::jsonb->'facts';_bytes:=((_facts->>'manifest_payload')::jsonb->>'byte_size')::bigint;
+        UPDATE starexec.job_output_storage_reservations SET verified_bytes=_bytes,charged_bytes=_bytes,verified_at=NEW.recorded_at
+            WHERE execution_token=NEW.execution_token AND verified_at IS NULL;
+        IF NOT FOUND THEN RAISE EXCEPTION 'Ordinary output completion allocation is unavailable'; END IF;
+        RETURN NEW;
+    END IF;
     IF NEW.receipt_kind<>'OUTPUT_REQUEST' THEN RETURN NEW; END IF;
     SELECT * INTO _request FROM starexec.job_execution_requests WHERE execution_token=NEW.execution_token;
     _facts:=NEW.receipt_payload::jsonb->'facts';

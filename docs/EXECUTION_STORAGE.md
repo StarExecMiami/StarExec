@@ -183,6 +183,22 @@ permits another writer. The freshly created copy directory is bound once before
 its contents are written; another incarnation cannot replace that binding.
 Claiming and binding leave the complete allowance charged. Neither establishes
 retained-byte verification, completed output or permission to retire storage.
+The ordinary retention controller verifies the stopped layout and conserved
+source before consuming that claim. It creates a new private destination,
+binds its incarnation before copying either scope, and freezes/forces the root
+only after both immutable subtrees match their original manifests. Recovery
+verifies only that exact complete frozen copy. Unknown, unbound or partial
+destinations are preserved without adoption, overwrite or an automatic retry.
+Both output scopes may be empty; executable build publication retains its
+existing regular-file requirement.
+
+`OUTPUT` requires the same copy operation, source/stop manifests, parent and
+target paths, and bound directory identity. Its first insertion reconciles only
+the unused copy allowance, retaining the measured byte charge; replay cannot
+refund it again. Generic source observations cannot establish completed output.
+The controller does not apply scientific statistics or retire storage. Stage
+accounting, positive provider absence and registered used-resource cleanup remain
+separate prerequisites for enabling the normal dispatcher.
 
 `JobOutputReservations` verifies typed allocation readback against the immutable
 request. Pending allocations remain charged and prevent owner/pair deletion,

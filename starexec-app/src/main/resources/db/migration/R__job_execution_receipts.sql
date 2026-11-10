@@ -26,9 +26,9 @@ BEGIN
         END IF;
         _start := (NEW.receipt_payload::jsonb->'facts'->>'start_requested')::boolean;
     END IF;
-    IF (NEW.receipt_kind IN ('RELEASE','OUTPUT_REQUEST') OR _start) AND (_request.execution_token IS NULL
+    IF (NEW.receipt_kind IN ('RELEASE','OUTPUT_REQUEST','OUTPUT') OR _start) AND (_request.execution_token IS NULL
         OR NOT starexec.lock_current_job_storage_pair(_request.pair_id,_request.attempt_no,
-            _request.owner_id,_request.execution_id,NEW.receipt_kind<>'OUTPUT_REQUEST')) THEN
+            _request.owner_id,_request.execution_id,NEW.receipt_kind NOT IN ('OUTPUT_REQUEST','OUTPUT'))) THEN
         RAISE EXCEPTION 'Ordinary action requires the exact current admitted locator';
     END IF;
     SELECT disk_size INTO _usage FROM starexec.users WHERE id=_initial.origin_owner_id FOR UPDATE NOWAIT;
@@ -185,6 +185,11 @@ BEGIN
             OR starexec.job_execution_json_unique((_facts->>'manifest_payload')::json) IS DISTINCT FROM TRUE
             OR _facts->>'manifest_sha256' IS DISTINCT FROM encode(sha256(convert_to(_facts->>'manifest_payload','UTF8')),'hex') THEN
             RAISE EXCEPTION 'Ordinary output requires the exact stop and immutable output manifest';
+        END IF;
+        IF NOT starexec.lock_job_output_copy(NEW.execution_token,NEW.operation_token,
+            _facts->>'reservation_sha256',_facts->>'parent_identity')
+            OR NOT starexec.job_output_completion_matches(NEW.execution_token,NEW.operation_token,NEW.engine_identity,NEW.receipt_payload) THEN
+            RAISE EXCEPTION 'Ordinary output requires the exact reserved and verified retained copy';
         END IF;
     WHEN 'CLEANUP_REQUEST' THEN
         IF jsonb_typeof(_facts->'staging_identity') IS DISTINCT FROM 'string' OR btrim(_facts->>'staging_identity')='' THEN

@@ -1048,6 +1048,221 @@ class PodmanJobCreationSqlTest extends Common {
         assertFalse(Files.exists(saved.target()));
     }
 
+    private Path outputParent() throws IOException {
+        return Files.createDirectory(files.resolve("retained"),PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+    }
+
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void stoppedOutputRetentionConservesExactCopiesAndMeasuredCharge(boolean empty) throws Exception {
+        var fixture=stoppedOutputFixture();
+        if(!empty) {
+            Files.writeString(lease.staging().resolve("execution/monitor/stdout.txt"),"abc");
+            Files.writeString(lease.staging().resolve("execution/savedoutput/answer.p"),"de");
+        }
+        var source=PodmanJobOutput.captureStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),8,8);
+        Path parent=outputParent();long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        assertTrue(PodmanJobOutput.retainStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+        var allocation=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        assertNotNull(allocation.verifiedAt());assertEquals(empty?0L:5L,allocation.verifiedBytes());
+        assertEquals(source.byteSize(),allocation.chargedBytes());assertEquals(usage+source.byteSize(),number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        var actual=org.starexec.jobs.JobOutputCopy.verify(allocation);
+        assertEquals(source.payload(),actual.payload());assertEquals(source.sha256(),actual.sha256());
+        assertEquals(source.byteSize(),actual.byteSize());assertEquals(source.entryCount(),actual.entryCount());
+        assertEquals(PosixFilePermissions.fromString("r-xr-xr-x"),Files.getPosixFilePermissions(allocation.target()));
+        if(!empty) {
+            assertEquals("abc",Files.readString(allocation.target().resolve("monitor/stdout.txt")));
+            assertEquals("de",Files.readString(allocation.target().resolve("savedoutput/answer.p")));
+        }
+        var completed=JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).orElseThrow();
+        assertTrue(PodmanJobOutput.retainStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+        assertEquals(allocation,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(completed,JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).orElseThrow());
+        assertEquals(usage+source.byteSize(),number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertEquals(source,PodmanJobOutput.captureStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),8,8));
+        assertEquals(0,number("SELECT disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id=? AND stage_number=1",pair));
+        assertEquals(0,number("SELECT disk_size FROM starexec.jobs WHERE id=?",job));
+        assertNull(JobStorageLeases.find(connection,lease.token()).orElseThrow().releasedAt());
+        verify(client,never()).removeContainerCmd(anyString());
+    }
+
+    private StoppedOutputFixture nonemptyRetentionFixture() throws Exception {
+        var fixture=stoppedOutputFixture();Files.writeString(lease.staging().resolve("execution/monitor/stdout.txt"),"abc");
+        Files.writeString(lease.staging().resolve("execution/savedoutput/answer.p"),"de");return fixture;
+    }
+
+    @ParameterizedTest @ValueSource(strings={"claim-lost","binding-before-commit","binding-lost","completion-before-commit","completion-lost"})
+    void stoppedOutputRetentionPreservesUncertainCopiesWithoutAnotherWriter(String fault) throws Exception {
+        var fixture=nonemptyRetentionFixture();Path parent=outputParent();long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        var uncertain=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(connection));
+        var commits=new java.util.concurrent.atomic.AtomicInteger();int selected=fault.startsWith("claim")?2:fault.startsWith("binding")?3:4;
+        doAnswer(call->{
+            int n=commits.incrementAndGet();
+            if(n==selected && fault.endsWith("before-commit")) throw new SQLException("Synthetic lost ordinary copy reply");
+            connection.commit();if(n==selected) throw new SQLException("Synthetic lost ordinary copy reply");return null;
+        }).when(uncertain).commit();
+        var failed=assertThrows(SQLException.class,()->PodmanJobOutput.retainStoppedOutput(uncertain,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+        assertTrue(failed.getMessage().contains("Synthetic lost ordinary copy reply"),failed::getMessage);
+        assertTrue(connection.getAutoCommit());assertEquals(selected,commits.get());
+        var before=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        assertNotNull(before.copyStartedAt());
+        if(fault.startsWith("completion")) {
+            assertEquals("abc",Files.readString(before.target().resolve("monitor/stdout.txt")));
+            assertEquals("de",Files.readString(before.target().resolve("savedoutput/answer.p")));
+            assertEquals(fault.equals("completion-lost")?5:8,before.chargedBytes());
+            assertEquals(usage+before.chargedBytes(),number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+            assertTrue(PodmanJobOutput.retainStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+            var after=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+            assertEquals(before.copyStartedAt(),after.copyStartedAt());assertEquals(before.directoryIdentity(),after.directoryIdentity());
+            assertEquals(5,after.chargedBytes());assertNotNull(after.verifiedAt());
+            assertEquals(usage+5,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+            if(fault.equals("completion-lost")) assertEquals(before,after);
+        } else {
+            assertEquals(8,before.chargedBytes());assertNull(before.verifiedAt());
+            assertEquals(!fault.equals("claim-lost"),Files.exists(before.target(),LinkOption.NOFOLLOW_LINKS));
+            assertEquals(fault.equals("binding-lost"),before.directoryIdentity()!=null);
+            if(Files.exists(before.target())) try(var children=Files.list(before.target())) {assertEquals(0,children.count());}
+            assertThrows(IOException.class,()->PodmanJobOutput.retainStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+            assertEquals(before,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+            assertEquals(usage+8,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+            assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).isEmpty());
+        }
+        assertNull(JobStorageLeases.find(connection,lease.token()).orElseThrow().releasedAt());verify(client,never()).removeContainerCmd(anyString());
+    }
+
+    @Test void stoppedOutputRetentionFencesCancellationAfterDirectoryBinding() throws Exception {
+        var fixture=nonemptyRetentionFixture();Path parent=outputParent();long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        var observed=mock(Connection.class,org.mockito.AdditionalAnswers.delegatesTo(connection));var commits=new java.util.concurrent.atomic.AtomicInteger();
+        doAnswer(call->{
+            connection.commit();if(commits.incrementAndGet()==3) try(var other=Common.getConnection()) {
+                connectionNumber(other,"UPDATE starexec.jobs SET killed=true WHERE id=? RETURNING id",job);
+            }
+            return null;
+        }).when(observed).commit();
+        var refused=assertThrows(SQLException.class,()->PodmanJobOutput.retainStoppedOutput(observed,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+        assertTrue(refused.getMessage().contains("Ordinary"),refused::getMessage);
+        var allocation=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        assertEquals(8,allocation.chargedBytes());assertNull(allocation.verifiedAt());
+        assertEquals(usage+8,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertEquals(5,org.starexec.jobs.JobOutputCopy.verify(allocation).byteSize());
+        assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).isEmpty());
+        assertFalse(PodmanJobOutput.retainStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+        assertEquals(allocation,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"parent-replaced","target-replaced","target-link","file-changed","source-changed","permissions","extra-file"})
+    void stoppedOutputRetentionRefusesChangedConservedCopies(String change) throws Exception {
+        var fixture=nonemptyRetentionFixture();Path parent=outputParent();
+        assertTrue(PodmanJobOutput.retainStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+        var before=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        var receipt=JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).orElseThrow();
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        switch(change) {
+            case "parent-replaced" -> {
+                Files.move(parent,files.resolve("original-parent"));Files.createDirectory(parent,PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+            }
+            case "target-replaced","target-link" -> {
+                Path original=Files.move(before.target(),parent.resolve("original-copy"));
+                if(change.equals("target-link")) Files.createSymbolicLink(before.target(),original);
+                else {
+                    Files.createDirectory(before.target(),PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+                    for(String scope:List.of("monitor","savedoutput")) org.starexec.jobs.SolverArtifactTree.copy(original.resolve(scope),before.target().resolve(scope),8,6);
+                    Files.setPosixFilePermissions(before.target(),PosixFilePermissions.fromString("r-xr-xr-x"));
+                }
+            }
+            case "file-changed" -> {
+                Path file=before.target().resolve("monitor/stdout.txt");Files.setPosixFilePermissions(file,PosixFilePermissions.fromString("rw-------"));
+                Files.writeString(file,"bad");Files.setPosixFilePermissions(file,PosixFilePermissions.fromString("r--r--r--"));
+            }
+            case "source-changed" -> Files.writeString(lease.staging().resolve("execution/monitor/stdout.txt"),"abc!");
+            case "permissions" -> Files.setPosixFilePermissions(before.target(),PosixFilePermissions.fromString("rwx------"));
+            case "extra-file" -> {
+                Files.setPosixFilePermissions(before.target(),PosixFilePermissions.fromString("rwx------"));Files.writeString(before.target().resolve("extra"),"unknown");
+                Files.setPosixFilePermissions(before.target(),PosixFilePermissions.fromString("r-xr-xr-x"));
+            }
+            default -> throw new AssertionError();
+        }
+        assertThrows(IOException.class,()->PodmanJobOutput.retainStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+        assertEquals(before,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(receipt,JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).orElseThrow());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"unknown-target","quota","source-link","source-hardlink"})
+    void stoppedOutputRetentionRefusesUnsafeOrUnfundedFirstCopies(String change) throws Exception {
+        var fixture=nonemptyRetentionFixture();Path parent=outputParent();long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        Path target=parent.resolve("job-"+lease.token());
+        switch(change) {
+            case "unknown-target" -> {Files.createDirectory(target);Files.writeString(target.resolve("foreign"),"keep");}
+            case "quota" -> number("UPDATE starexec.users SET disk_quota=? WHERE id=? RETURNING id",usage+7,owner);
+            case "source-link" -> Files.createSymbolicLink(lease.staging().resolve("execution/monitor/alias"),Path.of("stdout.txt"));
+            case "source-hardlink" -> Files.createLink(files.resolve("output-alias"),lease.staging().resolve("execution/monitor/stdout.txt"));
+            default -> throw new AssertionError();
+        }
+        assertThrows(Exception.class,()->PodmanJobOutput.retainStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+        var allocation=org.starexec.data.database.JobOutputReservations.find(connection,lease.token());
+        if(change.equals("unknown-target")) {
+            assertTrue(allocation.isPresent());assertNull(allocation.orElseThrow().copyStartedAt());
+            assertEquals("keep",Files.readString(target.resolve("foreign")));assertEquals(usage+8,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        } else {
+            assertTrue(allocation.isEmpty());assertFalse(Files.exists(target));assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        }
+        assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).isEmpty());
+    }
+
+    @Test void completedOrdinaryOutputCannotRefundItsChargeAgain() throws Exception {
+        var fixture=nonemptyRetentionFixture();Path parent=outputParent();
+        assertTrue(PodmanJobOutput.retainStoppedOutput(connection,fixture.request(),fixture.inspection(),"c".repeat(64),parent,8,8));
+        var before=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);
+        connection.setAutoCommit(false);
+        try {assertThrows(SQLException.class,()->number("UPDATE starexec.job_output_storage_reservations SET charged_bytes=0,verified_bytes=0 WHERE execution_token=? RETURNING charged_bytes",lease.token()));}
+        finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(5,number("UPDATE starexec.job_output_storage_reservations SET charged_bytes=charged_bytes WHERE execution_token=? RETURNING charged_bytes",lease.token()));
+        assertEquals(before,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"no-copy","unbound","directory","reservation","source","manifest","target","parent","parent-identity","stop","operation","cancelled","attempt","execution","funding"})
+    void ordinaryOutputCompletionRefusesMissingOrMismatchedRetention(String change) throws Exception {
+        var saved=outputCopyReservation();
+        if(!change.equals("no-copy") && !change.equals("unbound")) {
+            org.starexec.jobs.JobOutputCopy.retain(connection,saved,lease.staging().resolve("execution/monitor"),lease.staging().resolve("execution/savedoutput"));
+        } else if(change.equals("unbound")) assertTrue(org.starexec.data.database.JobOutputReservations.claimCopy(connection,saved));
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper();var original=mapper.readTree(saved.request().payload()).path("facts");
+        var allocation=org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow();
+        var facts=mapper.createObjectNode().put("stop_sha256",original.path("stop_sha256").textValue()).put("reservation_sha256",saved.request().sha256())
+                .put("source_manifest_sha256",original.path("source_manifest_sha256").textValue()).put("parent_path",saved.parent().toString())
+                .put("parent_identity",saved.parentIdentity()).put("target_path",saved.target().toString()).put("directory_identity",allocation.directoryIdentity()==null?"unbound":allocation.directoryIdentity())
+                .put("manifest_payload",original.path("source_manifest_payload").textValue()).put("manifest_sha256",original.path("source_manifest_sha256").textValue());
+        var envelope=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.readTree(saved.request().payload());envelope.put("kind","OUTPUT");envelope.set("facts",facts);
+        long usage=number("SELECT disk_size FROM starexec.users WHERE id=?",owner);connection.setAutoCommit(false);
+        try {
+            switch(change) {
+                case "no-copy","unbound" -> { }
+                case "directory" -> facts.put("directory_identity","other-directory");
+                case "reservation" -> facts.put("reservation_sha256","0".repeat(64));
+                case "source" -> facts.put("source_manifest_sha256","0".repeat(64));
+                case "manifest" -> facts.put("manifest_payload","{}").put("manifest_sha256",JobExecutionProtocol.digest("{}"));
+                case "target" -> facts.put("target_path",saved.target().resolve("other").toString());
+                case "parent" -> facts.put("parent_path",saved.parent().resolve("other").toString());
+                case "parent-identity" -> facts.put("parent_identity","other-parent");
+                case "stop" -> facts.put("stop_sha256","0".repeat(64));
+                case "operation" -> envelope.put("operation_token",UUID.randomUUID().toString());
+                case "cancelled" -> number("UPDATE starexec.jobs SET killed=true WHERE id=? RETURNING id",job);
+                case "attempt" -> number("UPDATE starexec.job_pair_attempts SET current_attempt_no=2 WHERE pair_id=? RETURNING pair_id",pair);
+                case "execution" -> number("UPDATE starexec.job_pairs SET sge_id=sge_id+1 WHERE id=? RETURNING id",pair);
+                case "funding" -> number("UPDATE starexec.users SET disk_size=? WHERE id=? RETURNING id",usage-1,owner);
+                default -> throw new AssertionError();
+            }
+            String payload=envelope.toString();var refused=assertThrows(SQLException.class,()->number("SELECT CASE WHEN starexec.record_job_execution_receipt(?,?,?,?,?,?) THEN 1 ELSE 0 END",
+                    lease.token(),"OUTPUT",UUID.fromString(envelope.path("operation_token").textValue()),saved.request().engine(),payload,JobExecutionProtocol.digest(payload)));
+            assertTrue(refused.getMessage().contains("Ordinary"),refused::getMessage);
+        } finally {connection.rollback();connection.setAutoCommit(true);}
+        assertEquals(allocation,org.starexec.data.database.JobOutputReservations.find(connection,lease.token()).orElseThrow());
+        assertEquals(usage,number("SELECT disk_size FROM starexec.users WHERE id=?",owner));
+        assertTrue(JobExecutionProtocol.findReceipt(connection,lease.token(),JobExecutionProtocol.Phase.OUTPUT).isEmpty());
+    }
+
     private StoppedOutputFixture stoppedOutputFixture() throws Exception {
         var adapter=prepare();var saved=plan(adapter,JobExecutionProtocol.Transport.JAVA);var kernel=kernelPacket(adapter,saved);
         assertTrue(adapter.claimCreation(connection));assertTrue(adapter.claimStart(connection,"c".repeat(64),createdInspection(saved)));

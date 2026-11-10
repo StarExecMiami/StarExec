@@ -74,6 +74,15 @@ public final class SolverArtifactTree {
         return copy(source, destination, maxBytes, maxEntries, true, true);
     }
 
+    /** Optional ordinary output is non-runnable and may contain no regular files. */
+    static Snapshot copyOptionalOutput(Path source,Path destination,long maxBytes,int maxEntries) throws IOException {
+        return copy(source,destination,maxBytes,maxEntries,true,false);
+    }
+
+    static void verifyOptionalOutput(Path directory,Snapshot expected) throws IOException {
+        verify(directory,expected,false);
+    }
+
     /** Copies only saved logs; positive absence is an empty, non-runnable snapshot. */
     static Snapshot copyFailureLogs(Path staging, Path destination, long maxBytes, int maxEntries) throws IOException {
         if (maxBytes < 0 || maxEntries < 1) throw new IllegalArgumentException("Invalid artifact limits");
