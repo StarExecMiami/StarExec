@@ -268,7 +268,7 @@ public final class ExecutionStorageLeases {
                     && falseFact(facts,"running") && falseFact(facts,"paused") && falseFact(facts,"restarting")
                     && falseFact(facts,"privileged") && facts.getAsJsonPrimitive("private_pid_namespace").isBoolean()
                     && facts.get("private_pid_namespace").getAsBoolean()
-                    && ("no".equals(facts.get("restart_policy").getAsString()) || "".equals(facts.get("restart_policy").getAsString()))
+                    && ("no".equals(facts.get("restart_policy").getAsString()) || facts.get("restart_policy").getAsString().isEmpty())
                     && facts.get("image_id").getAsString().matches("sha256:[0-9a-f]{64}")
                     && Instant.parse("0001-01-01T00:00:00Z").equals(Instant.parse(facts.get("started_at").getAsString()));
         } catch (RuntimeException malformed) { return false; }

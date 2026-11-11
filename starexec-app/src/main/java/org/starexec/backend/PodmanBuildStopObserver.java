@@ -211,8 +211,8 @@ final class PodmanBuildStopObserver {
                 && Boolean.FALSE.equals(state.getRestarting()) && Long.valueOf(0).equals(state.getPidLong()),
                 "Build process termination is unverified");
         // docker-java's noRestart() uses an empty name; the engine can return the explicit "no" name.
-        require(host != null && host.getRestartPolicy() != null && ("no".equals(host.getRestartPolicy().getName())
-                || "".equals(host.getRestartPolicy().getName())),
+        String restartPolicy=host != null && host.getRestartPolicy() != null ? host.getRestartPolicy().getName() : null;
+        require(restartPolicy != null && ("no".equals(restartPolicy) || restartPolicy.isEmpty()),
                 "Build restart policy is unverified");
         require(Boolean.FALSE.equals(host.getPrivileged()) && (host.getPidMode() == null
                 || host.getPidMode().isEmpty() || "private".equals(host.getPidMode()))

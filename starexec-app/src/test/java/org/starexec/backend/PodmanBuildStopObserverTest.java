@@ -340,6 +340,14 @@ class PodmanBuildStopObserverTest {
         }
     }
 
+    @Test void missingRestartPolicyNameCannotAuthorizeAStopReceipt() throws Exception {
+        host.withRestartPolicy(mock(RestartPolicy.class));
+        try (var dao=registered()) {
+            assertThrows(IllegalStateException.class, () -> PodmanBuildStopObserver.recordIfBuild(inspection,id));
+            dao.verifyNoInteractions();
+        }
+    }
+
     @Test void refusedCreatedResourceCleanupDoesNotInventACompletedReceipt() throws Exception {
         var build = new BuildExecutionContext(5, 42, 1, token, java.nio.file.Path.of("/data/source"),
                 java.nio.file.Path.of("/data/staging"));
