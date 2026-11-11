@@ -12,7 +12,7 @@ import java.security.MessageDigest;
 
 /**
  * Servlet filter that enforces CSRF token validation on all state-modifying
- * POST requests to /secure/* paths and the public registration endpoint.
+ * POST, PUT, PATCH and DELETE requests to /secure/*, /services/* and public registration.
  *
  * <p>The StarExecCommand CLI client is exempted because it sends the custom
  * {@code StarExecCommand: StarExecCommand} header on every request.  Browsers
@@ -69,17 +69,25 @@ public class CsrfFilter implements Filter {
         HttpServletRequest  request  = (HttpServletRequest)  servletRequest;
         HttpServletResponse response = (HttpServletResponse) servletResponse;
 
-        if ("POST".equalsIgnoreCase(request.getMethod())) {
-            String uri = request.getRequestURI();
-            String ctx = request.getContextPath();
+        String method = request.getMethod();
+        if ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method)
+                || "PATCH".equalsIgnoreCase(method) || "DELETE".equalsIgnoreCase(method)) {
+            // The container has decoded and mapped this path; the raw URI may
+            // contain encoded characters or path parameters before a separator.
+            String path = request.getServletPath();
+            if (path == null || path.isEmpty()) {
+                path = request.getPathInfo();
+            }
 
-            boolean isSecure      = uri.startsWith(ctx + "/secure/");
-            boolean isRegistration = uri.startsWith(ctx + "/public/registration/");
+            boolean isSecure = path != null && (path.equals("/secure") || path.startsWith("/secure/"));
+            boolean isService = path != null && (path.equals("/services") || path.startsWith("/services/"));
+            boolean isRegistration = path != null && (path.equals("/public/registration")
+                    || path.startsWith("/public/registration/"));
 
-            if (isSecure || isRegistration) {
+            if (isSecure || isService || isRegistration) {
                 if (!isApiClient(request) && !isTokenValid(request)) {
                     log.warn("doFilter",
-                            "CSRF token validation failed for " + uri
+                            "CSRF token validation failed for " + path
                                     + " [UA=" + request.getHeader("User-Agent") + "]");
                     response.sendError(HttpServletResponse.SC_FORBIDDEN,
                             "Invalid or missing CSRF token");
