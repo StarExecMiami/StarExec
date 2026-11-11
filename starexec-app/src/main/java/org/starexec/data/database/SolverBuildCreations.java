@@ -83,7 +83,7 @@ public final class SolverBuildCreations {
         final Creation request;
         try {
             request=new Creation(build,resource.filesystemKey(),resource.identity(),execution,containerName(build),
-                    image,transport,payload,payload==null?null:digest(payload));
+                    image,transport,payload,digest(payload));
         } catch (IllegalArgumentException invalid) { return false; }
         try {
             return Common.runTransactional(connection,transaction->{
