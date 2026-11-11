@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
+import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
 import org.starexec.data.database.ErrorLogs;
 import org.starexec.data.database.Permissions;
@@ -24,14 +25,20 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -39,6 +46,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.endsWith;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
@@ -54,7 +62,7 @@ import static org.starexec.test.TemporaryFolders.newFolder;
  * directory behind, and two uploads by one user in the same millisecond shared one.
  *
  * <p>The files are real, under a temporary upload root. The session, the database, the thread
- * pool, the archive extraction and the creation of spaces and jobs are replaced at their
+ * pool and the creation of spaces and jobs are replaced at their
  * boundaries.
  */
 public class XmlUploadDirectoryCleanupTest {
@@ -69,6 +77,8 @@ public class XmlUploadDirectoryCleanupTest {
 	public File tmp;
 
 	private File root;
+	private File runnerRoot;
+	private final Map<String, File> stagedArchives = new HashMap<>();
 	private HashMap<String, Object> form;
 	/** The tasks that space XML uploads gave the thread pool. The tests run them. */
 	private final List<Runnable> tasks = new ArrayList<>();
@@ -100,6 +110,8 @@ public class XmlUploadDirectoryCleanupTest {
 	@BeforeEach
 	public void uploadRoot() throws IOException {
 		root = newFolder(tmp, "uploads");
+		Files.setPosixFilePermissions(root.toPath(), PosixFilePermissions.fromString("rwx------"));
+		runnerRoot = newFolder(tmp, "runner");
 	}
 
 	@Test
@@ -156,11 +168,15 @@ public class XmlUploadDirectoryCleanupTest {
 		withBoundaries(() -> {
 			uploadSpaceXml(archive("first.zip"));
 			uploadSpaceXml(archive("second.zip"));
-			assertArrayEquals(new String[] {DATE, DATE + "-1"}, left(spaceUploads()));
+			assertEquals(2, left(spaceUploads()).length);
+			File first = stagedArchives.get("first.zip").getParentFile().getParentFile();
+			File second = stagedArchives.get("second.zip").getParentFile().getParentFile();
+			assertNotEquals(first, second);
 
 			tasks.get(0).run();
 			assertEquals(List.of("first.xml"), seen);
-			assertArrayEquals(new String[] {"second.zip"}, left(new File(spaceUploads(), DATE + "-1")));
+			assertFalse(first.exists(), "the first task deleted only its own claim");
+			assertTrue(stagedArchives.get("second.zip").isFile(), "the second archive is untouched");
 
 			tasks.get(1).run();
 		});
@@ -203,11 +219,12 @@ public class XmlUploadDirectoryCleanupTest {
 		pool = Pool.RUNS_IN_THE_REQUEST;
 		creationError = new SyntheticError("synthetic: an Error while creating the spaces");
 		List<File> other = new ArrayList<>();
-		betweenTaskAndRequest = () -> other.add(claimAsAnotherUpload(spaceUploads(), "other.xml"));
+		betweenTaskAndRequest = () -> other.add(claimAsAnotherUpload("other.xml"));
 
 		assertThrows(SyntheticError.class, () -> withBoundaries(() -> uploadSpaceXml(archive("spaces.zip"))));
 
-		assertEquals(List.of(new File(spaceUploads(), DATE)), other, "the other upload got the name this one released");
+		assertEquals(List.of(stagedArchives.get("spaces.zip").getParentFile().getParentFile()), other,
+				"the other upload got the name this one released");
 		assertTrue(new File(other.get(0), "other.xml").isFile(), "the other upload's file is untouched");
 	}
 
@@ -221,12 +238,15 @@ public class XmlUploadDirectoryCleanupTest {
 
 		assertThrows(SyntheticError.class, () -> withBoundaries(() -> uploadSpaceXml(archive("spaces.zip"))));
 		assertArrayEquals(new String[0], left(spaceUploads()), "the request deleted the directory");
-		File other = claimAsAnotherUpload(spaceUploads(), "spaces.zip");
+		File other = claimAsAnotherUpload("spaces.zip");
+		write(stagedArchives.get("spaces.zip"), "theirs\n");
 
 		withBoundaries(this::runTasks);
 
 		assertTrue(seen.isEmpty(), "no spaces are created from the other upload's archive");
 		assertTrue(new File(other, "spaces.zip").isFile(), "the other upload's archive is untouched");
+		assertEquals("theirs\n", Files.readString(stagedArchives.get("spaces.zip").toPath()),
+				"the replacement at the original archive path is untouched");
 	}
 
 	/** A damaged archive is reported on the upload's status, instead of passing for one that holds no XML. */
@@ -328,11 +348,12 @@ public class XmlUploadDirectoryCleanupTest {
 		}
 	}
 
-	/** Runs body with the session, database, error log, thread pool and archive extraction replaced. */
+	/** Runs body with the session, database, error log and thread pool replaced. */
 	private void withBoundaries(Body body) throws Exception {
-		try (MockedStatic<R> r = mockStatic(R.class, invocation ->
+		try (MockedStatic<EnvironmentConfig> config = mockStatic(EnvironmentConfig.class, CALLS_REAL_METHODS);
+		     MockedStatic<R> r = mockStatic(R.class, invocation ->
 				invocation.getMethod().getName().equals("getBatchSpaceXMLDir")
-						? root.getAbsolutePath() : invocation.callRealMethod());
+						? new File(runnerRoot, "batchSpace/uploads").getAbsolutePath() : invocation.callRealMethod());
 		     MockedStatic<Util> util = mockStatic(Util.class, invocation -> {
 			     switch (invocation.getMethod().getName()) {
 			     case "pathDate":
@@ -345,18 +366,15 @@ public class XmlUploadDirectoryCleanupTest {
 				     return invocation.callRealMethod();
 			     }
 		     });
-		     MockedStatic<ArchiveUtil> archives = mockStatic(ArchiveUtil.class);
 		     MockedStatic<Uploads> uploads = mockStatic(Uploads.class);
 		     MockedStatic<SessionUtil> session = mockStatic(SessionUtil.class);
 		     MockedStatic<Permissions> permissions = mockStatic(Permissions.class);
 		     MockedStatic<ErrorLogs> errorLogs = mockStatic(ErrorLogs.class)) {
-			archives.when(() -> ArchiveUtil.extractArchive(anyString())).thenAnswer(invocation -> {
-				if (extractionFails) {
-					return false;
-				}
-				extract(new File((String) invocation.getArgument(0)));
-				return true;
-			});
+			config.when(EnvironmentConfig::getUploadStagingDirectory).thenReturn(root.getAbsolutePath());
+			config.when(EnvironmentConfig::getDataDir).thenReturn(runnerRoot.getAbsolutePath());
+			config.when(EnvironmentConfig::getJobOutputDirectory).thenReturn(new File(runnerRoot, "output").getAbsolutePath());
+			config.when(EnvironmentConfig::getJobLogDirectory).thenReturn(new File(runnerRoot, "logs").getAbsolutePath());
+			config.when(EnvironmentConfig::getBuildArtifactDirectory).thenReturn("");
 			uploads.when(() -> Uploads.setXMLErrorMessage(eq(STATUS), anyString())).thenAnswer(invocation -> {
 				xmlErrors.add(invocation.getArgument(1));
 				return true;
@@ -441,16 +459,6 @@ public class XmlUploadDirectoryCleanupTest {
 		return List.of(1);
 	}
 
-	/** What extracting an archive leaves beside it: its XML file, without the archive. */
-	private void extract(File archive) throws IOException {
-		Files.delete(archive.toPath());
-		String name = archive.getName();
-		write(new File(archive.getParentFile(), name.substring(0, name.lastIndexOf('.')) + ".xml"), "<synthetic/>\n");
-		if (archiveHoldsADirectory) {
-			Files.createDirectory(new File(archive.getParentFile(), "nested").toPath());
-		}
-	}
-
 	private void runTasks() {
 		for (Runnable task : List.copyOf(tasks)) {
 			task.run();
@@ -458,14 +466,14 @@ public class XmlUploadDirectoryCleanupTest {
 	}
 
 	private File spaceUploads() {
-		return new File(root, OWNER + "/TEMP_XML_FOLDER_");
+		return root;
 	}
 
 	private File jobUploads() {
-		return new File(root, "Job" + OWNER + "/TEMP_JOB_XML_FOLDER_");
+		return root;
 	}
 
-	/** Gives every name that a claim can try to another upload, so that the claim fails. */
+	/** Preserves peer uploads while a nonprivate root makes new admission fail. */
 	private static List<File> takeEveryName(File uploads) throws IOException {
 		List<File> others = new ArrayList<>();
 		for (int suffix = 0; suffix <= Util.MAX_DIRECTORY_SUFFIX; suffix++) {
@@ -473,22 +481,39 @@ public class XmlUploadDirectoryCleanupTest {
 			write(new File(other, "other.xml"), "<other/>\n");
 			others.add(other);
 		}
+		Files.setPosixFilePermissions(uploads.toPath(), PosixFilePermissions.fromString("rwxr-xr-x"));
 		return others;
 	}
 
-	/** Claims the name that an upload in DATE gets, as another upload would, and puts one file in it. */
-	private static File claimAsAnotherUpload(File uploads, String file) throws IOException {
-		File dir = Util.claimNewDirectory(new File(uploads, DATE));
+	/** Reuses the exact released pathname, so cleanup cannot rely on a random name avoiding replacement. */
+	private File claimAsAnotherUpload(String file) throws IOException {
+		File dir = stagedArchives.get("spaces.zip").getParentFile().getParentFile();
+		Files.createDirectory(dir.toPath(), PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
 		write(new File(dir, file), "theirs\n");
 		return dir;
 	}
 
 	/** An uploaded archive. Saving it, like the real one, needs its directory to exist. */
-	private static PartWrapper archive(String name) throws IOException {
+	private PartWrapper archive(String name) throws IOException {
 		PartWrapper archive = mock(PartWrapper.class);
 		when(archive.getName()).thenReturn(name);
 		doAnswer(invocation -> {
-			Files.writeString(((File) invocation.getArgument(0)).toPath(), "synthetic archive");
+			File destination = invocation.getArgument(0);
+			stagedArchives.put(name, destination);
+			if (extractionFails) {
+				Files.writeString(destination.toPath(), "damaged archive");
+			} else {
+				try (ZipOutputStream output = new ZipOutputStream(Files.newOutputStream(destination.toPath()))) {
+					output.putNextEntry(new ZipEntry(name.substring(0, name.lastIndexOf('.')) + ".xml"));
+					output.write("<synthetic/>\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+					output.closeEntry();
+					if (archiveHoldsADirectory) {
+						output.putNextEntry(new ZipEntry("nested/illegal.xml"));
+						output.write("<synthetic/>\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+						output.closeEntry();
+					}
+				}
+			}
 			return null;
 		}).when(archive).write(any(File.class));
 		return archive;
