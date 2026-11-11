@@ -34,7 +34,7 @@ final class KubernetesBuildLaunchFence {
         String version = observed.getMetadata().getResourceVersion();
         Job replacement = new JobBuilder(observed).editMetadata().addToAnnotations(ANNOTATION, version).endMetadata().build();
         Job fenced = client.batch().v1().jobs().inNamespace(namespace)
-                .resource(replacement).lockResourceVersion(version).replace();
+                .resource(replacement).lockResourceVersion(version).update();
         require(selector.equals(validate(namespace, expected, fenced)), "Build selector changed during launch fencing");
         require(isFenced(fenced) && version.equals(fenced.getMetadata().getAnnotations().get(ANNOTATION)),
                 "Build launch fence was not acknowledged");

@@ -2224,7 +2224,7 @@ public class KubernetesNativeBackend implements Backend {
         version = observed.getMetadata().getResourceVersion();
         Job resume = new JobBuilder(observed).editSpec().withSuspend(false).endSpec().build();
         Job updated = kubernetesClient.batch().v1().jobs().inNamespace(namespace)
-            .resource(resume).lockResourceVersion(version).replace();
+            .resource(resume).lockResourceVersion(version).update();
         if (!execution.equals(ExecutionRef.fromJob(execution.execId(), updated))
                 || updated.getSpec() == null || !Boolean.FALSE.equals(updated.getSpec().getSuspend())) {
             throw new IllegalStateException("Build resume did not return the admitted enabled Job");

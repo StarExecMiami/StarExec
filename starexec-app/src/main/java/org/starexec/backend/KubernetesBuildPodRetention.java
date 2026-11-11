@@ -55,7 +55,7 @@ final class KubernetesBuildPodRetention {
             require(nonblank(version), "Build Pod resource version is unavailable");
             List<String> remaining = finalizers.stream().filter(f -> !FINALIZER.equals(f)).toList();
             Pod replacement = new PodBuilder(pod).editMetadata().withFinalizers(remaining).endMetadata().build();
-            Pod updated = client.pods().inNamespace(namespace).resource(replacement).lockResourceVersion(version).replace();
+            Pod updated = client.pods().inNamespace(namespace).resource(replacement).lockResourceVersion(version).update();
             require(updated != null && updated.getMetadata() != null
                     && pod.getMetadata().getUid().equals(updated.getMetadata().getUid())
                     && pod.getMetadata().getName().equals(updated.getMetadata().getName())

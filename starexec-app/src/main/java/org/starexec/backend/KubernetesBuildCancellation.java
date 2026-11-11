@@ -39,7 +39,7 @@ final class KubernetesBuildCancellation {
         Job replacement = new JobBuilder(observed).editMetadata().addToAnnotations(ANNOTATION, version).endMetadata()
                 .editSpec().withActiveDeadlineSeconds(DEADLINE_SECONDS).endSpec().build();
         Job updated = client.batch().v1().jobs().inNamespace(namespace).resource(replacement)
-                .lockResourceVersion(version).replace();
+                .lockResourceVersion(version).update();
         require(version.equals(acknowledgedVersion(namespace, expected, updated))
                 && replacement.getSpec().equals(updated.getSpec())
                 && Long.valueOf(Math.addExact(observed.getMetadata().getGeneration(),
