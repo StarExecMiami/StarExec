@@ -80,7 +80,7 @@ class KubernetesBuildAdmissionTest {
         doAnswer(call -> { replacement = call.getArgument(0); return resource; })
                 .when(namespaced).resource(any(Job.class));
         when(resource.lockResourceVersion("17")).thenReturn(locked);
-        when(locked.replace()).thenAnswer(call -> { events.add("resume"); return replacement; });
+        when(locked.update()).thenAnswer(call -> { events.add("resume"); return replacement; });
         clearInvocations(client);
         artifacts = mockStatic(SolverBuildArtifacts.class);
         artifacts.when(() -> SolverBuildArtifacts.admitExecution(build, "kubernetes:starexec:7:uid-original"))
@@ -110,7 +110,7 @@ class KubernetesBuildAdmissionTest {
         assertEquals("starexec", replacement.getMetadata().getNamespace());
         assertEquals(Boolean.FALSE, replacement.getSpec().getSuspend());
         assertEquals(Boolean.TRUE, observed.getSpec().getSuspend(), "the receipt remains unchanged");
-        verify(locked, times(1)).replace();
+        verify(locked, times(1)).update();
     }
 
     @Test void refusedAdmissionNeverSendsAResumeRequest() {
@@ -151,35 +151,35 @@ class KubernetesBuildAdmissionTest {
 
     @Test void anAmbiguousUpdateIsNotRetriedAgainstAnotherJobVersion() {
         RuntimeException failure = new RuntimeException("ambiguous update");
-        when(locked.replace()).thenThrow(failure);
+        when(locked.update()).thenThrow(failure);
         assertSame(failure, assertThrows(RuntimeException.class, () -> resume(created())));
-        verify(locked, times(1)).replace();
+        verify(locked, times(1)).update();
         assertEquals("17", replacement.getMetadata().getResourceVersion());
         assertEquals("uid-original", replacement.getMetadata().getUid());
     }
 
     @ParameterizedTest @ValueSource(strings = { "uid", "name" })
     void anotherResourceCannotSatisfyTheResumeReceipt(String changed) {
-        when(locked.replace()).thenAnswer(call -> {
+        when(locked.update()).thenAnswer(call -> {
             Job other = new JobBuilder(replacement).build();
             if (changed.equals("uid")) other.getMetadata().setUid("different-uid");
             else other.getMetadata().setName("different-name");
             return other;
         });
         assertThrows(IllegalStateException.class, () -> resume(created()));
-        verify(locked, times(1)).replace();
+        verify(locked, times(1)).update();
     }
 
     @Test void anEmptyResumeResponseIsUnresolved() {
-        when(locked.replace()).thenReturn(null);
+        when(locked.update()).thenReturn(null);
         assertThrows(IllegalStateException.class, () -> resume(created()));
-        verify(locked, times(1)).replace();
+        verify(locked, times(1)).update();
     }
 
     @Test void aStillSuspendedResumeResponseIsUnresolved() {
-        when(locked.replace()).thenReturn(created());
+        when(locked.update()).thenReturn(created());
         assertThrows(IllegalStateException.class, () -> resume(created()));
-        verify(locked, times(1)).replace();
+        verify(locked, times(1)).update();
     }
 
     @Test void observesControllerStatusBeforeTheFirstResumeWrite() throws Exception {
@@ -198,7 +198,7 @@ class KubernetesBuildAdmissionTest {
         assertEquals(Boolean.TRUE, current.getSpec().getSuspend());
         assertEquals(current.getStatus(), replacement.getStatus());
         verify(observation, times(1)).get();
-        verify(locked, times(1)).replace();
+        verify(locked, times(1)).update();
         verify(resource, never()).lockResourceVersion("17");
     }
 
@@ -267,11 +267,11 @@ class KubernetesBuildAdmissionTest {
         current.getMetadata().setResourceVersion("23");
         when(resource.lockResourceVersion("23")).thenReturn(locked);
         var conflict = new io.fabric8.kubernetes.client.KubernetesClientException("Job changed", 409, null);
-        when(locked.replace()).thenThrow(conflict);
+        when(locked.update()).thenThrow(conflict);
 
         assertSame(conflict, assertThrows(io.fabric8.kubernetes.client.KubernetesClientException.class, () -> resume(created())));
         assertEquals("23", replacement.getMetadata().getResourceVersion());
         verify(observation, times(1)).get();
-        verify(locked, times(1)).replace();
+        verify(locked, times(1)).update();
     }
 }
