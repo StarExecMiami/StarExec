@@ -84,14 +84,11 @@ public class SolverBuildRecordSqlTest extends Common {
 
 	@BeforeEach
 	public void createSolverFiles() throws Exception {
-		try (Connection con = Common.getConnection();
-				PreparedStatement ps = con.prepareStatement("SELECT min(id) FROM starexec.users");
-				ResultSet rs = ps.executeQuery()) {
-			assertTrue(rs.next());
-			userId = rs.getInt(1);
-			assertTrue(userId > 0, "the database must have a user");
-		}
-		Path solverDir = Files.createDirectories(folder.toPath().resolve("Solvers/3/probe"));
+		userId = insertReturningId("INSERT INTO starexec.users (email, first_name, last_name, institution,"
+				+ " created, password, disk_quota, disk_size)"
+				+ " VALUES (?, 'Build', 'Record', 'test', now(), 'x', 1000000, 0) RETURNING id",
+				ps -> ps.setString(1, "build-" + UUID.randomUUID() + "@example.invalid"));
+		Path solverDir = Files.createDirectories(folder.toPath().resolve("Solvers/" + userId + "/probe"));
 		source = Files.createDirectory(solverDir.resolve("20261025-09.15.48.756_src"));
 		Files.writeString(source.resolve("starexec_build"), "BUILD SCRIPT");
 		// The upload creates the built path empty; a build that worked copied the solver into it.
@@ -111,6 +108,11 @@ public class SolverBuildRecordSqlTest extends Common {
 			}
 			for (int solver : solvers) {
 				delete(con, "DELETE FROM starexec.solvers WHERE id = ?", solver);
+			}
+			if (userId > 0) {
+				assertEquals("0", read("SELECT disk_size FROM starexec.users WHERE id=?", userId),
+						"the fixture must settle its own disk usage");
+				delete(con, "DELETE FROM starexec.users WHERE id = ?", userId);
 			}
 		}
 	}
