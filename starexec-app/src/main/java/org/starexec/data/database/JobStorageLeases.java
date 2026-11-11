@@ -14,6 +14,14 @@ import java.util.UUID;
 
 /** Durable ordinary-job storage ownership; a lease is never engine launch permission. */
 public final class JobStorageLeases {
+    private static final String FIND_JOB_LEASE =
+            "SELECT c.execution_token,c.origin_pair_id,c.attempt_no,c.origin_owner_id,c.prior_execution_id,"
+            + "r.resource_key,r.observed_identity,r.root_path,c.limit_bytes,r.inode_limit,"
+            + "c.created_at,c.use_started_at,c.released_at FROM starexec.execution_storage_claims c"
+            + " JOIN starexec.execution_storage_resources r ON r.resource_key=c.resource_key"
+            + " WHERE c.execution_token=? AND c.lease_kind='JOB'";
+    private static final String FIND_LOCKED_JOB_LEASE = FIND_JOB_LEASE + " FOR UPDATE OF c NOWAIT";
+
     private JobStorageLeases() { }
 
     public record Lease(UUID token, int pairId, int attemptNo, int ownerId, Integer priorExecutionId,
@@ -41,12 +49,7 @@ public final class JobStorageLeases {
     }
 
     private static Optional<Lease> find(Connection connection, UUID token, boolean lock) throws SQLException {
-        try (var query = connection.prepareStatement(
-                "SELECT c.execution_token,c.origin_pair_id,c.attempt_no,c.origin_owner_id,c.prior_execution_id,"
-                + "r.resource_key,r.observed_identity,r.root_path,c.limit_bytes,r.inode_limit,"
-                + "c.created_at,c.use_started_at,c.released_at FROM starexec.execution_storage_claims c"
-                + " JOIN starexec.execution_storage_resources r ON r.resource_key=c.resource_key"
-                + " WHERE c.execution_token=? AND c.lease_kind='JOB'" + (lock ? " FOR UPDATE OF c NOWAIT" : ""))) {
+        try (var query = connection.prepareStatement(lock ? FIND_LOCKED_JOB_LEASE : FIND_JOB_LEASE)) {
             query.setObject(1, token);
             try (var row = query.executeQuery()) {
                 if (!row.next()) return Optional.empty();
