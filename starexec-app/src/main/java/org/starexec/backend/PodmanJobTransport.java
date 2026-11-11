@@ -49,7 +49,7 @@ final class PodmanJobTransport {
             Files.write(input,payload.getBytes(StandardCharsets.UTF_8));
             if (!first.consume()) return Optional.empty();
             long started=System.nanoTime();long timeout=TimeUnit.SECONDS.toNanos((long)responseSeconds+1);
-            child=new ProcessBuilder("curl","-q","--silent","--noproxy","*","--retry","0","--proto","=http",
+            child=new ProcessBuilder("/usr/bin/curl","-q","--silent","--noproxy","*","--retry","0","--proto","=http",
                     "--connect-timeout",Integer.toString(connectSeconds),"--max-time",Integer.toString(responseSeconds),
                     "--request","POST","--unix-socket",endpoint,"--header","Content-Type: application/json",
                     "--data-binary","@-","--write-out","\n%{http_code}",
