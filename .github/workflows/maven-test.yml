@@ -8,7 +8,7 @@ on:
       - "pom.xml"
       - ".github/workflows/maven-test.yml"
   pull_request:
-    branches: [UMprod, dev, main, containerised]
+    branches: [UMprod, dev, main, containerised, fix/security-api-contracts]
     paths:
       - "starexec-app/**"
       - "pom.xml"
@@ -290,3 +290,69 @@ jobs:
             fi
           done
           exit $fail
+
+  populated-schema-upgrade:
+    name: Populated Database Upgrade
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: starexec
+          POSTGRES_PASSWORD: ci_upgrade_password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U starexec -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout proposed migrations
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout the historical schema before the payload-retention migration
+        uses: actions/checkout@v4
+        with:
+          ref: 85533a9d504353d831da58cd764c11175d91bf50
+          path: upgrade-baseline
+          persist-credentials: false
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: "maven"
+      - name: Upgrade populated V0121 to V0137 and verify a fresh installation
+        env:
+          STAREXEC_UPGRADE_DB_URL: jdbc:postgresql://localhost:5432/postgres
+          STAREXEC_UPGRADE_DB_USER: starexec
+          STAREXEC_UPGRADE_DB_PASSWORD: ci_upgrade_password
+          STAREXEC_UPGRADE_BASELINE_DIR: ${{ github.workspace }}/upgrade-baseline/starexec-app/src/main/resources/db/migration
+        run: >-
+          mvn -B -pl starexec-app -Pit test-compile failsafe:integration-test failsafe:verify
+          -Dit.test=PopulatedSchemaUpgradeIT -Dfailsafe.failIfNoSpecifiedTests=true
+      - name: Verify the upgrade actually executed without omissions
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          path = Path("starexec-app/target/failsafe-reports/TEST-org.starexec.test.junit.database.PopulatedSchemaUpgradeIT.xml")
+          result = ET.parse(path).getroot()
+          counts = {key: int(result.get(key, "0")) for key in ("tests", "failures", "errors", "skipped")}
+          if counts != {"tests": 1, "failures": 0, "errors": 0, "skipped": 0}:
+              raise SystemExit("Populated upgrade did not pass completely: " + str(counts))
+          print("Populated schema upgrade executed: 1 test, 0 failures, 0 errors, 0 skipped")
+          PY
+      - name: Preserve upgrade reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: populated-database-upgrade
+          path: starexec-app/target/failsafe-reports/
+          if-no-files-found: error
