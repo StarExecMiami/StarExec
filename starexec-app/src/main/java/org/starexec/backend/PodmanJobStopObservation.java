@@ -33,7 +33,8 @@ final class PodmanJobStopObservation {
         facts.put("paused",state.getPaused());facts.put("restarting",state.getRestarting());facts.put("privileged",false);
         facts.put("private_pid_namespace",true);facts.put("restart_policy",inspection.getHostConfig().getRestartPolicy().getName());
         facts.put("started_at",state.getStartedAt());facts.put("finished_at",state.getFinishedAt());facts.put("exit_code",state.getExitCodeLong());
-        if(cancelled) facts.put("disposition","cancelled");facts.put("observed_at",Instant.now().toString());
+        if(cancelled) facts.put("disposition","cancelled");
+        facts.put("observed_at",Instant.now().toString());
         return PodmanJobReceipts.observed(request,JobExecutionProtocol.Phase.STOP,container,operation,facts);
     }
 

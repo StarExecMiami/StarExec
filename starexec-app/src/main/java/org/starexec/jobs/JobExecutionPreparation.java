@@ -328,7 +328,9 @@ public final class JobExecutionPreparation {
         return first.directory()==second.directory() && first.bytes()==second.bytes() && first.entries()==second.entries() && first.sha256().equals(second.sha256());
     }
     private static long receiptBytes(Receipt receipt) {
-        long bytes=0;for (Copy copy:receipt.copies()) bytes=Math.addExact(bytes,copy.materialized().bytes());return bytes;
+        long bytes=0;
+        for (Copy copy:receipt.copies()) bytes=Math.addExact(bytes,copy.materialized().bytes());
+        return bytes;
     }
     private static void limits(JobStorageLeases.Lease lease,DedicatedStorageResource resource,long bytes,int entries) throws IOException {
         require(lease!=null && resource!=null && bytes>0 && entries>DIRECTORIES.size()+2

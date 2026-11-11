@@ -214,7 +214,8 @@ final class PodmanJobTransport {
                 }
                 if(worker.isAlive()) {
                     var unresolved=new IOException("Ordinary Java transport worker remains unresolved");
-                    if(closeFailure!=null) unresolved.addSuppressed(closeFailure);throw unresolved;
+                    if(closeFailure!=null) unresolved.addSuppressed(closeFailure);
+                    throw unresolved;
                 }
             }
             if(closeFailure!=null) throw closeFailure;
