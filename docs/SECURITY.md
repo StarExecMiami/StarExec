@@ -377,6 +377,17 @@ server:
   max-request-size: 105MB
 ```
 
+### Private Upload Staging
+
+Private upload staging requires an explicitly provisioned `STAREXEC_UPLOAD_STAGING_DIR`.
+Keep this application-owned `0700` directory outside every runner-writable root and
+bind-mount alias. Ancestors must remain under trusted administration. Each upload
+claims a fresh private child; cleanup verifies the conserved storage identity and
+unlinks only that claim, without following links or repairing permissions on their
+targets. Root permissions and mount configuration must remain stable while a claim
+is active. These checks do not replace isolation of untrusted processes or validation
+of their effective mounts.
+
 ### Authentication
 
 **Current authentication:**

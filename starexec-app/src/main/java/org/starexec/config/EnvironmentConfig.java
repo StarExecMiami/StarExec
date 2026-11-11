@@ -476,6 +476,11 @@ public class EnvironmentConfig {
         return getEnv("STAREXEC_CONFIG_PATH", "/config");
     }
 
+    /** Explicit application-only upload storage; absence never selects shared runner data. */
+    public static String getUploadStagingDirectory() {
+        return getEnv("STAREXEC_UPLOAD_STAGING_DIR", "");
+    }
+
     public static String getRunsolverPath() {
         return getEnv("STAREXEC_RUNSOLVER_PATH", "/usr/local/bin/runsolver");
     }
