@@ -1,6 +1,8 @@
 package org.starexec.backend.storage;
 
 import org.starexec.config.EnvironmentConfig;
+import org.starexec.util.ArchiveExtractor;
+import org.starexec.util.ArchiveUtil;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -28,6 +30,11 @@ public final class PrivateUploadStage implements AutoCloseable {
     private final Root root;
     private final Path directory;
     private final Map<String, Object> identity;
+    private Path archive;
+    private Path content;
+    private Map<String, Object> contentIdentity;
+    private boolean extractionAttempted;
+    private boolean extracted;
     private boolean removed;
     private boolean closed;
 
@@ -69,6 +76,95 @@ public final class PrivateUploadStage implements AutoCloseable {
     public synchronized Path directory() throws IOException {
         requireOwned();
         return directory;
+    }
+
+    /** Selects a server-named archive once, separately from its extracted content. */
+    public synchronized Path archivePath(String submittedName) throws IOException {
+        requireOwned();
+        if (archive != null) throw new IOException("An upload archive is already selected");
+        if (submittedName == null || submittedName.isBlank() || submittedName.indexOf('\0') >= 0
+                || submittedName.contains("/") || submittedName.contains("\\")) {
+            throw new IOException("Invalid upload archive name");
+        }
+        String suffix;
+        if (submittedName.endsWith(".tar.gz")) suffix = ".tar.gz";
+        else if (submittedName.endsWith(".tgz")) suffix = ".tgz";
+        else if (submittedName.endsWith(".tar")) suffix = ".tar";
+        else if (submittedName.endsWith(".zip")) suffix = ".zip";
+        else throw new IOException("Unsupported upload archive type");
+        Path source = Files.createDirectory(directory.resolve("source"),
+            PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+        archive = source.resolve("archive" + suffix);
+        return archive;
+    }
+
+    /** Extracts once while every producer and consumer remains application-controlled. */
+    public synchronized Path extractArchive() throws IOException {
+        requireOwned();
+        if (archive == null || extractionAttempted) {
+            throw new IOException("Upload archive is missing or extraction was already attempted");
+        }
+        extractionAttempted = true;
+        try {
+            requireRegularFile(archive);
+            long compressed = Files.size(archive);
+            long estimated = ArchiveUtil.getArchiveSize(archive.toString());
+            if (estimated < 0 || compressed <= 0) throw new IOException("Invalid upload archive");
+            if (estimated > 0 && estimated / compressed > 1000) {
+                throw new IOException("Upload archive exceeds the compression-ratio limit");
+            }
+            content = Files.createDirectory(directory.resolve("content"),
+                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+            contentIdentity = identity(content);
+            ArchiveExtractor.extractSafely(archive.toString(), content, null,
+                ArchiveExtractor.ExtractionSettings.fromEnvironment());
+            requireOwned();
+            validateContent();
+            extracted = true;
+            return content;
+        } catch (IOException | RuntimeException refused) {
+            throw new IOException("Could not safely extract the uploaded archive", refused);
+        }
+    }
+
+    public synchronized Path content() throws IOException {
+        requireOwned();
+        if (!extracted || !contentIdentity.equals(identity(content))) {
+            throw new IOException("Validated upload content is unavailable");
+        }
+        return content;
+    }
+
+    private void validateContent() throws IOException {
+        if (!contentIdentity.equals(identity(content))) {
+            throw new IOException("Upload extraction directory was replaced");
+        }
+        Files.walkFileTree(content, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path path, BasicFileAttributes attributes) throws IOException {
+                Map<String, Object> node = identity(path);
+                if (((Number) node.get("uid")).longValue() != root.owner()
+                        || (((Number) node.get("mode")).intValue() & 0170000) != 0040000) {
+                    throw new IOException("Upload content contains an unowned directory");
+                }
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
+                requireRegularFile(file);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+    }
+
+    private void requireRegularFile(Path path) throws IOException {
+        Map<String, Object> node = Files.readAttributes(path, "unix:mode,uid,nlink", LinkOption.NOFOLLOW_LINKS);
+        if ((((Number) node.get("mode")).intValue() & 0170000) != 0100000
+                || ((Number) node.get("uid")).longValue() != root.owner()
+                || ((Number) node.get("nlink")).longValue() != 1) {
+            throw new IOException("Upload content is not an exclusively owned regular file");
+        }
     }
 
     /** Revalidates the conserved root, mount and claim before a trusted application operation. */
