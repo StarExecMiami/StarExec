@@ -36,14 +36,18 @@ final class KubernetesBuildStopObserver {
         if (labels == null || !labels.containsKey(ARTIFACT_LABEL)) return null;
         require(namespace != null && namespace.equals(metadata.getNamespace()), "Build namespace differs");
         require("true".equals(labels.get("starexec.org/managed")), "Build is not managed by this backend");
-        long artifact = Long.parseLong(labels.get(ARTIFACT_LABEL));
-        int pair = Integer.parseInt(labels.get("starexec.org/pair-id"));
-        int attempt = Integer.parseInt(labels.get("starexec.org/attempt-no"));
-        int execution = Integer.parseInt(labels.get("starexec.org/exec-id"));
-        require(artifact > 0 && pair > 0 && attempt > 0 && execution > 0, "Build ownership must be positive");
-        ExecutionRef ref = ExecutionRef.fromJob(execution, job);
-        require(ref != null, "Build Job has no immutable identity");
-        return new Identity(artifact, pair, attempt, ref);
+        try {
+            long artifact = Long.parseLong(labels.get(ARTIFACT_LABEL));
+            int pair = Integer.parseInt(labels.get("starexec.org/pair-id"));
+            int attempt = Integer.parseInt(labels.get("starexec.org/attempt-no"));
+            int execution = Integer.parseInt(labels.get("starexec.org/exec-id"));
+            require(artifact > 0 && pair > 0 && attempt > 0 && execution > 0, "Build ownership must be positive");
+            ExecutionRef ref = ExecutionRef.fromJob(execution, job);
+            require(ref != null, "Build Job has no immutable identity");
+            return new Identity(artifact, pair, attempt, ref);
+        } catch (NumberFormatException malformed) {
+            throw new IllegalStateException("Build identity contains invalid numeric metadata",malformed);
+        }
     }
 
     static SolverBuildStopReceipt record(String namespace, Identity expected, Job job, PodList pods) throws SQLException {
@@ -135,7 +139,11 @@ final class KubernetesBuildStopObserver {
                 "Build cancellation belongs to another backend or namespace");
         String[] engine = artifact.engineIdentity().substring(prefix.length()).split(":", 2);
         require(engine.length == 2 && !engine[1].isBlank(), "Build cancellation engine identity is invalid");
-        int execution = Integer.parseInt(engine[0]);
+        final int execution;
+        try { execution = Integer.parseInt(engine[0]); }
+        catch (NumberFormatException malformed) {
+            throw new IllegalStateException("Build identity contains invalid numeric metadata",malformed);
+        }
         require(execution > 0, "Build cancellation execution must be positive");
         var facts = stored.receipt().facts();
         require(nonblank(facts, "job_name"), "Build cancellation Job name is unavailable");

@@ -12,7 +12,7 @@ import org.starexec.data.to.SolverBuildStopReceipt;
 final class PodmanBuildStopObserver {
     static final String ARTIFACT_LABEL = "starexec.build.artifact";
 
-    private record Identity(long artifact, int pair, int attempt, int execution) {
+    record Identity(long artifact, int pair, int attempt, int execution) {
         String engine(String id) { return "podman:" + execution + ":" + id; }
     }
 
@@ -36,7 +36,11 @@ final class PodmanBuildStopObserver {
         String[] engine=artifact.engineIdentity()==null?new String[0]:artifact.engineIdentity().split(":",-1);
         require(engine.length==3 && "podman".equals(engine[0]) && receipt.resourceId().equals(engine[2]),
                 "Created cancellation engine identity differs");
-        int execution=Integer.parseInt(engine[1]);
+        final int execution;
+        try { execution=Integer.parseInt(engine[1]); }
+        catch (NumberFormatException malformed) {
+            throw new IllegalStateException("Build identity contains invalid numeric metadata",malformed);
+        }
         var restored=new RefusedCreation(artifact,execution,receipt);
         require(org.starexec.data.database.ExecutionStorageLeases.isRefusedPodmanCreation(
                 restored.build(),execution,receipt.resourceId(),receipt),"Created cancellation facts are invalid");
@@ -183,18 +187,22 @@ final class PodmanBuildStopObserver {
         return SolverBuildStopReceipt.observed("podman",build.artifactId(),build.pairId(),build.attemptNo(),engine,containerId,Instant.now(),facts);
     }
 
-    private static Identity identity(InspectContainerResponse inspection, String containerId) {
+    static Identity identity(InspectContainerResponse inspection, String containerId) {
         require(isBuild(inspection) && containerId != null && containerId.equals(inspection.getId()),
                 "Build inspection resource identity differs");
         Map<String, String> labels = inspection.getConfig().getLabels();
         require("true".equals(labels.get("starexec.managed")) && "2".equals(labels.get("starexec.label.version"))
                 && "job-pair".equals(labels.get("starexec.kind")), "Build ownership labels are invalid");
-        long artifact = Long.parseLong(labels.get(ARTIFACT_LABEL));
-        int pair = Integer.parseInt(labels.get("starexec.pair.id"));
-        int attempt = Integer.parseInt(labels.get("starexec.attempt"));
-        int execution = Integer.parseInt(labels.get("starexec.exec.id"));
-        require(artifact > 0 && pair > 0 && attempt > 0 && execution > 0, "Build ownership must be positive");
-        return new Identity(artifact, pair, attempt, execution);
+        try {
+            long artifact = Long.parseLong(labels.get(ARTIFACT_LABEL));
+            int pair = Integer.parseInt(labels.get("starexec.pair.id"));
+            int attempt = Integer.parseInt(labels.get("starexec.attempt"));
+            int execution = Integer.parseInt(labels.get("starexec.exec.id"));
+            require(artifact > 0 && pair > 0 && attempt > 0 && execution > 0, "Build ownership must be positive");
+            return new Identity(artifact, pair, attempt, execution);
+        } catch (NumberFormatException malformed) {
+            throw new IllegalStateException("Build identity contains invalid numeric metadata",malformed);
+        }
     }
 
     private static void requireStoppedFlags(InspectContainerResponse inspection) {

@@ -134,11 +134,11 @@ public final class PodmanPrivateBuild {
         require(PodmanBuildStopObserver.isBuild(inspection)
                 && LAYOUT.equals(inspection.getConfig().getLabels().get(LAYOUT_LABEL)),
                 "Stopped build layout is unsupported");
-        int execution=PodmanBuildStopObserver.buildExecution(inspection,container);
-        var labels=inspection.getConfig().getLabels();
-        int pair=Integer.parseInt(labels.get("starexec.pair.id"));
-        int attempt=Integer.parseInt(labels.get("starexec.attempt"));
-        long id=Long.parseLong(labels.get(PodmanBuildStopObserver.ARTIFACT_LABEL));
+        var identity=PodmanBuildStopObserver.identity(inspection,container);
+        int execution=identity.execution();
+        int pair=identity.pair();
+        int attempt=identity.attempt();
+        long id=identity.artifact();
         String engine="podman:"+execution+":"+container;
         var artifact=SolverBuildArtifacts.find(pair,attempt)
                 .orElseThrow(() -> new IOException("Stopped build registration is unavailable"));
