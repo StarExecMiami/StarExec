@@ -1,6 +1,5 @@
 package org.starexec.servlets;
 
-import org.apache.commons.io.FileUtils;
 import org.starexec.constants.R;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.logger.StarLogger;
@@ -13,8 +12,11 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
+import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URLConnection;
+import java.nio.file.Files;
 
 /**
  * Handles the request to get the picture from the file system. If there is such a picture for the request, or else a
@@ -151,8 +153,7 @@ public class GetPicture extends HttpServlet {
 					serveBundledDefault(defaultPicFilename, response);
 					return;
 				}
-				java.io.OutputStream os = response.getOutputStream();
-				FileUtils.copyFile(file, os);
+				writePicture(Files.newInputStream(file.toPath()), response);
 			} catch (Exception e) {
 				log.warn("User: " + System.getProperty("user.name") + "\nCan Read: " + file.canRead() + "\nExists: " + file.exists());
 				log.warn("picture with path " + file.getAbsolutePath() + " could not be found", e);
@@ -181,7 +182,18 @@ public class GetPicture extends HttpServlet {
 				response.sendError(HttpServletResponse.SC_NOT_FOUND, "No such picture.");
 				return;
 			}
-			bundled.transferTo(response.getOutputStream());
+			writePicture(bundled, response);
+		}
+	}
+
+	/** Set the type before streaming; stored originals can be PNG despite their .jpg names. */
+	private static void writePicture(InputStream source, HttpServletResponse response) throws IOException {
+		try (BufferedInputStream picture = new BufferedInputStream(source)) {
+			String type = URLConnection.guessContentTypeFromStream(picture);
+			// Never turn non-image bytes left by an unsuccessful upload into active HTML.
+			response.setContentType(type != null && type.startsWith("image/")
+					? type : "application/octet-stream");
+			picture.transferTo(response.getOutputStream());
 		}
 	}
 
