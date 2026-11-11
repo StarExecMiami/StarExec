@@ -2,6 +2,7 @@ package org.starexec.servlets;
 
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.fileupload2.javax.JavaxServletFileUpload;
+import org.starexec.backend.storage.PrivateUploadStage;
 import org.starexec.constants.R;
 import org.starexec.data.database.Permissions;
 import org.starexec.data.database.Uploads;
@@ -101,37 +102,34 @@ public class UploadSpaceXML extends HttpServlet {
 			final int userId, final int spaceId, final HashMap<String, Object> form, final BatchUtil batchUtil,
 			final int statusId
 	) {
-		// Only ever the directory this upload claimed: its parent holds other uploads' directories.
-		File uniqueDir = null;
+		PrivateUploadStage stage = null;
 		boolean handedOff = false;
+		boolean requestFailed = false;
 		// Set by whichever deletes the directory: the task once it starts, or else the request. Deleting it
 		// twice could remove a directory that another upload has claimed under the same name since.
 		final AtomicBoolean cleanupClaimed = new AtomicBoolean();
 		try {
 			log.debug("Handling Upload of XML File from User " + userId);
 			PartWrapper item = (PartWrapper) form.get(UploadSpaceXML.UPLOAD_FILE);
-			// The directory holds the archive and its XML only until the spaces are created.
-			File parent = new File(new File(R.getBatchSpaceXMLDir(), "" + userId), "TEMP_XML_FOLDER_");
-			uniqueDir = Util.claimNewDirectory(new File(parent, Util.pathDate()));
-
-			//Process the archive file and extract
-
-			File archiveFile = new File(uniqueDir, FilenameUtils.getName(item.getName()));
+			stage = PrivateUploadStage.configured();
+			File archiveFile = stage.archivePath(FilenameUtils.getName(item.getName())).toFile();
 			item.write(archiveFile);
-			final String archivePath = uniqueDir.getCanonicalPath();
+			final PrivateUploadStage owned = stage;
 			Util.threadPoolExecute(() -> {
 				if (!cleanupClaimed.compareAndSet(false, true)) {
 					return; // the request has given this upload up and deleted its directory
 				}
-				try {
-					boolean extracted = ArchiveUtil.extractArchive(archiveFile.getAbsolutePath());
-					archiveFile.delete();
+				try (owned) {
+					File archiveLocation;
+					try {
+						archiveLocation = owned.extractArchive().toFile();
+					} catch (PrivateUploadStage.InvalidArchiveException refused) {
+						archiveLocation = null;
+					}
 					Uploads.XMLFileUploadComplete(statusId);
-					if (!extracted) {
+					if (archiveLocation == null) {
 						Uploads.setXMLErrorMessage(statusId, ArchiveUtil.NOT_EXTRACTED);
 					} else {
-//create new file reference for inside the scope of the Runnable, same as uniqueDir:
-						File archiveLocation = new File(archivePath);
 						//Typically there will just be 1 file, but might as well allow more
 						for (File file : archiveLocation.listFiles()) {
 							if (!file.isFile()) {
@@ -149,20 +147,29 @@ public class UploadSpaceXML extends HttpServlet {
 					}
 				} catch (Exception e) {
 					log.error(Util.getStackTrace(e));
-					Uploads.setBenchmarkErrorMessage(statusId, e.getMessage());
-				} finally {
-					Util.safeDeleteDirectory(archivePath);
+					Uploads.setXMLErrorMessage(statusId, "The XML upload could not be processed. Please try again or contact an administrator.");
 				}
 				Uploads.XMLEverythingComplete(statusId);
 			});
 			handedOff = true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
+			requestFailed = true;
 		} finally {
 			// Once the task is handed off or has started, the task deletes the directory. It can start in this
 			// thread, when the pool's queue is full, and throw before handedOff is set.
-			if (!handedOff && uniqueDir != null && cleanupClaimed.compareAndSet(false, true)) {
-				Util.safeDeleteDirectory(uniqueDir.getAbsolutePath());
+			if (!handedOff && cleanupClaimed.compareAndSet(false, true)) {
+				if (stage != null) {
+					try {
+						stage.close();
+					} catch (IOException cleanupFailure) {
+						log.error("Could not clean up XML upload staging", cleanupFailure);
+					}
+				}
+				if (requestFailed) {
+					Uploads.setXMLErrorMessage(statusId, "The XML upload could not be prepared or queued. Please try again or contact an administrator.");
+					Uploads.XMLEverythingComplete(statusId);
+				}
 			}
 		}
 	}

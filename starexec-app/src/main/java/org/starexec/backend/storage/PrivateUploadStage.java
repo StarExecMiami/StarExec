@@ -23,6 +23,13 @@ import java.util.Map;
 
 /** Owned upload storage excluded from every declared runner-writable root. */
 public final class PrivateUploadStage implements AutoCloseable {
+    public static final class InvalidArchiveException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        private InvalidArchiveException(Throwable cause) {
+            super("Could not safely extract the uploaded archive", cause);
+        }
+    }
     private record Location(long mount, String device, Path physical) { }
     private record Root(Path path, List<Path> excluded, Map<Path, Map<String, Object>> ancestors,
                         Map<String, Object> identity, Location location, long owner) { }
@@ -109,9 +116,11 @@ public final class PrivateUploadStage implements AutoCloseable {
             requireRegularFile(archive);
             long compressed = Files.size(archive);
             long estimated = ArchiveUtil.getArchiveSize(archive.toString());
-            if (estimated < 0 || compressed <= 0) throw new IOException("Invalid upload archive");
+            if (estimated < 0 || compressed <= 0) {
+                throw new InvalidArchiveException(new IOException("Invalid upload archive"));
+            }
             if (estimated > 0 && estimated / compressed > 1000) {
-                throw new IOException("Upload archive exceeds the compression-ratio limit");
+                throw new InvalidArchiveException(new IOException("Upload archive exceeds the compression-ratio limit"));
             }
             content = Files.createDirectory(directory.resolve("content"),
                 PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
@@ -122,7 +131,12 @@ public final class PrivateUploadStage implements AutoCloseable {
             validateContent();
             extracted = true;
             return content;
+        } catch (InvalidArchiveException refused) {
+            throw refused;
         } catch (IOException | RuntimeException refused) {
+            if (refused instanceof SecurityException || refused.getCause() instanceof SecurityException) {
+                throw new InvalidArchiveException(refused);
+            }
             throw new IOException("Could not safely extract the uploaded archive", refused);
         }
     }
