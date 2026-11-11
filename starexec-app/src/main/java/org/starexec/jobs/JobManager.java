@@ -4,6 +4,7 @@ import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.starexec.backend.Backend;
+import org.starexec.backend.BuildExecutionContext;
 import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.DB;
@@ -36,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 
 /**
  * Handles all SGE interactions for job submission and maintenance
@@ -585,9 +587,8 @@ public abstract class JobManager {
 				while (it.hasNext()) {
 					SchedulingState s = it.next();
 
-					if (!s.pairIter.hasNext()) {
-						// we will remove this SchedulingState from the schedule, since it is out of job
-						// pairs
+					if (s.deferred || !s.pairIter.hasNext()) {
+						// Remove exhausted jobs and jobs deferred for this scheduling pass.
 						it.remove();
 						continue;
 					}
@@ -596,8 +597,8 @@ public abstract class JobManager {
 					if (!s.job.isHighPriority() && userToHighPriorityStates.containsKey(currentStateUserId)) {
 						List<SchedulingState> highPriorityStates = userToHighPriorityStates.get(currentStateUserId);
 
-						// Filter out all of the high priority states that have no more job pairs.
-						highPriorityStates = highPriorityStates.stream().filter(state -> state.pairIter.hasNext())
+						// Deferred high-priority jobs must not displace runnable ordinary work.
+							highPriorityStates = highPriorityStates.stream().filter(state -> !state.deferred && state.pairIter.hasNext())
 								.collect(Collectors.toList());
 
 						// Replace the high priority states with the filtered ones.
@@ -721,18 +722,38 @@ public abstract class JobManager {
 						i++;
 						log.trace("About to submit pair " + pair.getId());
 
+						boolean preparingBuild = s.job.isBuildJob();
 						try {
+							BuildExecutionContext build = null;
+							if (s.job.isBuildJob() && R.BACKEND.requiresLeasedBuildStaging()) {
+								if (!R.BACKEND.supportsBuildStaging()) {
+									throw new SubmissionDeferredException("Backend cannot accept dedicated build staging");
+								}
+								try {
+									build = ExecutionStorageLeases.prepareRegistered(pair.getId(),List.of(
+											Path.of(R.STAREXEC_DATA_DIR),Path.of(EnvironmentConfig.getJobOutputDirectory()),
+											Path.of(EnvironmentConfig.getJobLogDirectory())));
+									if (build == null) throw new SubmissionDeferredException("Dedicated build context is unavailable");
+								} catch (SQLException | IOException unavailable) {
+									log.warn("Dedicated build preparation unavailable for pair " + pair.getId(), unavailable);
+									throw new SubmissionDeferredException("Dedicated build preparation unavailable; pair stays queued");
+									}
+							} else {
+								requireLegacyBuildDispatch(s.job, pair);
+							}
+							preparingBuild = false;
 							// Write the script that will run this individual pair
 							final String scriptPath = JobManager.writeJobScript(s.jobTemplate, s.job, pair, q);
 							log.trace("About to get the log path from the database...");
 							final String logPath = JobPairs.getLogFilePath(pair);
 							log.trace("Just got the log path from the database.");
-							final File file = new File(logPath);
-							file.getParentFile().mkdirs();
-
-							if (file.exists()) {
-								log.debug("Deleting old log file for " + pair.getId());
-								file.delete();
+							if (build == null) {
+								final File file = new File(logPath);
+								file.getParentFile().mkdirs();
+								if (file.exists()) {
+									log.debug("Deleting old log file for " + pair.getId());
+									file.delete();
+								}
 							}
 							// Submit to the grid engine
 
@@ -743,8 +764,10 @@ public abstract class JobManager {
 							// is an inert comment to a backend that places work itself, so
 							// such a backend had no way to learn which queue a pair
 							// belonged to and could run it anywhere.
-							int execId = R.BACKEND.submitScript(
-									pair.getId(), scriptPath, R.BACKEND_WORKING_DIR, logPath, q.getName());
+							int execId = build == null ? R.BACKEND.submitScript(
+									pair.getId(), scriptPath, R.BACKEND_WORKING_DIR, logPath, q.getName())
+									: R.BACKEND.submitScript(pair.getId(),scriptPath,R.BACKEND_WORKING_DIR,
+											logPath,q.getName(),build);
 
 							log.trace("Just submitted pair " + pair.getId());
 
@@ -756,6 +779,11 @@ public abstract class JobManager {
 								);
 								queueSize++;
 							} else {
+								if (build != null) {
+									// Managed admission owns the durable binding; a late update could overwrite a rerun.
+									queueSize++;
+									continue;
+								}
 								JobPairs.ConditionalPairUpdateResult execUpdateResult = JobPairs.tryUpdateBackendExecId(
 										pair.getId(), execId);
 								if (execUpdateResult == JobPairs.ConditionalPairUpdateResult.UPDATED) {
@@ -802,6 +830,12 @@ public abstract class JobManager {
 								log.error("submitJobs", "could not return deferred pair " + pair.getId() +
 										" to PENDING_SUBMIT; it stays ENQUEUED without an execution");
 							}
+							if (preparingBuild && returned != JobPairs.ConditionalPairUpdateResult.ERROR) {
+								// Build storage and recovery can be unavailable while ordinary jobs remain runnable.
+								s.deferred = true;
+								log.info("submitJobs", "deferring build job " + s.job.getId() + " for this pass: " + e.getMessage());
+								break;
+							}
 							log.info(
 									"submitJobs",
 									"deferring pair " + pair.getId() + " (" + returned + "): " + e.getMessage() +
@@ -834,6 +868,26 @@ public abstract class JobManager {
 		}
 
 	} // end submitJobs()
+
+	/** A registry read is a replay guard, never permission to launch a managed execution. */
+	private static void requireLegacyBuildDispatch(Job job, JobPair pair) {
+		if (!job.isBuildJob()) return;
+		try {
+			var artifact = SolverBuildArtifacts.findCurrent(pair.getId()).orElse(null);
+			if (artifact != null && (artifact.executionToken() != null || artifact.stagingPath() != null
+					|| artifact.engineIdentity() != null || artifact.stoppedAt() != null
+					|| artifact.storageRoot() != null || artifact.solverPath() != null
+					|| !"PLANNED".equals(artifact.state()))) {
+				throw new SubmissionDeferredException("Registered build requires managed dispatch or recovery");
+			}
+			if (SolverBuildArtifacts.hasManagedHistory(pair.getId())) {
+				throw new SubmissionDeferredException("Earlier managed build attempt requires reconciliation");
+			}
+		} catch (SQLException unavailable) {
+			log.warn("Build registry unavailable before dispatch of pair " + pair.getId(), unavailable);
+			throw new SubmissionDeferredException("Build registry unavailable; pair stays queued");
+		}
+	}
 
 	private static void cleanupSubmittedBackendWork(int pairId, int execId, String reason) {
 		log.warn(
@@ -1642,8 +1696,12 @@ public abstract class JobManager {
 		stage.setSolver(s);
 		stage.setConfiguration(c);
 		// SolverBuildRecorder finds the build job's helper benchmark by this name.
-		int bench = UploadBenchmark.addBenchmarkFromText("dummy benchmark", R.SOLVER_BUILD_SCRIPT, s.getUserId(),
+		Integer bench = UploadBenchmark.addBenchmarkFromText("dummy benchmark", R.SOLVER_BUILD_SCRIPT, s.getUserId(),
 				R.NO_TYPE_PROC_ID, true);
+		if (bench == null || bench <= 0) {
+			Solvers.setSolverBuildStatus(s, SolverBuildStatusCode.BUILD_FAILED.getVal());
+			return -1;
+		}
 		pair.addStage(stage);
 		pair.setBench(Benchmarks.get(bench)); // This hard coded value should be changed before feature is used.
 		pair.setSpace(Spaces.get(spaceId));
@@ -1835,6 +1893,7 @@ public abstract class JobManager {
 		final Job job;
 		final String jobTemplate;
 		final Iterator<JobPair> pairIter;
+		boolean deferred;
 
 		SchedulingState(Job _job, String _jobTemplate, Iterator<JobPair> _pairIter) {
 			job = _job;

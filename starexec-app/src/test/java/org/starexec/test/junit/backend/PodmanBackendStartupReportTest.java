@@ -3,10 +3,15 @@ package org.starexec.test.junit.backend;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Logger;
@@ -15,11 +20,13 @@ import ch.qos.logback.core.AppenderBase;
 import ch.qos.logback.core.read.ListAppender;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.InspectImageCmd;
+import com.github.dockerjava.api.command.ListContainersCmd;
 import com.github.dockerjava.api.command.VersionCmd;
 import com.github.dockerjava.api.exception.InternalServerErrorException;
 import com.github.dockerjava.api.model.Version;
 import com.github.dockerjava.core.DockerClientImpl;
 import java.net.ConnectException;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -31,6 +38,8 @@ import org.junit.jupiter.api.Timeout;
 import org.mockito.MockedStatic;
 import org.slf4j.LoggerFactory;
 import org.starexec.backend.PodmanBackend;
+import org.starexec.data.database.SolverBuildArtifacts;
+import org.starexec.data.database.SolverBuildCreations;
 
 /**
  * What {@code PodmanBackend.initialize()} logs and throws must match how far it got.
@@ -118,11 +127,20 @@ public class PodmanBackendStartupReportTest {
         probe.start();
         logger.addAppender(probe);
         try {
-            // No database here: the queue, node and reconciliation steps log their errors
-            // and carry on, as they do in production.
-            try (MockedStatic<DockerClientImpl> factory = mockStatic(DockerClientImpl.class)) {
+            // Successful startup requires all build-ownership recovery catalogs to be readable.
+            try (MockedStatic<DockerClientImpl> factory = mockStatic(DockerClientImpl.class);
+                 MockedStatic<SolverBuildCreations> creations = mockStatic(SolverBuildCreations.class);
+                 MockedStatic<SolverBuildArtifacts> artifacts = mockStatic(SolverBuildArtifacts.class)) {
                 factory.when(() -> DockerClientImpl.getInstance(any(), any())).thenReturn(engine);
+                creations.when(SolverBuildCreations::pending).thenReturn(List.of());
+                creations.when(SolverBuildCreations::maximumExecutionId).thenReturn(0);
+                creations.when(SolverBuildCreations::unreleased).thenReturn(List.of());
+                artifacts.when(SolverBuildArtifacts::refusedPodmanCreations).thenReturn(List.of());
                 backend.initialize("unused");
+                creations.verify(SolverBuildCreations::pending);
+                creations.verify(SolverBuildCreations::maximumExecutionId);
+                creations.verify(SolverBuildCreations::unreleased);
+                artifacts.verify(SolverBuildArtifacts::refusedPodmanCreations);
             }
 
             assertTrue(backend.isQueueDispatchable("container.q"), "a backend that finished start-up takes work");
@@ -144,6 +162,31 @@ public class PodmanBackendStartupReportTest {
         } finally {
             logger.detachAppender(probe);
             probe.stop();
+            backend.destroyIf();
+        }
+    }
+
+    @Test
+    @Timeout(value = 30_000, unit = TimeUnit.MILLISECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    public void unavailableBuildOwnershipRecoveryPreventsStartup() {
+        DockerClient engine = engineAnswering("5.2.1");
+        when(engine.inspectImageCmd(any())).thenReturn(mock(InspectImageCmd.class));
+        PodmanBackend backend = new PodmanBackend();
+        try (MockedStatic<DockerClientImpl> factory = mockStatic(DockerClientImpl.class);
+             MockedStatic<SolverBuildCreations> creations = mockStatic(SolverBuildCreations.class)) {
+            factory.when(() -> DockerClientImpl.getInstance(any(), any())).thenReturn(engine);
+            creations.when(SolverBuildCreations::pending).thenThrow(new SQLException("catalog unavailable"));
+
+            IllegalStateException failure = assertThrows(IllegalStateException.class,
+                    () -> backend.initialize("unused"));
+
+            assertTrue(failure.getMessage().contains("Build creation ownership recovery is unavailable"));
+            assertFalse(failure.getMessage().contains("Could not connect"));
+            assertFalse(backend.isQueueDispatchable("container.q"));
+            assertFalse(logged("initialized successfully"));
+            verify(engine, never()).createContainerCmd(anyString());
+            verify(engine, never()).startContainerCmd(anyString());
+        } finally {
             backend.destroyIf();
         }
     }
@@ -172,6 +215,11 @@ public class PodmanBackendStartupReportTest {
         when(engine.versionCmd()).thenReturn(versionCmd);
         when(versionCmd.exec()).thenReturn(version);
         when(version.getVersion()).thenReturn(engineVersion);
+        ListContainersCmd containers = mock(ListContainersCmd.class);
+        when(engine.listContainersCmd()).thenReturn(containers);
+        when(containers.withShowAll(true)).thenReturn(containers);
+        when(containers.withLabelFilter(anyMap())).thenReturn(containers);
+        when(containers.exec()).thenReturn(List.of());
         return engine;
     }
 

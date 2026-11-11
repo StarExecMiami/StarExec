@@ -45,6 +45,41 @@ public class Download extends HttpServlet {
 	private static final String PARAM_ID = "id";
 	private static final String PARAM_ANON_ID = "anonId";
 	private static final String PARAM_REUPLOAD = "reupload";
+	private static final String OUTPUT_NOT_FOUND = "Output not found.";
+	private static final String OUTPUT_INTERNAL_ERROR = "Failed to generate download";
+
+	private static boolean isOutputDownload(String type) {
+		return R.JOB_OUTPUT.equals(type) || R.PAIR_OUTPUT.equals(type) || R.JOB_OUTPUTS.equals(type);
+	}
+
+	private static ValidatorStatusCode outputAccessStatus(Permissions.OutputAccess access) {
+		return switch (access) {
+			case ALLOWED -> new ValidatorStatusCode(true);
+			case NOT_FOUND, FORBIDDEN -> notFound(OUTPUT_NOT_FOUND);
+			case INVALID_REQUEST -> new ValidatorStatusCode(false,
+					"Pair outputs must belong to one job.", HttpServletResponse.SC_BAD_REQUEST);
+		};
+	}
+
+	private static void sendOutputError(HttpServletResponse response, int status, String message) throws IOException {
+		response.setHeader("Cache-Control", "no-store");
+		response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, message));
+		response.sendError(status, message);
+	}
+
+	private static final class OutputAccessException extends RuntimeException {
+		private final ValidatorStatusCode status;
+
+		private OutputAccessException(Permissions.OutputAccess access) {
+			status = access == Permissions.OutputAccess.ALLOWED
+					? new ValidatorStatusCode(false, OUTPUT_INTERNAL_ERROR, HttpServletResponse.SC_INTERNAL_SERVER_ERROR)
+					: outputAccessStatus(access);
+		}
+	}
+
+	private static void requireOutputAccess(Permissions.OutputAccess access) {
+		if (access != Permissions.OutputAccess.ALLOWED) throw new OutputAccessException(access);
+	}
 
 	private static ValidatorStatusCode forbidden(String message) {
 		return new ValidatorStatusCode(false, message, HttpServletResponse.SC_FORBIDDEN);
@@ -97,7 +132,7 @@ public class Download extends HttpServlet {
 	 */
 	private static boolean handleSolver(Solver s, HttpServletResponse response, boolean reupload) throws Exception {
 		String baseName = s.getName();
-		ArchiveUtil.createAndOutputZip(new File(s.getPath()), response.getOutputStream(), baseName, reupload);
+		SolverArchive.write(new File(s.getPath()).toPath(), response.getOutputStream(), baseName, reupload);
 		return true;
 	}
 
@@ -111,7 +146,8 @@ public class Download extends HttpServlet {
 	 */
 	private static boolean handleSolverSource(Solver s, HttpServletResponse response) throws Exception {
 		String baseName = s.getName();
-		ArchiveUtil.createAndOutputZip(new File(s.getPath() + "_src"), response.getOutputStream(), baseName, false);
+		File source = Solvers.findSolverSource(s).orElseThrow(() -> new IOException("Solver source identity changed"));
+		SolverArchive.write(source.toPath(), response.getOutputStream(), baseName);
 		return true;
 	}
 
@@ -258,7 +294,8 @@ public class Download extends HttpServlet {
 	 */
 	private static boolean handlePairOutputs(
 			List<Integer> pairIds, int userId, HttpServletResponse response, Boolean longPath
-	) {
+	) throws SQLException, IOException {
+		requireOutputAccess(Permissions.checkPairOutputsAccess(pairIds, userId));
 		List<JobPair> pairs = new ArrayList<>();
 		Job j = null;
 		final String methodName = "handlePairOutputs";
@@ -267,19 +304,18 @@ public class Download extends HttpServlet {
 		for (Integer id : pairIds) {
 			JobPair jp = JobPairs.getPair(id);
 			if (jp == null) {
-				return false;
+				throw new OutputAccessException(Permissions.checkPairOutputsAccess(pairIds, userId));
 			}
 			pairs.add(jp);
 			if (j == null) {
 				j = Jobs.get(jp.getJobId());
+				if (j == null) throw new OutputAccessException(Permissions.checkJobOutputAccess(jp.getJobId(), userId));
 				//make sure the user can see the job
-				if (!Permissions.canUserSeeJob(j.getId(), userId).isSuccess()) {
-					return false;
-				}
+				requireOutputAccess(Permissions.checkJobOutputAccess(j.getId(), userId));
 			} else {
 				//for now, only get pairs if they are part of one job
 				if (j.getId() != jp.getJobId()) {
-					return false;
+					throw new OutputAccessException(Permissions.checkPairOutputsAccess(pairIds, userId));
 				}
 			}
 		}
@@ -305,7 +341,7 @@ public class Download extends HttpServlet {
 	 * @return a boolean for whether or not this succeeded
 	 */
 
-	private static boolean handlePairOutput(int pairId, int userId, HttpServletResponse response, Boolean longPath) {
+	private static boolean handlePairOutput(int pairId, int userId, HttpServletResponse response, Boolean longPath) throws SQLException, IOException {
 		//ArchiveUtil.createAndOutputZip(JobPairs.getOutputPaths(pairId), response.getOutputStream(), "");
 		//return true;
 		return handlePairOutputs(Collections.singletonList(pairId), userId, response, longPath);
@@ -562,7 +598,7 @@ public class Download extends HttpServlet {
 	 */
 	private static void addJobPairsToZipOutput(
 			List<JobPair> pairs, HttpServletResponse response, String baseName, boolean useSpacePath, Long earlyDate
-	) {
+	) throws IOException {
 		long lastModified;
 		if (earlyDate != null) {
 			lastModified = earlyDate;
@@ -570,8 +606,7 @@ public class Download extends HttpServlet {
 			lastModified = -1;
 		}
 		ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-		ZipArchiveOutputStream stream = new ZipArchiveOutputStream(buffer);
-		try {
+		try (ZipArchiveOutputStream stream = new ZipArchiveOutputStream(buffer)) {
 			for (JobPair p : pairs) {
 				String zipFileNameParent = "";
 				StringBuilder zipFileName = new StringBuilder(baseName);
@@ -628,7 +663,9 @@ public class Download extends HttpServlet {
 					}
 				}
 			}
-			if (lastModified == -1 || earlyDate == Long.valueOf(lastModified)) {
+			boolean hasCompletedPairs = pairs.stream().anyMatch(p -> p.getStatus().getCode().finishedRunning());
+			if (lastModified == -1
+					|| (earlyDate != null && lastModified == earlyDate.longValue() && !hasCompletedPairs)) {
 				response.setStatus(HttpServletResponse.SC_NOT_MODIFIED);
 			} else {
 				response.setDateHeader("Last-Modified", lastModified);
@@ -636,9 +673,11 @@ public class Download extends HttpServlet {
 				buffer.writeTo(response.getOutputStream());
 			}
 			response.getOutputStream().close();
-			stream.close();
+		} catch (ClientAbortException e) {
+			throw e;
 		} catch (Exception e) {
 			log.error("addJobPairsToZipOutput", e);
+			throw new IOException("Failed to prepare output archive", e);
 		}
 	}
 
@@ -652,9 +691,10 @@ public class Download extends HttpServlet {
 	 * @throws IOException
 	 * @author Ruoyu Zhang
 	 */
-	private static boolean handleJobOutputs(int jobId, HttpServletResponse response, Integer since, Long lastModified)
+	private static boolean handleJobOutputs(int jobId, int userId, HttpServletResponse response, Integer since, Long lastModified)
 			throws Exception {
 		log.debug("got request to download output for job = " + jobId);
+		requireOutputAccess(Permissions.checkJobOutputAccess(jobId, userId));
 		// If the user can actually see the job the pair is apart of
 		log.debug("confirmed user can download job = " + jobId);
 		log.debug("since: " + since);
@@ -767,6 +807,16 @@ public class Download extends HttpServlet {
 				return new ValidatorStatusCode(false, message);
 			}
 
+			if (R.JOB_OUTPUT.equals(type)) {
+				try {
+					String since = request.getParameter("since");
+					String timestamp = request.getParameter("lastTimestamp");
+					if (since != null) Integer.parseInt(since);
+					if (timestamp != null) Long.parseLong(timestamp);
+				} catch (NumberFormatException malformed) {
+					return new ValidatorStatusCode(false, "Invalid output download filters", HttpServletResponse.SC_BAD_REQUEST);
+				}
+			}
 
 			if (type.equals(R.JOB_OUTPUTS)) {
 				//expecting a comma-separated list
@@ -778,6 +828,11 @@ public class Download extends HttpServlet {
 					return new ValidatorStatusCode(
 							false, "The given list of ids contained one or more invalid integers");
 				}
+				if (Arrays.stream(ids.split(",", -1)).anyMatch(id -> !Validator.isValidPosInteger(id))) {
+					return new ValidatorStatusCode(false, "The given list of ids contained one or more invalid integers");
+				}
+				return outputAccessStatus(Permissions.checkPairOutputsAccess(
+						Validator.convertToIntList(ids), SessionUtil.getUserId(request)));
 			} else {
 				String universallyUniqueId = request.getParameter(PARAM_ANON_ID);
 				if (universallyUniqueId == null) {
@@ -789,9 +844,11 @@ public class Download extends HttpServlet {
 					return validateForAnonymousLink(universallyUniqueId, type, request);
 				}
 			}
-			return new ValidatorStatusCode(true);
 		} catch (Exception e) {
 			log.warn(e.getMessage(), e);
+			if (isOutputDownload(request.getParameter(PARAM_TYPE))) {
+				return new ValidatorStatusCode(false, OUTPUT_INTERNAL_ERROR, HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+			}
 		}
 		return new ValidatorStatusCode(false, "Internal error processing download request");
 	}
@@ -816,7 +873,7 @@ public class Download extends HttpServlet {
 		}
 	}
 
-	private static ValidatorStatusCode validateForUser(int userId, String type, HttpServletRequest request) {
+	private static ValidatorStatusCode validateForUser(int userId, String type, HttpServletRequest request) throws SQLException {
 		final String methodName = "validateForUser";
 		log.entry(methodName);
 		if (!Validator.isValidPosInteger(request.getParameter(PARAM_ID))) {
@@ -845,8 +902,7 @@ public class Download extends HttpServlet {
 			}
 			break;
 		case R.JOB:
-		case R.JOB_XML:
-		case R.JOB_OUTPUT: {
+		case R.JOB_XML: {
 			ValidatorStatusCode canSeeJobStatus = Permissions.canUserSeeJob(id, userId);
 			if (!canSeeJobStatus.isSuccess()) {
 				log.debug(methodName, "User could not see job, returning failure status.");
@@ -854,13 +910,10 @@ public class Download extends HttpServlet {
 			}
 			break;
 		}
+		case R.JOB_OUTPUT:
+			return outputAccessStatus(Permissions.checkJobOutputAccess(id, userId));
 		case R.PAIR_OUTPUT: {
-			int jobId = JobPairs.getPair(id).getJobId();
-			ValidatorStatusCode canSeeJobStatus = Permissions.canUserSeeJob(jobId, userId);
-			if (!canSeeJobStatus.isSuccess()) {
-				return canSeeJobStatus;
-			}
-			break;
+			return outputAccessStatus(Permissions.checkPairOutputsAccess(Collections.singletonList(id), userId));
 		}
 		case R.BENCHMARK:
 			status = BenchmarkSecurity.canUserDownloadBenchmark(id, userId);
@@ -896,6 +949,11 @@ public class Download extends HttpServlet {
 		String shortName = null;
 		try {
 			if (request.getParameter(PARAM_ANON_ID) != null && request.getParameter(PARAM_ID) != null) {
+				if (isOutputDownload(request.getParameter(PARAM_TYPE))) {
+					sendOutputError(response, HttpServletResponse.SC_BAD_REQUEST,
+							"Invalid request: cannot combine anonId with sequential id");
+					return;
+				}
 				response.sendError(
 						HttpServletResponse.SC_BAD_REQUEST,
 						"Invalid request: cannot combine anonId with sequential id"
@@ -906,6 +964,10 @@ public class Download extends HttpServlet {
 			ValidatorStatusCode status = validateRequest(request);
 			if (!status.isSuccess()) {
 				log.debug("Bad download Request--" + status.getMessage());
+				if (isOutputDownload(request.getParameter(PARAM_TYPE))) {
+					sendOutputError(response, getValidationFailureStatus(status), status.getMessage());
+					return;
+				}
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
 				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 				response.sendError(getValidationFailureStatus(status), status.getMessage());
@@ -1148,7 +1210,7 @@ public class Download extends HttpServlet {
 
 					shortName = "Job" + jobId + "_output";
 					response.addHeader("Content-Disposition", "attachment; filename=" + shortName + ".zip");
-					success = handleJobOutputs(jobId, response, since, lastModified);
+					success = handleJobOutputs(jobId, u.getId(), response, since, lastModified);
 				} else if (request.getParameter(PARAM_TYPE).equals(R.JOB_PAGE_DOWNLOAD_TYPE)) {
 					log.debug(methodName, "Handling " + R.JOB_PAGE_DOWNLOAD_TYPE);
 					int jobId = Integer.parseInt(request.getParameter(PARAM_ID));
@@ -1168,6 +1230,10 @@ public class Download extends HttpServlet {
 				response.getOutputStream().close();
 			} else {
 				log.debug(methodName, "Failed to process file for download.");
+				if (isOutputDownload(request.getParameter(PARAM_TYPE))) {
+					sendOutputError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, OUTPUT_INTERNAL_ERROR);
+					return;
+				}
 				response.sendError(
 						HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "failed to process file for download.");
 			}
@@ -1182,10 +1248,19 @@ public class Download extends HttpServlet {
 					"User Agent: " + request.getHeader("User-Agent")
 			);
 			response.getOutputStream().close();
+		} catch (OutputAccessException e) {
+			if (!response.isCommitted()) {
+				response.reset();
+				sendOutputError(response, getValidationFailureStatus(e.status), e.status.getMessage());
+			}
 		} catch (Exception e) {
 			log.error("Caught exception in Download.doGet", e);
 			if (!response.isCommitted()) {
 				response.reset();
+				if (isOutputDownload(request.getParameter(PARAM_TYPE))) {
+					sendOutputError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, OUTPUT_INTERNAL_ERROR);
+					return;
+				}
 				response.sendError(
 						HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
 						"Failed to generate download"

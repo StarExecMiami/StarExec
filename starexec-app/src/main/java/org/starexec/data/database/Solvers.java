@@ -8,9 +8,12 @@ import org.starexec.constants.R;
 import org.starexec.data.to.*;
 import org.starexec.data.to.Solver.ExecutableType;
 import org.starexec.data.to.compare.SolverComparator;
+import org.starexec.data.security.GeneralSecurity;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
+import org.starexec.jobs.SolverArtifactTree;
 import org.starexec.util.DataTablesQuery;
+import org.starexec.util.DescriptorDirectory;
 import org.starexec.util.NamedParameterStatement;
 import org.starexec.util.PaginationQueryBuilder;
 import org.starexec.util.Util;
@@ -21,7 +24,11 @@ import org.postgresql.util.PSQLException;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -416,62 +423,30 @@ public class Solvers {
 	 * @return True on success, false on error
 	 */
 	public static boolean cleanOrphanedDeletedSolvers() {
-		final String methodName = "cleanOrphanedDeletedSolvers";
-		Connection con = null;
-		PreparedStatement ps = null;
-		PreparedStatement stmt = null;
-		ResultSet results = null;
-
-		//will contain the id of every solver that is associated with either a space or a pair
-		HashSet<Integer> parentedSolvers = new HashSet<>();
 		try {
-			con = Common.getConnection();
-			// call the function with parentheses to ensure Postgres treats it as a function call
-			ps = con.prepareStatement("SELECT * FROM starexec.GetSolversAssociatedWithSpaces()");
-			results = ps.executeQuery();
-			while (results.next()) {
-				parentedSolvers.add(results.getInt("id"));
+			List<Integer> candidates = new ArrayList<>();
+			try (Connection connection = Common.getConnection(); PreparedStatement statement = connection.prepareStatement(
+					"SELECT s.id FROM starexec.solvers s WHERE s.deleted IS TRUE"
+					+ " AND NOT starexec.solver_storage_requires_retention(s.id,s.path)"
+					+ " AND (s.disk_size>0 OR NOT EXISTS (SELECT 1 FROM starexec.solver_assoc sa WHERE sa.solver_id=s.id))"
+					+ " ORDER BY s.id"); ResultSet result = statement.executeQuery()) {
+				while (result.next()) candidates.add(result.getInt(1));
 			}
-			Common.safeClose(ps);
-			Common.safeClose(results);
-
-			ps = con.prepareStatement("SELECT * FROM starexec.GetSolversAssociatedWithPairs()");
-			results = ps.executeQuery();
-			while (results.next()) {
-				parentedSolvers.add(results.getInt("id"));
-			}
-
-			Common.safeClose(ps);
-			Common.safeClose(results);
-
-			stmt = con.prepareStatement("SELECT * FROM GetDeletedSolvers()");
-			results = stmt.executeQuery();
-			while (results.next()) {
-				Solver s = resultSetToSolver(results);
-				if (new File(s.getPath()).exists()) {
-					log.warn("a deleted solver still has an on-disk directory! ID = " + s.getId());
-					if (!FileUtils.deleteQuietly(new File(s.getPath()))) {
-						log.warn("failed to delete solver on disk! Not removing solver from database.");
-						continue;
+			boolean success = true;
+			for (int id : candidates) {
+				if (!delete(id)) { success = false; continue; }
+				Common.inTransaction(connection -> {
+					try (PreparedStatement statement = connection.prepareStatement("SELECT starexec.remove_deleted_solver_metadata(?)")) {
+						statement.setInt(1, id);
+						try (ResultSet result = statement.executeQuery()) { return result.next() && result.getBoolean(1); }
 					}
-				}
-				// the solver has been deleted AND it is not associated with any spaces or job pairs
-				if (!parentedSolvers.contains(s.getId())) {
-					removeSolverFromDatabase(s.getId(), con);
-				}
+				});
 			}
-			return true;
-		} catch (StarExecDatabaseException e) {
-			log.error(methodName, e.getMessage(), e);
+			return success;
 		} catch (Exception e) {
-			log.error(methodName, e.getMessage(), e);
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(ps);
-			Common.safeClose(stmt);
-			Common.safeClose(results);
+			log.error("cleanOrphanedDeletedSolvers", "Deleted solver cleanup failed", e);
+			return false;
 		}
-		return false;
 	}
 
 	/**
@@ -590,56 +565,77 @@ public class Solvers {
 		}
 	}
 
-	/**
-	 * Sets the deleted flag of a solver and removes it from disk (cascading deletes handle all dependencies)
-	 *
-	 * @param id the id of the solver to delete
-	 * @return True if the operation was a success, false otherwise
-	 * @author Todd Elvers
-	 */
+	/** Logically deletes a solver before legacy cleanup; referenced storage retains its existing charge. */
 	public static boolean delete(int id) {
-		final String methodName = "delete";
-		log.trace("Solvers.delete() called on solver with id = " + id);
-		Connection con = null;
-		PreparedStatement stmt = null;
-		ResultSet rs = null;
 		try {
-			File buildOutput = Solvers.getSolverBuildOutput(id);
-			if (buildOutput.exists()) {
-				Util.safeDeleteDirectory(buildOutput.getParent());
-			}
-			con = Common.getConnection();
-
-			stmt = con.prepareStatement("SELECT SetSolverToDeletedById(?)");
-			stmt.setInt(1, id);
-			rs = stmt.executeQuery();
-			rs.next();
-
-			String sourcePath = rs.getString(1) + "_src";
-			log.trace("Deleting solver source from disk, path: " + sourcePath);
-			Util.safeDeleteDirectory(sourcePath);
-			File srcFile = new File(sourcePath);
-			if (srcFile.getParentFile().exists()) {
-				srcFile.getParentFile().delete();
-			}
-
-			// Delete solver file from disk, and the parent directory if it's empty
-			Util.safeDeleteDirectory(rs.getString(1));
-			File file = new File(rs.getString(1));
-			if (file.getParentFile().exists()) {
-				file.getParentFile().delete();
-			}
-
-			return true;
+			List<SolverDeletion> requests = Common.inTransaction(connection ->
+					requestSolverDeletions(connection, "SELECT * FROM starexec.request_solver_storage_deletion(?)", id));
+			return finishSolverDeletions(requests);
 		} catch (Exception e) {
-			String message = String.format("Deletion of solver [id=%d] failed.", id);
-			log.error(methodName, message, e);
+			log.error("delete", "Solver deletion failed", e);
 			return false;
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(rs);
-			Common.safeClose(stmt);
 		}
+	}
+
+	private record SolverDeletion(int id, int ownerId, String path, long chargedBytes) { }
+
+	private static List<SolverDeletion> requestSolverDeletions(Connection connection, String sql, int id) throws SQLException {
+		List<SolverDeletion> requests = new ArrayList<>();
+		try (PreparedStatement statement = connection.prepareStatement(sql)) {
+			statement.setInt(1, id);
+			try (ResultSet result = statement.executeQuery()) {
+				while (result.next()) {
+					long bytes = result.getLong("charged_bytes");
+					if (result.wasNull() || bytes < 0) throw new SQLException("Solver cleanup charge is unavailable");
+					requests.add(new SolverDeletion(result.getInt("solver_id"), result.getInt("owner_id"), result.getString("legacy_path"), bytes));
+				}
+			}
+		}
+		return requests;
+	}
+
+	private static boolean finishSolverDeletions(List<SolverDeletion> requests) throws SQLException, IOException {
+		for (SolverDeletion request : requests) {
+			if (request.path() == null) continue;
+			if (!deleteLegacySolverFiles(request.id(), request.path())) return false;
+			boolean settled = Common.inTransaction(connection -> {
+				try (PreparedStatement statement = connection.prepareStatement("SELECT starexec.settle_legacy_solver_deletion(?,?,?,?)")) {
+					statement.setInt(1, request.id()); statement.setInt(2, request.ownerId());
+					statement.setString(3, request.path()); statement.setLong(4, request.chargedBytes());
+					try (ResultSet result = statement.executeQuery()) { return result.next() && result.getBoolean(1); }
+				}
+			});
+			if (!settled) return false;
+		}
+		return true;
+	}
+
+	private static boolean deleteLegacySolverFiles(int solverId, String path) throws IOException {
+		File buildLog = getSolverBuildOutput(solverId);
+		if (buildLog == null || buildLog.getParentFile() == null) throw new IOException("Legacy build log location is unavailable");
+		Set<Path> roots = new LinkedHashSet<>();
+		roots.add(Path.of(path));
+		roots.add(Path.of(path.endsWith("_src") ? path : path + "_src"));
+		roots.add(buildLog.getParentFile().toPath());
+		for (Path root : roots) {
+			if (!root.isAbsolute() || root.getParent() == null || !root.equals(root.normalize())) {
+				throw new IOException("Legacy cleanup requires an absolute normalized non-root path");
+			}
+			try {
+				if (!Files.readAttributes(root, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isDirectory()) {
+					throw new IOException("Legacy cleanup root is not a directory");
+				}
+				try (DescriptorDirectory ignored = DescriptorDirectory.open(root)) { }
+			} catch (NoSuchFileException absent) { }
+		}
+		for (Path root : roots) {
+			if (!Util.safeDeleteDirectory(root.toString())) return false;
+			try {
+				Files.readAttributes(root, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+				throw new IOException("Legacy solver files remain after cleanup");
+			} catch (NoSuchFileException absent) { }
+		}
+		return true;
 	}
 
 	/**
@@ -2294,46 +2290,15 @@ public class Solvers {
 		}
 	}
 
-	/**
-	 * Deletes all solvers a user has from disk and sets their "deleted" flag to true. Solvers should NOT be deleted
-	 * from the database, as they still may be associated with spaces
-	 *
-	 * @param userId The userId in question
-	 * @return True on success, false otherwise
-	 * @author Eric Burns
-	 */
+	/** Deletes the committed recycled selection, retaining referenced storage and unsettled charges. */
 	public static boolean setRecycledSolversToDeleted(int userId) {
-		final String methodName = "setRecycledSolversToDeleted";
-		Connection con = null;
-		PreparedStatement ps = null;
-		ResultSet results = null;
 		try {
-			con = Common.getConnection();
-			ps = con.prepareStatement("SELECT * FROM starexec.GetRecycledSolverPaths(?)");
-			ps.setInt(1, userId);
-			results = ps.executeQuery();
-
-			while (results.next()) {
-				Util.safeDeleteDirectory(results.getString("path"));
-				Util.safeDeleteDirectory(results.getString("path") + "_src");
-				File buildOutput = Solvers.getSolverBuildOutput(results.getInt("id"));
-				if (buildOutput.exists()) {
-					Util.safeDeleteDirectory(buildOutput.getParent());
-				}
-			}
-			Common.safeClose(ps);
-			ps = con.prepareStatement("SELECT starexec.SetRecycledSolversToDeleted(?)");
-			ps.setInt(1, userId);
-			ps.execute();
-
-			return true;
+			List<SolverDeletion> requests = Common.inTransaction(connection ->
+					requestSolverDeletions(connection, "SELECT * FROM starexec.request_recycled_solver_deletions(?)", userId));
+			return finishSolverDeletions(requests);
 		} catch (Exception e) {
-			log.error(methodName, e.getMessage(), e);
+			log.error("setRecycledSolversToDeleted", "Recycled solver deletion failed", e);
 			return false;
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(ps);
-			Common.safeClose(results);
 		}
 	}
 
@@ -2633,6 +2598,98 @@ public class Solvers {
 		}
 	}
 
+	/** Reads the explicitly applied log; cleanup continues to use the legacy file locator. */
+	public static Optional<String> readSolverBuildLog(int solverId, int userId) throws SQLException {
+		boolean admin = GeneralSecurity.hasAdminReadPrivileges(userId);
+		return Common.inTransaction(connection -> {
+			String sql = "SELECT s.path,s.build_status,s.user_id,s.build_output_artifact_id,"
+					+ "a.solver_id,a.origin_owner_id,a.state,a.source_path,a.storage_root,a.artifact_path,a.execution_token,"
+					+ "a.manifest_payload,a.manifest_sha256,a.byte_size,"
+					+ "EXISTS(SELECT 1 FROM starexec.job_pairs p JOIN starexec.job_pair_attempts t ON t.pair_id=p.id"
+					+ " WHERE p.id=a.origin_pair_id AND p.status_code=21 AND t.current_attempt_no=a.attempt_no"
+					+ " AND a.execution_stopped_at IS NOT NULL AND a.execution_stop_receipt_payload IS NOT NULL"
+					+ " AND a.execution_stop_receipt_payload::jsonb #> '{facts,disposition}' IS NULL"
+					+ " AND starexec.solver_build_stop_receipt_matches(a.execution_stop_receipt_payload,"
+					+ "a.execution_stop_receipt_sha256,a.id,a.origin_pair_id,a.attempt_no,a.engine_identity)) AS cancelled_logs,"
+					+ "EXISTS(SELECT 1 FROM starexec.solver_build_artifacts m"
+					+ " WHERE m.origin_solver_id=s.id AND m.execution_token IS NOT NULL) AS managed"
+					+ " FROM starexec.solvers s LEFT JOIN starexec.solver_build_artifacts a ON a.id=s.build_output_artifact_id"
+					+ " WHERE s.id=? AND s.deleted IS NOT TRUE AND s.recycled IS NOT TRUE AND (s.user_id=? OR ?) FOR SHARE OF s";
+			try (PreparedStatement statement = connection.prepareStatement(sql)) {
+				statement.setInt(1, solverId); statement.setInt(2, userId); statement.setBoolean(3, admin);
+				try (ResultSet result = statement.executeQuery()) {
+					if (!result.next()) return Optional.empty();
+					if (result.getObject("build_output_artifact_id") == null) {
+						if (result.getBoolean("managed")) throw new IOException("Managed build output has not been applied");
+						return readLegacyBuildLog(solverId);
+					}
+					String state = result.getString("state");
+					String path = result.getString("path");
+					Integer status = (Integer) result.getObject("build_status");
+					String storage = result.getString("storage_root");
+					if (result.getInt("solver_id") != solverId || result.getInt("origin_owner_id") != result.getInt("user_id")) {
+						throw new IOException("Applied build output owner differs from its solver");
+					}
+					if (result.getObject("execution_token") == null) {
+						String source = result.getString("source_path");
+						if (!"REJECTED".equals(state) || storage != null || result.getString("manifest_payload") != null
+								|| !(Integer.valueOf(3).equals(status) && path.equals(source)
+								|| Integer.valueOf(2).equals(status) && source != null && source.length() > 4 && source.endsWith("_src")
+								&& path.equals(source.substring(0, source.length()-4)))) {
+							throw new IOException("Applied legacy output identity differs from its solver");
+						}
+						return readLegacyBuildLog(solverId);
+					}
+					if (!("PUBLISHED".equals(state) && Integer.valueOf(2).equals(status) && path.equals(result.getString("artifact_path"))
+							|| "REJECTED".equals(state) && (Integer.valueOf(3).equals(status)
+								|| Integer.valueOf(0).equals(status) && result.getBoolean("cancelled_logs"))
+								&& path.equals(result.getString("source_path")))
+							|| storage == null || !Path.of(storage).resolve("solver").toString().equals(result.getString("artifact_path"))
+							|| result.getObject("byte_size") == null) {
+						throw new IOException("Applied build output identity differs from its solver");
+					}
+					return SolverArtifactTree.readLog(Path.of(storage), result.getString("manifest_payload"),
+							result.getString("manifest_sha256"), result.getLong("byte_size"));
+				}
+			}
+		});
+	}
+
+	private static Optional<String> readLegacyBuildLog(int solverId) throws IOException {
+		File legacy = getSolverBuildOutput(solverId);
+		return legacy != null && legacy.exists()
+				? Optional.of(FileUtils.readFileToString(legacy, StandardCharsets.UTF_8)) : Optional.empty();
+	}
+
+	/** Resolves original source for an already authorized snapshot, refusing a changed asset identity. */
+	public static Optional<File> findSolverSource(Solver snapshot) throws SQLException {
+		if (snapshot == null || snapshot.getPath() == null) return Optional.empty();
+		String sql = "SELECT s.build_source_path,a.source_path AS artifact_source FROM starexec.solvers s"
+				+ " LEFT JOIN starexec.solver_build_artifacts a ON a.solver_id=s.id"
+				+ " AND a.state='PUBLISHED' AND a.artifact_path=s.path"
+				+ " WHERE s.id=? AND s.user_id=? AND s.path=? AND s.deleted IS NOT TRUE";
+		try (Connection connection = Common.getConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
+			statement.setInt(1, snapshot.getId()); statement.setInt(2, snapshot.getUserId()); statement.setString(3, snapshot.getPath());
+			try (ResultSet result = statement.executeQuery()) {
+				if (!result.next()) return Optional.empty();
+				String hint = result.getString("build_source_path");
+				String recorded = result.getString("artifact_source");
+				if (hint != null && recorded != null && !hint.equals(recorded)) {
+					throw new SQLException("Solver source metadata disagrees with its published artifact");
+				}
+				String source = hint != null ? hint : recorded;
+				if (source == null) source = snapshot.getPath().endsWith("_src") ? snapshot.getPath() : snapshot.getPath() + "_src";
+				try {
+					Path path = Path.of(source);
+					if (!path.isAbsolute() || path.getParent() == null || !path.equals(path.normalize())) {
+						throw new SQLException("Solver source must be an absolute normalized non-root directory");
+					}
+					return Optional.of(path.toFile());
+				} catch (java.nio.file.InvalidPathException invalid) { throw new SQLException("Invalid solver source path", invalid); }
+			}
+		}
+	}
+
 	/**
 	 * Gets the ID of every orphaned solver the given user owns
 	 *
@@ -2829,6 +2886,8 @@ public class Solvers {
 				+ " JOIN starexec.benchmarks bm ON bm.id = b.bench_id"
 				+ " JOIN starexec.solvers s ON s.id = b.solver_id"
 				+ " WHERE starexec.IsTerminalPairStatus(b.status_code) AND bm.deleted IS NOT TRUE AND bm.name = ?"
+				+ " AND NOT EXISTS (SELECT 1 FROM starexec.solver_build_artifacts a"
+				+ " WHERE a.origin_pair_id=b.pair_id AND a.execution_token IS NOT NULL)"
 				+ " ORDER BY b.job_id";
 		List<FinishedSolverBuild> builds = new ArrayList<>();
 		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
@@ -2860,19 +2919,30 @@ public class Solvers {
 	 * @throws SQLException if the update fails
 	 */
 	public static boolean recordBuildOutcome(FinishedSolverBuild build, String builtPath) throws SQLException {
-		boolean built = builtPath != null;
-		final String sql = "UPDATE starexec.solvers s SET build_status = ?, path = ?"
-				+ " WHERE s.id = ? AND s.path = ? AND s.build_status = ?"
-				+ " AND NOT EXISTS (SELECT 1" + BUILD_JOB_PAIRS + " AND sd.solver_id = s.id AND j.id > ?)";
-		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
-			ps.setInt(1, built ? SolverBuildStatus.SolverBuildStatusCode.BUILT_BY_STAREXEC.getVal()
-					: SolverBuildStatus.SolverBuildStatusCode.BUILD_FAILED.getVal());
-			ps.setString(2, built ? builtPath : build.getSolverPath());
-			ps.setInt(3, build.getSolverId());
-			ps.setString(4, build.getSolverPath());
-			ps.setInt(5, build.getSolverBuildStatus().getVal());
-			ps.setInt(6, build.getJobId());
-			return ps.executeUpdate() == 1;
+		return finishLegacyBuild(build, builtPath, true).isPresent();
+	}
+
+	/** Claims one unbound helper for deletion, settling its accounting before returning its path. */
+	public static Optional<String> claimLegacyBuildRetirement(FinishedSolverBuild build) throws SQLException {
+		return finishLegacyBuild(build, null, false);
+	}
+
+	private static Optional<String> finishLegacyBuild(FinishedSolverBuild build, String builtPath,
+			boolean apply) throws SQLException {
+		try (Connection connection = Common.getConnection()) {
+			return Common.runTransactional(connection, transaction -> {
+				try (PreparedStatement statement = transaction.prepareStatement(
+						"SELECT starexec.finish_legacy_solver_build(?,?,?,?,?,?,?,?,?,?)")) {
+					statement.setInt(1, build.getJobId()); statement.setInt(2, build.getPairId());
+					statement.setInt(3, build.getBenchmarkId()); statement.setInt(4, build.getSolverId());
+					statement.setString(5, build.getSolverPath()); statement.setInt(6, build.getSolverBuildStatus().getVal());
+					statement.setInt(7, build.getPairStatus().getVal()); statement.setString(8, builtPath);
+					statement.setString(9, R.SOLVER_BUILD_SCRIPT); statement.setBoolean(10, apply);
+					try (ResultSet result = statement.executeQuery()) {
+						return result.next() ? Optional.ofNullable(result.getString(1)) : Optional.empty();
+					}
+				}
+			});
 		}
 	}
 

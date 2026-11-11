@@ -84,6 +84,8 @@ export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
 |----------|---------|----------|---------|-------|
 | `STAREXEC_BACKEND_TYPE` | `local` | No | `podman` | Backend: local, podman, kubernetes, k8s, kubernetes-native, sge, oar (legacy). Note: Makefile `make start` uses Podman deployment by default. |
 | `STAREXEC_DATA_DIR` | `/tmp/starexec/data` | No | `/var/lib/starexec/data` | Data directory path |
+| `STAREXEC_BUILD_ARTIFACT_DIR` | *(empty)* | For managed build publication | `/var/lib/starexec/build-artifacts` | Existing application-owned directory with mode `0700`, separate from all runner-writable roots. No shared-data fallback. See [execution storage](EXECUTION_STORAGE.md). |
+| `STAREXEC_UPLOAD_STAGING_DIR` | *(empty)* | For private upload staging | `/var/lib/starexec/uploads-private` | Existing application-owned directory with mode `0700`, outside runner-writable roots and their mount aliases. The application never provisions the root or falls back to shared data. |
 | `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` | `1800` | No | `3600` | Timeout for async benchmark archive extraction only. Applies to resumable upload job extraction, not all shell commands globally. |
 | `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` | `107374182400` | No | `214748364800` | Hard cap for total extracted bytes during async benchmark archive extraction. Effective limit is the smaller of this value and the uploader's remaining disk quota. |
 | `STAREXEC_UPLOAD_CLEANUP_ENABLED` | `true` | No | `true` | Enables DB-driven cleanup of expired upload-owned artifacts. |

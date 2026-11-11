@@ -377,6 +377,36 @@ server:
   max-request-size: 105MB
 ```
 
+### Private Upload Staging
+
+Private upload staging requires an explicitly provisioned `STAREXEC_UPLOAD_STAGING_DIR`.
+Keep this application-owned `0700` directory outside every runner-writable root and
+bind-mount alias. Ancestors must remain under trusted administration. Each upload
+claims a fresh private child; cleanup verifies the conserved storage identity and
+unlinks only that claim, without following links or repairing permissions on their
+targets. Root permissions and mount configuration must remain stable while a claim
+is active. These checks do not replace isolation of untrusted processes or validation
+of their effective mounts.
+
+### Text Benchmark Files
+
+Text benchmark names must pass the existing benchmark-name validator before a
+file is created. The upload writer opens each directory component through Java's
+[SecureDirectoryStream](https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/nio/file/SecureDirectoryStream.html)
+without following symbolic links, then creates a fresh UTF-8 file relative to the
+open directory. Existing files and links are never replaced. Filesystems without
+secure directory streams are refused.
+
+This protection applies to file creation. Extraction, processing and subsequent
+pathname access still require application-controlled parent directories. Untrusted
+solver and build processes must not be able to modify those directories. The
+[Local backend](BACKENDS.md#local-backend) remains limited to trusted workloads;
+descriptor-relative file creation does not make it a filesystem sandbox.
+
+Quick jobs reject invalid names with HTTP 400 and report benchmark creation
+failure with HTTP 500 before submitting a job. Solver build submission also stops
+if its helper benchmark cannot be created.
+
 ### Authentication
 
 **Current authentication:**

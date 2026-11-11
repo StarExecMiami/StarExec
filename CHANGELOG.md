@@ -7,7 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Ingest conserved per-stage scientific measurements through a fenced SQL path without changing measured disk charges.
+- Account verified ordinary output bytes to the immutable original job once, atomically with completion and without a second owner charge.
+- Conserve the original job in new ordinary creation payloads and reject mismatched admission labels without rewriting historical requests.
+- Refuse premature legacy refunds, resets and quota reconciliation while ordinary execution storage remains unsettled.
+- Refuse legacy statistics accounting for registered ordinary executions while preserving unmanaged and stale-attempt behavior.
+- Retain bounded stopped ordinary output in immutable reserved copies and bind completion to exact bytes and directory ownership.
+- Conserve once-only ordinary output-copy claims and immutable copy-directory bindings before retained writes.
+- Exclude reserved ordinary output parents from writable execution resources and serialize concurrent registration.
+- Add durable ordinary output-copy reservations with exact source manifests, bounded quota booking and immutable allocation readback.
+- Persist ordinary job creation requests and cancellation locators atomically, retaining exact immutable request bytes across uncertain replies and cancellation.
+- Retain immutable ordinary execution phase receipts and fence late creation or payload release after cleanup intent.
+- Match ordinary creation validation to the prepared execution working directory.
+- Recover prepared ordinary inputs through the exact conserved creation request without rebinding storage ownership.
+- Capture authorized ordinary mount policies with the existing held-runtime kernel verifier.
+- Preserve exact ordinary creation and phase acknowledgements across database reply loss and connection failures.
+- Collect runtime mount identity for the exact prepared inputs, preserving scientific filenames without shell interpolation.
+- Configure private ordinary scripts without shared writable paths and retain final files for trusted cleanup.
+- Bind private ordinary creation policies to exact prepared inputs and durable ownership without replay permission.
+- Preserve real provider zero timestamps when recording a positively never-started ordinary container, without granting payload release or storage settlement.
+- Send conserved ordinary creation requests once over the local curl transport, preserving uncertain outcomes and bounding response handling and child cleanup.
+- Send the same conserved ordinary request through the selected Java transport without automatic replay, with bounded slow-response handling and verified worker cleanup.
+- Conserve exact ordinary created-container configuration after validating its immutable request, launcher, limits, environment and bind access, without treating configuration as execution admission.
+- Require a first acknowledged ordinary hold-start claim against the current job, attempt, owner and cancellation locator; historical observations cannot authorize another start.
+- Couple ordinary creation to bounded same-socket inspection and one acknowledged trusted hold start, preserving transport selection and uncertain outcomes without payload release.
+- Conserve exact ordinary stopped-provider facts and revalidate them before retirement, preserving cancellation and never-started distinctions without releasing used storage.
+- Verify the ordinary held runtime and current inputs before one durable payload-release decision and a non-repeatable signal; historical releases cannot authorize another send.
+- Recover stopped ordinary output from its conserved private layout and immutable inputs without reusing pre-payload empty-directory assumptions.
+- Observe stopped monitor and saved-output bytes under one reservation-bounded budget without granting publication or cleanup from a source manifest.
+
+- Serialize dedicated storage ownership across solver builds and ordinary job
+  attempts, preserving build lease history and booking each job allowance once.
+  Refuse reclamation after storage use begins or while its contents are unknown.
+
 ### Added
+- **Private job preparation**: Copy authorized ordinary-job inputs into reserved storage with durable identity checks and pre-engine restoration. Retain ownership after partial or uncertain preparation; dispatch remains separate.
+- **Job input snapshots**: Capture authorized input metadata for reserved ordinary-job attempts and recover their storage tokens after a controller restart. Runtime preparation and admission remain separate.
+- **Build storage admission**: Added dedicated ext4 capacity verification and PostgreSQL storage leases tied to current attempts and booked quotas. Independent staging cleanup preserves published output and settles its own allowance once; private resource roots cannot become asset references. Runtime pool activation still requires private mounts and dispatch integration.
 - **Kubernetes health endpoints**: Added `/starexec/public/health/liveness` and `/starexec/public/health/readiness` so orchestrators can distinguish a live process from one able to serve, and pointed the chart's probes at them.
 - **SMT-aware CPU partitioning**: Added sibling-aware CPU partitioning that keeps SMT siblings within a single partition and rejects explicit partition layouts that split them.
 - **Kubernetes execution observability**: Added pod-state observation alongside job state, so a pair whose pod has never started is no longer reported as running, and added the pod read permission the backend needs for it.
@@ -29,6 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dead stress-test endpoint**: Removed the `/secure/add/stressTest` mapping and the admin UI that reached it. The mapping pointed at a class in `src/test/java`, so it was never packaged into the WAR and every request returned HTTP 500. The stress-test capability itself is unchanged; it is driven by `TestManager` in the test harness.
 
 ### Fixed
+- **Incremental output polling**: Compare timestamps by value so unchanged output returns 304 instead of an empty ZIP. Newly completed pairs still deliver output whose modification time predates the previous poll.
+- **Private output downloads**: Job and pair output downloads now return the same uncached 404 for missing or inaccessible targets, 400 for malformed IDs and filters, and a generic 500 for internal failures before response commit. Checked database outcomes preserve visibility rules and keep rejected requests from creating archives. Pair archive preparation errors propagate instead of returning an empty 200 response; successful ZIP contents and unrelated download contracts remain unchanged.
 - **Icons no longer touch their labels in action buttons and select toggles**: The buttons in a page's action list and the "all / none" toggles drew each icon flush against its text. The buttons are flex containers, and a flex container does not render the space that jQuery UI and the markup put between an icon and its label; the toggles have no space in their markup. Both now keep 4px (`$spacing-2xs`) between icon and label, about the gap jQuery UI's other buttons already show.
 - **Dialogs stay hidden until they open, and show their whole message**: The cluster page showed a stray alert icon under its footer. Its queue-removal confirmation is built after the one script call that hid all dialog markup, so it was never hidden; dialog markup is now hidden by the stylesheet, which also covers dialogs that scripts add later and pages whose scripts have not run. Confirmations and forms across the site opened at fixed heights that the dialog's title bar and button row had outgrown, so the queue-removal question and the space download options were cut off. They now size to their content, up to 90% of the window, past which the content scrolls. The job page's chart dialogs keep their fixed size.
 - **The cluster page's job pair legends show their labels again**: They read only the count ("0"). `cluster.js` built them from a self-closed `<span/>`, which jQuery 3.5 and later no longer expands, so the label landed inside the count and was overwritten. The other seven self-closed non-void tags in the webapp are closed too, and `SelfClosingTagTests` fails on any new one.

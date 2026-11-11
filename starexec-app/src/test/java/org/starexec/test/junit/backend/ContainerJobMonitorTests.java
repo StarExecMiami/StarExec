@@ -36,6 +36,9 @@ public class ContainerJobMonitorTests {
 
     private ContainerJobMonitor monitor;
 
+    @org.junit.jupiter.api.io.TempDir
+    java.nio.file.Path readbackFixture;
+
     @BeforeEach
     public void setUp() {
         MockitoAnnotations.openMocks(this);
@@ -206,6 +209,74 @@ public class ContainerJobMonitorTests {
         );
         m.setAccessible(true);
         return m.invoke(monitor, dir);
+    }
+
+    private void assertStatsRefused(java.nio.file.Path directory) throws Exception {
+        try {
+            Object stats=parseRunsolverOutput(directory);
+            fail("Unsafe stats were accepted with cpuTime="+number(stats,"cpuTime"));
+        } catch (java.lang.reflect.InvocationTargetException failure) {
+            assertTrue(failure.getCause() instanceof org.starexec.backend.StageStatusSnapshots.InvalidSnapshotException,
+                    failure.getCause().toString());
+        }
+    }
+
+    @Test
+    public void linkedStatisticsCannotReadOutsideTheOutputDirectory() throws Exception {
+        var output=java.nio.file.Files.createDirectory(readbackFixture.resolve("output"));
+        var outside=java.nio.file.Files.writeString(readbackFixture.resolve("outside-stats.json"),"{\"cpuTime\":999}");
+        java.nio.file.Files.createSymbolicLink(output.resolve("stats.json"),outside);
+        assertStatsRefused(output);
+        assertEquals("{\"cpuTime\":999}",java.nio.file.Files.readString(outside));
+    }
+
+    @Test
+    public void linkedOutputAncestorsCannotRedirectStatistics() throws Exception {
+        var outside=java.nio.file.Files.createDirectory(readbackFixture.resolve("outside"));
+        java.nio.file.Files.writeString(outside.resolve("stats.json"),"{\"cpuTime\":999}");
+        var alias=java.nio.file.Files.createSymbolicLink(readbackFixture.resolve("output"),outside);
+        assertStatsRefused(alias);
+    }
+
+    @Test
+    public void oversizedStatisticsCannotConsumeUnboundedMonitorMemory() throws Exception {
+        var output=java.nio.file.Files.createDirectory(readbackFixture.resolve("output"));
+        java.nio.file.Files.writeString(output.resolve("stats.json")," ".repeat(1024*1024)+"{\"cpuTime\":999}");
+        assertStatsRefused(output);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"var.out","watcher.out"})
+    public void linkedLegacyMeasurementsCannotBypassTheReader(String name) throws Exception {
+        var output=java.nio.file.Files.createDirectory(readbackFixture.resolve("output"));
+        var outside=java.nio.file.Files.writeString(readbackFixture.resolve("outside"),"CPUTIME=999");
+        java.nio.file.Files.createSymbolicLink(output.resolve(name),outside);
+        assertStatsRefused(output);
+    }
+
+    @Test
+    public void linkedAttributesCannotReadForeignProperties() throws Exception {
+        var output=java.nio.file.Files.createDirectory(readbackFixture.resolve("output"));
+        var outside=java.nio.file.Files.writeString(readbackFixture.resolve("outside"),"starexec-result=foreign\n");
+        java.nio.file.Files.createSymbolicLink(output.resolve("attributes.txt"),outside);
+        Method method=ContainerJobMonitor.class.getDeclaredMethod("parseAttributes",java.nio.file.Path.class);
+        method.setAccessible(true);
+        var failure=org.junit.jupiter.api.Assertions.assertThrows(java.lang.reflect.InvocationTargetException.class,
+                ()->method.invoke(monitor,output));
+        assertTrue(failure.getCause() instanceof org.starexec.backend.StageStatusSnapshots.InvalidSnapshotException);
+    }
+
+    @Test
+    public void linkedStatusCannotWriteAnyPairRows() throws Exception {
+        var output=java.nio.file.Files.createDirectory(readbackFixture.resolve("output"));
+        var outside=java.nio.file.Files.writeString(readbackFixture.resolve("outside"),"{\"pairId\":77,\"stageNumber\":1,\"status\":7}");
+        java.nio.file.Files.createSymbolicLink(output.resolve("status.json"),outside);
+        try (MockedStatic<JobPairs> pairs=Mockito.mockStatic(JobPairs.class)) {
+            var failure=org.junit.jupiter.api.Assertions.assertThrows(java.lang.reflect.InvocationTargetException.class,
+                    ()->invokeProcessCompletedJob(new PodmanBackend.CompletedContainerInfo("owned-container",77,output.toString(),0)));
+            assertTrue(failure.getCause() instanceof org.starexec.backend.StageStatusSnapshots.InvalidSnapshotException);
+            pairs.verifyNoInteractions();
+        }
     }
 
     private boolean flag(Object stats, String name) throws Exception {

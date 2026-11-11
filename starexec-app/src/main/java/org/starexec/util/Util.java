@@ -16,6 +16,7 @@ import java.nio.file.AccessDeniedException;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -1698,6 +1699,10 @@ public class Util {
     private static void chmodFileTree(File file, String permission)
         throws IOException {
         if (file == null || !file.exists()) {
+            return;
+        }
+        if (Files.isSymbolicLink(file.toPath())
+                || file.isFile() && ((Number) Files.getAttribute(file.toPath(), "unix:nlink", LinkOption.NOFOLLOW_LINKS)).longValue() > 1) {
             return;
         }
         chmodSinglePath(file, permission);

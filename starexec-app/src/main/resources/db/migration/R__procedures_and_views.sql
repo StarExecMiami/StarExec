@@ -1685,6 +1685,11 @@ BEGIN
     END IF;
     PERFORM starexec.EnforcePairAttempt(_jobPairId, _attemptNo);
 
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims
+        WHERE lease_kind='JOB' AND origin_pair_id=_jobPairId) THEN
+        RAISE EXCEPTION 'Managed ordinary statistics require the conserved retained-output path' USING ERRCODE='55000';
+    END IF;
+
     SELECT id INTO _nodeId FROM starexec.nodes WHERE name = _nodeName;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
@@ -1841,6 +1846,14 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims
+        WHERE lease_kind='JOB' AND origin_pair_id=_jobPairId AND released_at IS NULL)
+        OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations
+            WHERE origin_pair_id=_jobPairId AND released_at IS NULL) THEN
+        RAISE EXCEPTION 'Ordinary storage must settle before legacy pair refunds'
+            USING ERRCODE='55000';
     END IF;
 
 	SELECT SUM(disk_size) FROM starexec.jobpair_stage_data WHERE jobpair_id=_jobPairId INTO _sumDiskSize;
@@ -3585,6 +3598,18 @@ BEGIN
             MESSAGE = format('Job %s not found', _jobId);
     END IF;
 
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims c
+        LEFT JOIN starexec.job_pairs p ON p.id=c.origin_pair_id
+        WHERE c.lease_kind='JOB' AND c.released_at IS NULL
+            AND (p.job_id=_jobId OR starexec.job_execution_original_job(c.execution_token)=_jobId))
+        OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations r
+            LEFT JOIN starexec.job_pairs p ON p.id=r.origin_pair_id
+            WHERE r.released_at IS NULL
+                AND (p.job_id=_jobId OR starexec.job_execution_original_job(r.execution_token)=_jobId)) THEN
+        RAISE EXCEPTION 'Ordinary storage must settle before legacy job deletion'
+            USING ERRCODE='55000';
+    END IF;
+
     UPDATE jobs SET deleted = true, total_pairs = 0, disk_size = 0
     WHERE id = _jobId;
     IF NOT FOUND THEN
@@ -3621,6 +3646,18 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims c
+        LEFT JOIN starexec.job_pairs p ON p.id=c.origin_pair_id
+        WHERE c.lease_kind='JOB' AND c.released_at IS NULL
+            AND (p.job_id=_jobId OR starexec.job_execution_original_job(c.execution_token)=_jobId))
+        OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations r
+            LEFT JOIN starexec.job_pairs p ON p.id=r.origin_pair_id
+            WHERE r.released_at IS NULL
+                AND (p.job_id=_jobId OR starexec.job_execution_original_job(r.execution_token)=_jobId)) THEN
+        RAISE EXCEPTION 'Ordinary storage must settle before legacy job accounting'
+            USING ERRCODE='55000';
     END IF;
 
     UPDATE jobs SET disk_size = _diskSize
@@ -7041,45 +7078,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Deletes a solver given that solver's id
--- Author: Todd Elvers + Eric Burns
-DROP FUNCTION IF EXISTS starexec.SetSolverToDeletedById CASCADE;
-CREATE OR REPLACE FUNCTION starexec.SetSolverToDeletedById(_solverId INT)
-RETURNS TEXT AS $$
-DECLARE
-    _path TEXT;
-BEGIN
-        -- Postgres doesn't support UPDATE ... JOIN syntax; use UPDATE ... FROM starexec.... WHERE
-        UPDATE users
-        SET disk_size = users.disk_size - solvers.disk_size
-        FROM starexec.solvers
-        WHERE solvers.user_id = users.id
-            AND solvers.id = _solverId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Solver %s not found when updating owner disk usage', _solverId);
-    END IF;
-
-    SELECT s.path INTO _path FROM starexec.solvers s WHERE s.id = _solverId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Solver %s not found', _solverId);
-    END IF;
-    UPDATE solvers
-    SET deleted = true, disk_size = 0
-    WHERE id = _solverId;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Solver %s not found', _solverId);
-    END IF;
-    RETURN _path;
-END;
-$$ LANGUAGE plpgsql;
-
 -- Gets the IDs of all the spaces associated with the given solver
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetAssociatedSpaceIdsBySolver CASCADE;
@@ -7495,21 +7493,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Sets all the solvers the user has in the database to "deleted"
--- Author: Eric Burns
-DROP FUNCTION IF EXISTS starexec.SetRecycledSolversToDeleted CASCADE;
-CREATE OR REPLACE FUNCTION starexec.SetRecycledSolversToDeleted(_userId INT)
-RETURNS VOID AS $$
-BEGIN
-    UPDATE users
-    SET disk_size = users.disk_size - (SELECT COALESCE(SUM(s.disk_size), 0) FROM starexec.solvers s WHERE s.user_id = _userId AND s.recycled = true AND s.deleted = false)
-    WHERE users.id = _userId;
-    UPDATE solvers
-    SET deleted = true, disk_size = 0
-    WHERE user_id = _userId AND recycled = true AND deleted = false;
-END;
-$$ LANGUAGE plpgsql;
-
 -- Gets all recycled solver ids a user has in the database
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetRecycledSolverIds CASCADE;
@@ -7519,22 +7502,6 @@ BEGIN
     RETURN QUERY
     SELECT s.id FROM starexec.solvers s
     WHERE s.user_id = _userId AND s.recycled = true;
-END;
-$$ LANGUAGE plpgsql;
-
--- Permanently removes a solver from the database
--- Author: Eric Burns
-DROP FUNCTION IF EXISTS starexec.RemoveSolverFromDatabase CASCADE;
-CREATE OR REPLACE FUNCTION starexec.RemoveSolverFromDatabase(_id INT)
-RETURNS VOID AS $$
-BEGIN
-    DELETE FROM starexec.solvers
-    WHERE id = _id;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Solver %s not found', _id);
-    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7710,12 +7677,18 @@ BEGIN
         FROM starexec.jobpair_stage_data jpsd
         WHERE jpsd.solver_id = _solverId
     );
-    -- Set Solver status to Unbuilt
+    -- Keep the original source of immutable build artifacts. Fence the old result
+    -- before its replacement job exists, including rebuilds of failed solvers.
     UPDATE solvers
-        SET build_status = 0, -- 0 = Unbuilt : SolverBuildStatus.java
-            path = CONCAT(path, '_src')
+        SET build_generation = build_generation + 1,
+            build_source_path = COALESCE(build_source_path,
+                CASE WHEN build_status = 2 THEN path || '_src' ELSE path END),
+            path = COALESCE(build_source_path,
+                CASE WHEN build_status = 2 THEN path || '_src' ELSE path END),
+            build_status = CASE WHEN build_status = 2 THEN 0 ELSE build_status END
         WHERE id = _solverId
-        AND build_status = 2;  -- 2 = Built by StarExec
+        AND deleted IS NOT TRUE
+        AND build_status IN (2, 3); -- Built by StarExec, or failed and being rebuilt.
 END;
 $$ LANGUAGE plpgsql;
 
@@ -9650,6 +9623,14 @@ BEGIN
     SELECT disk_size INTO _userDiskSize FROM starexec.users
     WHERE id = _userID FOR NO KEY UPDATE;
 
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims
+        WHERE lease_kind='JOB' AND origin_owner_id=_userID AND released_at IS NULL)
+        OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations
+            WHERE origin_owner_id=_userID AND released_at IS NULL) THEN
+        RAISE EXCEPTION 'Ordinary storage must settle before legacy user reconciliation'
+            USING ERRCODE='55000';
+    END IF;
+
     SELECT COALESCE(SUM(disk_size), 0) INTO _sumDiskSize FROM
     (SELECT disk_size FROM starexec.solvers WHERE user_id = _userID AND deleted = false
      UNION ALL
@@ -9831,6 +9812,8 @@ RETURNS VOID AS $$
 DECLARE
     _permIds INT[];
 BEGIN
+    PERFORM starexec.assert_user_solver_storage_deletable(_userId);
+
     -- Capture the permission ids before user_assoc cascades away with the user.
     SELECT array_agg(ua.permission) INTO _permIds
     FROM starexec.user_assoc ua
@@ -10580,6 +10563,11 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION starexec.RerunJobPairsBatchCore(_pairIds INT[])
 RETURNS VOID AS $$
 BEGIN
+    -- Zero-byte reruns still protect job ownership before locking user accounting.
+    PERFORM j.id FROM starexec.jobs j
+    WHERE j.id IN (SELECT p.job_id FROM starexec.job_pairs p WHERE p.id=ANY(_pairIds))
+    ORDER BY j.id FOR NO KEY UPDATE;
+
     -- 1. Identify pairs and reclaim disk size from jobs
     UPDATE starexec.jobs j
     SET disk_size = GREATEST(j.disk_size - sub.reclaim, 0)
@@ -10603,6 +10591,21 @@ BEGIN
        SET completed = NULL
      WHERE j.completed IS NOT NULL
        AND j.id IN (SELECT jp.job_id FROM starexec.job_pairs jp WHERE jp.id = ANY(_pairIds));
+
+    -- A new storage admission changes this row even when no stage bytes exist.
+    -- Locking it also rejects an older repeatable-read snapshot before the reset.
+    PERFORM u.id FROM starexec.users u
+    WHERE u.id IN (SELECT j.user_id FROM starexec.jobs j
+        JOIN starexec.job_pairs p ON p.job_id=j.id WHERE p.id=ANY(_pairIds))
+    ORDER BY u.id FOR NO KEY UPDATE;
+
+    IF EXISTS (SELECT 1 FROM starexec.execution_storage_claims
+        WHERE lease_kind='JOB' AND origin_pair_id=ANY(_pairIds) AND released_at IS NULL)
+        OR EXISTS (SELECT 1 FROM starexec.job_output_storage_reservations
+            WHERE origin_pair_id=ANY(_pairIds) AND released_at IS NULL) THEN
+        RAISE EXCEPTION 'Ordinary storage must settle before a legacy rerun'
+            USING ERRCODE='55000';
+    END IF;
 
     -- 2. Reclaim disk size from users
     UPDATE starexec.users u

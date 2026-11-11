@@ -369,12 +369,20 @@ public class UploadBenchmark extends HttpServlet {
 	public static Integer addBenchmarkFromText(
 			String benchText, String name, int userId, int typeId, boolean downloadable
 	) {
+		if (!Validator.isValidBenchName(name)) {
+			return null;
+		}
 		File uniqueDir = null;
 		Integer id = null;
 		try {
-			log.debug("trying to add benchmark with text = " + benchText + " and name = " + name);
+			log.debug("Adding a text benchmark");
 			uniqueDir = getDirectoryForBenchmarkUpload(userId, null);
-			FileUtils.writeStringToFile(new File(uniqueDir, name), benchText, StandardCharsets.UTF_8);
+			if (uniqueDir == null) {
+				throw new IOException("No benchmark upload directory was allocated");
+			}
+			try (DescriptorDirectory directory = DescriptorDirectory.open(uniqueDir.toPath())) {
+				directory.writeNewText(name, benchText);
+			}
 			List<Benchmark> bench =
 					Benchmarks.extractSpacesAndBenchmarks(uniqueDir, typeId, userId, downloadable, null, null)
 					          .getBenchmarksRecursively();

@@ -1,0 +1,226 @@
+package org.starexec.backend;
+
+import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.google.gson.JsonObject;
+import java.sql.SQLException;
+import java.time.Instant;
+import java.util.Map;
+import org.starexec.data.database.SolverBuildArtifacts;
+import org.starexec.data.to.SolverBuildStopReceipt;
+
+/** Records a stopped build while the engine's immutable resource identity still exists. */
+final class PodmanBuildStopObserver {
+    static final String ARTIFACT_LABEL = "starexec.build.artifact";
+
+    record Identity(long artifact, int pair, int attempt, int execution) {
+        String engine(String id) { return "podman:" + execution + ":" + id; }
+    }
+
+    private PodmanBuildStopObserver() { }
+
+    record RefusedCreation(SolverBuildArtifacts.Artifact artifact, int execution, SolverBuildStopReceipt receipt) {
+        String container() { return receipt.resourceId(); }
+        BuildExecutionContext build() {
+            return new BuildExecutionContext(artifact.id(),artifact.pairId(),artifact.attemptNo(),artifact.executionToken(),
+                    java.nio.file.Path.of(artifact.sourcePath()),java.nio.file.Path.of(artifact.stagingPath()));
+        }
+    }
+
+    /** Restores immutable cancellation history even after staging has been settled or purged. */
+    static RefusedCreation restoreRefusedCreation(SolverBuildArtifacts.Artifact artifact) throws SQLException {
+        require(artifact!=null && artifact.executionToken()!=null && artifact.stoppedAt()!=null
+                && ("REJECTED".equals(artifact.state()) || "DELETED".equals(artifact.state())),
+                "Build has no conserved created cancellation");
+        var receipt=SolverBuildArtifacts.findStopReceipt(artifact.pairId(),artifact.attemptNo()).orElseThrow(
+                ()->new IllegalStateException("Created cancellation receipt is unavailable")).receipt();
+        String[] engine=artifact.engineIdentity()==null?new String[0]:artifact.engineIdentity().split(":",-1);
+        require(engine.length==3 && "podman".equals(engine[0]) && receipt.resourceId().equals(engine[2]),
+                "Created cancellation engine identity differs");
+        final int execution;
+        try { execution=Integer.parseInt(engine[1]); }
+        catch (NumberFormatException malformed) {
+            throw new IllegalStateException("Build identity contains invalid numeric metadata",malformed);
+        }
+        var restored=new RefusedCreation(artifact,execution,receipt);
+        require(org.starexec.data.database.ExecutionStorageLeases.isRefusedPodmanCreation(
+                restored.build(),execution,receipt.resourceId(),receipt),"Created cancellation facts are invalid");
+        if("creation_unacknowledged".equals(receipt.facts().get("reason").getAsString())) {
+            var creation=org.starexec.data.database.SolverBuildCreations.find(artifact.id()).orElseThrow(
+                    ()->new IllegalStateException("Created cancellation has no conserved request"));
+            require(creation.build().equals(restored.build()) && creation.execution()==execution
+                    && creation.sha256().equals(receipt.facts().get("request_sha256").getAsString())
+                    && creation.name().equals(receipt.facts().get("container_name").getAsString())
+                    && creation.image().equals(receipt.facts().get("image_id").getAsString()),
+                    "Created cancellation differs from its conserved request");
+        }
+        return restored;
+    }
+
+    /** A stored cancellation is not authority to remove a resource whose physical facts changed. */
+    static void requireRefusedCreation(InspectContainerResponse inspection, RefusedCreation restored) throws SQLException {
+        SolverBuildStopReceipt receipt;
+        if ("creation_unacknowledged".equals(restored.receipt().facts().get("reason").getAsString())) {
+            var creation=org.starexec.data.database.SolverBuildCreations.find(restored.artifact().id()).orElseThrow(
+                    ()->new IllegalStateException("Conserved creation request is unavailable"));
+            require(creation.build().equals(restored.build()) && creation.execution()==restored.execution(),
+                    "Conserved creation request differs from cancellation");
+            try { PodmanBuildCreationRecovery.requireCreated(inspection,restored.container(),creation); }
+            catch(java.io.IOException invalid) { throw new SQLException("Recovered creation policy differs",invalid); }
+            receipt=unacknowledgedCreationReceipt(inspection,restored.container(),creation);
+        } else receipt=cancelledCreationReceipt(inspection,restored.container(),restored.build(),restored.execution());
+        require(restored.receipt().payload().equals(receipt.payload()),"Recovered cancellation receipt changed");
+    }
+
+    static boolean isBuild(InspectContainerResponse inspection) {
+        require(inspection != null && inspection.getConfig() != null, "Container ownership inspection is unavailable");
+        return inspection.getConfig().getLabels() != null
+                && inspection.getConfig().getLabels().containsKey(ARTIFACT_LABEL);
+    }
+
+    static Integer buildExecution(InspectContainerResponse inspection, String containerId) {
+        return isBuild(inspection) ? identity(inspection, containerId).execution() : null;
+    }
+
+    static void recordIfBuild(InspectContainerResponse inspection, String containerId) throws SQLException {
+        recordIfBuild(inspection,containerId,false);
+    }
+
+    static void recordCancelledIfBuild(InspectContainerResponse inspection, String containerId) throws SQLException {
+        recordIfBuild(inspection,containerId,true);
+    }
+
+    private static void recordIfBuild(InspectContainerResponse inspection, String containerId, boolean cancellationRequested) throws SQLException {
+        if (!isBuild(inspection)) return;
+        Identity identity = identity(inspection, containerId);
+        var state = inspection.getState();
+        require(state != null && ("exited".equals(state.getStatus()) || "dead".equals(state.getStatus())),
+                "Build container has not reached a terminal engine state");
+        requireStoppedFlags(inspection);
+        require(Instant.parse(state.getFinishedAt()).isAfter(Instant.EPOCH), "Build finish time is missing");
+        Instant.parse(state.getStartedAt());
+        require(state.getExitCodeLong() != null, "Build exit code is missing");
+        require(inspection.getImageId() != null && !inspection.getImageId().isBlank(), "Build image identity is missing");
+        var artifact = SolverBuildArtifacts.find(identity.pair(), identity.attempt()).orElseThrow(
+                () -> new IllegalStateException("Build artifact registration is unavailable"));
+        String engine = identity.engine(containerId);
+        require(artifact.id() == identity.artifact() && artifact.executionToken() != null
+                && engine.equals(artifact.engineIdentity()), "Build container differs from its admitted execution");
+
+        JsonObject facts = new JsonObject();
+        facts.addProperty("status", state.getStatus()); facts.addProperty("pid", state.getPidLong());
+        facts.addProperty("running", state.getRunning()); facts.addProperty("paused", state.getPaused());
+        facts.addProperty("restarting", state.getRestarting());
+        facts.addProperty("restart_policy", inspection.getHostConfig().getRestartPolicy().getName());
+        facts.addProperty("private_pid_namespace", true); facts.addProperty("privileged", false);
+        facts.addProperty("image_id", inspection.getImageId());
+        facts.addProperty("started_at", state.getStartedAt()); facts.addProperty("finished_at", state.getFinishedAt());
+        facts.addProperty("exit_code", state.getExitCodeLong());
+        var existing = SolverBuildArtifacts.findStopReceipt(identity.pair(), identity.attempt());
+        boolean cancelled=cancellationRequested || existing.isPresent()
+                && existing.get().receipt().facts().has("disposition")
+                && "cancelled".equals(existing.get().receipt().facts().get("disposition").getAsString());
+        if (cancelled) facts.addProperty("disposition","cancelled");
+        SolverBuildStopReceipt receipt;
+        if (existing.isPresent()) {
+            receipt = existing.get().receipt();
+            require(receipt.matches(identity.artifact(), identity.pair(), identity.attempt(), engine)
+                    && "podman".equals(receipt.backend()) && containerId.equals(receipt.resourceId())
+                    && facts.equals(receipt.facts()), "Stored build stop receipt differs from this engine observation");
+        } else {
+            receipt = SolverBuildStopReceipt.observed("podman", identity.artifact(), identity.pair(),
+                    identity.attempt(), engine, containerId, Instant.now(), facts);
+        }
+        boolean conserved=cancelled
+                ? SolverBuildArtifacts.recordCancelled(identity.pair(),identity.attempt(),artifact.executionToken(),engine,receipt)
+                : SolverBuildArtifacts.recordStopReceipt(identity.pair(),identity.attempt(),artifact.executionToken(),engine,receipt);
+        require(conserved, "Could not conserve the build stop receipt");
+    }
+
+    /** A refused launch can discard a positively observed never-started resource without claiming completion. */
+    static void requireNeverStarted(InspectContainerResponse inspection, String containerId,
+                                    BuildExecutionContext build, int execution) {
+        Identity identity = identity(inspection, containerId);
+        require(identity.artifact() == build.artifactId() && identity.pair() == build.pairId()
+                && identity.attempt() == build.attemptNo() && identity.execution() == execution,
+                "Refused container differs from its build submission");
+        require(inspection.getState() != null && "created".equals(inspection.getState().getStatus()),
+                "Refused build may already have started");
+        requireStoppedFlags(inspection);
+        require(Instant.parse("0001-01-01T00:00:00Z").equals(Instant.parse(inspection.getState().getStartedAt())),
+                "Refused build has a previous start");
+    }
+
+    /** Positive created-state observation; persistence must bind and reject atomically, never admit launch. */
+    static SolverBuildStopReceipt cancelledCreationReceipt(InspectContainerResponse inspection,String containerId,
+                                                            BuildExecutionContext build,int execution) throws SQLException {
+        return cancelledCreationReceipt(inspection,containerId,build,execution,null);
+    }
+
+    static SolverBuildStopReceipt unacknowledgedCreationReceipt(InspectContainerResponse inspection,String container,
+            org.starexec.data.database.SolverBuildCreations.Creation creation) throws SQLException {
+        require(creation.image().equals(inspection.getImageId()),"Unacknowledged creation image differs");
+        return cancelledCreationReceipt(inspection,container,creation.build(),creation.execution(),creation);
+    }
+
+    private static SolverBuildStopReceipt cancelledCreationReceipt(InspectContainerResponse inspection,String containerId,
+            BuildExecutionContext build,int execution,org.starexec.data.database.SolverBuildCreations.Creation creation) throws SQLException {
+        requireNeverStarted(inspection,containerId,build,execution);
+        require(inspection.getImageId()!=null && inspection.getImageId().matches("sha256:[0-9a-f]{64}"),
+                "Created build image identity is unavailable");
+        var state=inspection.getState();var facts=new JsonObject();
+        facts.addProperty("disposition","cancelled");facts.addProperty("reason",creation==null?"admission_refused":"creation_unacknowledged");
+        if(creation!=null) {
+            facts.addProperty("container_name",creation.name());facts.addProperty("request_sha256",creation.sha256());
+        }
+        facts.addProperty("status",state.getStatus());facts.addProperty("pid",state.getPidLong());
+        facts.addProperty("running",state.getRunning());facts.addProperty("paused",state.getPaused());facts.addProperty("restarting",state.getRestarting());
+        facts.addProperty("started_at",state.getStartedAt());facts.addProperty("restart_policy",inspection.getHostConfig().getRestartPolicy().getName());
+        facts.addProperty("private_pid_namespace",true);facts.addProperty("privileged",false);facts.addProperty("image_id",inspection.getImageId());
+        String engine="podman:"+execution+":"+containerId;
+        var stored=SolverBuildArtifacts.findStopReceipt(build.pairId(),build.attemptNo());
+        if (stored.isPresent()) {
+            var receipt=stored.get().receipt();
+            require(receipt.matches(build.artifactId(),build.pairId(),build.attemptNo(),engine) && "podman".equals(receipt.backend())
+                    && containerId.equals(receipt.resourceId()) && facts.equals(receipt.facts()),"Created cancellation conflicts with the conserved receipt");
+            return receipt;
+        }
+        return SolverBuildStopReceipt.observed("podman",build.artifactId(),build.pairId(),build.attemptNo(),engine,containerId,Instant.now(),facts);
+    }
+
+    static Identity identity(InspectContainerResponse inspection, String containerId) {
+        require(isBuild(inspection) && containerId != null && containerId.equals(inspection.getId()),
+                "Build inspection resource identity differs");
+        Map<String, String> labels = inspection.getConfig().getLabels();
+        require("true".equals(labels.get("starexec.managed")) && "2".equals(labels.get("starexec.label.version"))
+                && "job-pair".equals(labels.get("starexec.kind")), "Build ownership labels are invalid");
+        try {
+            long artifact = Long.parseLong(labels.get(ARTIFACT_LABEL));
+            int pair = Integer.parseInt(labels.get("starexec.pair.id"));
+            int attempt = Integer.parseInt(labels.get("starexec.attempt"));
+            int execution = Integer.parseInt(labels.get("starexec.exec.id"));
+            require(artifact > 0 && pair > 0 && attempt > 0 && execution > 0, "Build ownership must be positive");
+            return new Identity(artifact, pair, attempt, execution);
+        } catch (NumberFormatException malformed) {
+            throw new IllegalStateException("Build identity contains invalid numeric metadata",malformed);
+        }
+    }
+
+    private static void requireStoppedFlags(InspectContainerResponse inspection) {
+        var state = inspection.getState(); var host = inspection.getHostConfig();
+        require(Boolean.FALSE.equals(state.getRunning()) && Boolean.FALSE.equals(state.getPaused())
+                && Boolean.FALSE.equals(state.getRestarting()) && Long.valueOf(0).equals(state.getPidLong()),
+                "Build process termination is unverified");
+        // docker-java's noRestart() uses an empty name; the engine can return the explicit "no" name.
+        String restartPolicy=host != null && host.getRestartPolicy() != null ? host.getRestartPolicy().getName() : null;
+        require(restartPolicy != null && ("no".equals(restartPolicy) || restartPolicy.isEmpty()),
+                "Build restart policy is unverified");
+        require(Boolean.FALSE.equals(host.getPrivileged()) && (host.getPidMode() == null
+                || host.getPidMode().isEmpty() || "private".equals(host.getPidMode()))
+                && (host.getCapAdd() == null || host.getCapAdd().length == 0),
+                "Build process namespace isolation is unverified");
+    }
+
+    private static void require(boolean condition, String message) {
+        if (!condition) throw new IllegalStateException(message);
+    }
+}
