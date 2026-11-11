@@ -1924,11 +1924,7 @@ public class RESTServices {
 			throw RESTException.FORBIDDEN;
 		}
 		try {
-			File output = Solvers.getSolverBuildOutput(id);
-			if (!output.exists()) {
-				throw RESTException.NOT_FOUND;
-			}
-			return FileUtils.readFileToString(output, StandardCharsets.UTF_8);
+			return Solvers.readSolverBuildLog(id, userId).orElseThrow(() -> RESTException.NOT_FOUND);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			throw RESTException.INTERNAL_SERVER_ERROR;
@@ -5487,6 +5483,10 @@ public class RESTServices {
 	 * structured fields only. No part of the underlying cause reaches the client.
 	 */
 	private static String describeDeletionBlocker(UserDeletionBlockedException e) {
+		if (UserDeletionBlockedException.SOLVER_STORAGE_IN_USE.equals(e.getReasonCode())) {
+			return "Cannot delete this user yet: solver files or build records are still retained or in use. "
+					+ "Complete their cleanup or retry after the current storage operation.";
+		}
 		if (UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED.equals(e.getReasonCode())) {
 			return "Cannot delete this user yet: one or more active jobs could not be safely stopped and retired. "
 					+ "Resolve the backend state and retry the deletion.";

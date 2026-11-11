@@ -123,6 +123,19 @@ public class StageAttributeFilesTest {
 		assertTrue(selected.isEmpty(), "the legacy file was used: " + selected);
 	}
 
+	/** A protocol marker cannot authorize reading another directory's output. */
+	@Test
+	public void aLinkedStageDirectoryCannotSupplyAttributes() throws Exception {
+		Path out = output();
+		Path outside = newFolder(folder).toPath();
+		Files.writeString(outside.resolve("1.txt"), "starexec-result=Foreign\n");
+		Files.createSymbolicLink(out.resolve("stage-attributes"), outside);
+
+		assertTrue(StageAttributeFiles.select(out, PAIR, Set.of(), 1,
+				new Properties(), () -> Set.of(1)).isEmpty(),
+				"A stage directory link must not import another directory's attributes");
+	}
+
 	/** A file far larger than any post-processor output is refused instead of read into memory. */
 	@Test
 	public void anOversizedStageFileIsNotRead() throws Exception {

@@ -2,6 +2,8 @@ package org.starexec.test.unit.jobs;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -37,23 +39,31 @@ public class CleanupTargetTest {
 	@Test
 	public void failedBuildCleanupFinishesAfterDeletingItsBenchmark() throws Exception {
 		Harness h = new Harness(folder, false);
-		h.run("BUILD_JOB=true; cleanUpAfterKilledBuildJob");
+		h.run("BUILD_JOB=true; cleanUpAfterKilledBuildJob", false);
 		h.assertBenchmarkCleaned();
 	}
 
 	@Test
 	public void failedBuildCleanupAcceptsSpacesInTheBenchmarkDirectory() throws Exception {
 		Harness h = new Harness(folder, true);
-		h.run("BUILD_JOB=true; cleanUpAfterKilledBuildJob");
+		h.run("BUILD_JOB=true; cleanUpAfterKilledBuildJob", false);
 		h.assertBenchmarkCleaned();
 	}
 
-	@Test
-	public void aNonBuildJobKeepsItsBenchmark() throws Exception {
+	@ParameterizedTest
+	@ValueSource(booleans = {false, true})
+	public void aContainerBuildKeepsItsBenchmarkForApplicationCleanup(boolean spaces) throws Exception {
+		Harness h = new Harness(folder, spaces);
+		h.run("BUILD_JOB=true; cleanUpAfterKilledBuildJob");
+		h.assertBenchmarkRetained();
+	}
+
+	@ParameterizedTest
+	@ValueSource(booleans = {false, true})
+	public void aNonBuildJobKeepsItsBenchmark(boolean containerMode) throws Exception {
 		Harness h = new Harness(folder, true);
-		h.run("BUILD_JOB=false; cleanUpAfterKilledBuildJob");
-		assertEquals("BENCHMARK", Files.readString(h.benchmark));
-		assertEquals("KEEP", Files.readString(h.unrelated));
+		h.run("BUILD_JOB=false; cleanUpAfterKilledBuildJob", containerMode);
+		h.assertBenchmarkRetained();
 	}
 
 	@Test
@@ -86,6 +96,10 @@ public class CleanupTargetTest {
 		}
 
 		void run(String operation) throws Exception {
+			run(operation, true);
+		}
+
+		void run(String operation, boolean containerMode) throws Exception {
 			ProcessBuilder builder = new ProcessBuilder(Bash.PATH, "-c",
 					"SOLVER_PATHS=(); source \"$SCRIPT_DIR/functions.bash\"; log() { :; }; "
 							+ "dbExec() { :; }; setRemainingDiskQuota() { REMAINING_DISK_QUOTA=0; }; "
@@ -96,7 +110,7 @@ public class CleanupTargetTest {
 			env.put("WORKING_DIR_BASE", root.toString());
 			env.put("BENCH_PATH", encode(benchmark));
 			env.put("PAIR_OUTPUT_DIRECTORY", encode(output));
-			env.put("CONTAINER_MODE", "true");
+			env.put("CONTAINER_MODE", Boolean.toString(containerMode));
 			env.put("PAIR_ID", "42");
 			env.put("SOLVER_ID", "1");
 			env.put("BENCH_ID", "1");
@@ -125,6 +139,12 @@ public class CleanupTargetTest {
 		void assertBenchmarkCleaned() throws Exception {
 			assertTrue(Files.isDirectory(benchmark.getParent()));
 			assertFalse(Files.exists(benchmark), "the build benchmark must be removed");
+			assertEquals("KEEP", Files.readString(unrelated));
+			assertEquals("PARTIAL", Files.readString(output.resolve("partial")));
+		}
+
+		void assertBenchmarkRetained() throws Exception {
+			assertEquals("BENCHMARK", Files.readString(benchmark));
 			assertEquals("KEEP", Files.readString(unrelated));
 			assertEquals("PARTIAL", Files.readString(output.resolve("partial")));
 		}

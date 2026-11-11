@@ -51,8 +51,8 @@ backend:
 
 ### Default startup policy (`make start`)
 
-`make start` defaults to the Podman deployment path for better production parity and
-safer execution of untrusted solver binaries.
+`make start` defaults to the Podman deployment path for container runtime parity.
+This default does not establish isolation of shared application data from solvers.
 
 - **Default**: Podman backend (container isolation)
 - **Fallback (explicit opt-in)**: Local backend for trusted-only debugging workflows
@@ -115,9 +115,20 @@ or backend mismatch incidents across releases).
 | Resource limits     | ⚠️    | ✅     | ✅                                         | ✅   | ✅   |
 | Job persistence     | ❌    | ✅     | ✅                                         | ✅   | ✅   |
 | Horizontal scaling  | ❌    | ❌     | Limited by current implementation maturity | ✅   | ✅   |
-| Untrusted code safe | ❌    | ✅     | ✅                                         | ⚠️   | ⚠️   |
+| Untrusted code safe | ❌    | ⚠️     | ⚠️                                         | ⚠️   | ⚠️   |
 | Setup complexity    | Low   | Medium | High                                       | High | High |
 | Maintenance         | Low   | Medium | High                                       | High | High |
+
+Podman and Kubernetes ordinary jobs currently mount shared application data with
+write access. Container namespaces and CPU/memory limits do not restrict writes
+through those mounts. Read-only published solver inputs protect those inputs;
+they do not isolate the remaining job data or enforce a per-execution disk limit.
+See [Bounded execution storage](EXECUTION_STORAGE.md) for the required private
+input/output boundary. Until that boundary is enforced for every execution path,
+use trusted workloads and do not treat either backend as safe for hostile code.
+Mount access semantics are documented by
+[Podman](https://docs.podman.io/en/stable/markdown/podman-run.1.html#volume-v-source-volume-host-dir-container-dir-options)
+and [Kubernetes](https://kubernetes.io/docs/concepts/storage/volumes/).
 
 ### Performance Comparison
 
@@ -140,6 +151,12 @@ The Local Backend executes jobs as processes on the host system. It's simple and
 **Best for:** Development, testing, small trusted workloads
 
 **Not for:** Production, untrusted code, large-scale jobs
+
+Build-aware submissions hold a real process on an anonymous input pipe while the
+server records its PID and start identity and commits execution admission. The
+server then releases the existing CPU-affinity command. Refusal or an admission
+failure closes the pipe and terminates the owned process. Use this lifecycle
+control only with trusted local workloads.
 
 ### Configuration
 
@@ -224,9 +241,11 @@ reserve SMT siblings.
 
 ### Overview
 
-The Podman Backend executes jobs in isolated containers. It provides strong isolation, enforced resource limits, and database-backed job persistence.
+The Podman Backend executes jobs in containers with CPU/memory limits and
+database-backed job persistence. Mounted data remains subject to the shared
+storage limitations described above.
 
-**Best for:** Production single-node deployments, untrusted code
+**Best for:** Single-node container deployments with trusted workloads
 
 **Not for:** Multi-node scaling (use Kubernetes instead)
 
@@ -405,6 +424,97 @@ The Kubernetes backend routes `kubernetes`, `k8s`, and `kubernetes-native` to `K
 **Best for:** Controlled Kubernetes experiments and backend development
 
 **Status:** Experimental. Core submission logic exists, but monitoring still runs in polling mode and production-scale validation is still pending.
+
+The build-aware `Backend.submitScript` overload carries a registered per-attempt
+staging destination. Podman commits execution admission before calling the engine
+start operation. Kubernetes creates build Jobs suspended, admits their returned
+UID in the database, and resumes the exact observed UID and resource version.
+An uncertain engine response retains execution tracking and capacity.
+
+After admission commits, Kubernetes reads the initial suspended Job once before
+resuming it. The read must still identify the registered build and initial
+generation, retain Pod evidence, and have no launch-fence or cancellation marker.
+The single resume write uses that observed resource version; a conflicting or
+ambiguous write is not retried against a newer version.
+
+Resuming a build requires `update` on Jobs in the application's namespace Role.
+The Helm chart grants this to the application account. Runner Pods explicitly
+disable service-account token mounting, including when a custom account is used.
+Engine termination, artifact validation and publication remain separate operations;
+a terminal `status.json` does not establish that writers have stopped.
+
+Podman build containers marked with a registered artifact identity require a matching
+terminal engine inspection before ingestion or removal. The observer checks the
+actual container ID, pair attempt, admitted execution, effective restart policy,
+private process namespace and stopped process flags. It commits an immutable stop
+receipt before cleanup. A failed observation or database write retains the build
+resource and its capacity for retry. A positively inspected, never-started
+container refused by admission can be removed without claiming build completion.
+These checks establish process termination separately from input and output mount
+authorization, artifact validation, and publication.
+
+Kubernetes build Jobs retain their resources until a matching terminal controller
+and terminated containers can be recorded durably. The observer checks Job and
+Pod UIDs, owner references, runtime container and image IDs, and all regular,
+initialization and ephemeral containers. Marked build Jobs have no automatic TTL;
+individual cleanup uses Foreground propagation with a resource-version precondition.
+Bulk deletion excludes these Jobs and recovers their accounting individually.
+Missing Pod observations, an unreadable API or a failed receipt write retain the
+resource and capacity. An explicit stop of an eligible enabled build sets the
+Job's active deadline to one second with its observed resource version and a
+request marker; it preserves the remaining specification and does not suspend
+the Job. A stale or ambiguous update cannot authorize deletion or capacity release.
+The first matching terminal controller and container observations after the
+acknowledged request conserve a cancelled receipt before cleanup. A bounded stop
+wait advances this cleanup using the captured Job identity. Passive safety checks
+do not request cancellation. Old Jobs without retained Pod evidence and enabled
+Pods without positive runtime termination observations remain unresolved.
+
+Build Pod templates include an evidence-retention finalizer before admission.
+Cleanup requires a complete census bound to the actual Job UID, conserves the
+matching physical observations, and removes only the application's finalizer
+using each Pod's observed resource version. Unknown or changed container evidence,
+conflicts and failed acknowledgements retain the Job for retry. Other owners'
+finalizers remain untouched; accepting deletion does not establish resource absence.
+The application service account needs namespace-scoped Pod `update` permission for
+this metadata operation. Runner Pods do not receive its service account token.
+Build stop validation requires `spec.managedBy` to remain unset, checking both
+the modeled field and additional properties before fencing or releasing evidence.
+
+The artifact catalog distinguishes a build that never ran from a completed build.
+Recording non-execution atomically rejects the artifact and conserves its immutable
+receipt, including after the solver is deleted. Such a receipt cannot authorize
+publication or another launch. The backend must fence launch before using this
+operation; suspension or a missing Pod alone is insufficient.
+
+The catalog can atomically reject a cancelled build while conserving its positive
+termination receipt from the admitted engine. Replays preserve the original bytes
+and timestamps, including after cleanup. Runtime publication refuses cancellation
+and non-execution receipts; the publication state transition enforces the same
+rule for callers of the lower-level catalog function. Conserving a cancellation
+receipt does not itself establish termination or decide the pair's intervention.
+
+Native callbacks conserve cancellation as a distinct outcome and acknowledge its
+catalog rejection before cleanup. They do not read scientific status files or
+write solver results for that outcome; the intervention owner settles the pair.
+Cleanup and accounting retain the original Job UID through retries and startup,
+including when the Job is already gone. Callback ownership is checked again after
+provider I/O before tracking and capacity are released. Unknown receipt outcomes
+remain unresolved rather than being treated as normal completion.
+
+The initial launch fence accepts only a generation-one suspended Job with a
+UID-bound selector and complete empty Pod census. It updates metadata using the
+observed resource version; build admission refuses the resulting marker. A
+conflict leaves the newer Job untouched. The fence alone does not record
+non-execution or authorize artifact publication.
+
+Cleanup of an initially suspended build commits its non-execution receipt and
+artifact rejection before deleting the acknowledged fenced Job version. Tracking
+remains until resource removal and accounting settlement both finish. Callbacks
+use the attempt-fenced retry routine without reading status files or recording
+scientific results. Startup resumes this lifecycle from the conserved catalog
+even if the Job is already gone. Unknown registered builds cannot use the legacy
+pending reset, which would otherwise reuse a rejected artifact.
 
 ### Architecture
 
@@ -937,21 +1047,25 @@ Jobs run as the application user with full host access.
 
 ### Podman Backend
 
-Recommended for untrusted code
+Container controls do not establish isolation of shared writable application data.
 
-- Container isolation via namespaces
-- Resource limits enforced by cgroups
-- Rootless mode for additional security
-- No host access from containers
+- Namespaces restrict process scope; mounted host paths remain accessible.
+- Cgroups enforce configured CPU/memory limits, not per-execution disk capacity.
+- Rootless mode reduces host privileges but does not prevent writes allowed to the
+  application user through shared mounts.
+- Published solver inputs are read-only; ordinary job output still requires the
+  private storage boundary described in [Bounded execution storage](EXECUTION_STORAGE.md).
 
 ### Kubernetes Backend
 
-Safe for untrusted code
+Shared writable data volumes remain accessible to job pods. Kubernetes controls
+must be configured and verified together with per-execution storage isolation.
 
-- Pod security policies
-- NetworkPolicies for isolation
-- Resource quotas
-- RBAC for access control
+- Pod security settings limit privileges and host integration.
+- NetworkPolicies govern network traffic, not mounted filesystem access.
+- Resource quotas govern admitted resources; they do not establish a hard write
+  limit on a shared persistent volume.
+- RBAC controls Kubernetes API access, not files exposed by a volume mount.
 
 ### HPC Backends (SGE/OAR)
 

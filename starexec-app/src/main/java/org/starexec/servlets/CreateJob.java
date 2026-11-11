@@ -326,7 +326,12 @@ public class CreateJob extends HttpServlet {
 					String benchText = request.getParameter(R.BENCHMARK);
 					String bName = request.getParameter(benchName);
 					int benchProc = Integer.parseInt(request.getParameter(benchProcessor));
-					int benchId = UploadBenchmark.addBenchmarkFromText(benchText, bName, userId, benchProc, false);
+					Integer benchId = UploadBenchmark.addBenchmarkFromText(benchText, bName, userId, benchProc, false);
+					if (benchId == null || benchId <= 0) {
+						response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+								"Unable to create the benchmark for this job.");
+						return;
+					}
 					buildQuickJob(j, solverId, benchId, space);
 					break;
 				case "keepHierarchy": {
@@ -639,6 +644,9 @@ public class CreateJob extends HttpServlet {
 			}
 
 			if (request.getParameter(run).equals("quickJob")) {
+				if (!Validator.isValidBenchName(request.getParameter(benchName))) {
+					return new ValidatorStatusCode(false, "The benchmark name is not valid.");
+				}
 				//we only need to check to see if the space is valid if a space was actually specified
 				if (!Util.paramExists(R.BENCHMARK, request)) {
 					return new ValidatorStatusCode(false, "You need to select a benchmark to run a quick job");

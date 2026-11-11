@@ -41,10 +41,10 @@ public abstract class BaseStarLogger {
     }
 
     public void entry(String method) {
-        log.debug(prefix(method) + "Entering method " + method + ".");
+        sendToLogger(StarLevel.DEBUG, prefix(method) + "Entering method " + method + ".", null);
     }
     public void exit(String method) {
-        log.debug(prefix(method)+"Leaving method "+method+".");
+        sendToLogger(StarLevel.DEBUG, prefix(method)+"Leaving method "+method+".", null);
     }
 
     public void debug(final String message) {
@@ -127,6 +127,7 @@ public abstract class BaseStarLogger {
     }
 
     protected void sendToLogger(StarLevel level, String message, Throwable t) {
+        message = escapeLineBreaks(message);
         switch (level) {
             case ERROR:
                 if (t != null) { log.error(message, t); } else { log.error(message); }
@@ -150,6 +151,10 @@ public abstract class BaseStarLogger {
                 if (t != null) { log.trace(message, t); } else { log.trace(message); }
                 break;
         }
+    }
+
+    private static String escapeLineBreaks(String message) {
+        return message == null ? null : message.replace("\r", "\\r").replace("\n", "\\n");
     }
 
     protected String getMessage(final String method, final String message, final Throwable t) {
