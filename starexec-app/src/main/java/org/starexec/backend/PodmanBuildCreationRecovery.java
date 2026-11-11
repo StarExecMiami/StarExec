@@ -24,7 +24,7 @@ final class PodmanBuildCreationRecovery {
     static Map<String,String> labels(SolverBuildCreations.Creation creation) throws IOException {
         var node=new ObjectMapper().readTree(creation.payload()).path("Labels");
         var labels=new java.util.LinkedHashMap<String,String>();
-        node.fields().forEachRemaining(e->labels.put(e.getKey(),e.getValue().textValue()));
+        node.properties().forEach(e->labels.put(e.getKey(),e.getValue().textValue()));
         require(labels.values().stream().allMatch(Objects::nonNull),"Conserved creation labels are invalid");
         return Map.copyOf(labels);
     }

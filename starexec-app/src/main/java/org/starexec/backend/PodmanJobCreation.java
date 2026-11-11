@@ -263,7 +263,7 @@ public final class PodmanJobCreation {
     }
     private static Map<String,String> labels(JobExecutionProtocol.Creation saved) throws IOException {
         var fields=JSON.readTree(saved.payload()).path("Labels");Map<String,String> labels=new LinkedHashMap<>();
-        var entries=fields.fields();
+        var entries=fields.properties().iterator();
         while (entries.hasNext()) { var e=entries.next();require(e.getValue().isTextual(),"Ordinary recovery label is invalid");labels.put(e.getKey(),e.getValue().textValue()); }
         return Map.copyOf(labels);
     }

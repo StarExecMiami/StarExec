@@ -31,7 +31,7 @@ final class PodmanJobNonExecution {
         var declared=JSON.readTree(request.payload());
         require(config!=null && config.getLabels()!=null && declared.path("Labels").isObject(),
                 "Ordinary non-execution ownership is unavailable");
-        var labels=declared.path("Labels").fields();
+        var labels=declared.path("Labels").properties().iterator();
         while (labels.hasNext()) {
             var label=labels.next();
             require(label.getValue().isTextual() && label.getValue().textValue().equals(config.getLabels().get(label.getKey())),
