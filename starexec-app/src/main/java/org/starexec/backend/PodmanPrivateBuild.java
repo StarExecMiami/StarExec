@@ -427,7 +427,7 @@ public final class PodmanPrivateBuild {
     }
 
     /** Linux providers can normalize the requested SIGTERM name to signal number 15. */
-    static void requireStopPolicy(Object signal) throws IOException {
+    static void requireDefaultStopSignal(Object signal) throws IOException {
         require("SIGTERM".equals(signal) || "TERM".equals(signal) || "15".equals(signal)
                 || Integer.valueOf(15).equals(signal),"Private build stop policy is unavailable");
     }
@@ -435,6 +435,6 @@ public final class PodmanPrivateBuild {
     /** The SDK preserves unmapped nested fields in the original inspection envelope. */
     static void requireStopPolicy(InspectContainerResponse inspection) throws IOException {
         Object config=inspection.getRawValues().get("Config");
-        requireStopPolicy(config instanceof Map<?,?> fields?fields.get("StopSignal"):null);
+        requireDefaultStopSignal(config instanceof Map<?,?> fields?fields.get("StopSignal"):null);
     }
 }

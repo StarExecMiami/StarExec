@@ -58,19 +58,19 @@ class PodmanPrivateBuildDispatchTest {
 
     @ParameterizedTest @ValueSource(strings={"SIGTERM","TERM","15"})
     void providerNormalizationPreservesTheTerminationPolicy(String signal) {
-        assertDoesNotThrow(()->PodmanPrivateBuild.requireStopPolicy(signal));
+        assertDoesNotThrow(()->PodmanPrivateBuild.requireDefaultStopSignal(signal));
     }
 
     @ParameterizedTest @ValueSource(strings={"SIGKILL","9","SIGUSR2","12","0"," 15 ","+15","15.0",""})
     void anotherOrAmbiguousProviderSignalCannotReplaceTermination(String signal) {
-        assertThrows(IOException.class,()->PodmanPrivateBuild.requireStopPolicy(signal));
+        assertThrows(IOException.class,()->PodmanPrivateBuild.requireDefaultStopSignal(signal));
     }
 
     @Test void numericProviderSignalStillRequiresExactTermination() throws Exception {
-        PodmanPrivateBuild.requireStopPolicy(Integer.valueOf(15));
-        assertThrows(IOException.class,()->PodmanPrivateBuild.requireStopPolicy((Object)null));
-        assertThrows(IOException.class,()->PodmanPrivateBuild.requireStopPolicy(15.0));
-        assertThrows(IOException.class,()->PodmanPrivateBuild.requireStopPolicy(9));
+        PodmanPrivateBuild.requireDefaultStopSignal(Integer.valueOf(15));
+        assertThrows(IOException.class,()->PodmanPrivateBuild.requireDefaultStopSignal((Object)null));
+        assertThrows(IOException.class,()->PodmanPrivateBuild.requireDefaultStopSignal(15.0));
+        assertThrows(IOException.class,()->PodmanPrivateBuild.requireDefaultStopSignal(9));
     }
 
     @ParameterizedTest @ValueSource(strings={"\"15\"","15","\"SIGTERM\"","\"TERM\""})

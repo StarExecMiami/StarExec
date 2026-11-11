@@ -97,17 +97,17 @@ public final class SolverBuildStaging {
      */
     public static BuildExecutionContext prepare(Connection con, int pairId, int attemptNo, Path parent)
             throws SQLException, IOException {
-        return prepare(con, pairId, attemptNo, parent, null);
+        return prepareWithOptionalBudget(con, pairId, attemptNo, parent, null);
     }
 
     /** Books a bounded private staging allowance before creating its directory. */
     public static BuildExecutionContext prepare(Connection con, int pairId, int attemptNo, Path parent, long maxBytes)
             throws SQLException, IOException {
         if (maxBytes < 0) throw new IllegalArgumentException("Invalid staging byte budget");
-        return prepare(con, pairId, attemptNo, parent, Long.valueOf(maxBytes));
+        return prepareWithOptionalBudget(con, pairId, attemptNo, parent, Long.valueOf(maxBytes));
     }
 
-    private static BuildExecutionContext prepare(Connection con, int pairId, int attemptNo, Path parent, Long maxBytes)
+    private static BuildExecutionContext prepareWithOptionalBudget(Connection con, int pairId, int attemptNo, Path parent, Long maxBytes)
             throws SQLException, IOException {
         return prepare(con, pairId, attemptNo, parent, maxBytes, null);
     }

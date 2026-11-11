@@ -1443,7 +1443,6 @@ public class PodmanBackend implements Backend {
                         workingDirectory,
                         logPath,
                         timestamp,
-                        attempt,
                         execIdForSlot,
                         selectedPartition,
                         build
@@ -1515,7 +1514,7 @@ public class PodmanBackend implements Backend {
      * Internal method to actually submit the job script.
      */
     private int doSubmitScript(int pairId, String jobName, String scriptPath, String workingDirectory,
-                               String logPath, long timestamp, int attempt, int execId,
+                               String logPath, long timestamp, int execId,
                                CpuPartition selectedPartition, BuildExecutionContext build) throws Exception {
         // Capture the attempt this container belongs to (#185), after JobManager has claimed
         // the pair and so after any rerun reset. It travels as a label so a monitor that
