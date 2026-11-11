@@ -7,8 +7,7 @@ import javax.ws.rs.core.Response.ResponseBuilder;
 
 /**
  * Exceptions that can be thrown from JAX-RS methods.
- * Missing resources use HTTP 404. Other error constants retain their legacy
- * HTTP 200 response.
+ * Missing and forbidden resources use HTTP 404. Internal failures use HTTP 500.
  */
 public class RESTException extends WebApplicationException {
 	private RESTException() throws UnsupportedOperationException {
@@ -27,6 +26,6 @@ public class RESTException extends WebApplicationException {
 	}
 
 	public static final RESTException NOT_FOUND = new RESTException(Status.NOT_FOUND, "not available");
-	public static final RESTException FORBIDDEN = new RESTException(Status.OK, "not available");
-	public static final RESTException INTERNAL_SERVER_ERROR = new RESTException(Status.OK, "not available");
+	public static final RESTException FORBIDDEN = new RESTException(Status.NOT_FOUND, "not available");
+	public static final RESTException INTERNAL_SERVER_ERROR = new RESTException(Status.INTERNAL_SERVER_ERROR, "not available");
 }
