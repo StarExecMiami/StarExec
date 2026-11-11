@@ -98,6 +98,7 @@ ops.txt
 **/backups/
 **/*.tar.gz
 **/*.sql
+!starexec-app/src/test/resources/schema-upgrade/v121/V0121__retain_manifest_payload_bytes.sql
 **/*.sql.gz
 **/*.backup
 

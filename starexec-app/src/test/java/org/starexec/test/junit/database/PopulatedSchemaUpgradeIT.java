@@ -46,7 +46,7 @@ class PopulatedSchemaUpgradeIT {
             try {
                 Flyway historical = Flyway.configure().dataSource(url, user, password)
                     .schemas("starexec").defaultSchema("starexec")
-                    .locations("filesystem:" + baseline, "classpath:db/upgrade/v121").target("121").load();
+                    .locations("filesystem:" + baseline, "classpath:schema-upgrade/v121").target("121").load();
                 historical.migrate();
                 assertEquals(MigrationVersion.fromVersion("121"), historical.info().current().getVersion());
                 Map<String, Integer> ids;
