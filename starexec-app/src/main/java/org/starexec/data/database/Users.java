@@ -1996,7 +1996,6 @@ public class Users {
 	 */
 	public static int add(User user) {
 		log.debug("beginning to add user...");
-		log.debug("pass = " + user.getPassword());
 		Connection con = null;
 		PreparedStatement stmt = null;
 		ResultSet rs = null;
@@ -2004,7 +2003,6 @@ public class Users {
 			con = Common.getConnection();
 
 			String hashedPass = PasswordHasher.hash(user.getPassword());
-			log.debug("hashedPass = " + hashedPass);
 			stmt = con.prepareStatement("SELECT AddUserAuthorized(?, ?, ?, ?, ?, ?, ?, ?)");
 			stmt.setString(1, user.getFirstName());
 			stmt.setString(2, user.getLastName());
@@ -2024,7 +2022,12 @@ public class Users {
 			log.debug("newid = " + user.getId());
 			return user.getId();
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			String sqlState = e instanceof SQLException ? ((SQLException) e).getSQLState() : null;
+			if (sqlState == null || !sqlState.matches("[A-Z0-9]{5}")) {
+				sqlState = "unknown";
+			}
+			log.error("add", "Failed to add user (exception: " + e.getClass().getSimpleName()
+					+ ", SQLState: " + sqlState + ")");
 			Common.doRollback(con);
 		} finally {
 			Common.safeClose(con);
