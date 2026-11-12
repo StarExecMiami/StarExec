@@ -1,0 +1,61 @@
+# =============================================================================
+# GitHub Actions Workflow: Job Runner Image Scan on Pull Requests
+# =============================================================================
+#
+# job-runner-publish.yml scans the published job-runner image and uploads the
+# result to code scanning under the category trivy-job-runner, but only on
+# pushes. GitHub's "Trivy" check on a pull request compares the PR's analyses
+# with its base branch's; with no trivy-job-runner analysis on the PR it could
+# not compare that configuration and concluded neutral on every PR.
+#
+# This workflow builds the image from the PR (amd64 only, nothing is pushed),
+# scans it with the same Trivy inputs as job-runner-publish.yml, and uploads
+# under the same category, so the check reports the PR's own findings.
+# A fork's pull request gets a read-only token and cannot upload: its scan
+# still runs and fails nothing, and its "Trivy" check stays neutral.
+# =============================================================================
+
+name: Job Runner Scan
+
+on:
+  pull_request:
+    branches: [UMprod, containerised, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: job-runner-scan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Scan Job Runner image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      LOCAL_IMAGE_TAG: starexec-job-runner:pr-${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Build image (amd64, not pushed)
+        run: docker build --file docker/job-runner.Dockerfile --tag "${LOCAL_IMAGE_TAG}" .
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE_TAG }}
+          format: 'sarif'
+          output: 'trivy-job-runner.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        if: github.event.pull_request.head.repo.fork == false
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
+        with:
+          sarif_file: 'trivy-job-runner.sarif'
+          category: 'trivy-job-runner'
