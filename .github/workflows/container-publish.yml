@@ -11,7 +11,7 @@
 #
 # Triggers:
 #   - push: to containerised/UMprod
-#   - pull_request: same branches and relevant paths — test-only, no push
+#   - pull_request: every PR to the same branches — test-only, no push
 #   - workflow_dispatch: manual execution
 #
 # Consumers:
@@ -27,16 +27,6 @@ on:
     branches: [UMprod, containerised]
   pull_request:
     branches: [UMprod, containerised]
-    paths:
-      - "starexec-app/**"
-      - "tomcat-credential-handler/**"
-      - "Dockerfile"
-      - "docker/**"
-      - "scripts/GetComputerInfo"
-      - "pom.xml"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/container-publish.yml"
   workflow_dispatch:
 
 permissions:
