@@ -7,6 +7,7 @@ import org.starexec.util.PartWrapper;
 import org.starexec.data.database.Processors;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.Processor;
+import org.starexec.data.to.Permission;
 import org.starexec.data.to.enums.ProcessorType;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.logger.StarLogger;
@@ -104,7 +105,8 @@ public class ProcessorManager extends HttpServlet {
 			}
 			// Make sure this user has the ability to add type to the space
 			int community = Integer.parseInt((String) form.get(OWNING_COMMUNITY));
-			if (!SessionUtil.getPermission(request, community).isLeader()) {
+			Permission permission = SessionUtil.getPermission(request, community);
+			if (permission == null || !permission.isLeader()) {
 				response.sendError(
 						HttpServletResponse.SC_FORBIDDEN, "Only community leaders can add types to their communities");
 
