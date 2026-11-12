@@ -151,7 +151,7 @@ jobs:
       
       - name: Scan image for vulnerabilities
         if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           # Use the first tag from metadata (most specific one)
           image-ref: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
@@ -161,7 +161,7 @@ jobs:
       
       - name: Upload Trivy scan results
         if: github.event_name != 'pull_request'
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
         continue-on-error: true
         with:
           sarif_file: 'trivy-job-runner.sarif'
