@@ -1,4 +1,4 @@
-"""Check runner scan identity and publication boundaries in the real workflows.
+"""Check Trivy scan coverage, runner identity and publication boundaries.
 
 Run with the existing PyYAML dependency:
 python3 -m unittest discover -s scripts -p 'test_runner_sarif_workflows.py'
@@ -172,6 +172,43 @@ class RunnerSarifWorkflowsTest(unittest.TestCase):
         self.assertNotIn("paths", trigger)
         self.assertNotIn("paths-ignore", trigger)
         self.assertNotIn("pull_request_target", self.workflow["on"])
+
+    def test_both_trivy_configurations_cover_every_container_target_pr(self):
+        container_path = ROOT / ".github/workflows/container-publish.yml"
+        container = yaml.load(container_path.read_text(), Loader=yaml.BaseLoader)
+        targets = set(container["on"]["pull_request"]["branches"])
+        self.assertEqual(targets, {"UMprod", "containerised"})
+        self.assertTrue(targets.issubset(self.workflow["on"]["pull_request"]["branches"]))
+        configurations = set()
+        for path, workflow in ((WORKFLOW, self.workflow), (container_path, container)):
+            with self.subTest(workflow=path.name):
+                trigger = workflow["on"]["pull_request"]
+                self.assertNotIn("paths", trigger, "CI-only and documentation PRs need both scans")
+                self.assertNotIn("paths-ignore", trigger)
+            for job in workflow["jobs"].values():
+                for step in job.get("steps", []):
+                    if step.get("uses", "").startswith("github/codeql-action/upload-sarif@"):
+                        configurations.add(step["with"]["category"])
+        self.assertEqual(configurations, {"trivy-container", "trivy-job-runner"})
+
+    def test_container_publication_remains_excluded_from_prs(self):
+        container = yaml.load(
+            (ROOT / ".github/workflows/container-publish.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
+        publish = container["jobs"]["publish"]
+        for name, result, expected in (
+            ("pull_request", "success", False), ("pull_request", "failure", False),
+            ("push", "success", True), ("push", "failure", False),
+            ("workflow_dispatch", "success", True), ("workflow_dispatch", "cancelled", False),
+        ):
+            context = event(name=name)
+            context["needs"] = {"validate": {"result": result}}
+            with self.subTest(event=name, validation=result):
+                self.assertEqual(active(publish, context), expected)
+        build = next(step for step in container["jobs"]["validate"]["steps"]
+                     if step.get("id") == "build")
+        self.assertEqual(build["with"]["push"], "false")
 
     def test_pr_build_and_scan_use_the_local_image_without_publication(self):
         context = event()
