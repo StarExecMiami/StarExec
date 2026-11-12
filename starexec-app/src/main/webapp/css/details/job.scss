@@ -234,7 +234,7 @@ table.panel {
 	width: 90px;
 }
 
-@media only screen and (max-width: 767px) {
+@include mobile {
 	#wrapper {
 		#explorer {
 			width: 100%;

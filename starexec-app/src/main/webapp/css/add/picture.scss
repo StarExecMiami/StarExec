@@ -1,6 +1,7 @@
 @use "../global/colors" as c;
 @use "../global/typography" as t;
 @use "../global/spacing" as s;
+@use "../global/mixins" as m;
 
 fieldset {
 	width: 75%;
@@ -70,7 +71,7 @@ label.error {
 	font-weight: t.$font-weight-semibold;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	.form-actions {
 		text-align: center;
 	}
