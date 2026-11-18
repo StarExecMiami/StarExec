@@ -2,7 +2,7 @@ package org.starexec.test.junit.app;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.app.RESTServices;
@@ -16,9 +16,9 @@ import org.starexec.util.SessionUtil;
 
 import javax.servlet.http.HttpServletRequest;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -70,11 +70,11 @@ public class PermissionDetailsAuthorizationTests {
 	}
 
 	private static void assertNoPersonalData(String json) {
-		assertFalse(json, json.contains(SECRET_EMAIL));
-		assertFalse(json, json.contains("email"));
-		assertFalse(json, json.contains("diskQuota"));
-		assertFalse(json, json.contains("\"user\":"));
-		assertFalse(json, json.contains("\"space\":"));
+		assertFalse(json.contains(SECRET_EMAIL), json);
+		assertFalse(json.contains("email"), json);
+		assertFalse(json.contains("diskQuota"), json);
+		assertFalse(json.contains("\"user\":"), json);
+		assertFalse(json.contains("\"space\":"), json);
 	}
 
 	@Test

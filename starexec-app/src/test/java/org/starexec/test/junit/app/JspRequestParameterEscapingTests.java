@@ -1,6 +1,6 @@
 package org.starexec.test.junit.app;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -8,8 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Static scan of JSP source (there is no JSP renderer in the unit-test classpath): request-derived values written
@@ -39,8 +39,8 @@ public class JspRequestParameterEscapingTests {
 	@Test
 	public void helpPageEscapesTheRefParameter() throws IOException {
 		String jsp = read("help.jsp");
-		assertFalse("raw ref must not be written into markup", jsp.contains("href=\"${ref}\""));
+		assertFalse(jsp.contains("href=\"${ref}\""), "raw ref must not be written into markup");
 		assertTrue(jsp.contains("<c:out value='${ref}'/>"));
-		assertTrue("c taglib must be declared", jsp.contains("prefix=\"c\""));
+		assertTrue(jsp.contains("prefix=\"c\""), "c taglib must be declared");
 	}
 }

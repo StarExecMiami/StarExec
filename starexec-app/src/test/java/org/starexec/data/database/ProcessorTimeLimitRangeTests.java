@@ -1,13 +1,13 @@
 package org.starexec.data.database;
 
-import org.junit.Test;
 import java.sql.Connection;
 
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A processor time limit must fit the column that stores it.
@@ -27,19 +27,19 @@ public class ProcessorTimeLimitRangeTests {
 
 	@Test
 	public void theColumnsWholeRangeIsStorable() {
-		assertTrue("1 is the smallest positive limit", Processors.isStorableTimeLimit(1));
-		assertTrue("the default must be storable",
-				Processors.isStorableTimeLimit(org.starexec.constants.R.PROCESSOR_TIME_LIMIT));
-		assertTrue("SMALLINT's maximum must be storable",
-				Processors.isStorableTimeLimit(Short.MAX_VALUE));
+		assertTrue(Processors.isStorableTimeLimit(1), "1 is the smallest positive limit");
+		assertTrue(Processors.isStorableTimeLimit(org.starexec.constants.R.PROCESSOR_TIME_LIMIT),
+				"the default must be storable");
+		assertTrue(Processors.isStorableTimeLimit(Short.MAX_VALUE),
+				"SMALLINT's maximum must be storable");
 		assertTrue(Processors.isStorableTimeLimit(Short.MAX_VALUE - 1));
 	}
 
 	@Test
 	public void aValueTooLargeForTheColumnIsRefused() {
 		// (short) 32768 is -32768 and (short) 40000 is -25536: both stored a negative limit.
-		assertFalse("one past SMALLINT must be refused, not wrapped",
-				Processors.isStorableTimeLimit(Short.MAX_VALUE + 1));
+		assertFalse(Processors.isStorableTimeLimit(Short.MAX_VALUE + 1),
+				"one past SMALLINT must be refused, not wrapped");
 		assertFalse(Processors.isStorableTimeLimit(40000));
 		assertFalse(Processors.isStorableTimeLimit(Integer.MAX_VALUE));
 	}
@@ -68,8 +68,8 @@ public class ProcessorTimeLimitRangeTests {
 	 */
 	@Test
 	public void zeroIsStorableBecauseTheSchemaAlreadyYieldsIt() {
-		assertTrue("a NULL time_limit reads back as 0; it must be storable",
-				Processors.isStorableTimeLimit(0));
+		assertTrue(Processors.isStorableTimeLimit(0),
+				"a NULL time_limit reads back as 0; it must be storable");
 	}
 
 	/**
@@ -90,8 +90,8 @@ public class ProcessorTimeLimitRangeTests {
 		try (MockedStatic<Common> common = Mockito.mockStatic(Common.class)) {
 			common.when(() -> Common.getConnection()).thenReturn(connection);
 
-			assertFalse("an unstorable time limit must be refused",
-					Processors.updateTimeLimit(1, 40000));
+			assertFalse(Processors.updateTimeLimit(1, 40000),
+					"an unstorable time limit must be refused");
 
 			Mockito.verify(connection, Mockito.never())
 					.prepareStatement(Mockito.contains("UpdateProcessorTimeLimit"));

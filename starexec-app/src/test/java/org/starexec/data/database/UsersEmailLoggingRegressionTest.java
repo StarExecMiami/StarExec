@@ -5,7 +5,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.postgresql.util.PSQLException;
 import org.slf4j.LoggerFactory;
@@ -20,7 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -112,7 +112,7 @@ public class UsersEmailLoggingRegressionTest {
 			}
 
 			assertNotNull(thrown);
-			assertFalse("Address leaked through exception or cause", throwableContains(thrown, address));
+			assertFalse(throwableContains(thrown, address), "Address leaked through exception or cause");
 			verify(statement).setString(2, address);
 		}
 	}
@@ -129,15 +129,15 @@ public class UsersEmailLoggingRegressionTest {
 			operation.run();
 
 			if (expectPersistedFailure) {
-				assertFalse("Expected the database failure to be logged", logs.events.isEmpty());
-				assertFalse("Expected the database failure to be persisted", persistedMessages.isEmpty());
+				assertFalse(logs.events.isEmpty(), "Expected the database failure to be logged");
+				assertFalse(persistedMessages.isEmpty(), "Expected the database failure to be persisted");
 			}
-			assertFalse("Address leaked into a formatted log message",
-					logs.events.stream().anyMatch(event -> contains(event.getFormattedMessage(), address)));
-			assertFalse("Address leaked through a logged throwable",
-					logs.events.stream().anyMatch(event -> throwableContains(event.getThrowableProxy(), address)));
-			assertFalse("Address leaked through ErrorLogs",
-					persistedMessages.stream().anyMatch(message -> contains(message, address)));
+			assertFalse(logs.events.stream().anyMatch(event -> contains(event.getFormattedMessage(), address)),
+					"Address leaked into a formatted log message");
+			assertFalse(logs.events.stream().anyMatch(event -> throwableContains(event.getThrowableProxy(), address)),
+					"Address leaked through a logged throwable");
+			assertFalse(persistedMessages.stream().anyMatch(message -> contains(message, address)),
+					"Address leaked through ErrorLogs");
 		}
 	}
 

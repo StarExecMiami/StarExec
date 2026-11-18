@@ -21,13 +21,19 @@
 	margin-top: -2px; // Optical adjustment for baseline alignment
 }
 
+// Dialog markup waits in the page until a script opens it. A stylesheet rule
+// hides it from the first paint, including dialogs that scripts add later;
+// jQuery UI's dialog() shows the element when it opens it.
+.hiddenDialog {
+	display: none;
+}
+
 // 4. Layout Components
 @import "global/common";
 @import "global/page";
 @import "global/pageHeader";
 @import "global/nav";
 @import "global/footer";
-@import "global/component-layout";
 
 // 5. UI Components
 @import "global/message";

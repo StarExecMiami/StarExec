@@ -1,13 +1,14 @@
 package org.starexec.test.junit.util;
 
-import org.junit.Assert;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.util.CsrfUtil;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.*;
 
 /**
@@ -19,7 +20,7 @@ public class CsrfUtilTests {
     private HttpServletRequest mockRequest;
     private HttpSession mockSession;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         mockRequest = mock(HttpServletRequest.class);
         mockSession = mock(HttpSession.class);
@@ -29,10 +30,10 @@ public class CsrfUtilTests {
 
     @Test
     public void testConstantsExist() {
-        Assert.assertNotNull("CSRF_TOKEN_ATTR should exist", CsrfUtil.CSRF_TOKEN_ATTR);
-        Assert.assertNotNull("CSRF_TOKEN_PARAM should exist", CsrfUtil.CSRF_TOKEN_PARAM);
-        Assert.assertEquals("csrfToken", CsrfUtil.CSRF_TOKEN_ATTR);
-        Assert.assertEquals("csrfToken", CsrfUtil.CSRF_TOKEN_PARAM);
+        Assertions.assertNotNull(CsrfUtil.CSRF_TOKEN_ATTR, "CSRF_TOKEN_ATTR should exist");
+        Assertions.assertNotNull(CsrfUtil.CSRF_TOKEN_PARAM, "CSRF_TOKEN_PARAM should exist");
+        Assertions.assertEquals("csrfToken", CsrfUtil.CSRF_TOKEN_ATTR);
+        Assertions.assertEquals("csrfToken", CsrfUtil.CSRF_TOKEN_PARAM);
     }
 
     // ===== getOrCreateToken Tests =====
@@ -44,8 +45,8 @@ public class CsrfUtilTests {
 
         String token = CsrfUtil.getOrCreateToken(mockRequest);
 
-        Assert.assertNotNull("Token should not be null", token);
-        Assert.assertFalse("Token should not be empty", token.isEmpty());
+        Assertions.assertNotNull(token, "Token should not be null");
+        Assertions.assertFalse(token.isEmpty(), "Token should not be empty");
         verify(mockSession).setAttribute(eq(CsrfUtil.CSRF_TOKEN_ATTR), anyString());
     }
 
@@ -57,7 +58,7 @@ public class CsrfUtilTests {
 
         String token = CsrfUtil.getOrCreateToken(mockRequest);
 
-        Assert.assertEquals("Should return existing token", existingToken, token);
+        Assertions.assertEquals(existingToken, token, "Should return existing token");
         verify(mockSession, never()).setAttribute(anyString(), any());
     }
 
@@ -88,9 +89,9 @@ public class CsrfUtilTests {
         CsrfUtil.getOrCreateToken(request1);
         CsrfUtil.getOrCreateToken(request2);
 
-        Assert.assertNotNull("First token should be set", tokens[0]);
-        Assert.assertNotNull("Second token should be set", tokens[1]);
-        Assert.assertNotEquals("Tokens should be unique", tokens[0], tokens[1]);
+        Assertions.assertNotNull(tokens[0], "First token should be set");
+        Assertions.assertNotNull(tokens[1], "Second token should be set");
+        Assertions.assertNotEquals(tokens[0], tokens[1], "Tokens should be unique");
     }
 
     // ===== validateToken Tests =====
@@ -102,7 +103,7 @@ public class CsrfUtilTests {
         when(mockSession.getAttribute(CsrfUtil.CSRF_TOKEN_ATTR)).thenReturn(token);
         when(mockRequest.getParameter(CsrfUtil.CSRF_TOKEN_PARAM)).thenReturn(token);
 
-        Assert.assertTrue("Valid token should validate", CsrfUtil.validateToken(mockRequest));
+        Assertions.assertTrue(CsrfUtil.validateToken(mockRequest), "Valid token should validate");
     }
 
     @Test
@@ -111,14 +112,14 @@ public class CsrfUtilTests {
         when(mockSession.getAttribute(CsrfUtil.CSRF_TOKEN_ATTR)).thenReturn("session-token");
         when(mockRequest.getParameter(CsrfUtil.CSRF_TOKEN_PARAM)).thenReturn("submitted-token");
 
-        Assert.assertFalse("Mismatched token should not validate", CsrfUtil.validateToken(mockRequest));
+        Assertions.assertFalse(CsrfUtil.validateToken(mockRequest), "Mismatched token should not validate");
     }
 
     @Test
     public void testValidateToken_NoSession() {
         when(mockRequest.getSession(false)).thenReturn(null);
 
-        Assert.assertFalse("Should fail when no session exists", CsrfUtil.validateToken(mockRequest));
+        Assertions.assertFalse(CsrfUtil.validateToken(mockRequest), "Should fail when no session exists");
     }
 
     @Test
@@ -127,7 +128,7 @@ public class CsrfUtilTests {
         when(mockSession.getAttribute(CsrfUtil.CSRF_TOKEN_ATTR)).thenReturn(null);
         when(mockRequest.getParameter(CsrfUtil.CSRF_TOKEN_PARAM)).thenReturn("some-token");
 
-        Assert.assertFalse("Should fail when session has no token", CsrfUtil.validateToken(mockRequest));
+        Assertions.assertFalse(CsrfUtil.validateToken(mockRequest), "Should fail when session has no token");
     }
 
     @Test
@@ -136,7 +137,7 @@ public class CsrfUtilTests {
         when(mockSession.getAttribute(CsrfUtil.CSRF_TOKEN_ATTR)).thenReturn("session-token");
         when(mockRequest.getParameter(CsrfUtil.CSRF_TOKEN_PARAM)).thenReturn(null);
 
-        Assert.assertFalse("Should fail when no token submitted", CsrfUtil.validateToken(mockRequest));
+        Assertions.assertFalse(CsrfUtil.validateToken(mockRequest), "Should fail when no token submitted");
     }
 
     @Test
@@ -145,7 +146,7 @@ public class CsrfUtilTests {
         when(mockSession.getAttribute(CsrfUtil.CSRF_TOKEN_ATTR)).thenReturn("session-token");
         when(mockRequest.getParameter(CsrfUtil.CSRF_TOKEN_PARAM)).thenReturn("");
 
-        Assert.assertFalse("Should fail when empty token submitted", CsrfUtil.validateToken(mockRequest));
+        Assertions.assertFalse(CsrfUtil.validateToken(mockRequest), "Should fail when empty token submitted");
     }
 
     // ===== validateTokenOrThrow Tests =====
@@ -161,20 +162,20 @@ public class CsrfUtilTests {
         CsrfUtil.validateTokenOrThrow(mockRequest);
     }
 
-    @Test(expected = SecurityException.class)
+    @Test
     public void testValidateTokenOrThrow_InvalidToken() {
         when(mockRequest.getSession(false)).thenReturn(mockSession);
         when(mockSession.getAttribute(CsrfUtil.CSRF_TOKEN_ATTR)).thenReturn("session-token");
         when(mockRequest.getParameter(CsrfUtil.CSRF_TOKEN_PARAM)).thenReturn("wrong-token");
 
-        CsrfUtil.validateTokenOrThrow(mockRequest);
+        assertThrows(SecurityException.class, () -> CsrfUtil.validateTokenOrThrow(mockRequest));
     }
 
-    @Test(expected = SecurityException.class)
+    @Test
     public void testValidateTokenOrThrow_NoSession() {
         when(mockRequest.getSession(false)).thenReturn(null);
 
-        CsrfUtil.validateTokenOrThrow(mockRequest);
+        assertThrows(SecurityException.class, () -> CsrfUtil.validateTokenOrThrow(mockRequest));
     }
 
     // ===== regenerateToken Tests =====
@@ -185,8 +186,8 @@ public class CsrfUtilTests {
 
         String token = CsrfUtil.regenerateToken(mockRequest);
 
-        Assert.assertNotNull("New token should not be null", token);
-        Assert.assertFalse("New token should not be empty", token.isEmpty());
+        Assertions.assertNotNull(token, "New token should not be null");
+        Assertions.assertFalse(token.isEmpty(), "New token should not be empty");
         verify(mockSession).setAttribute(eq(CsrfUtil.CSRF_TOKEN_ATTR), eq(token));
     }
 
@@ -198,8 +199,8 @@ public class CsrfUtilTests {
 
         String newToken = CsrfUtil.regenerateToken(mockRequest);
 
-        Assert.assertNotNull("New token should not be null", newToken);
-        Assert.assertNotEquals("New token should be different", oldToken, newToken);
+        Assertions.assertNotNull(newToken, "New token should not be null");
+        Assertions.assertNotEquals(oldToken, newToken, "New token should be different");
         verify(mockSession).setAttribute(eq(CsrfUtil.CSRF_TOKEN_ATTR), eq(newToken));
     }
 
@@ -218,10 +219,10 @@ public class CsrfUtilTests {
 
         // Test with token that differs at the end
         when(mockRequest.getParameter(CsrfUtil.CSRF_TOKEN_PARAM)).thenReturn(attackToken1);
-        Assert.assertFalse(CsrfUtil.validateToken(mockRequest));
+        Assertions.assertFalse(CsrfUtil.validateToken(mockRequest));
 
         // Test with completely different token
         when(mockRequest.getParameter(CsrfUtil.CSRF_TOKEN_PARAM)).thenReturn(attackToken2);
-        Assert.assertFalse(CsrfUtil.validateToken(mockRequest));
+        Assertions.assertFalse(CsrfUtil.validateToken(mockRequest));
     }
 }

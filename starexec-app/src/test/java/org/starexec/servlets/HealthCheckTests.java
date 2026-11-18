@@ -1,7 +1,7 @@
 package org.starexec.servlets;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import javax.servlet.http.HttpServletRequest;
@@ -11,8 +11,8 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.reflect.Method;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * These tests lean on a property of the unit-test JVM: {@code Common.dataPool} is
@@ -28,7 +28,7 @@ public class HealthCheckTests {
 	private HttpServletResponse response;
 	private StringWriter body;
 
-	@Before
+	@BeforeEach
 	public void setUp() throws IOException {
 		servlet = new HealthCheck();
 		request = Mockito.mock(HttpServletRequest.class);
@@ -93,7 +93,7 @@ public class HealthCheckTests {
 
 		String text = body.toString().toLowerCase();
 		assertEquals("not ready", text.trim());
-		assertTrue("body must not name the database or driver",
-			!text.contains("postgres") && !text.contains("jdbc") && !text.contains("sql"));
+		assertTrue(!text.contains("postgres") && !text.contains("jdbc") && !text.contains("sql"),
+			"body must not name the database or driver");
 	}
 }

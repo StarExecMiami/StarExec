@@ -20,9 +20,9 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.Backend;
@@ -34,7 +34,7 @@ import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.to.Job;
 import org.starexec.data.to.JobPair;
-import org.testng.Assert;
+import org.junit.jupiter.api.Assertions;
 
 /**
  * Unit tests for LocalBackend job execution.
@@ -56,7 +56,7 @@ public class LocalBackendTests {
     // Poll interval for checking conditions
     private static final int POLL_INTERVAL_MS = 100;
 
-    @Before
+    @BeforeEach
     public void initialize() throws IOException {
         tempDir = Files.createTempDirectory("localbackend_test");
         Path scriptPath = tempDir.resolve("fake_job.sh");
@@ -79,7 +79,7 @@ public class LocalBackendTests {
         );
     }
 
-    @After
+    @AfterEach
     public void cleanup() {
         // Ensure backend is properly shut down to release resources
         if (backend != null) {
@@ -102,12 +102,12 @@ public class LocalBackendTests {
             newLog.toString()
         );
         String status = backend.getRunningJobsStatus();
-        Assert.assertTrue(status.contains("new_job.sh"));
+        Assertions.assertTrue(status.contains("new_job.sh"));
     }
 
     @Test
     public void killJobTest() {
-        Assert.assertTrue(backend.killPair(existingJobId));
+        Assertions.assertTrue(backend.killPair(existingJobId));
 
         // Use Awaitility to wait for job removal with deterministic polling
         // This replaces the flaky Thread.sleep(6000) pattern
@@ -119,14 +119,14 @@ public class LocalBackendTests {
             );
 
         String status = backend.getRunningJobsStatus();
-        Assert.assertFalse(status.contains("fake_job.sh"));
+        Assertions.assertFalse(status.contains("fake_job.sh"));
     }
 
     @Test
     public void killNonExistantJobTest() {
-        Assert.assertFalse(backend.killPair(-1)); // Should return false for non-existent
+        Assertions.assertFalse(backend.killPair(-1)); // Should return false for non-existent
         String status = backend.getRunningJobsStatus();
-        Assert.assertTrue(status.contains(existingJobId + "")); // Existing job still there
+        Assertions.assertTrue(status.contains(existingJobId + "")); // Existing job still there
     }
 
     @Test
@@ -146,7 +146,7 @@ public class LocalBackendTests {
             newWork.toString(),
             newLog.toString()
         );
-        Assert.assertTrue(backend.killAll());
+        Assertions.assertTrue(backend.killAll());
 
         // Use Awaitility to wait for all jobs to be removed
         // This replaces the flaky Thread.sleep(6000) pattern
@@ -162,22 +162,22 @@ public class LocalBackendTests {
             });
 
         String status = backend.getRunningJobsStatus();
-        Assert.assertFalse(status.contains("fake_job.sh"));
-        Assert.assertFalse(status.contains("another_job.sh"));
+        Assertions.assertFalse(status.contains("fake_job.sh"));
+        Assertions.assertFalse(status.contains("another_job.sh"));
     }
 
     @Test
     public void getRunningJobsStatusTest() {
         String status = backend.getRunningJobsStatus();
-        Assert.assertTrue(status.contains("LocalBackend Status"));
-        Assert.assertTrue(status.contains("fake_job.sh"));
+        Assertions.assertTrue(status.contains("LocalBackend Status"));
+        Assertions.assertTrue(status.contains("fake_job.sh"));
     }
 
     @Test
     public void getQueuesTest() {
         String[] queues = backend.getQueues();
-        Assert.assertEquals(queues.length, 1);
-        Assert.assertEquals(queues[0], R.DEFAULT_QUEUE_NAME);
+        Assertions.assertEquals(1, queues.length);
+        Assertions.assertEquals(R.DEFAULT_QUEUE_NAME, queues[0]);
     }
 
     // ------------------------------------------------------------------
@@ -248,7 +248,7 @@ public class LocalBackendTests {
         ThreadPoolExecutor configuredExecutor =
             (ThreadPoolExecutor) executorField.get(backend);
         configuredExecutor.shutdownNow();
-        Assert.assertTrue(configuredExecutor.awaitTermination(2, TimeUnit.SECONDS));
+        Assertions.assertTrue(configuredExecutor.awaitTermination(2, TimeUnit.SECONDS));
 
         var rejectionHandler = callerRuns
             ? new ThreadPoolExecutor.CallerRunsPolicy()
@@ -278,9 +278,9 @@ public class LocalBackendTests {
                 Thread.currentThread().interrupt();
             }
         });
-        Assert.assertTrue(workerStarted.await(2, TimeUnit.SECONDS));
+        Assertions.assertTrue(workerStarted.await(2, TimeUnit.SECONDS));
         executor.execute(() -> { });
-        Assert.assertEquals(executor.getQueue().size(), 1,
+        Assertions.assertEquals(1, executor.getQueue().size(),
             "the single worker and bounded queue must both be occupied");
     }
 
@@ -338,9 +338,9 @@ public class LocalBackendTests {
             executeJob(job);
             verifyNoScientificStatusWrites(jobPairs);
         }
-        Assert.assertEquals(jobMonitor().getTrackedPairCount(), 1,
+        Assertions.assertEquals(1, jobMonitor().getTrackedPairCount(),
             "the unresolved pair must remain tracked for late evidence");
-        Assert.assertFalse(Files.exists(output.resolve("status.json")));
+        Assertions.assertFalse(Files.exists(output.resolve("status.json")));
     }
 
     @Test
@@ -360,7 +360,7 @@ public class LocalBackendTests {
             executeJob(job);
             verifyNoScientificStatusWrites(jobPairs);
         }
-        Assert.assertEquals(jobMonitor().getTrackedPairCount(), 1,
+        Assertions.assertEquals(1, jobMonitor().getTrackedPairCount(),
             "process lifecycle failure alone must leave the pair unresolved");
     }
 
@@ -390,7 +390,7 @@ public class LocalBackendTests {
             executeJob(job);
             verifyNoScientificStatusWrites(jobPairs);
         }
-        Assert.assertEquals(jobMonitor().getTrackedPairCount(), 1,
+        Assertions.assertEquals(1, jobMonitor().getTrackedPairCount(),
             "an implementation failure must leave the scientific result unresolved");
     }
 
@@ -418,13 +418,13 @@ public class LocalBackendTests {
             verifyNoScientificStatusWrites(jobPairs);
         }
 
-        Assert.assertFalse(active.containsKey(104),
+        Assertions.assertFalse(active.containsKey(104),
             "a refused attempt must not remain forever in activeJobs");
         Field completedAt = job.getClass().getDeclaredField("completedAt");
         completedAt.setAccessible(true);
-        Assert.assertTrue(completedAt.getLong(job) > 0,
+        Assertions.assertTrue(completedAt.getLong(job) > 0,
             "a refused attempt must still record operational completion");
-        Assert.assertEquals(jobMonitor().getTrackedPairCount(), 0,
+        Assertions.assertEquals(0, jobMonitor().getTrackedPairCount(),
             "cleanup failed before monitor registration");
     }
 
@@ -449,16 +449,16 @@ public class LocalBackendTests {
             try {
                 int execId = backend.submitScript(
                     42, script.toString(), workDir.toString(), logPath.toString());
-                Assert.fail("a failed attempt read must defer, not return " + execId);
+                Assertions.fail("a failed attempt read must defer, not return " + execId);
             } catch (SubmissionDeferredException expected) {
-                Assert.assertTrue(expected.getMessage().contains("42"),
+                Assertions.assertTrue(expected.getMessage().contains("42"),
                     "the message names the pair: " + expected.getMessage());
-                Assert.assertTrue(expected.getMessage().contains("connection reset"),
+                Assertions.assertTrue(expected.getMessage().contains("connection reset"),
                     "the message names the cause: " + expected.getMessage());
             }
         }
 
-        Assert.assertEquals(active.size(), before,
+        Assertions.assertEquals(before, active.size(),
             "a deferred submission must not register an execution");
 
         // Nothing is left reserved: the same pair submits once the database recovers.
@@ -466,7 +466,7 @@ public class LocalBackendTests {
             pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
             int execId = backend.submitScript(
                 42, script.toString(), workDir.toString(), logPath.toString());
-            Assert.assertTrue(execId > 0, "the next pass submits the pair");
+            Assertions.assertTrue(execId > 0, "the next pass submits the pair");
         }
     }
 
@@ -504,7 +504,7 @@ public class LocalBackendTests {
                         42, script.toString(), workDir.toString(), logPath.toString());
                 }
             });
-            Assert.assertTrue(submitStarted.await(2, TimeUnit.SECONDS));
+            Assertions.assertTrue(submitStarted.await(2, TimeUnit.SECONDS));
 
             Future<Integer> submittedJob = submission;
             await()
@@ -518,10 +518,10 @@ public class LocalBackendTests {
                 // Both monitor-holding control paths must stay responsive.
                 return !backend.killPair(Integer.MIN_VALUE) && backend.killAll();
             });
-            Assert.assertTrue(controlStarted.await(2, TimeUnit.SECONDS));
+            Assertions.assertTrue(controlStarted.await(2, TimeUnit.SECONDS));
             boolean controlCompleted = false;
             try {
-                Assert.assertTrue(control.get(500, TimeUnit.MILLISECONDS));
+                Assertions.assertTrue(control.get(500, TimeUnit.MILLISECONDS));
                 controlCompleted = true;
             } catch (TimeoutException expectedWhenCallerRuns) {
                 // Released below so the baseline failure does not strand a solver process.
@@ -532,7 +532,7 @@ public class LocalBackendTests {
             try {
                 submission.get(2, TimeUnit.SECONDS);
             } catch (ExecutionException e) {
-                Assert.assertTrue(e.getCause() instanceof SubmissionDeferredException,
+                Assertions.assertTrue(e.getCause() instanceof SubmissionDeferredException,
                     "saturation must use the scheduler's non-terminal deferral signal");
                 deferred = true;
             }
@@ -540,16 +540,16 @@ public class LocalBackendTests {
                 control.get(2, TimeUnit.SECONDS);
             }
 
-            Assert.assertTrue(controlCompleted,
+            Assertions.assertTrue(controlCompleted,
                 "a saturated submission must not hold the backend monitor while a solver runs");
-            Assert.assertTrue(deferred,
+            Assertions.assertTrue(deferred,
                 "the explicit saturation contract is to defer the submission");
-            Assert.assertFalse(Files.exists(solverStarted),
+            Assertions.assertFalse(Files.exists(solverStarted),
                 "a saturated solver must not run on its submitting thread");
-            Assert.assertTrue(backend.getActiveExecutionIds().isEmpty(),
+            Assertions.assertTrue(backend.getActiveExecutionIds().isEmpty(),
                 "a rejected or completed submission must not leave a tracked execution ID");
-            Assert.assertEquals(((LocalBackend) backend).getQueuedJobCount(), 0);
-            Assert.assertEquals(((LocalBackend) backend).getRunningJobCount(), 0);
+            Assertions.assertEquals(0, ((LocalBackend) backend).getQueuedJobCount());
+            Assertions.assertEquals(0, ((LocalBackend) backend).getRunningJobCount());
 
             saturatedExecutor.getQueue().clear();
             int queuedId;
@@ -558,24 +558,24 @@ public class LocalBackendTests {
                 queuedId = backend.submitScript(
                     42, script.toString(), workDir.toString(), logPath.toString());
             }
-            Assert.assertTrue(queuedId > 0, "the freed queue slot must accept a submission");
-            Assert.assertTrue(backend.killPair(queuedId),
+            Assertions.assertTrue(queuedId > 0, "the freed queue slot must accept a submission");
+            Assertions.assertTrue(backend.killPair(queuedId),
                 "a job must be cancellable immediately after submitScript returns");
             releaseWorker.countDown();
             await()
                 .atMost(2, TimeUnit.SECONDS)
                 .until(() -> saturatedExecutor.getQueue().isEmpty());
-            Assert.assertFalse(Files.exists(solverStarted),
+            Assertions.assertFalse(Files.exists(solverStarted),
                 "an immediately cancelled queued job must never execute");
-            Assert.assertTrue(backend.getActiveExecutionIds().isEmpty());
+            Assertions.assertTrue(backend.getActiveExecutionIds().isEmpty());
 
             saturatedExecutor.shutdown();
             try {
                 backend.submitScript(
                     42, script.toString(), workDir.toString(), logPath.toString());
-                Assert.fail("a job-pair submission during shutdown must be deferred");
+                Assertions.fail("a job-pair submission during shutdown must be deferred");
             } catch (SubmissionDeferredException expected) {
-                Assert.assertTrue(backend.getActiveExecutionIds().isEmpty(),
+                Assertions.assertTrue(backend.getActiveExecutionIds().isEmpty(),
                     "shutdown rejection must not leave a tracked execution ID");
             }
         } finally {
@@ -612,10 +612,10 @@ public class LocalBackendTests {
             int execId = backend.submitScript(
                 -1, script.toString(), workDir.toString(), logPath.toString());
 
-            Assert.assertEquals(execId, -1,
+            Assertions.assertEquals(-1, execId,
                 "a saturated maintenance submission reports an error instead of running inline");
-            Assert.assertFalse(Files.exists(solverStarted));
-            Assert.assertTrue(backend.getActiveExecutionIds().isEmpty());
+            Assertions.assertFalse(Files.exists(solverStarted));
+            Assertions.assertTrue(backend.getActiveExecutionIds().isEmpty());
         } finally {
             releaseWorker.countDown();
             saturatedExecutor.shutdownNow();
@@ -632,7 +632,7 @@ public class LocalBackendTests {
         ThreadPoolExecutor configuredExecutor =
             (ThreadPoolExecutor) executorField.get(backend);
         configuredExecutor.shutdownNow();
-        Assert.assertTrue(configuredExecutor.awaitTermination(2, TimeUnit.SECONDS));
+        Assertions.assertTrue(configuredExecutor.awaitTermination(2, TimeUnit.SECONDS));
         ThreadPoolExecutor failing = new ThreadPoolExecutor(
             1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(1)) {
             @Override
@@ -649,8 +649,8 @@ public class LocalBackendTests {
             int execId = backend.submitScript(
                 42, script.toString(), workDir.toString(), logPath.toString());
 
-            Assert.assertEquals(execId, -1);
-            Assert.assertTrue(backend.getActiveExecutionIds().isEmpty(),
+            Assertions.assertEquals(-1, execId);
+            Assertions.assertTrue(backend.getActiveExecutionIds().isEmpty(),
                 "a failed hand-off must not leave a tracked execution ID");
         } finally {
             failing.shutdownNow();
@@ -676,10 +676,10 @@ public class LocalBackendTests {
             int execId = backend.submitScript(
                 -1, script.toString(), workDir.toString(), logPath.toString());
 
-            Assert.assertTrue(execId > 0);
-            Assert.assertTrue(Files.exists(solverStarted),
+            Assertions.assertTrue(execId > 0);
+            Assertions.assertTrue(Files.exists(solverStarted),
                 "the fixture must prove CallerRunsPolicy executed the saturated task");
-            Assert.assertFalse(backend.getActiveExecutionIds().contains(execId),
+            Assertions.assertFalse(backend.getActiveExecutionIds().contains(execId),
                 "a task completed inside execute() must not be registered afterward");
         } finally {
             releaseWorker.countDown();
@@ -740,9 +740,9 @@ public class LocalBackendTests {
         jobMonitor().stop(); // no polling: the pair stays "finished but not yet ingested"
         runFinishedJob(201, 5201, "finished-not-ingested", TERMINAL_STATUS_JSON);
 
-        Assert.assertTrue(backend.getActiveExecutionIds().contains(201),
+        Assertions.assertTrue(backend.getActiveExecutionIds().contains(201),
             "the backend must keep answering for a pair whose terminal result is unrecorded");
-        Assert.assertFalse(sweepMarkedBroken(pairWithExecId(5201, 201)).contains(5201),
+        Assertions.assertFalse(sweepMarkedBroken(pairWithExecId(5201, 201)).contains(5201),
             "a finished pair awaiting ingestion must not be recorded as ERROR_SUBMIT_FAIL");
     }
 
@@ -761,8 +761,8 @@ public class LocalBackendTests {
         block.setAccessible(true);
         tracked.put(5202, block.invoke(state, "invalid snapshot"));
 
-        Assert.assertTrue(backend.getActiveExecutionIds().contains(202));
-        Assert.assertFalse(sweepMarkedBroken(pairWithExecId(5202, 202)).contains(5202),
+        Assertions.assertTrue(backend.getActiveExecutionIds().contains(202));
+        Assertions.assertFalse(sweepMarkedBroken(pairWithExecId(5202, 202)).contains(5202),
             "a pair held for intervention keeps its retained results and stays unresolved");
     }
 
@@ -774,13 +774,13 @@ public class LocalBackendTests {
         runFinishedJob(203, 5203, "orphan-no-status", null);
         runFinishedJob(204, 5204, "orphan-running-status", status(4));
 
-        Assert.assertFalse(backend.getActiveExecutionIds().contains(203));
-        Assert.assertFalse(backend.getActiveExecutionIds().contains(204));
+        Assertions.assertFalse(backend.getActiveExecutionIds().contains(203));
+        Assertions.assertFalse(backend.getActiveExecutionIds().contains(204));
         List<Integer> broken = sweepMarkedBroken(
             pairWithExecId(5203, 203), pairWithExecId(5204, 204), pairWithExecId(5205, 205));
-        Assert.assertTrue(broken.contains(5203), "no status.json: orphan");
-        Assert.assertTrue(broken.contains(5204), "non-terminal status.json and no process: orphan");
-        Assert.assertTrue(broken.contains(5205), "unknown execution: orphan");
+        Assertions.assertTrue(broken.contains(5203), "no status.json: orphan");
+        Assertions.assertTrue(broken.contains(5204), "non-terminal status.json and no process: orphan");
+        Assertions.assertTrue(broken.contains(5205), "unknown execution: orphan");
     }
 
     @Test
@@ -788,10 +788,10 @@ public class LocalBackendTests {
         waitForFixtureJob();
         jobMonitor().stop();
         runFinishedJob(206, 5206, "ingested", TERMINAL_STATUS_JSON);
-        Assert.assertTrue(backend.getActiveExecutionIds().contains(206));
+        Assertions.assertTrue(backend.getActiveExecutionIds().contains(206));
 
         jobMonitor().clearPairTracking(5206); // what retiring the pair does to the monitor
-        Assert.assertFalse(backend.getActiveExecutionIds().contains(206),
+        Assertions.assertFalse(backend.getActiveExecutionIds().contains(206),
             "the retained id must be released once the monitor no longer holds the result");
     }
 
@@ -831,7 +831,7 @@ public class LocalBackendTests {
 
         int execId = backend.submitScript(
             -1, script.toString(), workDir.toString(), output.resolve("job.log").toString());
-        Assert.assertTrue(execId > 0);
+        Assertions.assertTrue(execId > 0);
 
         Process wrapper = null;
         List<ProcessHandle> tree = List.of();
@@ -853,18 +853,18 @@ public class LocalBackendTests {
             processField.setAccessible(true);
             wrapper = (Process) processField.get(job);
             tree = wrapper.descendants().toList();
-            Assert.assertFalse(tree.isEmpty(), "the fixture must have a live descendant");
+            Assertions.assertFalse(tree.isEmpty(), "the fixture must have a live descendant");
 
-            Assert.assertTrue(backend.killPair(execId));
+            Assertions.assertTrue(backend.killPair(execId));
 
             for (ProcessHandle member : tree) {
-                Assert.assertFalse(member.isAlive(),
+                Assertions.assertFalse(member.isAlive(),
                     "killPair left descendant " + member.pid() + " running after the wrapper died");
             }
             // killTree waits on the ProcessHandles' onExit(); Process.isAlive() is updated by a
             // separate reaper thread and can lag it by an instant, so wait for the wrapper instead
             // of sampling it once.
-            Assert.assertTrue(wrapper.waitFor(MAX_WAIT_SECONDS, TimeUnit.SECONDS),
+            Assertions.assertTrue(wrapper.waitFor(MAX_WAIT_SECONDS, TimeUnit.SECONDS),
                 "the wrapper must have exited once killPair returned");
             await().atMost(MAX_WAIT_SECONDS, TimeUnit.SECONDS)
                 .pollInterval(10, TimeUnit.MILLISECONDS)
@@ -913,9 +913,9 @@ public class LocalBackendTests {
         int total = maxConcurrency();
         executeJob(job);
 
-        Assert.assertEquals(coreQueue().size(), total - 1,
+        Assertions.assertEquals(total - 1, coreQueue().size(),
             "the core of a job whose tree is still alive must not be offered back");
-        Assert.assertEquals(backend.killPairConfirmed(301), Backend.KillOutcome.UNPROVEN,
+        Assertions.assertEquals(Backend.KillOutcome.UNPROVEN, backend.killPairConfirmed(301),
             "a surviving descendant means the kill is not proven");
 
         alive.set(false);
@@ -923,18 +923,18 @@ public class LocalBackendTests {
         await().atMost(MAX_WAIT_SECONDS, TimeUnit.SECONDS)
             .pollInterval(10, TimeUnit.MILLISECONDS)
             .until(() -> coreQueue().size() == total);
-        Assert.assertEquals(backend.killPairConfirmed(301), Backend.KillOutcome.CONFIRMED_SAFE);
+        Assertions.assertEquals(Backend.KillOutcome.CONFIRMED_SAFE, backend.killPairConfirmed(301));
     }
 
     /** Everything the job script can actually emit, both directions. */
     @Test
     public void everyStatusTheJobScriptEmitsIsClassifiedCorrectly() throws Exception {
         // STATUS_RUNNING: the pair is alive and must not be killed.
-        Assert.assertFalse(reportedComplete(status(4)), "STATUS_RUNNING is not a result");
+        Assertions.assertFalse(reportedComplete(status(4)), "STATUS_RUNNING is not a result");
 
         // The results a pair may be left holding.
         for (int terminal : new int[]{7, 11, 12, 13, 14, 15, 16, 17, 18, 24, 25, 26}) {
-            Assert.assertTrue(reportedComplete(status(terminal)), terminal + " is a result");
+            Assertions.assertTrue(reportedComplete(status(terminal)), terminal + " is a result");
         }
     }
 
@@ -944,16 +944,16 @@ public class LocalBackendTests {
      */
     @Test
     public void theStatesThatMeanWorkIsStillOwedAreNotResults() throws Exception {
-        Assert.assertFalse(reportedComplete(status(19)), "STATUS_PROCESSING_RESULTS");
-        Assert.assertFalse(reportedComplete(status(20)), "STATUS_PAUSED");
-        Assert.assertFalse(reportedComplete(status(22)), "STATUS_PROCESSING");
+        Assertions.assertFalse(reportedComplete(status(19)), "STATUS_PROCESSING_RESULTS");
+        Assertions.assertFalse(reportedComplete(status(20)), "STATUS_PAUSED");
+        Assertions.assertFalse(reportedComplete(status(22)), "STATUS_PROCESSING");
     }
 
     /** An unrecognised code resolves to STATUS_UNKNOWN, which is not a result. */
     @Test
     public void anUnrecognisedStatusIsNotAResult() throws Exception {
-        Assert.assertFalse(reportedComplete(status(99)), "99 is not a defined status");
-        Assert.assertFalse(reportedComplete(status(27)), "27 is past the highest defined status");
+        Assertions.assertFalse(reportedComplete(status(99)), "99 is not a defined status");
+        Assertions.assertFalse(reportedComplete(status(27)), "27 is past the highest defined status");
     }
 
     /**
@@ -965,18 +965,18 @@ public class LocalBackendTests {
         // The case that discriminates: the status field is complete, so a regex matches it and
         // reads 7 as a finished run -- but the document is not, so the write is still in
         // progress. The old implementation returned true here and killed a live process.
-        Assert.assertFalse(
+        Assertions.assertFalse(
             reportedComplete("{\"pairId\":1,\"status\":7,\"stageNum"),
             "a complete status field in an incomplete document is not a result");
-        Assert.assertFalse(
+        Assertions.assertFalse(
             reportedComplete("{\"pairId\":1,\"status\":14,\"stageNumber\":1,\"timesta"),
             "truncated in a later field is still an incomplete document");
 
         // These were already refused before the change; kept so the whole shape is covered.
-        Assert.assertFalse(reportedComplete("{\"pairId\":1,\"stat"), "truncated before the field");
-        Assert.assertFalse(reportedComplete("{\"pairId\":1,\"status\":1"), "truncated mid-number");
-        Assert.assertFalse(reportedComplete("{ this is not json"), "malformed");
-        Assert.assertFalse(reportedComplete("{\"pairId\":1}"), "no status field");
-        Assert.assertFalse(reportedComplete(null), "no status.json at all");
+        Assertions.assertFalse(reportedComplete("{\"pairId\":1,\"stat"), "truncated before the field");
+        Assertions.assertFalse(reportedComplete("{\"pairId\":1,\"status\":1"), "truncated mid-number");
+        Assertions.assertFalse(reportedComplete("{ this is not json"), "malformed");
+        Assertions.assertFalse(reportedComplete("{\"pairId\":1}"), "no status field");
+        Assertions.assertFalse(reportedComplete(null), "no status.json at all");
     }
 }

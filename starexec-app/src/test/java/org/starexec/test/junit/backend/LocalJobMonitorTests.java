@@ -1,11 +1,11 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -13,9 +13,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.LocalJobMonitor;
@@ -44,7 +44,7 @@ public class LocalJobMonitorTests {
 
     private LocalJobMonitor monitor;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         monitor = new LocalJobMonitor();
     }
@@ -53,7 +53,7 @@ public class LocalJobMonitorTests {
      * The constructor allocates a scheduler thread whether or not the monitor is ever
      * started, so a test that just drops the instance leaks one per test method.
      */
-    @After
+    @AfterEach
     public void tearDown() {
         if (monitor != null) {
             monitor.stop();
@@ -80,13 +80,13 @@ public class LocalJobMonitorTests {
 
     private long generationOf(int pairId) throws Exception {
         Object state = stateFor(pairId);
-        assertNotNull("no tracking entry for pairId=" + pairId, state);
+        assertNotNull(state, "no tracking entry for pairId=" + pairId);
         return (Long) field(state, "generation");
     }
 
     private String logDirOf(int pairId) throws Exception {
         Object state = stateFor(pairId);
-        assertNotNull("no tracking entry for pairId=" + pairId, state);
+        assertNotNull(state, "no tracking entry for pairId=" + pairId);
         return (String) field(state, "logDir");
     }
 
@@ -187,11 +187,11 @@ public class LocalJobMonitorTests {
 
         assertEquals(42.5, statDouble(stats, "wallclockTime"), 0.0001);
         assertEquals(
-            "cpuTime is absent from stats.json, so var.out's value must survive rather"
-                + " than being overwritten with 0",
             41.25,
             statDouble(stats, "cpuTime"),
-            0.0001
+            0.0001,
+            "cpuTime is absent from stats.json, so var.out's value must survive rather"
+                + " than being overwritten with 0"
         );
     }
 
@@ -216,9 +216,9 @@ public class LocalJobMonitorTests {
         ));
 
         assertEquals(
-            "Watcher.hh:396 writes this line with '='; a parser expecting ':' records 0",
             4096L,
-            statLong(stats, "maxResidentSetSize")
+            statLong(stats, "maxResidentSetSize"),
+            "Watcher.hh:396 writes this line with '='; a parser expecting ':' records 0"
         );
     }
 
@@ -252,8 +252,8 @@ public class LocalJobMonitorTests {
         assertEquals(9.90467e-05, statDouble(stats, "wallclockTime"), 0.0);
         assertEquals(1234570.0, statDouble(stats, "cpuTime"), 0.0);
         assertEquals(4.1e-05, statDouble(stats, "userTime"), 0.0);
-        assertEquals("an upper-case E is an exponent in JSON too", 4.22e-05,
-            statDouble(stats, "systemTime"), 0.0);
+        assertEquals(4.22e-05, statDouble(stats, "systemTime"),
+            0.0, "an upper-case E is an exponent in JSON too");
     }
 
     // ------------------------------------------------------------------
@@ -292,29 +292,29 @@ public class LocalJobMonitorTests {
         ));
 
         assertEquals(
-            "the fields applied before the malformed one must still come from"
-                + " stats.json -- the block does run, it just cannot finish",
             43.75,
             statDouble(stats, "wallclockTime"),
-            0.0001
+            0.0001,
+            "the fields applied before the malformed one must still come from"
+                + " stats.json -- the block does run, it just cannot finish"
         );
         assertEquals(
-            "cpuTime must fall back to var.out's measurement, not to 0",
             41.25,
             statDouble(stats, "cpuTime"),
-            0.0001
+            0.0001,
+            "cpuTime must fall back to var.out's measurement, not to 0"
         );
         assertEquals(
-            "userTime proves the parse threw rather than failing to match: a"
-                + " non-matching value would have left the block running and"
-                + " applied stats.json's 77.0 here",
             8.0,
             statDouble(stats, "userTime"),
-            0.0001
+            0.0001,
+            "userTime proves the parse threw rather than failing to match: a"
+                + " non-matching value would have left the block running and"
+                + " applied stats.json's 77.0 here"
         );
         assertNull(
-            "hostname is applied last, so it is only null if the block aborted",
-            statString(stats, "hostname")
+            statString(stats, "hostname"),
+            "hostname is applied last, so it is only null if the block aborted"
         );
     }
 
@@ -356,20 +356,20 @@ public class LocalJobMonitorTests {
             Object stats = parseRunSolverStats(outputDir(varOut, watcherOut, c[1]));
 
             assertNull(
-                why + ": the block must abort, leaving hostname unapplied",
-                statString(stats, "hostname")
+                statString(stats, "hostname"),
+                why + ": the block must abort, leaving hostname unapplied"
             );
             assertEquals(
-                why + ": cpuTime must keep var.out's measurement rather than 0",
                 41.25,
                 statDouble(stats, "cpuTime"),
-                0.0001
+                0.0001,
+                why + ": cpuTime must keep var.out's measurement rather than 0"
             );
             assertEquals(
-                why + ": maxResidentSetSize must keep watcher.out's measurement"
-                    + " rather than 0",
                 4096L,
-                statLong(stats, "maxResidentSetSize")
+                statLong(stats, "maxResidentSetSize"),
+                why + ": maxResidentSetSize must keep watcher.out's measurement"
+                    + " rather than 0"
             );
         }
     }
@@ -386,24 +386,24 @@ public class LocalJobMonitorTests {
     @Test
     public void truncatedStatusFileIsNotReadableRatherThanAnError() throws Exception {
         assertNull(
-            "a half-written status.json must not resolve to a status",
-            readStatusFile(dirContaining("{\"status\": 7, \"stageNum"), 1)
+            readStatusFile(dirContaining("{\"status\": 7, \"stageNum"), 1),
+            "a half-written status.json must not resolve to a status"
         );
     }
 
     @Test
     public void statusFileWithoutTheStatusFieldIsNotReadable() throws Exception {
         assertNull(
-            "a status.json lacking its status field must not resolve to a status",
-            readStatusFile(dirContaining("{\"stageNumber\": 1}"), 2)
+            readStatusFile(dirContaining("{\"stageNumber\": 1}"), 2),
+            "a status.json lacking its status field must not resolve to a status"
         );
     }
 
     @Test
     public void nonObjectStatusFileIsNotReadable() throws Exception {
         assertNull(
-            "content that is not a JSON object must not resolve to a status",
-            readStatusFile(dirContaining("not json at all"), 3)
+            readStatusFile(dirContaining("not json at all"), 3),
+            "content that is not a JSON object must not resolve to a status"
         );
     }
 
@@ -412,7 +412,7 @@ public class LocalJobMonitorTests {
         // The inverse error matters as much: this must not start returning null for
         // files that are perfectly good.
         Object ss = readStatusFile(dirContaining("{\"status\": 7, \"stageNumber\": 2}"), 4);
-        assertNotNull("a complete status.json must still parse", ss);
+        assertNotNull(ss, "a complete status.json must still parse");
 
         Field stage = ss.getClass().getDeclaredField("stageNumber");
         stage.setAccessible(true);
@@ -428,8 +428,8 @@ public class LocalJobMonitorTests {
             readStatusFile(empty, 5);
             fail("an absent status file has no stage or solver result to record");
         } catch (java.lang.reflect.InvocationTargetException e) {
-            assertTrue("expected an evidence refusal, got " + e.getCause(),
-                e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
+            assertTrue(e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException,
+                "expected an evidence refusal, got " + e.getCause());
         }
     }
 
@@ -445,10 +445,10 @@ public class LocalJobMonitorTests {
         monitor.clearPairTracking(98);
 
         assertFalse(
+            pairs().containsKey(98),
             "one removal must clear the directory, the processed status and the"
                 + " parse-failure count together -- they used to be three facts that"
-                + " could be left half-cleared",
-            pairs().containsKey(98)
+                + " could be left half-cleared"
         );
     }
 
@@ -477,9 +477,9 @@ public class LocalJobMonitorTests {
         long second = generationOf(42);
 
         assertTrue(
+            second > first,
             "a rerun must be distinguishable from the run it replaces; without a"
-                + " strictly increasing token nothing tells run N from run N+1",
-            second > first
+                + " strictly increasing token nothing tells run N from run N+1"
         );
         assertEquals("/tmp/run-2", logDirOf(42));
     }
@@ -498,10 +498,10 @@ public class LocalJobMonitorTests {
         monitor.registerJob("/tmp/run-n-plus-1", 42);
 
         assertFalse(
-            "a poll belonging to the superseded run must not retire the new run",
-            retire(42, runN)
+            retire(42, runN),
+            "a poll belonging to the superseded run must not retire the new run"
         );
-        assertTrue("the rerun must still be tracked", pairs().containsKey(42));
+        assertTrue(pairs().containsKey(42), "the rerun must still be tracked");
         assertEquals("/tmp/run-n-plus-1", logDirOf(42));
     }
 
@@ -514,7 +514,7 @@ public class LocalJobMonitorTests {
         monitor.registerJob("/tmp/run-n", 43);
         Object runN = stateFor(43);
 
-        assertTrue("an uncontested terminal result must retire the pair", retire(43, runN));
+        assertTrue(retire(43, runN), "an uncontested terminal result must retire the pair");
         assertFalse(pairs().containsKey(43));
     }
 
@@ -526,13 +526,13 @@ public class LocalJobMonitorTests {
     public void isCurrentGoesFalseOnceARerunLands() throws Exception {
         monitor.registerJob("/tmp/run-n", 44);
         Object runN = stateFor(44);
-        assertTrue("the run's own generation must be current before any rerun",
-            isCurrent(44, runN));
+        assertTrue(isCurrent(44, runN),
+            "the run's own generation must be current before any rerun");
 
         monitor.registerJob("/tmp/run-n-plus-1", 44);
 
-        assertFalse("run N must not be allowed to write after run N+1 has started",
-            isCurrent(44, runN));
+        assertFalse(isCurrent(44, runN),
+            "run N must not be allowed to write after run N+1 has started");
     }
 
     @Test
@@ -547,16 +547,16 @@ public class LocalJobMonitorTests {
         Object runNext = stateFor(45);
 
         assertEquals(
-            "a rerun starts its own unreadable-file budget; a count carried over could"
-                + " fail the new run on its first bad read",
             0,
-            ((Integer) field(runNext, "parseFailures")).intValue()
+            ((Integer) field(runNext, "parseFailures")).intValue(),
+            "a rerun starts its own unreadable-file budget; a count carried over could"
+                + " fail the new run on its first bad read"
         );
         assertEquals(
-            "a failure reported by the superseded run must not be counted against"
-                + " the new one",
             -1,
-            recordParseFailure(45, runN)
+            recordParseFailure(45, runN),
+            "a failure reported by the superseded run must not be counted against"
+                + " the new one"
         );
     }
 
@@ -597,8 +597,8 @@ public class LocalJobMonitorTests {
             updateDatabase(50, status, 1);
             return false;
         } catch (StageStatusSnapshots.InvalidSnapshotException refused) {
-            assertTrue("the refusal must name the status: " + refused.getMessage(),
-                    refused.getMessage().contains(status.toString()));
+            assertTrue(refused.getMessage().contains(status.toString()),
+                    "the refusal must name the status: " + refused.getMessage());
             return true;
         } catch (Throwable anythingElse) {
             // Got past the guard and failed further in, for want of a database.
@@ -615,18 +615,18 @@ public class LocalJobMonitorTests {
     public void onlyRunningOrATerminalResultCanBeRecordedAsAPairStatus() throws Throwable {
         for (StatusCode code : StatusCode.values()) {
             boolean allowed = code == StatusCode.STATUS_RUNNING || code.isTerminalExecutionResult();
-            assertEquals(code + " (" + code.getVal() + ")", !allowed, isRefused(code));
+            assertEquals(!allowed, isRefused(code), code + " (" + code.getVal() + ")");
         }
     }
 
     /** Named individually, so a regression says which state leaked rather than only that one did. */
     @Test
     public void theThreeStatesThatMeanWorkIsStillOwedAreRefusedAsAPairStatus() throws Throwable {
-        assertTrue("19 STATUS_PROCESSING_RESULTS",
-                isRefused(StatusCode.STATUS_PROCESSING_RESULTS));
-        assertTrue("20 STATUS_PAUSED", isRefused(StatusCode.STATUS_PAUSED));
-        assertTrue("22 STATUS_PROCESSING -- the one post-processing promotes to COMPLETE",
-                isRefused(StatusCode.STATUS_PROCESSING));
+        assertTrue(isRefused(StatusCode.STATUS_PROCESSING_RESULTS),
+                "19 STATUS_PROCESSING_RESULTS");
+        assertTrue(isRefused(StatusCode.STATUS_PAUSED), "20 STATUS_PAUSED");
+        assertTrue(isRefused(StatusCode.STATUS_PROCESSING),
+                "22 STATUS_PROCESSING -- the one post-processing promotes to COMPLETE");
     }
 
     /** The terminal error statuses 23-26 are results a pair may legitimately be left holding. */
@@ -637,7 +637,7 @@ public class LocalJobMonitorTests {
                 StatusCode.ERROR_BENCH_DEPENDENCY_MISSING,  // 24
                 StatusCode.ERROR_PRE_PROCESSOR,             // 25
                 StatusCode.ERROR_POST_PROCESSOR}) {         // 26
-            assertFalse(code + " is a result and must remain recordable", isRefused(code));
+            assertFalse(isRefused(code), code + " is a result and must remain recordable");
         }
     }
 
@@ -655,8 +655,8 @@ public class LocalJobMonitorTests {
             fail("STATUS_PROCESSING must be refused");
         } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
             for (StackTraceElement f : expected.getStackTrace()) {
-                assertFalse("the refusal must precede any JobPairs call, but the stack shows "
-                                + f, f.getClassName().contains("JobPairs"));
+                assertFalse(f.getClassName().contains("JobPairs"), "the refusal must precede any JobPairs call, but the stack shows "
+                                + f);
             }
         }
     }
@@ -764,8 +764,8 @@ public class LocalJobMonitorTests {
             fail("a non-terminal status on a stage the pair has passed must be refused");
         } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
             assertTrue(
-                "wrong refusal: " + expected.getMessage(),
-                expected.getMessage().contains("carries status 22"));
+                expected.getMessage().contains("carries status 22"),
+                "wrong refusal: " + expected.getMessage());
         }
     }
 }

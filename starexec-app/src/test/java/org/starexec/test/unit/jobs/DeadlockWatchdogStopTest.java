@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -10,8 +9,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * {@code stopDeadlockWatchdog} in the shipped helper (B7).
@@ -26,8 +26,8 @@ public class DeadlockWatchdogStopTest {
 
 	private static final Path SGE = Path.of("src/main/java/org/starexec/config/sge");
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	/** Before the first watchdog of the script's life starts, the variable is unset. */
 	@Test
@@ -37,8 +37,8 @@ public class DeadlockWatchdogStopTest {
 				+ "stopDeadlockWatchdog\n"
 				+ "echo T-COMPLETED\n");
 
-		assertEquals("must not abort under set -u:\n" + r.out, 0, r.exit);
-		assertTrue(r.out, r.out.contains("T-COMPLETED"));
+		assertEquals(0, r.exit, "must not abort under set -u:\n" + r.out);
+		assertTrue(r.out.contains("T-COMPLETED"), r.out);
 	}
 
 	/** A running watchdog is terminated and its PID is forgotten. */
@@ -53,9 +53,9 @@ public class DeadlockWatchdogStopTest {
 				+ "if kill -0 \"$W\" 2>/dev/null; then echo T-ALIVE; kill \"$W\"; else echo T-STOPPED; fi\n"
 				+ "echo \"T-PID|${KILL_DEADLOCKED_JOB_PAIR_PID}|\"\n");
 
-		assertEquals(r.out, 0, r.exit);
-		assertTrue("the watchdog must be stopped:\n" + r.out, r.out.contains("T-STOPPED"));
-		assertTrue("the PID must be cleared:\n" + r.out, r.out.contains("T-PID||"));
+		assertEquals(0, r.exit, r.out);
+		assertTrue(r.out.contains("T-STOPPED"), "the watchdog must be stopped:\n" + r.out);
+		assertTrue(r.out.contains("T-PID||"), "the PID must be cleared:\n" + r.out);
 	}
 
 	/**
@@ -76,16 +76,16 @@ public class DeadlockWatchdogStopTest {
 				+ "unset -f kill\n"
 				+ "echo T-COMPLETED\n");
 
-		assertEquals(r.out, 0, r.exit);
-		assertTrue(r.out, r.out.contains("T-COMPLETED"));
-		assertTrue("the second call must not signal the stale PID:\n" + r.out,
-				!r.out.contains("T-SIGNALED"));
+		assertEquals(0, r.exit, r.out);
+		assertTrue(r.out.contains("T-COMPLETED"), r.out);
+		assertTrue(!r.out.contains("T-SIGNALED"),
+				"the second call must not signal the stale PID:\n" + r.out);
 	}
 
 	// ----------------------------------------------------------------- harness
 
 	private Result runWithHelper(String body) throws Exception {
-		Path dir = folder.newFolder("wd-" + System.nanoTime()).toPath();
+		Path dir = newFolder(folder, "wd-" + System.nanoTime()).toPath();
 		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
 		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
 
@@ -108,7 +108,7 @@ public class DeadlockWatchdogStopTest {
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "command must not hang");
 		return new Result(p.exitValue(), out);
 	}
 

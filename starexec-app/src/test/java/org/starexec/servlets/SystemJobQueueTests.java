@@ -1,6 +1,6 @@
 package org.starexec.servlets;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
@@ -23,7 +23,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * The jobs StarExec creates on a user's behalf -- the test job for a newly uploaded solver, and the
@@ -93,8 +93,8 @@ public class SystemJobQueueTests {
 			Job job = mocks.added();
 			assertEquals(2, job.getQueue().getId());
 			StageAttributes stage = job.getStageAttributesByStageNumber(1);
-			assertEquals("the build job's cpu limit is its queue's", 111, stage.getCpuTimeout());
-			assertEquals("and so is its wallclock limit", 222, stage.getWallclockTimeout());
+			assertEquals(111, stage.getCpuTimeout(), "the build job's cpu limit is its queue's");
+			assertEquals(222, stage.getWallclockTimeout(), "and so is its wallclock limit");
 		}
 	}
 
@@ -190,7 +190,7 @@ public class SystemJobQueueTests {
 
 		Job added() {
 			List<Job> all = added.getAllValues();
-			assertEquals("exactly one job is added", 1, all.size());
+			assertEquals(1, all.size(), "exactly one job is added");
 			return all.get(0);
 		}
 

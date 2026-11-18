@@ -1,9 +1,9 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,10 +11,11 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Base64;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * What a build job's helpers leave behind once {@code starexec_build} has run: the built solver and its
@@ -28,8 +29,8 @@ import static org.junit.Assert.assertTrue;
  */
 public class SolverBuildCopyBackTest {
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	@Test
 	public void theBuiltSolverIsCopiedBackWithoutItsBuildScript() throws Exception {
@@ -40,10 +41,10 @@ public class SolverBuildCopyBackTest {
 		assertEquals("BUILT", Files.readString(h.built.resolve("bin/probe-solver")));
 		assertEquals("RUN", Files.readString(h.built.resolve("bin/starexec_run_default")));
 		assertEquals("SOURCE", Files.readString(h.built.resolve("src/README")));
-		assertFalse("the build script is not part of the built solver", Files.exists(h.built.resolve("starexec_build")));
-		assertEquals("the uploaded source stays for a rebuild", "BUILD SCRIPT",
-				Files.readString(h.solverSrc.resolve("starexec_build")));
-		assertFalse("the dummy benchmark's file is deleted", Files.exists(h.bench));
+		assertFalse(Files.exists(h.built.resolve("starexec_build")), "the build script is not part of the built solver");
+		assertEquals("BUILD SCRIPT", Files.readString(h.solverSrc.resolve("starexec_build")),
+				"the uploaded source stays for a rebuild");
+		assertFalse(Files.exists(h.bench), "the dummy benchmark's file is deleted");
 	}
 
 	@Test
@@ -87,7 +88,7 @@ public class SolverBuildCopyBackTest {
 		Result r = h.run("copySolverBack");
 
 		r.assertFinished();
-		assertFalse("the server records the build, not the job script:\n" + r.out, r.out.contains("T-DB|"));
+		assertFalse(r.out.contains("T-DB|"), "the server records the build, not the job script:\n" + r.out);
 	}
 
 	@Test
@@ -124,13 +125,13 @@ public class SolverBuildCopyBackTest {
 
 		Result r = h.run("copySolverBack");
 
-		assertNotEquals("the copy must fail the pair:\n" + r.out, 0, r.exit);
-		assertFalse(r.out, r.out.contains("T-DONE"));
-		assertTrue("the refusal must say why:\n" + r.out, r.out.contains("does not end in _src"));
+		assertNotEquals(0, r.exit, "the copy must fail the pair:\n" + r.out);
+		assertFalse(r.out.contains("T-DONE"), r.out);
+		assertTrue(r.out.contains("does not end in _src"), "the refusal must say why:\n" + r.out);
 		try (var entries = Files.list(h.built)) {
-			assertEquals("nothing is copied", 0, entries.count());
+			assertEquals(0, entries.count(), "nothing is copied");
 		}
-		assertTrue("nothing is deleted", Files.exists(h.bench));
+		assertTrue(Files.exists(h.bench), "nothing is deleted");
 	}
 
 	/**
@@ -148,11 +149,11 @@ public class SolverBuildCopyBackTest {
 		Result r = h.run("checkCache; printf 'T-PATH|%s|%s\\n' \"$SOLVER_PATH\" \"$SOLVER_CACHED\"; copySolverBack");
 
 		r.assertFinished();
-		assertTrue("the build must read its solver from the source:\n" + r.out,
-				r.out.contains("T-PATH|" + h.solverSrc + "|0\n"));
+		assertTrue(r.out.contains("T-PATH|" + h.solverSrc + "|0\n"),
+				"the build must read its solver from the source:\n" + r.out);
 		assertEquals("BUILT", Files.readString(h.built.resolve("bin/probe-solver")));
-		assertEquals("the cached copy is left as it was", "CACHED RUN",
-				Files.readString(h.cache.resolve("bin/starexec_run_default")));
+		assertEquals("CACHED RUN", Files.readString(h.cache.resolve("bin/starexec_run_default")),
+				"the cached copy is left as it was");
 	}
 
 	/** A run pair still copies its solver from the cache. */
@@ -165,7 +166,7 @@ public class SolverBuildCopyBackTest {
 		Result r = h.run("checkCache; printf 'T-PATH|%s|%s\\n' \"$SOLVER_PATH\" \"$SOLVER_CACHED\"");
 
 		r.assertFinished();
-		assertTrue("a run pair must use the cached copy:\n" + r.out, r.out.contains("T-PATH|" + h.cache + "|1\n"));
+		assertTrue(r.out.contains("T-PATH|" + h.cache + "|1\n"), "a run pair must use the cached copy:\n" + r.out);
 	}
 
 	@Test
@@ -174,12 +175,12 @@ public class SolverBuildCopyBackTest {
 		Result r = h.run("cleanUpAfterKilledBuildJob");
 
 		r.assertFinished();
-		assertEquals("a failed build's log is what its owner needs most", "BUILD OUTPUT",
-				Files.readString(h.buildLog));
-		assertFalse("the server records the build, not the job script:\n" + r.out, r.out.contains("T-DB|"));
-		assertFalse("the dummy benchmark's file is deleted", Files.exists(h.bench));
+		assertEquals("BUILD OUTPUT", Files.readString(h.buildLog),
+				"a failed build's log is what its owner needs most");
+		assertFalse(r.out.contains("T-DB|"), "the server records the build, not the job script:\n" + r.out);
+		assertFalse(Files.exists(h.bench), "the dummy benchmark's file is deleted");
 		try (var entries = Files.list(h.built)) {
-			assertEquals("a failed build copies no solver", 0, entries.count());
+			assertEquals(0, entries.count(), "a failed build copies no solver");
 		}
 	}
 
@@ -211,8 +212,8 @@ public class SolverBuildCopyBackTest {
 		r.assertFinished();
 		assertBuildLogNotSaved(h, r);
 		assertEquals("BUILT", Files.readString(h.built.resolve("bin/probe-solver")));
-		assertTrue(r.out, r.out.contains("T-LOG|solver copied back to " + h.built + "\n"));
-		assertFalse("the dummy benchmark's file is deleted", Files.exists(h.bench));
+		assertTrue(r.out.contains("T-LOG|solver copied back to " + h.built + "\n"), r.out);
+		assertFalse(Files.exists(h.bench), "the dummy benchmark's file is deleted");
 	}
 
 	/** The copy fails instead: the log's path is a directory that holds a directory named as the copy would be. */
@@ -226,8 +227,8 @@ public class SolverBuildCopyBackTest {
 		r.assertFinished();
 		assertBuildLogNotSaved(h, r);
 		assertEquals("BUILT", Files.readString(h.built.resolve("bin/probe-solver")));
-		assertTrue(r.out, r.out.contains("T-LOG|solver copied back to " + h.built + "\n"));
-		assertFalse("the dummy benchmark's file is deleted", Files.exists(h.bench));
+		assertTrue(r.out.contains("T-LOG|solver copied back to " + h.built + "\n"), r.out);
+		assertFalse(Files.exists(h.bench), "the dummy benchmark's file is deleted");
 	}
 
 	/** A failed build's cleanup saves its log the same way, and still deletes the build's helper benchmark. */
@@ -240,12 +241,12 @@ public class SolverBuildCopyBackTest {
 
 		r.assertFinished();
 		assertBuildLogNotSaved(h, r);
-		assertFalse("the dummy benchmark's file is deleted", Files.exists(h.bench));
+		assertFalse(Files.exists(h.bench), "the dummy benchmark's file is deleted");
 	}
 
 	private static void assertBuildLogNotSaved(Harness h, Result r) {
-		assertTrue("a build log that cannot be saved must be reported:\n" + r.out,
-				r.out.contains("T-LOG|the build log could not be saved in " + h.buildLog.getParent() + "\n"));
+		assertTrue(r.out.contains("T-LOG|the build log could not be saved in " + h.buildLog.getParent() + "\n"),
+				"a build log that cannot be saved must be reported:\n" + r.out);
 	}
 
 	private static final class Harness {
@@ -263,9 +264,9 @@ public class SolverBuildCopyBackTest {
 		boolean buildJob = true;
 
 		/** Laid out as an upload and a finished starexec_build leave it, for solver 7 and pair 42. */
-		Harness(TemporaryFolder folder, boolean spaces) throws Exception {
+		Harness(File folder, boolean spaces) throws Exception {
 			String s = spaces ? " " : "-";
-			root = folder.newFolder("fixture").toPath();
+			root = newFolder(folder, "fixture").toPath();
 			shared = Files.createDirectory(root.resolve("shared" + s + "data"));
 			Path solverDir = Files.createDirectories(shared.resolve("Solvers/3/probe" + s + "solver"));
 			solverSrc = Files.createDirectories(solverDir.resolve("20261025-09.15.48.756_src"));
@@ -336,11 +337,11 @@ public class SolverBuildCopyBackTest {
 			builder.directory(root.toFile()).redirectErrorStream(true).redirectOutput(log.toFile());
 			Process process = builder.start();
 			try {
-				assertTrue("the helper must finish", process.waitFor(20, TimeUnit.SECONDS));
+				assertTrue(process.waitFor(20, TimeUnit.SECONDS), "the helper must finish");
 				return new Result(process.exitValue(), Files.readString(log));
 			} finally {
 				process.destroyForcibly();
-				assertTrue("the helper must be reaped", process.waitFor(5, TimeUnit.SECONDS));
+				assertTrue(process.waitFor(5, TimeUnit.SECONDS), "the helper must be reaped");
 			}
 		}
 
@@ -359,8 +360,8 @@ public class SolverBuildCopyBackTest {
 		}
 
 		void assertFinished() {
-			assertEquals("the helper must not fail:\n" + out, 0, exit);
-			assertTrue("the helper must return:\n" + out, out.contains("T-DONE"));
+			assertEquals(0, exit, "the helper must not fail:\n" + out);
+			assertTrue(out.contains("T-DONE"), "the helper must return:\n" + out);
 		}
 	}
 }

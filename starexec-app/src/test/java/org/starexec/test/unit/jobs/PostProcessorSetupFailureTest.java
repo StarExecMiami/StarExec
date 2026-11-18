@@ -1,10 +1,8 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -14,8 +12,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * Failures while preparing a post-processor are attributed to that post-processor and stage.
@@ -25,14 +24,12 @@ import static org.junit.Assert.assertTrue;
  * failed. Each parameter deterministically fails one setup operation and checks the terminal file
  * consumed by the container monitors.
  */
-@RunWith(Parameterized.class)
 public class PostProcessorSetupFailureTest {
 
 	private static final Path SGE = Path.of("src/main/java/org/starexec/config/sge");
 	private static final int ERROR_POST_PROCESSOR = 26;
 	private static final int STAGE = 3;
 
-	@Parameterized.Parameters(name = "{0}")
 	public static Object[][] setupFailures() {
 		return new Object[][] {
 				{"create-directory",
@@ -63,19 +60,17 @@ public class PostProcessorSetupFailureTest {
 								+ "}\n"}
 		};
 	}
-
-	@Parameterized.Parameter(0)
 	public String operation;
-
-	@Parameterized.Parameter(1)
 	public String failureInjection;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
-	@Test
-	public void setupFailureNamesThePostProcessorAndCurrentStage() throws Exception {
-		Path root = folder.newFolder(operation).toPath();
+	@MethodSource("setupFailures")
+	@ParameterizedTest(name = "{0}")
+	public void setupFailureNamesThePostProcessorAndCurrentStage(String operation, String failureInjection) throws Exception {
+		initPostProcessorSetupFailureTest(operation, failureInjection);
+		Path root = newFolder(folder, operation).toPath();
 		Path sge = root.resolve("sge");
 		Path output = root.resolve("evidence");
 		Path postProcessor = root.resolve("uploaded-postprocessor");
@@ -119,20 +114,20 @@ public class PostProcessorSetupFailureTest {
 		File file = root.resolve("run.sh").toFile();
 		Files.writeString(file.toPath(), script);
 		Result parse = exec(Bash.PATH, "-n", file.getAbsolutePath());
-		assertEquals("generated script must parse:\n" + parse.output, 0, parse.exit);
+		assertEquals(0, parse.exit, "generated script must parse:\n" + parse.output);
 
 		Result run = exec(Bash.PATH, file.getAbsolutePath());
-		assertTrue("the injected setup failure must stop copyOutput:\n" + run.output, run.exit != 0);
+		assertTrue(run.exit != 0, "the injected setup failure must stop copyOutput:\n" + run.output);
 
 		Path statusFile = output.resolve("status.json");
-		assertTrue("the failure must leave terminal evidence:\n" + run.output,
-				Files.isRegularFile(statusFile));
+		assertTrue(Files.isRegularFile(statusFile),
+				"the failure must leave terminal evidence:\n" + run.output);
 		String status = Files.readString(statusFile);
-		assertEquals("the component that failed", ERROR_POST_PROCESSOR, field(status, "status"));
-		assertEquals("the stage whose post-processor was being prepared", STAGE,
-				field(status, "stageNumber"));
+		assertEquals(ERROR_POST_PROCESSOR, field(status, "status"), "the component that failed");
+		assertEquals(STAGE, field(status, "stageNumber"),
+				"the stage whose post-processor was being prepared");
 		Path snapshotFile = output.resolve("stage-status").resolve(STAGE + ".json");
-		assertTrue("the per-stage evidence must be published", Files.isRegularFile(snapshotFile));
+		assertTrue(Files.isRegularFile(snapshotFile), "the per-stage evidence must be published");
 		String snapshot = Files.readString(snapshotFile);
 		assertEquals(ERROR_POST_PROCESSOR, field(snapshot, "status"));
 		assertEquals(STAGE, field(snapshot, "stageNumber"));
@@ -140,7 +135,7 @@ public class PostProcessorSetupFailureTest {
 
 	private static int field(String json, String name) {
 		Matcher matcher = Pattern.compile("\\\"" + name + "\\\"\\s*:\\s*(-?\\d+)").matcher(json);
-		assertTrue(name + " must be present in " + json, matcher.find());
+		assertTrue(matcher.find(), name + " must be present in " + json);
 		try {
 			return Integer.parseInt(matcher.group(1));
 		} catch (NumberFormatException e) {
@@ -154,7 +149,7 @@ public class PostProcessorSetupFailureTest {
 		ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
 		Process process = builder.start();
 		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", process.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(process.waitFor(60, TimeUnit.SECONDS), "command must not hang");
 		return new Result(process.exitValue(), output);
 	}
 
@@ -166,5 +161,10 @@ public class PostProcessorSetupFailureTest {
 			this.exit = exit;
 			this.output = output;
 		}
+	}
+
+	public void initPostProcessorSetupFailureTest(String operation, String failureInjection) {
+		this.operation = operation;
+		this.failureInjection = failureInjection;
 	}
 }

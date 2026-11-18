@@ -1,10 +1,9 @@
 package org.starexec.data.database;
 
 import org.apache.commons.io.FileUtils;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
@@ -23,11 +22,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntUnaryOperator;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mockStatic;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * A benchmark copy that is not added leaves no file behind, including when its user is deleted
@@ -42,8 +42,8 @@ public class BenchmarkCopyCleanupTest {
 	private static final int OWNER = 5;
 	private static final int SPACE = 3;
 
-	@Rule
-	public TemporaryFolder tmp = new TemporaryFolder();
+	@TempDir
+	public File tmp;
 
 	private final AtomicBoolean ownerExists = new AtomicBoolean(true);
 	private final AtomicInteger inserts = new AtomicInteger();
@@ -52,9 +52,9 @@ public class BenchmarkCopyCleanupTest {
 	/** The id the n-th insert returns (counting from 1), or -1 for a failed insert. */
 	private IntUnaryOperator insert = n -> 90 + n;
 
-	@Before
+	@BeforeEach
 	public void setUp() throws IOException {
-		root = tmp.newFolder("Benchmarks");
+		root = newFolder(tmp, "Benchmarks");
 		neighbour = new File(root, "6/20261018-10.00.00.000/other.smt2");
 		write(neighbour, "(check-sat)\n");
 	}
@@ -80,23 +80,23 @@ public class BenchmarkCopyCleanupTest {
 
 		assertEquals(-1, id);
 		assertEquals(1, inserts.get());
-		assertArrayEquals("no directory is left", new File[0], ownerDirectories());
-		assertTrue("the original is untouched", new File(original.getPath()).isFile());
+		assertArrayEquals(new File[0], ownerDirectories(), "no directory is left");
+		assertTrue(new File(original.getPath()).isFile(), "the original is untouched");
 	}
 
 	@Test
 	public void aCopyWhoseFileCannotBeCopiedLeavesNoDirectory() throws Exception {
 		Benchmark original = original(33, "a.smt2");
 		// A directory where the file should be: the copy itself fails.
-		File unreadable = new File(tmp.getRoot(), "originals/b.smt2");
+		File unreadable = new File(tmp, "originals/b.smt2");
 		Files.createDirectories(unreadable.toPath());
 		original.setPath(unreadable.getAbsolutePath());
 
 		int id = copy(original);
 
 		assertEquals(-1, id);
-		assertEquals("nothing is inserted", 0, inserts.get());
-		assertArrayEquals("no directory is left", new File[0], ownerDirectories());
+		assertEquals(0, inserts.get(), "nothing is inserted");
+		assertArrayEquals(new File[0], ownerDirectories(), "no directory is left");
 	}
 
 	/**
@@ -116,9 +116,9 @@ public class BenchmarkCopyCleanupTest {
 		List<Integer> ids = copy(originals);
 
 		assertEquals(Arrays.asList(-1, -1), ids);
-		assertFalse("nothing is left under the deleted user's benchmark directory",
-				new File(root, "" + OWNER).exists());
-		assertTrue("another user's benchmark is untouched", neighbour.isFile());
+		assertFalse(new File(root, "" + OWNER).exists(),
+				"nothing is left under the deleted user's benchmark directory");
+		assertTrue(neighbour.isFile(), "another user's benchmark is untouched");
 	}
 
 	/** Users.deleteUser's end: the row is gone and the user's benchmark directory is deleted. */
@@ -133,7 +133,7 @@ public class BenchmarkCopyCleanupTest {
 
 	/** A benchmark of another user, outside the owner's directory. */
 	private Benchmark original(int id, String name) throws IOException {
-		File file = new File(tmp.getRoot(), "originals/" + id + "/" + name);
+		File file = new File(tmp, "originals/" + id + "/" + name);
 		write(file, "(check-sat)\n");
 		Processor type = new Processor();
 		type.setId(1);

@@ -4,11 +4,10 @@ import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.apache.commons.io.FileUtils;
-import org.junit.Assume;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.UploadJobQueue;
@@ -35,10 +34,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mockStatic;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * An upload job whose user is deleted while the worker downloads or extracts its archive leaves
@@ -61,8 +61,8 @@ public class UploadJobWorkerDeletedOwnerTest {
 	private static final long JOB_ID = 42L;
 	private static final String URL = "http://example.org/archives/probe.tar.gz";
 
-	@Rule
-	public TemporaryFolder tmp = new TemporaryFolder();
+	@TempDir
+	public File tmp;
 
 	private final AtomicBoolean ownerExists = new AtomicBoolean(true);
 	private final AtomicInteger touches = new AtomicInteger();
@@ -75,9 +75,9 @@ public class UploadJobWorkerDeletedOwnerTest {
 	/** Runs on the first heartbeat after the job started: the extraction is under way. */
 	private Runnable duringExtraction = () -> { };
 
-	@Before
+	@BeforeEach
 	public void setUp() throws IOException {
-		root = tmp.newFolder("Benchmarks");
+		root = newFolder(tmp, "Benchmarks");
 		archive = root.toPath().resolve(OWNER + "/20261015-17.00.00.000/probe.tar.gz");
 		Files.createDirectories(archive.getParent());
 		neighbour = new File(root, "6/20261018-10.00.00.000/other.p");
@@ -114,7 +114,7 @@ public class UploadJobWorkerDeletedOwnerTest {
 
 		process(worker(), job(null));
 
-		assertTrue("the deletion ran while entries were still being extracted", touches.get() >= 2);
+		assertTrue(touches.get() >= 2, "the deletion ran while entries were still being extracted");
 		assertNothingLeftForTheOwner();
 	}
 
@@ -126,7 +126,7 @@ public class UploadJobWorkerDeletedOwnerTest {
 
 		process(worker(), job(null));
 
-		assertTrue("the archive is kept for a retry", Files.isRegularFile(archive));
+		assertTrue(Files.isRegularFile(archive), "the archive is kept for a retry");
 	}
 
 	/**
@@ -141,7 +141,7 @@ public class UploadJobWorkerDeletedOwnerTest {
 
 		process(worker(), job(null));
 
-		assertTrue("the archive is kept for a retry", Files.isRegularFile(archive));
+		assertTrue(Files.isRegularFile(archive), "the archive is kept for a retry");
 	}
 
 	/**
@@ -156,7 +156,7 @@ public class UploadJobWorkerDeletedOwnerTest {
 
 		process(worker(), job(null));
 
-		assertTrue("the archive is kept for a retry", Files.isRegularFile(archive));
+		assertTrue(Files.isRegularFile(archive), "the archive is kept for a retry");
 	}
 
 	/**
@@ -175,10 +175,10 @@ public class UploadJobWorkerDeletedOwnerTest {
 
 		process(worker(), job(null));
 
-		assertFalse("the archive is deleted", Files.exists(archive));
-		assertFalse("an unfinished extraction is deleted", Files.exists(unfinished.getParent().getParent()));
-		assertFalse("a finished extraction is deleted", Files.exists(finished.getParent().getParent()));
-		assertTrue("another job's files are kept", Files.isRegularFile(anotherJobs));
+		assertFalse(Files.exists(archive), "the archive is deleted");
+		assertFalse(Files.exists(unfinished.getParent().getParent()), "an unfinished extraction is deleted");
+		assertFalse(Files.exists(finished.getParent().getParent()), "a finished extraction is deleted");
+		assertTrue(Files.isRegularFile(anotherJobs), "another job's files are kept");
 	}
 
 	/**
@@ -197,9 +197,9 @@ public class UploadJobWorkerDeletedOwnerTest {
 
 		process(worker(), job);
 
-		assertTrue("the archive in another user's directory is kept", Files.isRegularFile(othersArchive));
-		assertTrue("the files beside it are kept", Files.isRegularFile(besideIt));
-		assertTrue("another user's benchmark is untouched", neighbour.isFile());
+		assertTrue(Files.isRegularFile(othersArchive), "the archive in another user's directory is kept");
+		assertTrue(Files.isRegularFile(besideIt), "the files beside it are kept");
+		assertTrue(neighbour.isFile(), "another user's benchmark is untouched");
 	}
 
 	/** Nor does one that is not a path at all, and the cleanup throws nothing of its own. */
@@ -212,7 +212,7 @@ public class UploadJobWorkerDeletedOwnerTest {
 
 		process(worker(), job);
 
-		assertTrue("the archive is kept", Files.isRegularFile(archive));
+		assertTrue(Files.isRegularFile(archive), "the archive is kept");
 	}
 
 	/**
@@ -244,9 +244,9 @@ public class UploadJobWorkerDeletedOwnerTest {
 			process(worker(), job(null));
 		}
 
-		assertEquals("every extraction directory is tried", 3, attempts.get());
-		assertEquals("only the two that could not be deleted are left", 2, extractions(directory).size());
-		assertFalse("the archive is deleted", Files.exists(archive));
+		assertEquals(3, attempts.get(), "every extraction directory is tried");
+		assertEquals(2, extractions(directory).size(), "only the two that could not be deleted are left");
+		assertFalse(Files.exists(archive), "the archive is deleted");
 	}
 
 	/**
@@ -259,14 +259,14 @@ public class UploadJobWorkerDeletedOwnerTest {
 		try {
 			Files.createSymbolicLink(archive.resolveSibling("upload_" + JOB_ID + "_1"), neighbour.toPath().getParent());
 		} catch (UnsupportedOperationException | IOException e) {
-			Assume.assumeNoException("this file store cannot create symlinks", e);
+			Assumptions.abort("this file store cannot create symlinks: " + e);
 		}
 		ownerExists.set(false);
 
 		process(worker(), job(null));
 
-		assertTrue("what the link points to is kept", neighbour.isFile());
-		assertFalse("the archive is deleted", Files.exists(archive));
+		assertTrue(neighbour.isFile(), "what the link points to is kept");
+		assertFalse(Files.exists(archive), "the archive is deleted");
 	}
 
 	/**
@@ -276,12 +276,12 @@ public class UploadJobWorkerDeletedOwnerTest {
 	@Test
 	public void aDirectoryThatCannotBeListedStillLosesTheArchive() throws Exception {
 		Path directory = archive.getParent();
-		Assume.assumeTrue("POSIX file permissions", Files.getFileStore(directory).supportsFileAttributeView("posix"));
+		Assumptions.assumeTrue(Files.getFileStore(directory).supportsFileAttributeView("posix"), "POSIX file permissions");
 		writeArchive(archive, 1);
 		ownerExists.set(false);
 		Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("-wx------"));
 		try {
-			Assume.assumeFalse("file permissions apply to this user", Files.isReadable(directory));
+			Assumptions.assumeFalse(Files.isReadable(directory), "file permissions apply to this user");
 			process(worker(), job(null));
 		} finally {
 			if (Files.exists(directory)) {
@@ -289,7 +289,7 @@ public class UploadJobWorkerDeletedOwnerTest {
 			}
 		}
 
-		assertFalse("the archive is deleted", Files.exists(archive));
+		assertFalse(Files.exists(archive), "the archive is deleted");
 		assertNothingLeftForTheOwner();
 	}
 
@@ -314,8 +314,8 @@ public class UploadJobWorkerDeletedOwnerTest {
 			process(worker(), job(null));
 		}
 
-		assertTrue("the archive that could not be deleted is left", Files.isRegularFile(archive));
-		assertFalse("the extraction is deleted", Files.exists(finished.getParent().getParent()));
+		assertTrue(Files.isRegularFile(archive), "the archive that could not be deleted is left");
+		assertFalse(Files.exists(finished.getParent().getParent()), "the extraction is deleted");
 	}
 
 	/** Users.deleteUser's end: the row is gone and the user's benchmark directory is deleted. */
@@ -390,10 +390,10 @@ public class UploadJobWorkerDeletedOwnerTest {
 	}
 
 	private void assertNothingLeftForTheOwner() {
-		assertFalse("nothing is left under the deleted user's benchmark directory",
-				new File(root, "" + OWNER).exists());
-		assertTrue("another user's benchmark is untouched", neighbour.isFile());
-		assertTrue("the benchmark root is kept", root.isDirectory());
+		assertFalse(new File(root, "" + OWNER).exists(),
+				"nothing is left under the deleted user's benchmark directory");
+		assertTrue(neighbour.isFile(), "another user's benchmark is untouched");
+		assertTrue(root.isDirectory(), "the benchmark root is kept");
 	}
 
 	/** The job's extraction directories in a directory, as the cleanup finds them. */

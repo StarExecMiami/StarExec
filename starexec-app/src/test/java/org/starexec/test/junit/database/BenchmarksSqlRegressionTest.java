@@ -1,7 +1,7 @@
 package org.starexec.test.junit.database;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.test.util.DatabaseTestSupport;
 
@@ -12,11 +12,11 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.UUID;
 
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class BenchmarksSqlRegressionTest extends Common {
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("BenchmarksSqlRegressionTest");
 		Common.initialize();
@@ -28,7 +28,7 @@ public class BenchmarksSqlRegressionTest extends Common {
 			try (PreparedStatement ps = fixture.con.prepareStatement("SELECT * FROM starexec.GetBenchmarkById(?)")) {
 				ps.setInt(1, fixture.benchId);
 				try (ResultSet rs = ps.executeQuery()) {
-					assertTrue("Should return a row", rs.next());
+					assertTrue(rs.next(), "Should return a row");
 					assertProcessorColumnsPresent(rs);
 				}
 			}
@@ -194,18 +194,18 @@ public class BenchmarksSqlRegressionTest extends Common {
 				break;
 			}
 		}
-		assertTrue("Expected to find bench " + expectedBenchId + " in result set", found);
+		assertTrue(found, "Expected to find bench " + expectedBenchId + " in result set");
 	}
 
 	private static void assertProcessorColumnsPresent(ResultSet rs) throws SQLException {
-		assertNotNull("types_id missing", rs.getObject("types_id"));
-		assertNotNull("types_community missing", rs.getObject("types_community"));
-		assertNotNull("types_name missing", rs.getObject("types_name"));
-		assertNotNull("types_description missing", rs.getObject("types_description"));
-		assertNotNull("types_path missing", rs.getObject("types_path"));
-		assertNotNull("types_disk_size missing", rs.getObject("types_disk_size"));
-		assertNotNull("types_processor_type missing", rs.getObject("types_processor_type"));
-		assertNotNull("types_time_limit missing", rs.getObject("types_time_limit"));
-		assertNotNull("types_syntax_id missing", rs.getObject("types_syntax_id"));
+		assertNotNull(rs.getObject("types_id"), "types_id missing");
+		assertNotNull(rs.getObject("types_community"), "types_community missing");
+		assertNotNull(rs.getObject("types_name"), "types_name missing");
+		assertNotNull(rs.getObject("types_description"), "types_description missing");
+		assertNotNull(rs.getObject("types_path"), "types_path missing");
+		assertNotNull(rs.getObject("types_disk_size"), "types_disk_size missing");
+		assertNotNull(rs.getObject("types_processor_type"), "types_processor_type missing");
+		assertNotNull(rs.getObject("types_time_limit"), "types_time_limit missing");
+		assertNotNull(rs.getObject("types_syntax_id"), "types_syntax_id missing");
 	}
 }

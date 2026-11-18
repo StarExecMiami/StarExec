@@ -126,7 +126,7 @@
 								</svg>
 							</div>
 							<div>
-								<h3 class="tool-card__title">StarExecCommand</h3>
+								<h3 class="tool-card__title">StarExec<wbr>Command</h3>
 								<p class="tool-card__subtitle">Command-line interface</p>
 							</div>
 						</div>

@@ -1,8 +1,10 @@
 package org.starexec.test.junit.util;
 
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.starexec.util.PasswordHasher;
+
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Unit tests for the PasswordHasher utility class.
@@ -15,31 +17,31 @@ public class PasswordHasherTests {
     @Test
     public void testHash_ProducesBCryptFormat() {
         String hash = PasswordHasher.hash("password123");
-        Assert.assertNotNull("Hash should not be null", hash);
-        Assert.assertTrue("Hash should start with $2a$ or $2b$", 
-            hash.startsWith("$2a$") || hash.startsWith("$2b$"));
-        Assert.assertEquals(60, hash.length());
+        Assertions.assertNotNull(hash, "Hash should not be null");
+        Assertions.assertTrue(hash.startsWith("$2a$") || hash.startsWith("$2b$"), 
+            "Hash should start with $2a$ or $2b$");
+        Assertions.assertEquals(60, hash.length());
     }
 
     @Test
     public void testHash_DifferentSaltsProduceDifferentHashes() {
         String hash1 = PasswordHasher.hash("password123");
         String hash2 = PasswordHasher.hash("password123");
-        Assert.assertNotEquals("Same password should produce different hashes due to salt", 
-            hash1, hash2);
+        Assertions.assertNotEquals(hash1, 
+            hash2, "Same password should produce different hashes due to salt");
     }
 
     @Test
     public void testHash_NullPassword() {
-        Assert.assertNull("Null password should return null hash", PasswordHasher.hash(null));
+        Assertions.assertNull(PasswordHasher.hash(null), "Null password should return null hash");
     }
 
     @Test
     public void testHash_EmptyPassword() {
         String hash = PasswordHasher.hash("");
-        Assert.assertNotNull("Empty password should still produce a hash", hash);
-        Assert.assertTrue("Hash should be valid BCrypt format", 
-            hash.startsWith("$2a$") || hash.startsWith("$2b$"));
+        Assertions.assertNotNull(hash, "Empty password should still produce a hash");
+        Assertions.assertTrue(hash.startsWith("$2a$") || hash.startsWith("$2b$"), 
+            "Hash should be valid BCrypt format");
     }
 
     // ===== Password Verification Tests =====
@@ -49,8 +51,8 @@ public class PasswordHasherTests {
         String password = "mySecurePassword123!";
         String hash = PasswordHasher.hash(password);
         
-        Assert.assertTrue("Correct password should verify", 
-            PasswordHasher.verify(password, hash));
+        Assertions.assertTrue(PasswordHasher.verify(password, hash), 
+            "Correct password should verify");
     }
 
     @Test
@@ -58,24 +60,24 @@ public class PasswordHasherTests {
         String password = "mySecurePassword123!";
         String hash = PasswordHasher.hash(password);
         
-        Assert.assertFalse("Incorrect password should not verify", 
-            PasswordHasher.verify("wrongPassword", hash));
+        Assertions.assertFalse(PasswordHasher.verify("wrongPassword", hash), 
+            "Incorrect password should not verify");
     }
 
     @Test
     public void testVerify_NullParameters() {
         String validHash = PasswordHasher.hash("test");
         
-        Assert.assertFalse("Null plaintext should return false", 
-            PasswordHasher.verify(null, validHash));
-        Assert.assertFalse("Null hash should return false", 
-            PasswordHasher.verify("test", null));
+        Assertions.assertFalse(PasswordHasher.verify(null, validHash), 
+            "Null plaintext should return false");
+        Assertions.assertFalse(PasswordHasher.verify("test", null), 
+            "Null hash should return false");
     }
 
     @Test
     public void testVerify_InvalidHashFormat() {
-        Assert.assertFalse("Invalid hash should return false", 
-            PasswordHasher.verify("test", "invalid_hash"));
+        Assertions.assertFalse(PasswordHasher.verify("test", "invalid_hash"), 
+            "Invalid hash should return false");
     }
 
     // ===== Edge Cases =====
@@ -84,9 +86,9 @@ public class PasswordHasherTests {
     public void testVerify_CaseSensitivePassword() {
         String hash = PasswordHasher.hash("Password");
         
-        Assert.assertTrue(PasswordHasher.verify("Password", hash));
-        Assert.assertFalse(PasswordHasher.verify("password", hash));
-        Assert.assertFalse(PasswordHasher.verify("PASSWORD", hash));
+        Assertions.assertTrue(PasswordHasher.verify("Password", hash));
+        Assertions.assertFalse(PasswordHasher.verify("password", hash));
+        Assertions.assertFalse(PasswordHasher.verify("PASSWORD", hash));
     }
 
     @Test
@@ -94,7 +96,7 @@ public class PasswordHasherTests {
         String password = "p@$$w0rd!#%^&*()_+-=[]{}|;':\",./<>?`~";
         String hash = PasswordHasher.hash(password);
         
-        Assert.assertTrue(PasswordHasher.verify(password, hash));
+        Assertions.assertTrue(PasswordHasher.verify(password, hash));
     }
 
     @Test
@@ -102,7 +104,7 @@ public class PasswordHasherTests {
         String password = "пароль密码パスワード";
         String hash = PasswordHasher.hash(password);
         
-        Assert.assertTrue(PasswordHasher.verify(password, hash));
+        Assertions.assertTrue(PasswordHasher.verify(password, hash));
     }
 
     @Test
@@ -115,7 +117,7 @@ public class PasswordHasherTests {
         String longPassword = sb.toString();
         String hash = PasswordHasher.hash(longPassword);
         
-        Assert.assertTrue(PasswordHasher.verify(longPassword, hash));
+        Assertions.assertTrue(PasswordHasher.verify(longPassword, hash));
     }
 
     @Test
@@ -123,8 +125,8 @@ public class PasswordHasherTests {
         String password = "   spaces   ";
         String hash = PasswordHasher.hash(password);
         
-        Assert.assertTrue(PasswordHasher.verify(password, hash));
-        Assert.assertFalse(PasswordHasher.verify("spaces", hash));
+        Assertions.assertTrue(PasswordHasher.verify(password, hash));
+        Assertions.assertFalse(PasswordHasher.verify("spaces", hash));
     }
 
     @Test
@@ -133,8 +135,8 @@ public class PasswordHasherTests {
         String password = "consistentPassword";
         for (int i = 0; i < 5; i++) {
             String hash = PasswordHasher.hash(password);
-            Assert.assertTrue("Password should always verify against its hash",
-                PasswordHasher.verify(password, hash));
+            Assertions.assertTrue(PasswordHasher.verify(password, hash),
+                "Password should always verify against its hash");
         }
     }
 
@@ -159,43 +161,44 @@ public class PasswordHasherTests {
 
     @Test
     public void testVerify_PgcryptoWrappedLegacyHashAcceptsTheOriginalPassword() {
-        Assert.assertTrue(PasswordHasher.verify("Correct-Horse-9", PGCRYPTO_WRAPPED_ASCII));
-        Assert.assertTrue(PasswordHasher.verify("contraseña-ñ", PGCRYPTO_WRAPPED_UTF8));
+        Assertions.assertTrue(PasswordHasher.verify("Correct-Horse-9", PGCRYPTO_WRAPPED_ASCII));
+        Assertions.assertTrue(PasswordHasher.verify("contraseña-ñ", PGCRYPTO_WRAPPED_UTF8));
     }
 
     @Test
     public void testVerify_PgcryptoWrappedLegacyHashRejectsOtherPasswords() {
-        Assert.assertFalse(PasswordHasher.verify("correct-horse-9", PGCRYPTO_WRAPPED_ASCII));
-        Assert.assertFalse(PasswordHasher.verify("", PGCRYPTO_WRAPPED_ASCII));
+        Assertions.assertFalse(PasswordHasher.verify("correct-horse-9", PGCRYPTO_WRAPPED_ASCII));
+        Assertions.assertFalse(PasswordHasher.verify("", PGCRYPTO_WRAPPED_ASCII));
         // The digest itself must not work as a password: that would make a leaked legacy
         // hash a working credential.
-        Assert.assertFalse(PasswordHasher.verify(LEGACY_HEX, PGCRYPTO_WRAPPED_ASCII));
+        Assertions.assertFalse(PasswordHasher.verify(LEGACY_HEX, PGCRYPTO_WRAPPED_ASCII));
     }
 
     @Test
     public void testWrapLegacySha512_RoundTripsWithVerify() {
         String wrapped = PasswordHasher.wrapLegacySha512(LEGACY_HEX);
-        Assert.assertTrue(wrapped.startsWith(PasswordHasher.LEGACY_SHA512_PREFIX + "$2a$12$"));
-        Assert.assertTrue("fits users.password VARCHAR(128)", wrapped.length() <= 128);
-        Assert.assertTrue(PasswordHasher.verify("Correct-Horse-9", wrapped));
-        Assert.assertFalse(PasswordHasher.verify("Correct-Horse-8", wrapped));
+        Assertions.assertTrue(wrapped.startsWith(PasswordHasher.LEGACY_SHA512_PREFIX + "$2a$12$"));
+        Assertions.assertTrue(wrapped.length() <= 128, "fits users.password VARCHAR(128)");
+        Assertions.assertTrue(PasswordHasher.verify("Correct-Horse-9", wrapped));
+        Assertions.assertFalse(PasswordHasher.verify("Correct-Horse-8", wrapped));
     }
 
     @Test
     public void testVerify_AnUnwrappedLegacyDigestIsRefused() {
         // A migration that skipped the wrapping step must fail closed, not authenticate.
-        Assert.assertFalse(PasswordHasher.verify("Correct-Horse-9", LEGACY_HEX));
-        Assert.assertFalse(PasswordHasher.verify(LEGACY_HEX, LEGACY_HEX));
+        Assertions.assertFalse(PasswordHasher.verify("Correct-Horse-9", LEGACY_HEX));
+        Assertions.assertFalse(PasswordHasher.verify(LEGACY_HEX, LEGACY_HEX));
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testWrapLegacySha512_RefusesAnythingButALegacyDigest() {
-        PasswordHasher.wrapLegacySha512(PasswordHasher.hash("already-bcrypt"));
+        String bcrypt = PasswordHasher.hash("already-bcrypt");
+        assertThrows(IllegalArgumentException.class, () -> PasswordHasher.wrapLegacySha512(bcrypt));
     }
 
     @Test
     public void testVerify_PlainBCryptIsUnaffectedByTheLegacyPath() {
         String hash = PasswordHasher.hash("{sha512}looks-like-a-prefix");
-        Assert.assertTrue(PasswordHasher.verify("{sha512}looks-like-a-prefix", hash));
+        Assertions.assertTrue(PasswordHasher.verify("{sha512}looks-like-a-prefix", hash));
     }
 }

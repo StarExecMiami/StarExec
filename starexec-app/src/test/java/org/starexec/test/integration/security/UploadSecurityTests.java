@@ -10,7 +10,7 @@ import org.starexec.data.to.User;
 import org.starexec.test.TestUtil;
 import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
-import org.testng.Assert;
+import org.junit.jupiter.api.Assertions;
 
 /**
  * Tests for data/security/UploadSecurity.java
@@ -28,9 +28,9 @@ public class UploadSecurityTests extends TestSequence {
 	@StarexecTest
 	private void canViewUnvalidatedBenchmarkOutputTest() {
 		int unvalidatedId = Uploads.getFailedBenches(status.getId()).get(0).getId();
-		Assert.assertTrue(UploadSecurity.canViewUnvalidatedBenchmarkOutput(user.getId(), unvalidatedId).isSuccess());
-		Assert.assertTrue(UploadSecurity.canViewUnvalidatedBenchmarkOutput(admin.getId(), unvalidatedId).isSuccess());
-		Assert.assertFalse(UploadSecurity.canViewUnvalidatedBenchmarkOutput(nonOwner.getId(), unvalidatedId).isSuccess());
+		Assertions.assertTrue(UploadSecurity.canViewUnvalidatedBenchmarkOutput(user.getId(), unvalidatedId).isSuccess());
+		Assertions.assertTrue(UploadSecurity.canViewUnvalidatedBenchmarkOutput(admin.getId(), unvalidatedId).isSuccess());
+		Assertions.assertFalse(UploadSecurity.canViewUnvalidatedBenchmarkOutput(nonOwner.getId(), unvalidatedId).isSuccess());
 
 	}
 	

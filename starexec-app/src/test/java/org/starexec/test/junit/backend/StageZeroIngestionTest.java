@@ -1,8 +1,8 @@
 package org.starexec.test.junit.backend;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.LocalJobMonitor;
 import org.starexec.backend.StageStatusSnapshots;
@@ -11,8 +11,8 @@ import org.starexec.data.to.Status.StatusCode;
 
 import java.lang.reflect.Method;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * What ingestion does with a terminal status that names no stage.
@@ -44,12 +44,12 @@ public class StageZeroIngestionTest {
 
 	private LocalJobMonitor monitor;
 
-	@Before
+	@BeforeEach
 	public void setUp() {
 		monitor = new LocalJobMonitor();
 	}
 
-	@After
+	@AfterEach
 	public void tearDown() {
 		if (monitor != null) {
 			monitor.stop();
@@ -121,12 +121,12 @@ public class StageZeroIngestionTest {
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
 			for (StackTraceElement frame : expected.getStackTrace()) {
 				String where = frame.getClassName() + "." + frame.getMethodName();
-				assertFalse("a refused status must not reach the attribute write, but the"
-								+ " stack shows " + where,
-						where.contains("addJobPairAttributes"));
-				assertFalse("a refused status must not reach the statistics write, but the"
-								+ " stack shows " + where,
-						where.contains("updateRunSolverStats"));
+				assertFalse(where.contains("addJobPairAttributes"),
+						"a refused status must not reach the attribute write, but the"
+								+ " stack shows " + where);
+				assertFalse(where.contains("updateRunSolverStats"),
+						"a refused status must not reach the statistics write, but the"
+								+ " stack shows " + where);
 			}
 		}
 	}

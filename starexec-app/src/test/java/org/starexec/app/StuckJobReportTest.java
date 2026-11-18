@@ -1,17 +1,17 @@
 package org.starexec.app;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.Map;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.app.PeriodicTasks.StuckJob;
 import org.starexec.backend.Backend;
 import org.starexec.constants.R;
@@ -35,13 +35,13 @@ public class StuckJobReportTest {
 
     private Backend originalBackend;
 
-    @Before
+    @BeforeEach
     public void useABackendThatAcceptsWork() {
         originalBackend = R.BACKEND;
         R.BACKEND = backend(true);
     }
 
-    @After
+    @AfterEach
     public void restoreBackend() {
         R.BACKEND = originalBackend;
     }
@@ -61,11 +61,11 @@ public class StuckJobReportTest {
     public void pendingPairsOnAQueueTheBackendRefusesNameTheBackend() {
         R.BACKEND = backend(false);
         String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));
-        assertTrue(report, report.endsWith(
+        assertTrue(report.endsWith(
             "the backend is not accepting work on queue 'container.q'; the dispatcher's line"
                 + " for it ('Queue container.q cannot accept work at the moment', or 'Queue"
                 + " container.q has no nodes available' while it has no nodes) says since when, and"
-                + " the backend's own lines before it say why"));
+                + " the backend's own lines before it say why"), report);
     }
 
     /**
@@ -76,13 +76,13 @@ public class StuckJobReportTest {
     public void aRefusingBackendsReportAlsoNamesTheLineOfAQueueWithNoNodes() {
         R.BACKEND = backend(false);
         String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));
-        assertTrue(report, report.contains("'Queue container.q has no nodes available'"));
+        assertTrue(report.contains("'Queue container.q has no nodes available'"), report);
     }
 
     @Test
     public void pendingPairsOnAQueueTheBackendAcceptsPointAtItsNodes() {
         String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));
-        assertTrue(report, report.endsWith(NODES_ADVICE));
+        assertTrue(report.endsWith(NODES_ADVICE), report);
     }
 
     /** No answer is not a refusal: the report keeps the advice it gave before it asked. */
@@ -92,14 +92,14 @@ public class StuckJobReportTest {
         when(failing.isQueueDispatchable(anyString())).thenThrow(new IllegalStateException("no client"));
         R.BACKEND = failing;
         String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));
-        assertTrue(report, report.endsWith(NODES_ADVICE));
+        assertTrue(report.endsWith(NODES_ADVICE), report);
     }
 
     @Test
     public void noBackendLeavesTheNodesAdvice() {
         R.BACKEND = null;
         String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 0, 0));
-        assertTrue(report, report.endsWith(NODES_ADVICE));
+        assertTrue(report.endsWith(NODES_ADVICE), report);
     }
 
     /** A backend that takes no new work does not explain pairs it already has. */
@@ -107,9 +107,9 @@ public class StuckJobReportTest {
     public void pairsInFlightOnARefusingBackendPointAtTheJobMonitor() {
         R.BACKEND = backend(false);
         String report = PeriodicTasks.describeStuckJob(job("container.q", "ACTIVE", 24, 0, 2, 0));
-        assertTrue(report, report.endsWith(
+        assertTrue(report.endsWith(
             "pairs are in flight but none has started or finished; check the backend and its job"
-                + " monitor"));
+                + " monitor"), report);
     }
 
     /** The dispatcher reads only ACTIVE queues, so an inactive queue is the cause whatever the backend says. */
@@ -117,8 +117,8 @@ public class StuckJobReportTest {
     public void anInactiveQueueIsNamedEvenWhenTheBackendRefuses() {
         R.BACKEND = backend(false);
         String report = PeriodicTasks.describeStuckJob(job("default", "INACTIVE", 35, 0, 0, 0));
-        assertTrue(report, report.endsWith(
-            "its queue 'default' is INACTIVE, so its pending pairs cannot be dispatched"));
+        assertTrue(report.endsWith(
+            "its queue 'default' is INACTIVE, so its pending pairs cannot be dispatched"), report);
     }
 
     @Test
@@ -180,8 +180,8 @@ public class StuckJobReportTest {
                 job("q", "ACTIVE", 1, 1, 1, 0), job("q", "ACTIVE", 1, 0, 0, 0),
                 job("q", "ACTIVE", 0, 0, 0, 1)}) {
             String report = PeriodicTasks.describeStuckJob(j);
-            assertFalse(report, report.contains("LocalBackend"));
-            assertFalse(report, report.contains("LocalJobMonitor"));
+            assertFalse(report.contains("LocalBackend"), report);
+            assertFalse(report.contains("LocalJobMonitor"), report);
         }
     }
 
@@ -189,14 +189,14 @@ public class StuckJobReportTest {
     public void aStuckJobIsReportedOnceThenAgainOnlyAfterTheRepeatInterval() {
         Map<Integer, Long> reported = new HashMap<>();
         long t0 = 1_000_000L;
-        assertTrue("first sighting", PeriodicTasks.shouldReportStuckJob(reported, 1, t0));
-        assertFalse("five minutes later",
-            PeriodicTasks.shouldReportStuckJob(reported, 1, t0 + 5 * 60_000L));
-        assertFalse("just before the interval", PeriodicTasks.shouldReportStuckJob(
-            reported, 1, t0 + PeriodicTasks.STUCK_JOB_REPEAT_MILLIS - 1));
-        assertTrue("at the interval", PeriodicTasks.shouldReportStuckJob(
-            reported, 1, t0 + PeriodicTasks.STUCK_JOB_REPEAT_MILLIS));
-        assertTrue("another job has its own clock",
-            PeriodicTasks.shouldReportStuckJob(reported, 2, t0 + 5 * 60_000L));
+        assertTrue(PeriodicTasks.shouldReportStuckJob(reported, 1, t0), "first sighting");
+        assertFalse(PeriodicTasks.shouldReportStuckJob(reported, 1, t0 + 5 * 60_000L),
+            "five minutes later");
+        assertFalse(PeriodicTasks.shouldReportStuckJob(
+            reported, 1, t0 + PeriodicTasks.STUCK_JOB_REPEAT_MILLIS - 1), "just before the interval");
+        assertTrue(PeriodicTasks.shouldReportStuckJob(
+            reported, 1, t0 + PeriodicTasks.STUCK_JOB_REPEAT_MILLIS), "at the interval");
+        assertTrue(PeriodicTasks.shouldReportStuckJob(reported, 2, t0 + 5 * 60_000L),
+            "another job has its own clock");
     }
 }

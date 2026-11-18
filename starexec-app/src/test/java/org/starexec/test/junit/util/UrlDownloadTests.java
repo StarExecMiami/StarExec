@@ -1,9 +1,9 @@
 package org.starexec.test.junit.util;
 
 import com.sun.net.httpserver.HttpServer;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.util.Util;
 
 import java.io.File;
@@ -19,8 +19,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
  * {@code Util.copyFileFromURLUsingProxy} downloads an archive a user names by URL for a solver or
@@ -36,7 +36,7 @@ public class UrlDownloadTests {
 	private File destination;
 	private HttpServer server;
 
-	@Before
+	@BeforeEach
 	public void createArchive() throws Exception {
 		dir = Files.createTempDirectory("url-download-");
 		archive = dir.resolve("solver.zip");
@@ -48,7 +48,7 @@ public class UrlDownloadTests {
 		destination = dir.resolve("downloaded.zip").toFile();
 	}
 
-	@After
+	@AfterEach
 	public void stopServer() {
 		if (server != null) {
 			server.stop(0);
@@ -59,24 +59,24 @@ public class UrlDownloadTests {
 	public void aFileUrlIsNotCopied() throws Exception {
 		URL url = archive.toUri().toURL();
 
-		assertFalse("a file: URL is refused", Util.copyFileFromURLUsingProxy(url, destination));
-		assertFalse("nothing is written", destination.exists());
+		assertFalse(Util.copyFileFromURLUsingProxy(url, destination), "a file: URL is refused");
+		assertFalse(destination.exists(), "nothing is written");
 	}
 
 	@Test
 	public void aJarUrlIsNotCopied() throws Exception {
 		URL url = URI.create("jar:" + archive.toUri() + "!/entry.txt").toURL();
 
-		assertFalse("a jar: URL is refused", Util.copyFileFromURLUsingProxy(url, destination));
-		assertFalse("nothing is written", destination.exists());
+		assertFalse(Util.copyFileFromURLUsingProxy(url, destination), "a jar: URL is refused");
+		assertFalse(destination.exists(), "nothing is written");
 	}
 
 	@Test
 	public void anFtpUrlIsNotCopied() throws Exception {
 		URL url = URI.create("ftp://127.0.0.1:9/solver.zip").toURL();
 
-		assertFalse("an ftp: URL is refused", Util.copyFileFromURLUsingProxy(url, destination));
-		assertFalse("nothing is written", destination.exists());
+		assertFalse(Util.copyFileFromURLUsingProxy(url, destination), "an ftp: URL is refused");
+		assertFalse(destination.exists(), "nothing is written");
 	}
 
 	/** Local destinations are refused whether they are named or written as an address. */
@@ -97,9 +97,9 @@ public class UrlDownloadTests {
 
 		for (String host : new String[] {"localhost", "127.0.0.1", "[::ffff:127.0.0.1]"}) {
 			URL url = URI.create("http://" + host + ":" + port + "/solver.zip").toURL();
-			assertFalse(host + " is refused", Util.copyFileFromURLUsingProxy(url, destination));
+			assertFalse(Util.copyFileFromURLUsingProxy(url, destination), host + " is refused");
 		}
-		assertEquals("the server is never contacted", 0, requests.get());
-		assertFalse("nothing is written", destination.exists());
+		assertEquals(0, requests.get(), "the server is never contacted");
+		assertFalse(destination.exists(), "nothing is written");
 	}
 }

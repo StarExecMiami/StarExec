@@ -3,12 +3,6 @@ fieldset {
 	margin: 30px auto;
 }
 
-@media only screen and (max-width: 767px) {
-	fieldset {
-		width: 95%;
-	}
-}
-
 fieldset table tr td:first-child {
 	width: 200px;
 	margin: 10px;

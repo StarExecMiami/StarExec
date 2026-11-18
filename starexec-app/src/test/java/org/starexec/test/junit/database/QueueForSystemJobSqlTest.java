@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Queues;
 import org.starexec.data.to.Queue;
@@ -15,9 +15,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.UUID;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@code Queues.getQueueForSystemJob} against the real queue-access SQL (#204).
@@ -44,13 +44,13 @@ public class QueueForSystemJobSqlTest extends Common {
 	private int activeQueue;
 	private int originalTestQueue;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("QueueForSystemJobSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		originalTestQueue = Queues.getTestQueue();
 		try (Connection con = Common.getConnection()) {
@@ -70,7 +70,7 @@ public class QueueForSystemJobSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		if (originalTestQueue > 0) {
 			Queues.setTestQueue(originalTestQueue);
@@ -89,12 +89,12 @@ public class QueueForSystemJobSqlTest extends Common {
 
 		int chosen = Queues.getQueueForSystemJob(userId);
 
-		assertNotEquals("the inactive test queue is never scheduled", inactiveQueue, chosen);
-		assertTrue("a queue was chosen", chosen > 0);
+		assertNotEquals(inactiveQueue, chosen, "the inactive test queue is never scheduled");
+		assertTrue(chosen > 0, "a queue was chosen");
 		assertEquals("ACTIVE", Queues.get(chosen).getStatus());
-		assertTrue("the user can use it", usable(chosen));
-		assertTrue("the fixture's active global queue is usable, so something is",
-				usable(activeQueue));
+		assertTrue(usable(chosen), "the user can use it");
+		assertTrue(usable(activeQueue),
+				"the fixture's active global queue is usable, so something is");
 	}
 
 	@Test

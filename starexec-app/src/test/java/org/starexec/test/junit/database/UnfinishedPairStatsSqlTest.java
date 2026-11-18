@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.R;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
 import org.starexec.data.database.Common;
@@ -22,8 +22,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * A job space whose pairs are not all finished still has a solver summary (#206).
@@ -51,13 +51,13 @@ public class UnfinishedPairStatsSqlTest extends Common {
 	private int configId;
 	private int benchId;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("UnfinishedPairStatsSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			userId = selectInt(con, "SELECT min(id) FROM starexec.users");
@@ -110,7 +110,7 @@ public class UnfinishedPairStatsSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		if (jobId == 0) {
 			return;
@@ -132,7 +132,7 @@ public class UnfinishedPairStatsSqlTest extends Common {
 	@Test
 	public void anUnfinishedPairLoadsBesideAFinishedOne() {
 		List<JobPair> pairs = Jobs.getJobPairsInJobSpaceHierarchy(spaceId, PrimitivesToAnonymize.NONE);
-		assertNotNull("one unfinished pair must not stop the space's pairs loading", pairs);
+		assertNotNull(pairs, "one unfinished pair must not stop the space's pairs loading");
 		assertEquals(2, pairs.size());
 	}
 
@@ -140,7 +140,7 @@ public class UnfinishedPairStatsSqlTest extends Common {
 	public void theSummaryCountsTheFinishedPairAndTheUnfinishedOne() {
 		String row = "config=" + configId + " solved=1/1 wrong=0 unknown=0 incomplete=1";
 		assertEquals(List.of(row), summary(1));
-		assertEquals("the Primary view too", List.of(row), summary(0));
+		assertEquals(List.of(row), summary(0), "the Primary view too");
 	}
 
 	private List<String> summary(int stageNumber) {

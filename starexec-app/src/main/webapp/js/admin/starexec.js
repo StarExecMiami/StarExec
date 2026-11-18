@@ -68,7 +68,6 @@ function initUI() {
 		$('#dialog-confirm-restart').dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					log('user confirmed starexec restart.');

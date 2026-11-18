@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.R;
 import org.starexec.test.util.DatabaseTestSupport;
 
@@ -20,9 +20,9 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@code GetJobStatus} and {@code GetJobStatusDetail} are job-scoped, and the six status
@@ -61,12 +61,12 @@ public class JobStatusFunctionsSqlTest {
 	private int adminUserId;
 	private int plainUserId;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobStatusFunctionsSqlTest");
 	}
 
-	@Before
+	@BeforeEach
 	public void open() throws SQLException {
 		con = DriverManager.getConnection(R.POSTGRES_URL, R.POSTGRES_USERNAME, R.POSTGRES_PASSWORD);
 		con.setAutoCommit(false);
@@ -82,7 +82,7 @@ public class JobStatusFunctionsSqlTest {
 				+ " AND r.role IN ('admin', 'developer')) ORDER BY u.id LIMIT 1");
 	}
 
-	@After
+	@AfterEach
 	public void rollBack() throws SQLException {
 		if (con != null) {
 			try {
@@ -105,8 +105,8 @@ public class JobStatusFunctionsSqlTest {
 			int job = insertJob(plainUserId, false, false, false);
 			insertPairs(job, code, 1);
 			assertSameAsReference(job, "single pair with status_code " + code);
-			assertEquals("GetJobStatus for status_code " + code,
-					PENDING.contains(code) ? "incomplete" : "complete", status(job));
+			assertEquals(PENDING.contains(code) ? "incomplete" : "complete",
+					status(job), "GetJobStatus for status_code " + code);
 		}
 	}
 
@@ -119,8 +119,8 @@ public class JobStatusFunctionsSqlTest {
 
 		int empty = insertJob(plainUserId, false, false, false);
 		assertSameAsReference(empty, "job without pairs");
-		assertEquals("a job with no pairs is complete even though another job is pending",
-				"complete", status(empty));
+		assertEquals("complete",
+				status(empty), "a job with no pairs is complete even though another job is pending");
 		assertEquals("COMPLETE", detail(empty));
 
 		int finishedOnly = insertJob(plainUserId, false, false, false);
@@ -137,8 +137,8 @@ public class JobStatusFunctionsSqlTest {
 		assertEquals("RUNNING", detail(oneStraggler));
 
 		assertEquals("PROCESSING", detail(pendingNeighbour));
-		assertEquals("unknown job id", "complete", status(2_000_000_000));
-		assertEquals("unknown job id, detail", "COMPLETE", detail(2_000_000_000));
+		assertEquals("complete", status(2_000_000_000), "unknown job id");
+		assertEquals("COMPLETE", detail(2_000_000_000), "unknown job id, detail");
 		assertNullArgumentMatchesReference();
 	}
 
@@ -155,7 +155,7 @@ public class JobStatusFunctionsSqlTest {
 			}
 		}
 		int deleted = insertJob(plainUserId, true, true, true);
-		assertEquals("DELETED wins over KILLED and PAUSED", "DELETED", detail(deleted));
+		assertEquals("DELETED", detail(deleted), "DELETED wins over KILLED and PAUSED");
 		int killed = insertJob(plainUserId, false, true, true);
 		assertEquals("KILLED", detail(killed));
 		int paused = insertJob(plainUserId, false, false, true);
@@ -176,8 +176,8 @@ public class JobStatusFunctionsSqlTest {
 		int plainDone = insertJob(plainUserId, false, false, false);
 		insertPairs(plainDone, 7, 2);
 		assertEquals("GLOBAL_PAUSE", detail(plain));
-		assertEquals("an admin's job is exempt from the global pause", "RUNNING", detail(admin));
-		assertEquals("a finished job is unaffected", "COMPLETE", detail(plainDone));
+		assertEquals("RUNNING", detail(admin), "an admin's job is exempt from the global pause");
+		assertEquals("COMPLETE", detail(plainDone), "a finished job is unaffected");
 		assertSameAsReference(plain, "global pause, plain user");
 		assertSameAsReference(admin, "global pause, admin");
 		assertSameAsReference(plainDone, "global pause, finished job");
@@ -253,10 +253,10 @@ public class JobStatusFunctionsSqlTest {
 		// One job owns 50 pairs. Allow generous slack for index entries plus heap rows,
 		// and stay orders of magnitude below the 100k rows per call of the uncorrelated form.
 		long bound = (long) calls * pairsPerJob * 4;
-		assertTrue("GetJobStatus read " + statusReads + " rows for " + calls + " calls, bound "
-				+ bound, statusReads <= bound);
-		assertTrue("GetJobStatusDetail read " + detailReads + " rows for " + calls + " calls, bound "
-				+ bound, detailReads <= bound);
+		assertTrue(statusReads <= bound, "GetJobStatus read " + statusReads + " rows for " + calls + " calls, bound "
+				+ bound);
+		assertTrue(detailReads <= bound, "GetJobStatusDetail read " + detailReads + " rows for " + calls + " calls, bound "
+				+ bound);
 	}
 
 	// ------------------------------------------------------------------------------------
@@ -308,16 +308,16 @@ public class JobStatusFunctionsSqlTest {
 	}
 
 	private void assertReturnTypes(String when) throws SQLException {
-		assertEquals("GetJobStatusDetail return type " + when, "text", resultType("getjobstatusdetail"));
-		assertEquals("GetJobStatus return type " + when, "text", resultType("getjobstatus"));
-		assertEquals("GetCompletePairs return type " + when, "bigint", resultType("getcompletepairs"));
-		assertEquals("GetErrorPairs return type " + when, "bigint", resultType("geterrorpairs"));
-		assertEquals("GetPendingPairs return type " + when, "bigint", resultType("getpendingpairs"));
-		assertEquals("IsPublic return type " + when, "boolean", resultType("ispublic"));
+		assertEquals("text", resultType("getjobstatusdetail"), "GetJobStatusDetail return type " + when);
+		assertEquals("text", resultType("getjobstatus"), "GetJobStatus return type " + when);
+		assertEquals("bigint", resultType("getcompletepairs"), "GetCompletePairs return type " + when);
+		assertEquals("bigint", resultType("geterrorpairs"), "GetErrorPairs return type " + when);
+		assertEquals("bigint", resultType("getpendingpairs"), "GetPendingPairs return type " + when);
+		assertEquals("boolean", resultType("ispublic"), "IsPublic return type " + when);
 		for (String name : SIX) {
-			assertEquals("exactly one " + name + " overload " + when, 1L, selectLong(
+			assertEquals(1L, selectLong(
 					"SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace"
-							+ " WHERE n.nspname = 'starexec' AND p.proname = '" + name + "'"));
+							+ " WHERE n.nspname = 'starexec' AND p.proname = '" + name + "'"), "exactly one " + name + " overload " + when);
 		}
 	}
 
@@ -333,7 +333,7 @@ public class JobStatusFunctionsSqlTest {
 					+ " VALUES (" + plainUserId + ", " + job + ", 'COMPLETE')");
 			try (ResultSet rs = st.executeQuery("SELECT status FROM starexec.NotifyUsersOfJobs()"
 					+ " WHERE \"job\" = " + job)) {
-				assertTrue("NotifyUsersOfJobs reports the job whose status moved", rs.next());
+				assertTrue(rs.next(), "NotifyUsersOfJobs reports the job whose status moved");
 				assertEquals("RUNNING", rs.getString(1));
 			}
 		}
@@ -345,7 +345,7 @@ public class JobStatusFunctionsSqlTest {
 						+ " ON n.oid = p.pronamespace WHERE n.nspname = 'starexec' AND p.proname = ?")) {
 			ps.setString(1, function);
 			try (ResultSet rs = ps.executeQuery()) {
-				assertTrue(function + " exists", rs.next());
+				assertTrue(rs.next(), function + " exists");
 				return rs.getString(1);
 			}
 		}
@@ -358,18 +358,18 @@ public class JobStatusFunctionsSqlTest {
 	private static String statusFunctionsSectionOf(String script) {
 		int start = script.indexOf("-- FUNCTIONS from StarFunctions.sql");
 		int end = script.indexOf("-- Atomically sets the status of a job pair and its stages with precision");
-		assertTrue("section start marker present", start >= 0);
-		assertTrue("section end marker present", end > start);
+		assertTrue(start >= 0, "section start marker present");
+		assertTrue(end > start, "section end marker present");
 		String section = script.substring(start, end).toLowerCase();
 		for (String name : SIX) {
-			assertTrue(name + " is defined in the section", section.contains("function starexec." + name));
+			assertTrue(section.contains("function starexec." + name), name + " is defined in the section");
 		}
 		return script.substring(start, end);
 	}
 
 	private static String resource(String path) throws IOException {
 		try (InputStream in = JobStatusFunctionsSqlTest.class.getResourceAsStream(path)) {
-			assertNotNull("classpath resource " + path, in);
+			assertNotNull(in, "classpath resource " + path);
 			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
 		}
 	}
@@ -421,10 +421,10 @@ public class JobStatusFunctionsSqlTest {
 	}
 
 	private void assertSameAsReference(int job, String what) throws SQLException {
-		assertEquals("GetJobStatus vs old body: " + what,
-				selectString("SELECT pg_temp.old_status(" + job + ")"), status(job));
-		assertEquals("GetJobStatusDetail vs old body: " + what,
-				selectString("SELECT pg_temp.old_detail(" + job + ")"), detail(job));
+		assertEquals(selectString("SELECT pg_temp.old_status(" + job + ")"),
+				status(job), "GetJobStatus vs old body: " + what);
+		assertEquals(selectString("SELECT pg_temp.old_detail(" + job + ")"),
+				detail(job), "GetJobStatusDetail vs old body: " + what);
 	}
 
 	private void assertNullArgumentMatchesReference() throws SQLException {
@@ -474,14 +474,14 @@ public class JobStatusFunctionsSqlTest {
 
 	private String selectString(String sql) throws SQLException {
 		try (Statement st = con.createStatement(); ResultSet rs = st.executeQuery(sql)) {
-			assertTrue(sql, rs.next());
+			assertTrue(rs.next(), sql);
 			return rs.getString(1);
 		}
 	}
 
 	private long selectLong(String sql) throws SQLException {
 		try (Statement st = con.createStatement(); ResultSet rs = st.executeQuery(sql)) {
-			assertTrue(sql, rs.next());
+			assertTrue(rs.next(), sql);
 			return rs.getLong(1);
 		}
 	}
@@ -492,7 +492,7 @@ public class JobStatusFunctionsSqlTest {
 
 	private boolean selectBoolean(String sql) throws SQLException {
 		try (Statement st = con.createStatement(); ResultSet rs = st.executeQuery(sql)) {
-			assertTrue(sql, rs.next());
+			assertTrue(rs.next(), sql);
 			return rs.getBoolean(1);
 		}
 	}

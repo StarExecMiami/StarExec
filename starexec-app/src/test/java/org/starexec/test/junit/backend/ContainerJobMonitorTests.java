@@ -1,9 +1,9 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -13,8 +13,9 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
@@ -35,7 +36,7 @@ public class ContainerJobMonitorTests {
 
     private ContainerJobMonitor monitor;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         MockitoAnnotations.openMocks(this);
         monitor = new ContainerJobMonitor(backend);
@@ -79,7 +80,7 @@ public class ContainerJobMonitorTests {
                 fail("missing evidence must still be refused");
             } catch (java.lang.reflect.InvocationTargetException e) {
                 assertTrue(e.getCause() instanceof org.starexec.backend.StageStatusSnapshots.InvalidSnapshotException);
-                assertTrue(e.getCause().getMessage(), e.getCause().getMessage().contains(expected));
+                assertTrue(e.getCause().getMessage().contains(expected), e.getCause().getMessage());
             }
             pairs.verifyNoInteractions();
         }
@@ -106,13 +107,13 @@ public class ContainerJobMonitorTests {
 
         verify(backend).getCompletedContainers();
         assertEquals(
-            "Transient polling failures should reset the monitor to the base interval",
             pollInterval.getBaseInterval(),
-            pollInterval.getCurrentInterval()
+            pollInterval.getCurrentInterval(),
+            "Transient polling failures should reset the monitor to the base interval"
         );
         assertFalse(
-            "Transient polling failures should clear backed-off state for a fast retry",
-            pollInterval.isBackedOff()
+            pollInterval.isBackedOff(),
+            "Transient polling failures should clear backed-off state for a fast retry"
         );
     }
 
@@ -262,9 +263,9 @@ public class ContainerJobMonitorTests {
         drain.join(5000);
 
         assertEquals(
-            "poll and drain must not be inside checkCompletedJobs at the same time",
             1,
-            maxInside.get()
+            maxInside.get(),
+            "poll and drain must not be inside checkCompletedJobs at the same time"
         );
     }
 
@@ -279,8 +280,8 @@ public class ContainerJobMonitorTests {
         Object stats = parseRunsolverOutput(dir);
 
         assertTrue(
-            "wallclockExceeded must survive even though stats.json exists",
-            flag(stats, "wallclockExceeded")
+            flag(stats, "wallclockExceeded"),
+            "wallclockExceeded must survive even though stats.json exists"
         );
     }
 
@@ -289,12 +290,12 @@ public class ContainerJobMonitorTests {
         Object cpu = parseRunsolverOutput(
             outputDirWith("{\"cpuTime\": 5.0}", "Maximum CPU time exceeded: sending SIGTERM\n")
         );
-        assertTrue("cpuExceeded must survive stats.json", flag(cpu, "cpuExceeded"));
+        assertTrue(flag(cpu, "cpuExceeded"), "cpuExceeded must survive stats.json");
 
         Object mem = parseRunsolverOutput(
             outputDirWith("{\"cpuTime\": 5.0}", "Maximum VSize exceeded: sending SIGTERM\n")
         );
-        assertTrue("memoryExceeded must survive stats.json", flag(mem, "memoryExceeded"));
+        assertTrue(flag(mem, "memoryExceeded"), "memoryExceeded must survive stats.json");
     }
 
     @Test
@@ -362,11 +363,11 @@ public class ContainerJobMonitorTests {
             stats.getClass().getDeclaredField("maxResidentSetSize");
         f.setAccessible(true);
         assertEquals(
+            1024L,
+            f.getLong(stats),
             "runsolver writes 'maximum resident set size= N' with an equals sign"
                 + " (RunSolverSource/Watcher.hh:396); a parser expecting ':' silently"
-                + " records 0 for every run",
-            1024L,
-            f.getLong(stats)
+                + " records 0 for every run"
         );
     }
 
@@ -381,9 +382,9 @@ public class ContainerJobMonitorTests {
         );
 
         assertTrue(
+            flag(stats, "memoryExceeded"),
             "runsolver's -R memory kill (Watcher.hh:726) must not be recorded as a"
-                + " completed run",
-            flag(stats, "memoryExceeded")
+                + " completed run"
         );
     }
 
@@ -429,8 +430,8 @@ public class ContainerJobMonitorTests {
     public void timeoutFlagIsParsedFromVarOut() throws Exception {
         Object stats = parseRunsolverOutputWithVar(VAR_OUT_TIMED_OUT);
 
-        assertTrue("TIMEOUT=true must be read", flag(stats, "timeout"));
-        assertFalse("MEMOUT=false must be read as false", flag(stats, "memout"));
+        assertTrue(flag(stats, "timeout"), "TIMEOUT=true must be read");
+        assertFalse(flag(stats, "memout"), "MEMOUT=false must be read as false");
     }
 
     @Test
@@ -456,10 +457,10 @@ public class ContainerJobMonitorTests {
         Object stats = parseRunsolverOutput(dir);
 
         assertEquals(
-            "runsolver reported TIMEOUT=true, so this run must not be recorded as a"
-                + " clean completion just because no prose line matched",
             StatusCode.EXCEED_CPU,
-            determineStatus(stats, dir)
+            determineStatus(stats, dir),
+            "runsolver reported TIMEOUT=true, so this run must not be recorded as a"
+                + " clean completion just because no prose line matched"
         );
     }
 
@@ -472,10 +473,10 @@ public class ContainerJobMonitorTests {
         Object stats = parseRunsolverOutput(dir);
 
         assertEquals(
-            "the inverse error matters as much: a clean run must not be reported as"
-                + " having breached a limit",
             StatusCode.STATUS_COMPLETE,
-            determineStatus(stats, dir)
+            determineStatus(stats, dir),
+            "the inverse error matters as much: a clean run must not be reported as"
+                + " having breached a limit"
         );
     }
 
@@ -508,12 +509,12 @@ public class ContainerJobMonitorTests {
             verify(backend, times(1)).releaseSlotForCompletedContainer(container);
             jobPairs.verifyNoInteractions();
         }
-        assertFalse("a filesystem failure may recover and must use bounded retry",
-            quarantine().contains(container));
-        assertTrue("the failed read must be scheduled for retry with backoff",
-            attempts().containsKey(container));
-        assertTrue("the unreadable terminal evidence must be retained",
-            java.nio.file.Files.isDirectory(statusPath));
+        assertFalse(quarantine().contains(container),
+            "a filesystem failure may recover and must use bounded retry");
+        assertTrue(attempts().containsKey(container),
+            "the failed read must be scheduled for retry with backoff");
+        assertTrue(java.nio.file.Files.isDirectory(statusPath),
+            "the unreadable terminal evidence must be retained");
     }
 
     @Test
@@ -531,13 +532,13 @@ public class ContainerJobMonitorTests {
             );
 
         try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
-            assertFalse("unreadable evidence must not be reported as ingested",
-                invokeProcessReconciledJob(info));
+            assertFalse(invokeProcessReconciledJob(info),
+                "unreadable evidence must not be reported as ingested");
             jobPairs.verifyNoInteractions();
         }
         verify(backend, never()).removeCompletedContainer(info.containerId);
-        assertTrue("reconciliation must retain the container output for recovery",
-            java.nio.file.Files.isDirectory(statusPath));
+        assertTrue(java.nio.file.Files.isDirectory(statusPath),
+            "reconciliation must retain the container output for recovery");
     }
 
     @Test
@@ -556,10 +557,10 @@ public class ContainerJobMonitorTests {
             verify(backend, never()).removeCompletedContainer(container);
             verify(backend).releaseSlotForCompletedContainer(container);
         }
-        assertTrue("unknown output ownership must be quarantined for inspection",
-            quarantine().contains(container));
-        assertTrue("unowned evidence must remain on disk",
-            java.nio.file.Files.exists(out.resolve("status.json")));
+        assertTrue(quarantine().contains(container),
+            "unknown output ownership must be quarantined for inspection");
+        assertTrue(java.nio.file.Files.exists(out.resolve("status.json")),
+            "unowned evidence must remain on disk");
     }
 
     @Test
@@ -606,10 +607,10 @@ public class ContainerJobMonitorTests {
             verify(backend, never()).removeCompletedContainer(container);
             verify(backend, times(1)).releaseSlotForCompletedContainer(container);
         }
-        assertTrue("unexpected operational failures must use bounded retry",
-            attempts().containsKey(container));
-        assertTrue("valid evidence must survive an operational ingestion failure",
-            java.nio.file.Files.exists(out.resolve("status.json")));
+        assertTrue(attempts().containsKey(container),
+            "unexpected operational failures must use bounded retry");
+        assertTrue(java.nio.file.Files.exists(out.resolve("status.json")),
+            "valid evidence must survive an operational ingestion failure");
     }
 
     @Test
@@ -640,8 +641,8 @@ public class ContainerJobMonitorTests {
             verify(backend, never()).removeCompletedContainer(container);
             verify(backend, times(1)).releaseSlotForCompletedContainer(container);
         }
-        assertTrue("post-status ingestion failures must retry without deleting evidence",
-            attempts().containsKey(container));
+        assertTrue(attempts().containsKey(container),
+            "post-status ingestion failures must retry without deleting evidence");
     }
 
     @Test
@@ -657,10 +658,10 @@ public class ContainerJobMonitorTests {
             verify(backend, times(1)).releaseSlotForCompletedContainer(container);
             jobPairs.verifyNoInteractions();
         }
-        assertTrue("the completed container must be held for intervention",
-            quarantine().contains(container));
-        assertTrue("refusing an absent status file must not delete its output directory",
-            java.nio.file.Files.isDirectory(out));
+        assertTrue(quarantine().contains(container),
+            "the completed container must be held for intervention");
+        assertTrue(java.nio.file.Files.isDirectory(out),
+            "refusing an absent status file must not delete its output directory");
     }
 
     @Test
@@ -728,8 +729,8 @@ public class ContainerJobMonitorTests {
                 StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal(),
                 StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal()));
         }
-        assertFalse("an unfinished stage under a pair-level result is not a bad artifact",
-            quarantine().contains(container));
+        assertFalse(quarantine().contains(container),
+            "an unfinished stage under a pair-level result is not a bad artifact");
     }
 
     /** The control, unchanged: under a result that NAMES a stage, an unfinished one is held. */
@@ -762,8 +763,8 @@ public class ContainerJobMonitorTests {
         java.nio.file.Path out = finishedAtStageTwo("unreadable");
         writeSnapshotFile(out, "1.json", snapshotRecord(HELD_PAIR, 1, complete()));
         java.io.File dir = out.resolve("stage-status").toFile();
-        org.junit.Assume.assumeTrue("needs a filesystem that honours permissions",
-            dir.setReadable(false, false) && !dir.canRead());
+        Assumptions.assumeTrue(dir.setReadable(false, false) && !dir.canRead(),
+            "needs a filesystem that honours permissions");
         String container = "container-unreadable";
         try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
             pollTwice(out, container);
@@ -774,9 +775,9 @@ public class ContainerJobMonitorTests {
         } finally {
             dir.setReadable(true, false);
         }
-        assertFalse("an unreadable directory is not a bad artifact",
-            quarantine().contains(container));
-        assertTrue("it is due another attempt", attempts().containsKey(container));
+        assertFalse(quarantine().contains(container),
+            "an unreadable directory is not a bad artifact");
+        assertTrue(attempts().containsKey(container), "it is due another attempt");
         assertTrue(java.nio.file.Files.exists(out.resolve("stage-status/1.json")));
     }
 
@@ -789,10 +790,10 @@ public class ContainerJobMonitorTests {
             verify(backend, times(1)).releaseSlotForCompletedContainer(container);
             jobPairs.verifyNoInteractions();
         }
-        assertTrue("held on the first refusal, and skipped by the next poll",
-            quarantine().contains(container));
-        assertTrue("the output survives the refusal",
-            java.nio.file.Files.exists(out.resolve("status.json")));
+        assertTrue(quarantine().contains(container),
+            "held on the first refusal, and skipped by the next poll");
+        assertTrue(java.nio.file.Files.exists(out.resolve("status.json")),
+            "the output survives the refusal");
     }
 
     /** Two polls over the same exited container, as the scheduler would make them. */

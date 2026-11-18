@@ -3,13 +3,13 @@ package org.starexec.test.junit.backend;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.backend.LocalJobMonitor;
 import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.to.Status.StatusCode;
 
+import java.io.File;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.nio.file.Files;
@@ -17,9 +17,10 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * A pair that dies while a stage is still running.
@@ -44,32 +45,32 @@ public class PairLevelSnapshotIngestionTest {
 	private static final int PAIR = 4242;
 	private static final int PAIR_LEVEL = 0;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	// ----------------------------------------------------------------------- the reader
 
 	/** The defect itself, at the level that decides it. */
 	@Test
 	public void aStageThatNeverFinishedIsSkippedRatherThanRefused() throws Exception {
-		Path out = folder.newFolder("mid-stage").toPath();
+		Path out = newFolder(folder, "mid-stage").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
 
 		Map<Integer, Integer> read = StageStatusSnapshots.readForPairLevelResult(out, PAIR);
 
-		assertTrue("an unfinished stage must not be returned", read.isEmpty());
+		assertTrue(read.isEmpty(), "an unfinished stage must not be returned");
 	}
 
 	/** And the stages that did finish are still returned, which is what the no-bound read is for. */
 	@Test
 	public void theStagesThatFinishedAreStillReturned() throws Exception {
-		Path out = folder.newFolder("one-of-each").toPath();
+		Path out = newFolder(folder, "one-of-each").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
 		write(out, 2, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
 
 		Map<Integer, Integer> read = StageStatusSnapshots.readForPairLevelResult(out, PAIR);
 
-		assertEquals("only the finished stage", "[1]", read.keySet().toString());
+		assertEquals("[1]", read.keySet().toString(), "only the finished stage");
 		assertEquals(Integer.valueOf(StatusCode.STATUS_COMPLETE.getVal()), read.get(1));
 	}
 
@@ -82,13 +83,13 @@ public class PairLevelSnapshotIngestionTest {
 	 */
 	@Test
 	public void anUnfinishedStageBeneathAFinishedOneIsSkippedAndTheFinishedOneKept() throws Exception {
-		Path out = folder.newFolder("inconsistent").toPath();
+		Path out = newFolder(folder, "inconsistent").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
 		write(out, 2, PAIR, 2, StatusCode.STATUS_COMPLETE.getVal());
 
 		Map<Integer, Integer> read = StageStatusSnapshots.readForPairLevelResult(out, PAIR);
 
-		assertEquals("the finished stage is still ingested", "[2]", read.keySet().toString());
+		assertEquals("[2]", read.keySet().toString(), "the finished stage is still ingested");
 		assertEquals(Integer.valueOf(StatusCode.STATUS_COMPLETE.getVal()), read.get(2));
 	}
 
@@ -98,12 +99,12 @@ public class PairLevelSnapshotIngestionTest {
 	 */
 	@Test
 	public void anUnfinishedStageCannotLaunderItsOwnStatus() throws Exception {
-		Path out = folder.newFolder("launder").toPath();
+		Path out = newFolder(folder, "launder").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_PROCESSING.getVal());
 
 		Map<Integer, Integer> read = StageStatusSnapshots.readForPairLevelResult(out, PAIR);
 
-		assertTrue("STATUS_PROCESSING must never reach a caller", read.isEmpty());
+		assertTrue(read.isEmpty(), "STATUS_PROCESSING must never reach a caller");
 	}
 
 	/**
@@ -112,43 +113,43 @@ public class PairLevelSnapshotIngestionTest {
 	 */
 	@Test
 	public void aRecordNamingAnotherPairIsStillRefused() throws Exception {
-		Path out = folder.newFolder("wrong-pair").toPath();
+		Path out = newFolder(folder, "wrong-pair").toPath();
 		write(out, 1, PAIR + 99, 1, StatusCode.STATUS_RUNNING.getVal());
 
 		try {
 			StageStatusSnapshots.readForPairLevelResult(out, PAIR);
 			fail("a snapshot naming another pair must still be refused");
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertTrue(expected.getMessage(), expected.getMessage().contains("claims pair"));
+			assertTrue(expected.getMessage().contains("claims pair"), expected.getMessage());
 		}
 	}
 
 	/** Same for a name that disagrees with the record it holds. */
 	@Test
 	public void aNameDisagreeingWithItsRecordIsStillRefused() throws Exception {
-		Path out = folder.newFolder("wrong-name").toPath();
+		Path out = newFolder(folder, "wrong-name").toPath();
 		write(out, 1, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
 
 		try {
 			StageStatusSnapshots.readForPairLevelResult(out, PAIR);
 			fail("a name disagreeing with its record must still be refused");
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertTrue(expected.getMessage(), expected.getMessage().contains("is named for stage"));
+			assertTrue(expected.getMessage().contains("is named for stage"), expected.getMessage());
 		}
 	}
 
 	/** The control: under a result that NAMES a stage, an unfinished earlier stage is still refused. */
 	@Test
 	public void aStageLevelResultStillRefusesAnUnfinishedEarlierStage() throws Exception {
-		Path out = folder.newFolder("stage-level").toPath();
+		Path out = newFolder(folder, "stage-level").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
 
 		try {
 			StageStatusSnapshots.read(out, PAIR, 2);
 			fail("an unfinished stage before the reported one is still a defect");
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertTrue(expected.getMessage(),
-					expected.getMessage().contains("not a terminal execution result"));
+			assertTrue(expected.getMessage().contains("not a terminal execution result"),
+					expected.getMessage());
 		}
 	}
 
@@ -165,17 +166,17 @@ public class PairLevelSnapshotIngestionTest {
 	 */
 	@Test
 	public void theContradictionIsReportedToTheCaller() throws Exception {
-		Path out = folder.newFolder("reports").toPath();
+		Path out = newFolder(folder, "reports").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
 		write(out, 2, PAIR, 2, StatusCode.STATUS_COMPLETE.getVal());
 
 		StageStatusSnapshots.readForPairLevelResult(out, PAIR);
 		String reported = StageStatusSnapshots.lastContradiction().orElse("");
 
-		assertTrue("it must name the pair: " + reported, mentions(reported, "Pair " + PAIR));
-		assertTrue("the unfinished stage: " + reported, mentions(reported, "stage 1"));
-		assertTrue("its status: " + reported, mentions(reported, "status 4"));
-		assertTrue("and the finished one it sits below: " + reported, mentions(reported, "stage 2"));
+		assertTrue(mentions(reported, "Pair " + PAIR), "it must name the pair: " + reported);
+		assertTrue(mentions(reported, "stage 1"), "the unfinished stage: " + reported);
+		assertTrue(mentions(reported, "status 4"), "its status: " + reported);
+		assertTrue(mentions(reported, "stage 2"), "and the finished one it sits below: " + reported);
 	}
 
 	/**
@@ -185,20 +186,20 @@ public class PairLevelSnapshotIngestionTest {
 	 */
 	@Test
 	public void theOrdinaryMidStageDeathIsNotReported() throws Exception {
-		Path out = folder.newFolder("quiet").toPath();
+		Path out = newFolder(folder, "quiet").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
 		write(out, 2, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
 
 		StageStatusSnapshots.readForPairLevelResult(out, PAIR);
 
-		assertEquals("a pair dying in its last stage is ordinary and must not be reported",
-				Optional.empty(), StageStatusSnapshots.lastContradiction());
+		assertEquals(Optional.empty(),
+				StageStatusSnapshots.lastContradiction(), "a pair dying in its last stage is ordinary and must not be reported");
 	}
 
 	/** Two unfinished stages under one finished one are ONE contradiction, not two. */
 	@Test
 	public void oneReportPerPairNotPerStage() throws Exception {
-		Path out = folder.newFolder("one-per-pair").toPath();
+		Path out = newFolder(folder, "one-per-pair").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
 		write(out, 2, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
 		write(out, 3, PAIR, 3, StatusCode.STATUS_COMPLETE.getVal());
@@ -206,10 +207,10 @@ public class PairLevelSnapshotIngestionTest {
 		StageStatusSnapshots.readForPairLevelResult(out, PAIR);
 		String reported = StageStatusSnapshots.lastContradiction().orElse("");
 
-		assertTrue("both unfinished stages in one message: " + reported,
-				mentions(reported, "stage 1") && mentions(reported, "stage 2"));
-		assertEquals("one message, so one log line and one error_logs row: " + reported,
-				1, reported.split("Pair " + PAIR, -1).length - 1);
+		assertTrue(mentions(reported, "stage 1") && mentions(reported, "stage 2"),
+				"both unfinished stages in one message: " + reported);
+		assertEquals(1,
+				reported.split("Pair " + PAIR, -1).length - 1, "one message, so one log line and one error_logs row: " + reported);
 	}
 
 	/**
@@ -219,29 +220,29 @@ public class PairLevelSnapshotIngestionTest {
 	 */
 	@Test
 	public void theMonitorLogsTheContradiction() throws Throwable {
-		Path out = folder.newFolder("monitor-logs").toPath();
+		Path out = newFolder(folder, "monitor-logs").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
 		write(out, 2, PAIR, 2, StatusCode.STATUS_COMPLETE.getVal());
 
 		List<ILoggingEvent> logged = warningsWhile(LocalJobMonitor.class,
 				() -> ingestEarlierStageStatuses(out, PAIR_LEVEL));
 
-		assertEquals("the monitor must log it: " + logged, 1, logged.size());
-		assertTrue(logged.get(0).getFormattedMessage(),
-				mentions(logged.get(0).getFormattedMessage(), "Pair " + PAIR));
+		assertEquals(1, logged.size(), "the monitor must log it: " + logged);
+		assertTrue(mentions(logged.get(0).getFormattedMessage(), "Pair " + PAIR),
+				logged.get(0).getFormattedMessage());
 	}
 
 	/** And stays silent on the ordinary shape, so the log is not trained into noise. */
 	@Test
 	public void theMonitorStaysSilentOnTheOrdinaryShape() throws Throwable {
-		Path out = folder.newFolder("monitor-quiet").toPath();
+		Path out = newFolder(folder, "monitor-quiet").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
 		write(out, 2, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
 
 		List<ILoggingEvent> logged = warningsWhile(LocalJobMonitor.class,
 				() -> ingestEarlierStageStatuses(out, PAIR_LEVEL));
 
-		assertEquals("no warning for an ordinary mid-stage death: " + logged, 0, logged.size());
+		assertEquals(0, logged.size(), "no warning for an ordinary mid-stage death: " + logged);
 	}
 
 	/** A whole-word match, so a stage or status number cannot be matched by a longer one. */
@@ -291,7 +292,7 @@ public class PairLevelSnapshotIngestionTest {
 	 */
 	@Test
 	public void theLocalMonitorNoLongerRefusesAPairThatDiedMidStage() throws Throwable {
-		Path out = folder.newFolder("local-mid-stage").toPath();
+		Path out = newFolder(folder, "local-mid-stage").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
 
 		ingestEarlierStageStatuses(out, PAIR_LEVEL);
@@ -301,15 +302,15 @@ public class PairLevelSnapshotIngestionTest {
 	@Test
 	public void theLocalMonitorStillRefusesAnUnfinishedStageUnderAStageLevelResult()
 			throws Throwable {
-		Path out = folder.newFolder("local-stage-level").toPath();
+		Path out = newFolder(folder, "local-stage-level").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
 
 		try {
 			ingestEarlierStageStatuses(out, 2);
 			fail("an unfinished stage before the reported one is still a defect");
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertTrue(expected.getMessage(),
-					expected.getMessage().contains("not a terminal execution result"));
+			assertTrue(expected.getMessage().contains("not a terminal execution result"),
+					expected.getMessage());
 		}
 	}
 

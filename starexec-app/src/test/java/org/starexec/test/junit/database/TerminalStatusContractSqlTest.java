@@ -1,7 +1,7 @@
 package org.starexec.test.junit.database;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
@@ -13,8 +13,8 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Java and the database must agree on what counts as a stage's final result.
@@ -38,7 +38,7 @@ import static org.junit.Assert.assertTrue;
  */
 public class TerminalStatusContractSqlTest extends Common {
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("TerminalStatusContractSqlTest");
 		Common.initialize();
@@ -56,7 +56,7 @@ public class TerminalStatusContractSqlTest extends Common {
 				ps.setInt(1, code.getVal());
 				boolean db;
 				try (ResultSet rs = ps.executeQuery()) {
-					assertTrue("IsTerminalPairStatus returned no row for " + code, rs.next());
+					assertTrue(rs.next(), "IsTerminalPairStatus returned no row for " + code);
 					db = rs.getBoolean(1);
 				}
 				boolean java = code.isTerminalExecutionResult();
@@ -68,9 +68,9 @@ public class TerminalStatusContractSqlTest extends Common {
 			}
 		}
 
-		assertTrue("every status must be checked", checked >= 20);
-		assertEquals("Java and SQL disagree on: " + disagreements,
-				0, disagreements.size());
+		assertTrue(checked >= 20, "every status must be checked");
+		assertEquals(0,
+				disagreements.size(), "Java and SQL disagree on: " + disagreements);
 	}
 
 	/**
@@ -79,12 +79,12 @@ public class TerminalStatusContractSqlTest extends Common {
 	 */
 	@Test
 	public void theStatesThatMeanWorkIsStillOwedAreNotResults() {
-		assertTrue("PROCESSING_RESULTS is not a result",
-				!StatusCode.STATUS_PROCESSING_RESULTS.isTerminalExecutionResult());
-		assertTrue("PAUSED is not a result",
-				!StatusCode.STATUS_PAUSED.isTerminalExecutionResult());
-		assertTrue("PROCESSING is not a result -- post-processing turns it into COMPLETE",
-				!StatusCode.STATUS_PROCESSING.isTerminalExecutionResult());
+		assertTrue(!StatusCode.STATUS_PROCESSING_RESULTS.isTerminalExecutionResult(),
+				"PROCESSING_RESULTS is not a result");
+		assertTrue(!StatusCode.STATUS_PAUSED.isTerminalExecutionResult(),
+				"PAUSED is not a result");
+		assertTrue(!StatusCode.STATUS_PROCESSING.isTerminalExecutionResult(),
+				"PROCESSING is not a result -- post-processing turns it into COMPLETE");
 	}
 
 	/** And the predicate this replaced, kept visible so the difference is not re-litigated. */
@@ -96,7 +96,7 @@ public class TerminalStatusContractSqlTest extends Common {
 				divergent.add(code);
 			}
 		}
-		assertEquals("finishedRunning() differs on exactly the three non-result states: "
-				+ divergent, 3, divergent.size());
+		assertEquals(3, divergent.size(), "finishedRunning() differs on exactly the three non-result states: "
+				+ divergent);
 	}
 }

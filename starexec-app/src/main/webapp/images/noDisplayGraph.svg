@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300" role="img" aria-label="Chart unavailable">
+<title>Chart unavailable</title>
+<rect width="300" height="300" fill="#ffffff"/>
+<text x="150" y="26" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="bold" fill="#000000">Cannot display data</text>
+<rect x="40" y="40" width="245" height="230" fill="#c0c0c0" stroke="#808080"/>
+<g stroke="#ffffff" stroke-width="1" stroke-dasharray="2 2"><line x1="80.8" y1="40" x2="80.8" y2="270"/><line x1="121.7" y1="40" x2="121.7" y2="270"/><line x1="162.5" y1="40" x2="162.5" y2="270"/><line x1="203.3" y1="40" x2="203.3" y2="270"/><line x1="244.2" y1="40" x2="244.2" y2="270"/><line x1="40" y1="78.3" x2="285" y2="78.3"/><line x1="40" y1="116.7" x2="285" y2="116.7"/><line x1="40" y1="155.0" x2="285" y2="155.0"/><line x1="40" y1="193.3" x2="285" y2="193.3"/><line x1="40" y1="231.7" x2="285" y2="231.7"/></g>
+</svg>

@@ -1,10 +1,10 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.Backend;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
@@ -18,10 +18,10 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Caller-level tests for the administrative kill and reset paths, against the real SQL.
@@ -41,7 +41,7 @@ public class JobsKillProtocolSqlTest extends Common {
     private int enqueuedPairId;
     private Backend originalBackend;
 
-    @BeforeClass
+    @BeforeAll
     public static void requireDatabase() {
         DatabaseTestSupport.assumeDatabaseAvailable("JobsKillProtocolSqlTest");
         Common.initialize();
@@ -83,9 +83,9 @@ public class JobsKillProtocolSqlTest extends Common {
     /** The state a fixture-owned connection must be in before it returns to the pool. */
     private static void assertConnectionReturnedClean(Connection con, String operation)
             throws SQLException {
-        assertTrue(operation + " must explicitly finish its transaction and restore"
-                + " autoCommit before the connection goes back to the pool",
-                con.getAutoCommit());
+        assertTrue(con.getAutoCommit(),
+                operation + " must explicitly finish its transaction and restore"
+                + " autoCommit before the connection goes back to the pool");
     }
 
     /**
@@ -97,7 +97,7 @@ public class JobsKillProtocolSqlTest extends Common {
      * this is not a reliable negative control on its own; the deterministic check is the
      * fixture-boundary assertion in {@link #createFixture()}.</p>
      */
-    @AfterClass
+    @AfterAll
     public static void fixtureLeavesNothingBehind() throws SQLException {
         // @AfterClass still runs when @BeforeClass skipped the class by assumption, and
         // the pool is not initialised in a no-database run.
@@ -105,9 +105,9 @@ public class JobsKillProtocolSqlTest extends Common {
             return;
         }
         try (Connection con = Common.getConnection()) {
-            assertEquals("kill-protocol fixtures must not survive cleanup", 0,
-                    selectInt(con, "SELECT count(*) FROM starexec.jobs"
-                            + " WHERE name = 'kill-protocol-test'"));
+            assertEquals(0, selectInt(con, "SELECT count(*) FROM starexec.jobs"
+                            + " WHERE name = 'kill-protocol-test'"),
+                    "kill-protocol fixtures must not survive cleanup");
         }
     }
 
@@ -140,13 +140,13 @@ public class JobsKillProtocolSqlTest extends Common {
             }
 
             assertConnectionReturnedClean(con, "rollback probe");
-            assertEquals("the partially built fixture must not have been committed", 0,
-                    selectInt(con, "SELECT count(*) FROM starexec.jobs WHERE name = '"
-                            + probe + "'"));
+            assertEquals(0, selectInt(con, "SELECT count(*) FROM starexec.jobs WHERE name = '"
+                            + probe + "'"),
+                    "the partially built fixture must not have been committed");
         }
     }
 
-    @Before
+    @BeforeEach
     public void createFixture() throws SQLException {
         originalBackend = R.BACKEND;
         try (Connection con = Common.getConnection()) {
@@ -192,7 +192,7 @@ public class JobsKillProtocolSqlTest extends Common {
         return pairId;
     }
 
-    @After
+    @AfterEach
     public void dropFixture() throws SQLException {
         R.BACKEND = originalBackend;
         if (jobId == 0) {
@@ -240,23 +240,23 @@ public class JobsKillProtocolSqlTest extends Common {
     public void killingAnAllRunningJobStopsItsExecutions() throws Exception {
         R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
 
-        assertTrue("the kill must report success", invokeKill(jobId));
+        assertTrue(invokeKill(jobId), "the kill must report success");
 
-        assertTrue("the job must be flagged killed", isKilled(jobId));
-        assertEquals("the running pair must be recorded killed",
-                StatusCode.STATUS_KILLED.getVal(), statusOf(runningPairId));
-        assertEquals("and so must the enqueued one",
-                StatusCode.STATUS_KILLED.getVal(), statusOf(enqueuedPairId));
+        assertTrue(isKilled(jobId), "the job must be flagged killed");
+        assertEquals(StatusCode.STATUS_KILLED.getVal(),
+                statusOf(runningPairId), "the running pair must be recorded killed");
+        assertEquals(StatusCode.STATUS_KILLED.getVal(),
+                statusOf(enqueuedPairId), "and so must the enqueued one");
     }
 
     @Test
     public void anUnprovenKillNeverClaimsThePairWasKilled() throws Exception {
         R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
 
-        assertFalse("an incomplete kill must not report success", invokeKill(jobId));
+        assertFalse(invokeKill(jobId), "an incomplete kill must not report success");
 
-        assertEquals("a pair whose execution may still run must keep its status",
-                StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+        assertEquals(StatusCode.STATUS_RUNNING.getVal(),
+                statusOf(runningPairId), "a pair whose execution may still run must keep its status");
         assertEquals(StatusCode.STATUS_ENQUEUED.getVal(), statusOf(enqueuedPairId));
     }
 
@@ -264,21 +264,21 @@ public class JobsKillProtocolSqlTest extends Common {
     public void directJobDeletionPreservesRowsWhenExecutionStopIsUnproven() throws Exception {
         R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
 
-        assertFalse("deletion must report that an active execution could not be retired",
-                Jobs.delete(jobId));
+        assertFalse(Jobs.delete(jobId),
+                "deletion must report that an active execution could not be retired");
 
-        assertEquals("the job row must remain", 1,
-                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId));
-        assertEquals("the job must not be marked deleted", 0,
-                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId + " AND deleted"));
-        assertEquals("the running pair row must remain", 1,
-                selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = " + runningPairId));
-        assertEquals("the unproven running pair must retain its active status",
-                StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
-        assertEquals("the enqueued pair row must remain", 1,
-                selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = " + enqueuedPairId));
-        assertEquals("the unproven enqueued pair must retain its active status",
-                StatusCode.STATUS_ENQUEUED.getVal(), statusOf(enqueuedPairId));
+        assertEquals(1, selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId),
+                "the job row must remain");
+        assertEquals(0, selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId + " AND deleted"),
+                "the job must not be marked deleted");
+        assertEquals(1, selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = " + runningPairId),
+                "the running pair row must remain");
+        assertEquals(StatusCode.STATUS_RUNNING.getVal(),
+                statusOf(runningPairId), "the unproven running pair must retain its active status");
+        assertEquals(1, selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = " + enqueuedPairId),
+                "the enqueued pair row must remain");
+        assertEquals(StatusCode.STATUS_ENQUEUED.getVal(),
+                statusOf(enqueuedPairId), "the unproven enqueued pair must retain its active status");
     }
 
     // ------------------------------------------------------------------
@@ -292,15 +292,15 @@ public class JobsKillProtocolSqlTest extends Common {
      */
     @Test
     public void aRefusedDeletionIsCompletedOnceTheStopIsConfirmed() throws Exception {
-        assertTrue("what the endpoints do first", Jobs.setDeletedColumn(jobId));
+        assertTrue(Jobs.setDeletedColumn(jobId), "what the endpoints do first");
         R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
-        assertFalse("the first deletion is refused", Jobs.delete(jobId));
+        assertFalse(Jobs.delete(jobId), "the first deletion is refused");
         assertEquals(2, pairCount());
 
         R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
-        assertTrue("the retry must complete this deletion", Jobs.retryRefusedDeletions() >= 1);
+        assertTrue(Jobs.retryRefusedDeletions() >= 1, "the retry must complete this deletion");
 
-        assertEquals("no pair of the deleted job may remain", 0, pairCount());
+        assertEquals(0, pairCount(), "no pair of the deleted job may remain");
     }
 
     @Test
@@ -310,7 +310,7 @@ public class JobsKillProtocolSqlTest extends Common {
 
         Jobs.retryRefusedDeletions();
 
-        assertEquals("rows stay while an execution may still run", 2, pairCount());
+        assertEquals(2, pairCount(), "rows stay while an execution may still run");
         assertEquals(StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
     }
 
@@ -338,9 +338,9 @@ public class JobsKillProtocolSqlTest extends Common {
 
         assertTrue(Jobs.cleanOrphanedDeletedJobs());
 
-        assertEquals("the job row must remain", 1,
-                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId));
-        assertEquals("its in-flight pairs must remain", 2, pairCount());
+        assertEquals(1, selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId),
+                "the job row must remain");
+        assertEquals(2, pairCount(), "its in-flight pairs must remain");
     }
 
     /**
@@ -356,8 +356,8 @@ public class JobsKillProtocolSqlTest extends Common {
 
         assertTrue(Jobs.cleanOrphanedDeletedJobs());
 
-        assertEquals("a deleted, orphaned job with nothing in flight is purged", 0,
-                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId));
+        assertEquals(0, selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId),
+                "a deleted, orphaned job with nothing in flight is purged");
     }
 
     private int pairCount() throws SQLException {
@@ -384,17 +384,17 @@ public class JobsKillProtocolSqlTest extends Common {
                         + " EXECUTE FUNCTION starexec." + functionName + "()");
             }
 
-            assertFalse("deletion must stop if the database could not record the deleted marker",
-                    Jobs.delete(jobId));
-            assertEquals("the job remains available and undeleted", 0,
-                    selectInt("SELECT count(*) FROM starexec.jobs WHERE id = "
-                            + jobId + " AND deleted"));
-            assertEquals("the running pair row must remain", 1,
-                    selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = "
-                            + runningPairId));
-            assertEquals("the enqueued pair row must remain", 1,
-                    selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = "
-                            + enqueuedPairId));
+            assertFalse(Jobs.delete(jobId),
+                    "deletion must stop if the database could not record the deleted marker");
+            assertEquals(0, selectInt("SELECT count(*) FROM starexec.jobs WHERE id = "
+                            + jobId + " AND deleted"),
+                    "the job remains available and undeleted");
+            assertEquals(1, selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = "
+                            + runningPairId),
+                    "the running pair row must remain");
+            assertEquals(1, selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = "
+                            + enqueuedPairId),
+                    "the enqueued pair row must remain");
         } finally {
             try (Connection con = Common.getConnection();
                     java.sql.Statement statement = con.createStatement()) {
@@ -427,10 +427,10 @@ public class JobsKillProtocolSqlTest extends Common {
                         + " EXECUTE FUNCTION starexec." + functionName + "()");
             }
 
-            assertFalse("status persistence failure must not report a retired pair",
-                    JobPairs.killPairConfirmed(runningPairId, 771001));
-            assertEquals("the failed write leaves the pair visibly in flight",
-                    StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+            assertFalse(JobPairs.killPairConfirmed(runningPairId, 771001),
+                    "status persistence failure must not report a retired pair");
+            assertEquals(StatusCode.STATUS_RUNNING.getVal(),
+                    statusOf(runningPairId), "the failed write leaves the pair visibly in flight");
         } finally {
             try (Connection con = Common.getConnection();
                     java.sql.Statement statement = con.createStatement()) {
@@ -452,9 +452,9 @@ public class JobsKillProtocolSqlTest extends Common {
 
         assertTrue(Jobs.setPairsToPending(jobId, StatusCode.STATUS_RUNNING.getVal()));
 
-        assertTrue("the pair's own execution id must be used, never 0",
-                recorder.asked.contains(771001));
-        assertFalse("execution 0 must never be asked about", recorder.asked.contains(0));
+        assertTrue(recorder.asked.contains(771001),
+                "the pair's own execution id must be used, never 0");
+        assertFalse(recorder.asked.contains(0), "execution 0 must never be asked about");
         assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), statusOf(runningPairId));
     }
 
@@ -463,11 +463,11 @@ public class JobsKillProtocolSqlTest extends Common {
             throws Exception {
         R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
 
-        assertFalse("the caller must learn the operation did not complete",
-                Jobs.setPairsToPending(jobId, StatusCode.STATUS_RUNNING.getVal()));
+        assertFalse(Jobs.setPairsToPending(jobId, StatusCode.STATUS_RUNNING.getVal()),
+                "the caller must learn the operation did not complete");
 
-        assertEquals("resetting it would let a replacement run beside the surviving execution",
-                StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+        assertEquals(StatusCode.STATUS_RUNNING.getVal(),
+                statusOf(runningPairId), "resetting it would let a replacement run beside the surviving execution");
     }
 
     @Test
@@ -478,7 +478,7 @@ public class JobsKillProtocolSqlTest extends Common {
 
         assertFalse(Jobs.setPairsToPending(jobId, StatusCode.STATUS_RUNNING.getVal()));
 
-        assertFalse("a NULL sge_id must not be read as execution 0", recorder.asked.contains(0));
+        assertFalse(recorder.asked.contains(0), "a NULL sge_id must not be read as execution 0");
         assertEquals(StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
     }
 
@@ -499,9 +499,9 @@ public class JobsKillProtocolSqlTest extends Common {
         R.BACKEND = backend;
 
         try {
-            assertFalse("an incomplete kill must be reported, not swallowed", Jobs.pauseAll());
-            assertEquals("no pair may be made runnable again while an execution may survive",
-                    StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+            assertFalse(Jobs.pauseAll(), "an incomplete kill must be reported, not swallowed");
+            assertEquals(StatusCode.STATUS_RUNNING.getVal(),
+                    statusOf(runningPairId), "no pair may be made runnable again while an execution may survive");
             assertEquals(StatusCode.STATUS_ENQUEUED.getVal(), statusOf(enqueuedPairId));
         } finally {
             // pauseAll sets a system-wide flag; leave the scratch database as we found it.
@@ -519,7 +519,7 @@ public class JobsKillProtocolSqlTest extends Common {
         Backend backend = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
         R.BACKEND = backend;
 
-        assertTrue("the kill must report success", invokeKill(jobId));
+        assertTrue(invokeKill(jobId), "the kill must report success");
 
         org.mockito.Mockito.verify(backend).requestStop(771001);
         org.mockito.Mockito.verify(backend).requestStop(771002);
@@ -560,9 +560,9 @@ public class JobsKillProtocolSqlTest extends Common {
                 .thenReturn(true);
         R.BACKEND = backend;
 
-        assertTrue("the pause must report success", Jobs.pause(jobId));
+        assertTrue(Jobs.pause(jobId), "the pause must report success");
 
-        assertTrue("the job must be flagged paused", isPaused(jobId));
+        assertTrue(isPaused(jobId), "the job must be flagged paused");
         org.mockito.Mockito.verify(backend).killPair(771001);
         org.mockito.Mockito.verify(backend).killPair(771002);
         // Each stopped execution is retired from backend tracking. Otherwise LocalJobMonitor
@@ -570,10 +570,10 @@ public class JobsKillProtocolSqlTest extends Common {
         org.mockito.Mockito.verify(backend).clearPairTracking(runningPairId);
         org.mockito.Mockito.verify(backend).clearPairTracking(enqueuedPairId);
         int paused = StatusCode.STATUS_PAUSED.getVal();
-        assertEquals("the running pair must be paused", paused, statusOf(runningPairId));
-        assertEquals("and its stage", paused, stageStatusOf(runningPairId));
-        assertEquals("the enqueued pair must be paused", paused, statusOf(enqueuedPairId));
-        assertEquals("and its stage", paused, stageStatusOf(enqueuedPairId));
+        assertEquals(paused, statusOf(runningPairId), "the running pair must be paused");
+        assertEquals(paused, stageStatusOf(runningPairId), "and its stage");
+        assertEquals(paused, statusOf(enqueuedPairId), "the enqueued pair must be paused");
+        assertEquals(paused, stageStatusOf(enqueuedPairId), "and its stage");
     }
 
     /** A pair whose stop was not confirmed may still be running, so it is not marked paused. */
@@ -585,11 +585,11 @@ public class JobsKillProtocolSqlTest extends Common {
 
         Jobs.pause(jobId);
 
-        assertTrue("the job is flagged paused, so nothing new is dispatched", isPaused(jobId));
-        assertEquals("a pair that may still be running must keep its status",
-                StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
-        assertEquals("an enqueued pair is paused even so",
-                StatusCode.STATUS_PAUSED.getVal(), statusOf(enqueuedPairId));
+        assertTrue(isPaused(jobId), "the job is flagged paused, so nothing new is dispatched");
+        assertEquals(StatusCode.STATUS_RUNNING.getVal(),
+                statusOf(runningPairId), "a pair that may still be running must keep its status");
+        assertEquals(StatusCode.STATUS_PAUSED.getVal(),
+                statusOf(enqueuedPairId), "an enqueued pair is paused even so");
         // Nothing was stopped, so nothing is retired: an execution that runs on must still
         // have its result recorded.
         org.mockito.Mockito.verify(backend, org.mockito.Mockito.never())
@@ -609,10 +609,10 @@ public class JobsKillProtocolSqlTest extends Common {
                 .thenReturn(true);
         R.BACKEND = backend;
 
-        assertTrue("the pause must report success", Jobs.pause(jobId));
+        assertTrue(Jobs.pause(jobId), "the pause must report success");
 
-        assertEquals("the pending pair must be paused",
-                StatusCode.STATUS_PAUSED.getVal(), statusOf(enqueuedPairId));
+        assertEquals(StatusCode.STATUS_PAUSED.getVal(),
+                statusOf(enqueuedPairId), "the pending pair must be paused");
         org.mockito.Mockito.verify(backend).killPair(771001);
         org.mockito.Mockito.verify(backend, org.mockito.Mockito.times(1))
                 .killPair(org.mockito.ArgumentMatchers.anyInt());
@@ -638,11 +638,11 @@ public class JobsKillProtocolSqlTest extends Common {
         }).when(backend).clearPairTracking(org.mockito.ArgumentMatchers.anyInt());
         R.BACKEND = backend;
 
-        assertTrue("the pause must report success", Jobs.pause(jobId));
+        assertTrue(Jobs.pause(jobId), "the pause must report success");
 
-        assertEquals("tracking must be retired while the pair still reads RUNNING",
-                Integer.valueOf(StatusCode.STATUS_RUNNING.getVal()),
-                statusWhenRetired.get(runningPairId));
+        assertEquals(Integer.valueOf(StatusCode.STATUS_RUNNING.getVal()),
+                statusWhenRetired.get(runningPairId),
+                "tracking must be retired while the pair still reads RUNNING");
         assertEquals(StatusCode.STATUS_PAUSED.getVal(), statusOf(runningPairId));
     }
 
@@ -659,11 +659,11 @@ public class JobsKillProtocolSqlTest extends Common {
                 .when(backend).clearPairTracking(org.mockito.ArgumentMatchers.anyInt());
         R.BACKEND = backend;
 
-        assertTrue("the pause must report success", Jobs.pause(jobId));
+        assertTrue(Jobs.pause(jobId), "the pause must report success");
 
         int paused = StatusCode.STATUS_PAUSED.getVal();
-        assertEquals("the running pair must be paused", paused, statusOf(runningPairId));
-        assertEquals("the enqueued pair must be paused", paused, statusOf(enqueuedPairId));
+        assertEquals(paused, statusOf(runningPairId), "the running pair must be paused");
+        assertEquals(paused, statusOf(enqueuedPairId), "the enqueued pair must be paused");
     }
 
     // ------------------------------------------------------------------
@@ -699,9 +699,9 @@ public class JobsKillProtocolSqlTest extends Common {
                 Jobs.class.getDeclaredMethod("kill", int.class, Connection.class);
         m.setAccessible(true);
         try (Connection con = Common.getConnection()) {
-            assertTrue("Jobs.kill writes on the connection it is given and then borrows more"
+            assertTrue(con.getAutoCommit(), "Jobs.kill writes on the connection it is given and then borrows more"
                     + " from the same pool; handing it one mid-transaction makes it block on"
-                    + " its own helpers", con.getAutoCommit());
+                    + " its own helpers");
             return (Boolean) m.invoke(null, id, con);
         }
     }

@@ -1,8 +1,7 @@
 package org.starexec.test.unit.util;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.util.XMLUtil;
 import org.xml.sax.SAXNotRecognizedException;
@@ -30,11 +29,12 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.starexec.test.TemporaryFolders.newFile;
 
 /**
  * Schema resolution must be local, offline, and driven by an allowlist.
@@ -74,8 +74,8 @@ public class SchemaResolutionTest {
 	private static final String DEPLOYMENT_UPLOAD_SCHEMA_REF =
 			"https://starexec.example.org/starexec/public/runSolverOnUploadBatchJobSchema.xsd";
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	// ---------------------------------------------------------------- packaging
 
@@ -90,14 +90,14 @@ public class SchemaResolutionTest {
 	public void everySchemaIsBothPackagedAndServed() throws Exception {
 		for (String name : BUNDLED_SCHEMAS) {
 			try (InputStream packaged = XMLUtil.class.getResourceAsStream(SCHEMA_DIR + name)) {
-				assertNotNull(name + " is missing from the packaged deployment", packaged);
+				assertNotNull(packaged, name + " is missing from the packaged deployment");
 			}
 
 			Path source = Path.of("src/main/resources/schemas", name);
 			Path served = Path.of("src/main/webapp/public", name);
-			assertTrue(name + " is not served from webapp/public", Files.isRegularFile(served));
-			assertEquals(name + " differs between the packaged and served copies",
-					Files.readString(source), Files.readString(served));
+			assertTrue(Files.isRegularFile(served), name + " is not served from webapp/public");
+			assertEquals(Files.readString(source),
+					Files.readString(served), name + " differs between the packaged and served copies");
 		}
 	}
 
@@ -114,13 +114,13 @@ public class SchemaResolutionTest {
 	public void theImportLocationCannotBeFetched() throws Exception {
 		String schema = readPackaged("batchJobSchema.xsd");
 		Matcher m = Pattern.compile("<import[^>]*schemaLocation=\"([^\"]+)\"").matcher(schema);
-		assertTrue("batchJobSchema.xsd no longer declares an import to resolve", m.find());
+		assertTrue(m.find(), "batchJobSchema.xsd no longer declares an import to resolve");
 		String location = m.group(1);
 
-		assertTrue("the import location changed shape; revisit this proof",
-				BUNDLED_SCHEMAS.contains(location));
-		assertFalse("the import location is now an absolute URI, so this proof no longer holds",
-				URI.create(location.replace("@", "%40")).isAbsolute());
+		assertTrue(BUNDLED_SCHEMAS.contains(location),
+				"the import location changed shape; revisit this proof");
+		assertFalse(URI.create(location.replace("@", "%40")).isAbsolute(),
+				"the import location is now an absolute URI, so this proof no longer holds");
 		try {
 			new URL(location);
 			fail("the import location resolved as a URL: local resolution is no longer proven");
@@ -140,7 +140,7 @@ public class SchemaResolutionTest {
 	public void shippedExampleJobValidates() throws Exception {
 		ValidatorStatusCode status =
 				XMLUtil.validateAgainstSchema(packagedAsFile("ExampleJob.xml"), DEPLOYMENT_JOB_SCHEMA_REF);
-		assertTrue("shipped ExampleJob.xml does not validate: " + status.getMessage(), status.isSuccess());
+		assertTrue(status.isSuccess(), "shipped ExampleJob.xml does not validate: " + status.getMessage());
 	}
 
 	/**
@@ -153,7 +153,7 @@ public class SchemaResolutionTest {
 	public void shippedExampleSpaceValidates() throws Exception {
 		ValidatorStatusCode status =
 				XMLUtil.validateAgainstSchema(packagedAsFile("ExampleSpace.xml"), DEPLOYMENT_SPACE_SCHEMA_REF);
-		assertTrue("shipped ExampleSpace.xml does not validate: " + status.getMessage(), status.isSuccess());
+		assertTrue(status.isSuccess(), "shipped ExampleSpace.xml does not validate: " + status.getMessage());
 	}
 
 	/** Defect #8, end to end: the solver-upload schema now compiles and validates a document. */
@@ -175,8 +175,8 @@ public class SchemaResolutionTest {
 						+ "</tns:Jobs>\n");
 
 		ValidatorStatusCode status = XMLUtil.validateAgainstSchema(xml, DEPLOYMENT_UPLOAD_SCHEMA_REF);
-		assertTrue("solver-upload schema did not validate its own document shape: " + status.getMessage(),
-				status.isSuccess());
+		assertTrue(status.isSuccess(),
+				"solver-upload schema did not validate its own document shape: " + status.getMessage());
 	}
 
 	// ------------------------------------------------------------- denied input
@@ -201,9 +201,9 @@ public class SchemaResolutionTest {
 
 		for (String ref : refused) {
 			ValidatorStatusCode status = XMLUtil.validateAgainstSchema(exampleJob, ref);
-			assertFalse("'" + ref + "' was accepted as a schema reference", status.isSuccess());
-			assertTrue("rejection of '" + ref + "' should name the reference, was: " + status.getMessage(),
-					status.getMessage().contains("No bundled schema"));
+			assertFalse(status.isSuccess(), "'" + ref + "' was accepted as a schema reference");
+			assertTrue(status.getMessage().contains("No bundled schema"),
+					"rejection of '" + ref + "' should name the reference, was: " + status.getMessage());
 		}
 	}
 
@@ -211,7 +211,7 @@ public class SchemaResolutionTest {
 	@Test
 	public void aNullReferenceIsRefused() throws Exception {
 		ValidatorStatusCode status = XMLUtil.validateAgainstSchema(packagedAsFile("ExampleJob.xml"), null);
-		assertFalse("null was accepted as a schema reference", status.isSuccess());
+		assertFalse(status.isSuccess(), "null was accepted as a schema reference");
 	}
 
 	/**
@@ -222,14 +222,14 @@ public class SchemaResolutionTest {
 	 */
 	@Test
 	public void aPathLikeReferenceSelectsTheBundledCopyRatherThanTraversing() throws Exception {
-		File planted = folder.newFile("batchJobSchema.xsd");
+		File planted = newFile(folder, "batchJobSchema.xsd");
 		Files.writeString(planted.toPath(), "<?xml version=\"1.0\"?><not-a-schema/>");
 
 		ValidatorStatusCode status = XMLUtil.validateAgainstSchema(
 				packagedAsFile("ExampleJob.xml"), planted.getAbsolutePath());
 
-		assertTrue("a filesystem path was read instead of the bundled schema: " + status.getMessage(),
-				status.isSuccess());
+		assertTrue(status.isSuccess(),
+				"a filesystem path was read instead of the bundled schema: " + status.getMessage());
 	}
 
 	/**
@@ -281,8 +281,8 @@ public class SchemaResolutionTest {
 								+ "</tns:Jobs>\n");
 
 				XMLUtil.validateAgainstSchema(xml, DEPLOYMENT_JOB_SCHEMA_REF);
-				assertEquals("a " + document[0] + " reached the network",
-						0, drainConnections(listener));
+				assertEquals(0,
+						drainConnections(listener), "a " + document[0] + " reached the network");
 			}
 		}
 	}
@@ -303,10 +303,10 @@ public class SchemaResolutionTest {
 
 			ValidatorStatusCode status = XMLUtil.validateAgainstSchema(xml, DEPLOYMENT_JOB_SCHEMA_REF);
 
-			assertFalse("a document carrying a DOCTYPE was accepted", status.isSuccess());
-			assertTrue("expected the doctype control to reject it, got: " + status.getMessage(),
-					status.getMessage().contains("disallow-doctype-decl"));
-			assertEquals("the external DTD was fetched", 0, drainConnections(listener));
+			assertFalse(status.isSuccess(), "a document carrying a DOCTYPE was accepted");
+			assertTrue(status.getMessage().contains("disallow-doctype-decl"),
+					"expected the doctype control to reject it, got: " + status.getMessage());
+			assertEquals(0, drainConnections(listener), "the external DTD was fetched");
 		}
 	}
 
@@ -339,8 +339,8 @@ public class SchemaResolutionTest {
 			// If this ever starts working the comment in XMLUtil is stale, but nothing is
 			// unsafe: the code uses the default provider either way.
 		} catch (SAXNotRecognizedException expected) {
-			assertTrue("the classpath provider should be the one that cannot be restricted",
-					lookedUp.getClass().getName().contains("xerces"));
+			assertTrue(lookedUp.getClass().getName().contains("xerces"),
+					"the classpath provider should be the one that cannot be restricted");
 		}
 	}
 
@@ -353,11 +353,11 @@ public class SchemaResolutionTest {
 					.matcher(readPackaged(name));
 			while (m.find()) {
 				imports++;
-				assertTrue(name + " imports '" + m.group(1) + "', which is not bundled",
-						BUNDLED_SCHEMAS.contains(m.group(1).substring(m.group(1).lastIndexOf('/') + 1)));
+				assertTrue(BUNDLED_SCHEMAS.contains(m.group(1).substring(m.group(1).lastIndexOf('/') + 1)),
+						name + " imports '" + m.group(1) + "', which is not bundled");
 			}
 		}
-		assertTrue("the bundled schemas should declare imports to resolve", imports > 0);
+		assertTrue(imports > 0, "the bundled schemas should declare imports to resolve");
 	}
 
 	// ------------------------------------------------ documents from other instances
@@ -396,12 +396,12 @@ public class SchemaResolutionTest {
 
 			ValidatorStatusCode status = XMLUtil.validateAgainstSchema(xml, DEPLOYMENT_JOB_SCHEMA_REF);
 
-			assertFalse("the namespace round-trip gap has closed; update this test and the plan",
-					status.isSuccess());
-			assertTrue("expected a local schema-validation failure, got: " + status.getMessage(),
-					status.getMessage().contains("is not valid because"));
-			assertTrue("the failure should name the undeclared root element, got: " + status.getMessage(),
-					status.getMessage().contains("Jobs"));
+			assertFalse(status.isSuccess(),
+					"the namespace round-trip gap has closed; update this test and the plan");
+			assertTrue(status.getMessage().contains("is not valid because"),
+					"expected a local schema-validation failure, got: " + status.getMessage());
+			assertTrue(status.getMessage().contains("Jobs"),
+					"the failure should name the undeclared root element, got: " + status.getMessage());
 		}
 	}
 
@@ -413,7 +413,7 @@ public class SchemaResolutionTest {
 
 	private String readPackaged(String name) throws Exception {
 		try (InputStream in = XMLUtil.class.getResourceAsStream(SCHEMA_DIR + name)) {
-			assertNotNull(name + " is missing from the packaged deployment", in);
+			assertNotNull(in, name + " is missing from the packaged deployment");
 			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
 		}
 	}
@@ -423,7 +423,7 @@ public class SchemaResolutionTest {
 	}
 
 	private File write(String name, String content) throws Exception {
-		File file = new File(folder.getRoot(), name);
+		File file = new File(folder, name);
 		Files.writeString(file.toPath(), content);
 		return file;
 	}

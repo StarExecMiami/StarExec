@@ -1,11 +1,11 @@
 #loginForm {
-	width: 370px;
-	height: 140px;
+	// As wide and tall as its fields: a fixed 370x140px box, which the fieldset
+	// and table filled, was smaller than them, so they ran past its border.
+	width: fit-content;
 	margin: 50px auto auto;
 
 	table {
 		width: 100%;
-		height: 100%;
 	}
 
 	button {
@@ -18,7 +18,6 @@
 
 	fieldset {
 		width: 100%;
-		height: 100%;
 		padding: 30px;
 	}
 
@@ -30,30 +29,15 @@
 		width: 200px;
 		margin-bottom: 3px;
 	}
-
-	a:link {
-		text-decoration: none;
-		font-size: 14px;
-		position: relative;
-		bottom: 7px;
-	}
-}
-
-#emailRow {
-	margin-bottom: 3px;
 }
 
 @media only screen and (max-width: 767px) {
 	#loginForm {
 		margin: 20px 0 0 10px;
-		width: 100%;
+		width: auto;
 	}
 
 	body {
-		form #loginFieldset {
-			width: 50%;
-		}
-
 		#loginForm input {
 			margin-left: 6px;
 			width: 150px;
@@ -76,5 +60,3 @@
 		margin: 0 0 10px 0;
 	}
 }
-
-@media only screen and (min-width: 560px) and (max-width: 767px) {}

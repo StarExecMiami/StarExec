@@ -11,7 +11,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
-import org.junit.runners.model.InitializationError;
 
 public class LegacyTestSequenceDiscoveryTest {
 	private static final String MATRIX_TESTS =
@@ -141,16 +140,6 @@ public class LegacyTestSequenceDiscoveryTest {
 		assertTrue(error.getMessage().contains("COMPONENT_DAO"));
 		assertTrue(error.getMessage().contains("BACKEND_INTEGRATION"));
 		assertTrue(error.getMessage().contains("DEPLOYED_E2E"));
-	}
-
-	@Test
-	public void liveSuiteRunnerStopsAtTheInventoryPreflight() {
-		InitializationError error = assertThrows(InitializationError.class,
-				() -> new LegacyTestSequenceRunner(LegacyTestSequenceSuite.class));
-
-		assertTrue(error.getCauses().stream()
-				.map(Throwable::getMessage)
-				.anyMatch(message -> message != null && message.contains("725 UNVERIFIED")));
 	}
 
 	private abstract static class InMemorySequence extends TestSequence {

@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -11,8 +10,9 @@ import java.nio.file.Path;
 import java.util.Base64;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * {@code adjustForK8s} must not disturb the stage loop's iterator.
@@ -31,8 +31,8 @@ public class AdjustForK8sStageIndexTest {
 
 	private static final Path SGE = Path.of("src/main/java/org/starexec/config/sge");
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	@Test
 	public void oneStageWithNoScript() throws Exception {
@@ -76,7 +76,7 @@ public class AdjustForK8sStageIndexTest {
 	 */
 	@Test
 	public void theHelperIsUsableWithAJobscriptThatNeverSetsTheStageIndex() throws Exception {
-		Path dir = folder.newFolder("old-template").toPath();
+		Path dir = newFolder(folder, "old-template").toPath();
 		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
 		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
 
@@ -96,11 +96,11 @@ public class AdjustForK8sStageIndexTest {
 		Files.writeString(script.toPath(), s.toString());
 		Result r = run(Bash.PATH, script.getAbsolutePath());
 
-		assertEquals("an old template must not die on an unbound STAGE_INDEX:\n" + r.out,
-				0, r.exit);
-		assertEquals("the helper must default the index to 0", "0", value(r.out, "OUT-STAGE_INDEX"));
-		assertEquals("the initial status must name the first stage that runs",
-				"1", value(r.out, "OUT-STAGE_NUMBER"));
+		assertEquals(0,
+				r.exit, "an old template must not die on an unbound STAGE_INDEX:\n" + r.out);
+		assertEquals("0", value(r.out, "OUT-STAGE_INDEX"), "the helper must default the index to 0");
+		assertEquals("1",
+				value(r.out, "OUT-STAGE_NUMBER"), "the initial status must name the first stage that runs");
 	}
 
 	/**
@@ -110,7 +110,7 @@ public class AdjustForK8sStageIndexTest {
 	 */
 	@Test
 	public void adjustForK8sStillRedirectsTheWorkingDirWhenItFindsTheLauncher() throws Exception {
-		Path dir = folder.newFolder("still-works").toPath();
+		Path dir = newFolder(folder, "still-works").toPath();
 		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
 		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
 		Path solver = dir.resolve("solver0");
@@ -131,12 +131,12 @@ public class AdjustForK8sStageIndexTest {
 		Files.writeString(script.toPath(), s.toString());
 		Result r = run(Bash.PATH, script.getAbsolutePath());
 
-		assertEquals("must not abort:\n" + r.out, 0, r.exit);
-		assertTrue("adjustForK8s must still redirect WORKING_DIR_BASE, was "
-						+ value(r.out, "OUT-AFTER"),
-				value(r.out, "OUT-AFTER").endsWith("/k8sSandboxes/41"));
-		assertTrue("and it must have changed from the original",
-				!value(r.out, "OUT-AFTER").equals(value(r.out, "OUT-BEFORE")));
+		assertEquals(0, r.exit, "must not abort:\n" + r.out);
+		assertTrue(value(r.out, "OUT-AFTER").endsWith("/k8sSandboxes/41"),
+				"adjustForK8s must still redirect WORKING_DIR_BASE, was "
+						+ value(r.out, "OUT-AFTER"));
+		assertTrue(!value(r.out, "OUT-AFTER").equals(value(r.out, "OUT-BEFORE")),
+				"and it must have changed from the original");
 	}
 
 	/** The exports every generated script carries before it sources the helper. */
@@ -162,7 +162,7 @@ public class AdjustForK8sStageIndexTest {
 	 */
 	private void assertStageIndexPreserved(int stages, int scriptAtIndex) throws Exception {
 		String label = "stages=" + stages + " scriptAt=" + scriptAtIndex;
-		Path dir = folder.newFolder("k8s-" + stages + "-" + scriptAtIndex).toPath();
+		Path dir = newFolder(folder, "k8s-" + stages + "-" + scriptAtIndex).toPath();
 		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
 		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
 
@@ -196,13 +196,13 @@ public class AdjustForK8sStageIndexTest {
 
 		File script = new File(dir.toFile(), "generated.sh");
 		Files.writeString(script.toPath(), s.toString());
-		assertEquals(label + ": generated script must parse", 0,
-				run(Bash.PATH, "-n", script.getAbsolutePath()).exit);
+		assertEquals(0, run(Bash.PATH, "-n", script.getAbsolutePath()).exit,
+				label + ": generated script must parse");
 
 		Result r = run(Bash.PATH, script.getAbsolutePath());
-		assertEquals(label + ": the helper must not abort:\n" + r.out, 0, r.exit);
-		assertEquals(label + ": adjustForK8s must not move STAGE_INDEX",
-				"0", value(r.out, "OUT-STAGE_INDEX"));
+		assertEquals(0, r.exit, label + ": the helper must not abort:\n" + r.out);
+		assertEquals("0",
+				value(r.out, "OUT-STAGE_INDEX"), label + ": adjustForK8s must not move STAGE_INDEX");
 	}
 
 	private static String value(String output, String key) {
@@ -219,7 +219,7 @@ public class AdjustForK8sStageIndexTest {
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "command must not hang");
 		return new Result(p.exitValue(), out);
 	}
 

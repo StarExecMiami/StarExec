@@ -1,6 +1,6 @@
 package org.starexec.test.junit.backend;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.Backend;
 import org.starexec.backend.GridEngineBackend;
 import org.starexec.backend.OARBackend;
@@ -10,7 +10,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /** Contract tests for the conservative default termination result. */
 public class BackendKillConfirmationTests {
@@ -28,14 +28,14 @@ public class BackendKillConfirmationTests {
     @Test
     public void legacyQueueBackendsIntentionallyInheritTheFailClosedDefault() throws Exception {
         assertEquals(
-            "SGE must not claim termination safety without backend evidence",
             Backend.class,
-            GridEngineBackend.class.getMethod("killPairConfirmed", int.class).getDeclaringClass()
+            GridEngineBackend.class.getMethod("killPairConfirmed", int.class).getDeclaringClass(),
+            "SGE must not claim termination safety without backend evidence"
         );
         assertEquals(
-            "OAR must not claim termination safety without backend evidence",
             Backend.class,
-            OARBackend.class.getMethod("killPairConfirmed", int.class).getDeclaringClass()
+            OARBackend.class.getMethod("killPairConfirmed", int.class).getDeclaringClass(),
+            "OAR must not claim termination safety without backend evidence"
         );
     }
 

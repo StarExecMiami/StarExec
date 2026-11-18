@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -10,9 +9,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * What a pair's recorded status says when something other than the solver failed, driven
@@ -44,8 +44,8 @@ public class ProcessorFailureStatusTest {
 	private static final int ERROR_PRE_PROCESSOR = 25;
 	private static final int ERROR_POST_PROCESSOR = 26;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	// ------------------------------------------------------- the trap's overwrite rule
 
@@ -62,8 +62,8 @@ public class ProcessorFailureStatusTest {
 		h.run(1);
 
 		assertEquals(
-				"this is the behaviour the affected paths were relying on and not getting",
-				ERROR_RUNSCRIPT, h.status());
+				ERROR_RUNSCRIPT,
+				h.status(), "this is the behaviour the affected paths were relying on and not getting");
 	}
 
 	/** And the claim that suppresses it, which is what the fixed paths now make. */
@@ -125,9 +125,9 @@ public class ProcessorFailureStatusTest {
 		String helper = Files.readString(SGE.resolve("functions.bash"));
 
 		assertFalse(
+				helper.contains("if (( $? "),
 				"`if (( $? != 0 ))` on the line after a command is unreachable under set -e;"
-						+ " capture with `|| STATUS=$?` on the command itself instead",
-				helper.contains("if (( $? "));
+						+ " capture with `|| STATUS=$?` on the command itself instead");
 	}
 
 	/**
@@ -161,13 +161,13 @@ public class ProcessorFailureStatusTest {
 				}
 			}
 			assertTrue(
+					claimed,
 					"functions.bash:" + (i + 1) + " sends a processor status but does not claim"
 							+ " it with STATUS_SENT=true, so exitJobscript overwrites it with"
-							+ " ERROR_RUNSCRIPT: " + lines[i].trim(),
-					claimed);
+							+ " ERROR_RUNSCRIPT: " + lines[i].trim());
 		}
 
-		assertEquals("the processor failure paths must still exist to be checked", 5, checked);
+		assertEquals(5, checked, "the processor failure paths must still exist to be checked");
 	}
 
 	// ------------------------------------------------- which stage the fault is named against
@@ -198,9 +198,9 @@ public class ProcessorFailureStatusTest {
 		assertEquals(ERROR_POST_PROCESSOR, h.status());
 		assertEquals(2, h.stage());
 		assertTrue(
+				h.hasSnapshot(2),
 				"a named stage must also leave the per-stage snapshot the monitor reads, or a"
-						+ " later stage's write erases this result",
-				h.hasSnapshot(2));
+						+ " later stage's write erases this result");
 	}
 
 	/**
@@ -217,9 +217,9 @@ public class ProcessorFailureStatusTest {
 		h.run(0);
 
 		assertEquals(ERROR_POST_PROCESSOR, h.status());
-		assertEquals("sendStatus's stage argument defaults to 0", 0, h.stage());
-		assertFalse("stage 0 owns no jobpair_stage_data row, so it gets no snapshot",
-				h.hasSnapshot(0));
+		assertEquals(0, h.stage(), "sendStatus's stage argument defaults to 0");
+		assertFalse(h.hasSnapshot(0),
+				"stage 0 owns no jobpair_stage_data row, so it gets no snapshot");
 	}
 
 	/**
@@ -255,17 +255,17 @@ public class ProcessorFailureStatusTest {
 
 			String stage = line.substring(call.length()).trim();
 			assertFalse(
+					stage.isEmpty(),
 					"a processor fault sent with no stage number defaults to 0, and a precise"
 							+ " write keyed on \"= 0\" gives the status to no stage and NOT_REACHED"
-							+ " to every stage the pair has (#152): " + line,
-					stage.isEmpty());
+							+ " to every stage the pair has (#152): " + line);
 			assertTrue(
+					stage.contains("$1") || stage.contains("STAGE_NUMBERS[STAGE_INDEX]"),
 					"the stage must come from the stage the pair is actually running, not a"
-							+ " literal: " + line,
-					stage.contains("$1") || stage.contains("STAGE_NUMBERS[STAGE_INDEX]"));
+							+ " literal: " + line);
 		}
 
-		assertEquals("the processor failure paths must still exist to be checked", 5, checked);
+		assertEquals(5, checked, "the processor failure paths must still exist to be checked");
 	}
 
 	// ------------------------------------------------------ the runscript error path
@@ -291,10 +291,10 @@ public class ProcessorFailureStatusTest {
 		h.run(0);
 
 		assertEquals(ERROR_RUNSCRIPT, h.status());
-		assertEquals("the first stage's failure must name stage 1, not stage 0",
-				1, h.stage());
-		assertTrue("and must leave the per-stage snapshot that stage 0 cannot have",
-				h.hasSnapshot(1));
+		assertEquals(1,
+				h.stage(), "the first stage's failure must name stage 1, not stage 0");
+		assertTrue(h.hasSnapshot(1),
+				"and must leave the per-stage snapshot that stage 0 cannot have");
 	}
 
 	/** The same for a later stage, so the fix is not an off-by-one in the other direction. */
@@ -309,8 +309,8 @@ public class ProcessorFailureStatusTest {
 
 		assertEquals(3, h.stage());
 		assertTrue(h.hasSnapshot(3));
-		assertFalse("no snapshot may be written for a stage that did not fail",
-				h.hasSnapshot(2));
+		assertFalse(h.hasSnapshot(2),
+				"no snapshot may be written for a stage that did not fail");
 	}
 
 	// ------------------------------------------------------------------------ harness
@@ -321,9 +321,9 @@ public class ProcessorFailureStatusTest {
 		private final Path out;
 		private final StringBuilder body = new StringBuilder();
 
-		Harness(TemporaryFolder folder) throws Exception {
-			this.dir = folder.newFolder("sge").toPath();
-			this.out = folder.newFolder("out").toPath();
+		Harness(File folder) throws Exception {
+			this.dir = newFolder(folder, "sge").toPath();
+			this.out = newFolder(folder, "out").toPath();
 
 			// The helper reads its siblings relative to SCRIPT_DIR, so it is sourced from a copy
 			// of the shipped directory rather than from a rewritten fixture.
@@ -356,10 +356,10 @@ public class ProcessorFailureStatusTest {
 		void run(int expectedExit) throws Exception {
 			File script = new File(dir.toFile(), "generated.sh");
 			Files.writeString(script.toPath(), body.toString());
-			assertEquals("generated script must parse", 0,
-					exec(Bash.PATH, "-n", script.getAbsolutePath()).exit);
+			assertEquals(0, exec(Bash.PATH, "-n", script.getAbsolutePath()).exit,
+					"generated script must parse");
 			Result r = exec(Bash.PATH, script.getAbsolutePath());
-			assertEquals("unexpected exit status:\n" + r.out, expectedExit, r.exit);
+			assertEquals(expectedExit, r.exit, "unexpected exit status:\n" + r.out);
 		}
 
 		int status() throws Exception {
@@ -381,7 +381,7 @@ public class ProcessorFailureStatusTest {
 		var m = java.util.regex.Pattern
 				.compile("\"" + name + "\"\\s*:\\s*(-?\\d+)")
 				.matcher(json);
-		assertTrue("json must carry " + name + ": " + json, m.find());
+		assertTrue(m.find(), "json must carry " + name + ": " + json);
 		String raw = m.group(1);
 		try {
 			return Integer.parseInt(raw);
@@ -395,7 +395,7 @@ public class ProcessorFailureStatusTest {
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "command must not hang");
 		return new Result(p.exitValue(), out);
 	}
 

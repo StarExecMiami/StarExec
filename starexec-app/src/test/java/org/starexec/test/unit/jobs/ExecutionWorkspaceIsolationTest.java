@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -14,10 +13,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * Who owns the files an execution writes, driven through the real {@code functions.bash}.
@@ -61,8 +61,8 @@ public class ExecutionWorkspaceIsolationTest {
 		"LOCAL_PREPROCESSOR_DIR", "SAVED_OUTPUT_DIR", "PROCESSED_BENCH_PATH",
 	};
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	// ------------------------------------------------------------------ the invariant
 
@@ -83,9 +83,9 @@ public class ExecutionWorkspaceIsolationTest {
 				String pa = fast.get(a);
 				String pb = slow.get(b);
 				assertFalse(
+					pa.equals(pb) || isAncestorOf(pa, pb) || isAncestorOf(pb, pa),
 					"attempt A's " + a + " (" + pa + ") is reachable from attempt B's " + b
-						+ " (" + pb + ")",
-					pa.equals(pb) || isAncestorOf(pa, pb) || isAncestorOf(pb, pa));
+						+ " (" + pb + ")");
 			}
 		}
 	}
@@ -98,8 +98,8 @@ public class ExecutionWorkspaceIsolationTest {
 
 		for (String name : MUTABLE) {
 			String p = one.get(name);
-			assertTrue(name + " (" + p + ") must live under " + root,
-					p.equals(root) || isAncestorOf(root, p));
+			assertTrue(p.equals(root) || isAncestorOf(root, p),
+					name + " (" + p + ") must live under " + root);
 		}
 	}
 
@@ -122,12 +122,12 @@ public class ExecutionWorkspaceIsolationTest {
 		Map<String, String> slow = probe.resolve(12, 8);
 
 		String base = fast.get("WORKING_DIR_BASE");
-		assertEquals("the base must be the same for both attempts -- the cache hangs off it",
-				base, slow.get("WORKING_DIR_BASE"));
+		assertEquals(base,
+				slow.get("WORKING_DIR_BASE"), "the base must be the same for both attempts -- the cache hangs off it");
 		assertTrue(isAncestorOf(base, fast.get("WORKING_DIR")));
 		assertTrue(isAncestorOf(base, slow.get("WORKING_DIR")));
-		assertNotEquals("...and only the sandbox below it is per-attempt",
-				fast.get("WORKING_DIR"), slow.get("WORKING_DIR"));
+		assertNotEquals(fast.get("WORKING_DIR"),
+				slow.get("WORKING_DIR"), "...and only the sandbox below it is per-attempt");
 	}
 
 	// ------------------------------------------------------ attempts, not just pairs
@@ -143,8 +143,8 @@ public class ExecutionWorkspaceIsolationTest {
 		Map<String, String> first = probe.resolve(11, 7);
 		Map<String, String> rerun = probe.resolve(11, 9);
 
-		assertNotEquals("a new execution id must mean a new workspace",
-				first.get("WORKING_DIR"), rerun.get("WORKING_DIR"));
+		assertNotEquals(first.get("WORKING_DIR"),
+				rerun.get("WORKING_DIR"), "a new execution id must mean a new workspace");
 	}
 
 	/**
@@ -164,8 +164,8 @@ public class ExecutionWorkspaceIsolationTest {
 
 		probe.resolve(11, 7);   // same pair, same execution id: the recycled case
 
-		assertFalse("a previous attempt's output must not survive into the next attempt",
-				Files.exists(stale));
+		assertFalse(Files.exists(stale),
+				"a previous attempt's output must not survive into the next attempt");
 	}
 
 	// ------------------------------------------------------------- crossing, directly
@@ -238,12 +238,12 @@ public class ExecutionWorkspaceIsolationTest {
 
 		probe.runToExit(11, 7, "");
 
-		assertFalse("the finished attempt's workspace is gone",
-				Files.exists(Path.of(victim.get("WORKING_DIR"))));
-		assertTrue("a concurrent attempt's output must survive", Files.exists(bystanderFile));
+		assertFalse(Files.exists(Path.of(victim.get("WORKING_DIR"))),
+				"the finished attempt's workspace is gone");
+		assertTrue(Files.exists(bystanderFile), "a concurrent attempt's output must survive");
 		assertEquals("MARKER=E2E_SLOW", Files.readString(bystanderFile).trim());
-		assertTrue("the shared solver cache must survive",
-				Files.exists(cacheEntry.resolve("solver.bin")));
+		assertTrue(Files.exists(cacheEntry.resolve("solver.bin")),
+				"the shared solver cache must survive");
 	}
 
 	/**
@@ -261,8 +261,8 @@ public class ExecutionWorkspaceIsolationTest {
 		// exit 1 without reaching cleanWorkspace, as every early failure path does.
 		probe.runToExit(11, 7, "exit 1\n");
 
-		assertFalse("an early exit must not leak its workspace",
-				Files.exists(Path.of(attempt.get("WORKING_DIR"))));
+		assertFalse(Files.exists(Path.of(attempt.get("WORKING_DIR"))),
+				"an early exit must not leak its workspace");
 	}
 
 	/**
@@ -289,19 +289,19 @@ public class ExecutionWorkspaceIsolationTest {
 				+ "sendStatus \"$STATUS_COMPLETE\" 1\n");
 
 		assertEquals(
-				"a pair that finished must still read as finished, whatever cleanup managed",
-				7, probe.statusFor(11));
+				7,
+				probe.statusFor(11), "a pair that finished must still read as finished, whatever cleanup managed");
 
 		// The removal has to have actually failed, or this asserts nothing.
-		assertTrue("this test is only meaningful if the removal failed:\n" + probe.lastOutput,
-				probe.lastOutput.contains("could not remove"));
+		assertTrue(probe.lastOutput.contains("could not remove"),
+				"this test is only meaningful if the removal failed:\n" + probe.lastOutput);
 
 		// And the script must still exit 0. LocalBackend replaces the status of any pair whose
 		// script exits non-zero with ERROR_GENERAL, so a cleanup failure that escapes as an exit
 		// code corrupts the result through Java even though status.json is untouched -- which a
 		// status-only assertion cannot see.
-		assertEquals("a failed cleanup must not escape as a non-zero exit code",
-				0, probe.lastExit);
+		assertEquals(0,
+				probe.lastExit, "a failed cleanup must not escape as a non-zero exit code");
 
 		probe.chmodBackForCleanup();
 	}
@@ -320,7 +320,7 @@ public class ExecutionWorkspaceIsolationTest {
 		Probe probe = new Probe(folder);
 		Map<String, String> attempt = probe.resolve(11, 7);
 
-		Path outside = folder.newFolder("outside").toPath();
+		Path outside = newFolder(folder, "outside").toPath();
 		Path sentinel = outside.resolve("sentinel.txt");
 		Files.writeString(sentinel, "MUST SURVIVE\n");
 
@@ -330,10 +330,10 @@ public class ExecutionWorkspaceIsolationTest {
 				+ "ln -s \"" + sentinel + "\" \"$OUT_DIR/escape-file\"\n");
 
 		assertFalse(Files.exists(Path.of(attempt.get("WORKING_DIR"))));
-		assertTrue("cleanup must not follow a solver's symlink out of its own tree",
-				Files.exists(sentinel));
+		assertTrue(Files.exists(sentinel),
+				"cleanup must not follow a solver's symlink out of its own tree");
 		assertEquals("MUST SURVIVE", Files.readString(sentinel).trim());
-		assertTrue("the directory the link pointed at must still exist", Files.isDirectory(outside));
+		assertTrue(Files.isDirectory(outside), "the directory the link pointed at must still exist");
 	}
 
 	// -------------------------------------------------------------------- fail closed
@@ -353,8 +353,8 @@ public class ExecutionWorkspaceIsolationTest {
 		Probe probe = new Probe(folder);
 		probe.resolveExpectingFailure(11, 7);
 
-		assertEquals("the pair must be recorded as a runscript error, not left to the trap",
-				11, probe.statusFor(11));
+		assertEquals(11,
+				probe.statusFor(11), "the pair must be recorded as a runscript error, not left to the trap");
 	}
 
 	// ------------------------------------------------------------------ CPU affinity
@@ -371,9 +371,9 @@ public class ExecutionWorkspaceIsolationTest {
 		Probe probe = new Probe(folder);
 		String cores = probe.resolve(11, 7).get("CORES");
 
-		assertFalse("CORES must be set", cores.isEmpty());
-		assertEquals("CORES must come from the process affinity, not the workspace",
-				expectedAllowedCpus(), cores);
+		assertFalse(cores.isEmpty(), "CORES must be set");
+		assertEquals(expectedAllowedCpus(),
+				cores, "CORES must come from the process affinity, not the workspace");
 	}
 
 	/**
@@ -407,8 +407,8 @@ public class ExecutionWorkspaceIsolationTest {
 		private final Path root;
 		private final Path sge;
 
-		Probe(TemporaryFolder folder) throws Exception {
-			this.root = folder.newFolder("probe-" + System.nanoTime()).toPath();
+		Probe(File folder) throws Exception {
+			this.root = newFolder(folder, "probe-" + System.nanoTime()).toPath();
 			this.sge = root.resolve("sge");
 			Files.createDirectories(sge);
 			Files.createDirectories(root.resolve("work"));
@@ -458,7 +458,7 @@ public class ExecutionWorkspaceIsolationTest {
 			body += "echo \"WORKING_DIR_BASE=$WORKING_DIR_BASE\"\n";
 
 			Result r = run(body, "resolve-" + pairId + "-" + execId);
-			assertEquals("the helper must not abort:\n" + r.out, 0, r.exit);
+			assertEquals(0, r.exit, "the helper must not abort:\n" + r.out);
 			return parse(r.out);
 		}
 
@@ -470,8 +470,8 @@ public class ExecutionWorkspaceIsolationTest {
 					+ "initSandbox\n"
 					+ "echo \"REACHED_EXECUTION=yes\"\n";
 			Result r = run(body, "blocked-" + pairId);
-			assertFalse("execution must not continue past a failed workspace:\n" + r.out,
-					r.out.contains("REACHED_EXECUTION=yes"));
+			assertFalse(r.out.contains("REACHED_EXECUTION=yes"),
+					"execution must not continue past a failed workspace:\n" + r.out);
 			return r;
 		}
 
@@ -516,8 +516,8 @@ public class ExecutionWorkspaceIsolationTest {
 		private Result run(String body, String name) throws Exception {
 			File script = new File(root.toFile(), name + ".sh");
 			Files.writeString(script.toPath(), body);
-			assertEquals("generated script must parse", 0,
-					exec(Bash.PATH, "-n", script.getAbsolutePath()).exit);
+			assertEquals(0, exec(Bash.PATH, "-n", script.getAbsolutePath()).exit,
+					"generated script must parse");
 			return exec(Bash.PATH, script.getAbsolutePath());
 		}
 
@@ -535,7 +535,7 @@ public class ExecutionWorkspaceIsolationTest {
 					missing.add(name);
 				}
 			}
-			assertTrue("the helper did not report " + missing + ":\n" + out, missing.isEmpty());
+			assertTrue(missing.isEmpty(), "the helper did not report " + missing + ":\n" + out);
 			return values;
 		}
 	}
@@ -545,7 +545,7 @@ public class ExecutionWorkspaceIsolationTest {
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "command must not hang");
 		return new Result(p.exitValue(), out);
 	}
 

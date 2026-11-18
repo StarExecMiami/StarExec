@@ -1,6 +1,6 @@
 package org.starexec.test.integration.security;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.Websites;
 import org.starexec.data.security.WebsiteSecurity;
@@ -25,81 +25,81 @@ public class WebsiteSecurityTests extends TestSequence {
 	Solver solver = null;
 	@StarexecTest
 	private void canAddWebsiteBadNameTest() {
-		Assert.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, owner.getId(),"<script>","http://www.fake.com").isSuccess());
-		Assert.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, admin.getId(),"<script>","http://www.fake.com").isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, owner.getId(),"<script>","http://www.fake.com").isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, admin.getId(),"<script>","http://www.fake.com").isSuccess());
 	}
 	
 	@StarexecTest
 	private void canAddWebsiteBadURLTest() {
-		Assert.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, owner.getId(),"new","<script>").isSuccess());
-		Assert.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, admin.getId(),"new","<script>").isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, owner.getId(),"new","<script>").isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, admin.getId(),"new","<script>").isSuccess());
 	}
 	
 	@StarexecTest
 	private void canAddWebsiteBadTypeTest() {
-		Assert.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.JOB, owner.getId(),"new","http://www.fake.com").isSuccess());
-		Assert.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.JOB, admin.getId(),"new","http://www.fake.com").isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.JOB, owner.getId(),"new","http://www.fake.com").isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.JOB, admin.getId(),"new","http://www.fake.com").isSuccess());
 	}
 	
 	@StarexecTest
 	private void CanAssociateSpaceWebsiteTest() {
-		Assert.assertTrue(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, owner.getId(),"new","http://www.fake.com").isSuccess());
-		Assert.assertTrue(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, admin.getId(),"new","http://www.fake.com").isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, owner.getId(),"new","http://www.fake.com").isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, admin.getId(),"new","http://www.fake.com").isSuccess());
 		
-		Assert.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, nonOwner.getId(),"new","http://www.fake.com").isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserAddWebsite(space.getId(),R.SPACE, nonOwner.getId(),"new","http://www.fake.com").isSuccess());
 	}
 	
 	@StarexecTest
 	private void CanDeleteSpaceWebsiteTest() {
 		Websites.add(space.getId(), "https://www.fake.edu", "new", WebsiteType.SPACE);
 		int websiteId=Websites.getAll(space.getId(), WebsiteType.SPACE).get(0).getId();
-		Assert.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, owner.getId()).isSuccess());
-		Assert.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, admin.getId()).isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, owner.getId()).isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, admin.getId()).isSuccess());
 
-		Assert.assertFalse(WebsiteSecurity.canUserDeleteWebsite(websiteId, nonOwner.getId()).isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserDeleteWebsite(websiteId, nonOwner.getId()).isSuccess());
 		
-		Assert.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, owner.getId()).isSuccess());
-		Assert.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, admin.getId()).isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, owner.getId()).isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, admin.getId()).isSuccess());
 	}
 	
 	@StarexecTest
 	private void CanAssociateSolverWebsiteTest() {
-		Assert.assertTrue(WebsiteSecurity.canUserAddWebsite(solver.getId(),R.SOLVER, owner.getId(),"new","http://www.fake.com").isSuccess());
-		Assert.assertTrue(WebsiteSecurity.canUserAddWebsite(solver.getId(),R.SOLVER, admin.getId(),"new","http://www.fake.com").isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserAddWebsite(solver.getId(),R.SOLVER, owner.getId(),"new","http://www.fake.com").isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserAddWebsite(solver.getId(),R.SOLVER, admin.getId(),"new","http://www.fake.com").isSuccess());
 		
-		Assert.assertFalse(WebsiteSecurity.canUserAddWebsite(solver.getId(),R.SOLVER, nonOwner.getId(),"new","http://www.fake.com").isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserAddWebsite(solver.getId(),R.SOLVER, nonOwner.getId(),"new","http://www.fake.com").isSuccess());
 	}
 	
 	@StarexecTest
 	private void CanDeleteSolverWebsiteTest() {
 		Websites.add(solver.getId(), "https://www.fake.edu", "new", WebsiteType.SOLVER);
 		int websiteId=Websites.getAll(solver.getId(), WebsiteType.SOLVER).get(0).getId();
-		Assert.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, owner.getId()).isSuccess());
-		Assert.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, admin.getId()).isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, owner.getId()).isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, admin.getId()).isSuccess());
 		
-		Assert.assertFalse(WebsiteSecurity.canUserDeleteWebsite(websiteId, nonOwner.getId()).isSuccess());
-		Assert.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, owner.getId()).isSuccess());
-		Assert.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, admin.getId()).isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserDeleteWebsite(websiteId, nonOwner.getId()).isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, owner.getId()).isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, admin.getId()).isSuccess());
 	}
 	
 	@StarexecTest
 	private void CanAssociateUserWebsiteTest() {
-		Assert.assertTrue(WebsiteSecurity.canUserAddWebsite(owner.getId(),R.USER, owner.getId(),"new","http://www.fake.com").isSuccess());
-		Assert.assertTrue(WebsiteSecurity.canUserAddWebsite(owner.getId(),R.USER, admin.getId(),"new","http://www.fake.com").isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserAddWebsite(owner.getId(),R.USER, owner.getId(),"new","http://www.fake.com").isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserAddWebsite(owner.getId(),R.USER, admin.getId(),"new","http://www.fake.com").isSuccess());
 		
-		Assert.assertFalse(WebsiteSecurity.canUserAddWebsite(owner.getId(),R.USER, nonOwner.getId(),"new","http://www.fake.com").isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserAddWebsite(owner.getId(),R.USER, nonOwner.getId(),"new","http://www.fake.com").isSuccess());
 	}
 	
 	@StarexecTest
 	private void CanDeleteUserWebsiteTest() {
 		Websites.add(owner.getId(), "https://www.fake.edu", "new", WebsiteType.USER);
 		int websiteId=Websites.getAll(owner.getId(), WebsiteType.USER).get(0).getId();
-		Assert.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, owner.getId()).isSuccess());
-		Assert.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, admin.getId()).isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, owner.getId()).isSuccess());
+		Assertions.assertTrue(WebsiteSecurity.canUserDeleteWebsite(websiteId, admin.getId()).isSuccess());
 		
-		Assert.assertFalse(WebsiteSecurity.canUserDeleteWebsite(websiteId, nonOwner.getId()).isSuccess());
-		Assert.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, owner.getId()).isSuccess());
-		Assert.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, admin.getId()).isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserDeleteWebsite(websiteId, nonOwner.getId()).isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, owner.getId()).isSuccess());
+		Assertions.assertFalse(WebsiteSecurity.canUserDeleteWebsite(-1, admin.getId()).isSuccess());
 	}
 	
 	@Override

@@ -1,12 +1,14 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.lang.reflect.Field;
+import java.util.concurrent.TimeUnit;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.starexec.backend.PodmanBackend;
 import org.starexec.backend.exception.SubmissionDeferredException;
 
@@ -29,12 +31,13 @@ public class PodmanBackendInitGuardTest {
     @Test
     public void aBackendThatNeverInitializedIsNotDispatchable() {
         assertFalse(
-            "JobManager must not claim pairs for a backend that failed to initialize",
-            new PodmanBackend().isQueueDispatchable(QUEUE)
+            new PodmanBackend().isQueueDispatchable(QUEUE),
+            "JobManager must not claim pairs for a backend that failed to initialize"
         );
     }
 
-    @Test(timeout = 30_000)
+    @Test
+    @Timeout(value = 30_000, unit = TimeUnit.MILLISECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     public void aBackendThatNeverInitializedDefersAPairInsteadOfRunningIt() {
         PodmanBackend backend = new PodmanBackend();
         try {
@@ -42,8 +45,8 @@ public class PodmanBackendInitGuardTest {
             fail("an uninitialized backend must not accept a pair");
         } catch (SubmissionDeferredException e) {
             assertTrue(
-                "the deferral must say why: " + e.getMessage(),
-                e.getMessage().contains("not initialized")
+                e.getMessage().contains("not initialized"),
+                "the deferral must say why: " + e.getMessage()
             );
         }
     }
@@ -56,8 +59,8 @@ public class PodmanBackendInitGuardTest {
 
         setField(backend, "shuttingDown", true);
         assertFalse(
-            "a backend that is shutting down must not be given new pairs",
-            backend.isQueueDispatchable(QUEUE)
+            backend.isQueueDispatchable(QUEUE),
+            "a backend that is shutting down must not be given new pairs"
         );
     }
 

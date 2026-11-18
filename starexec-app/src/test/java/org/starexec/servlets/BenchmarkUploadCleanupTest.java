@@ -1,10 +1,9 @@
 package org.starexec.servlets;
 
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
@@ -38,11 +37,11 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -52,6 +51,7 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * A benchmark upload, or a benchmark added from text or from a file, leaves no files behind when it
@@ -69,8 +69,8 @@ public class BenchmarkUploadCleanupTest {
 	private static final int BENCHMARK_ID = 77;
 	private static final String OWNER_GONE = "Could not find the user uploading these benchmarks";
 
-	@Rule
-	public TemporaryFolder tmp = new TemporaryFolder();
+	@TempDir
+	public File tmp;
 
 	private final AtomicBoolean ownerExists = new AtomicBoolean(true);
 	private final List<UploadJob.UploadJobRequest> queued = new ArrayList<>();
@@ -86,14 +86,14 @@ public class BenchmarkUploadCleanupTest {
 	private Runnable beforeDirectory = () -> { };
 	private boolean enqueueFails;
 
-	@BeforeClass
+	@BeforeAll
 	public static void compileValidatorPatterns() {
 		Validator.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void form() throws IOException {
-		root = tmp.newFolder("Benchmarks");
+		root = newFolder(tmp, "Benchmarks");
 		neighbour = new File(root, "6/20261018-10.00.00.000/other.smt2");
 		write(neighbour, "(check-sat)\n");
 
@@ -125,9 +125,9 @@ public class BenchmarkUploadCleanupTest {
 		verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
 		assertEquals(1, queued.size());
 		File archive = new File(queued.get(0).getArchivePath());
-		assertTrue("the archive is kept for the worker", archive.isFile());
-		assertEquals("the archive is in a directory of its own under the owner's",
-				new File(root, "" + OWNER), archive.getParentFile().getParentFile());
+		assertTrue(archive.isFile(), "the archive is kept for the worker");
+		assertEquals(new File(root, "" + OWNER),
+				archive.getParentFile().getParentFile(), "the archive is in a directory of its own under the owner's");
 	}
 
 	/** The race from #275: the user is deleted while the archive is still arriving. */
@@ -138,7 +138,7 @@ public class BenchmarkUploadCleanupTest {
 		post();
 
 		assertNothingLeftForTheOwner();
-		assertEquals("nothing is queued", 0, queued.size());
+		assertEquals(0, queued.size(), "nothing is queued");
 		verify(response).sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, OWNER_GONE);
 		verify(response, never()).setStatus(HttpServletResponse.SC_ACCEPTED);
 	}
@@ -161,8 +161,8 @@ public class BenchmarkUploadCleanupTest {
 		post();
 
 		verify(response).sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to enqueue upload job");
-		assertArrayEquals("no upload directory is left", new File[0], uploadDirectories());
-		assertTrue("another user's benchmark is untouched", neighbour.isFile());
+		assertArrayEquals(new File[0], uploadDirectories(), "no upload directory is left");
+		assertTrue(neighbour.isFile(), "another user's benchmark is untouched");
 	}
 
 	@Test
@@ -175,7 +175,7 @@ public class BenchmarkUploadCleanupTest {
 		post();
 
 		verify(response).sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to enqueue upload job");
-		assertArrayEquals("no upload directory is left", new File[0], uploadDirectories());
+		assertArrayEquals(new File[0], uploadDirectories(), "no upload directory is left");
 	}
 
 	/**
@@ -192,7 +192,7 @@ public class BenchmarkUploadCleanupTest {
 				dirs.add(UploadBenchmark.getDirectoryForBenchmarkUpload(OWNER, null));
 			}
 		}
-		assertEquals("100 calls, 100 directories", 100, dirs.size());
+		assertEquals(100, dirs.size(), "100 calls, 100 directories");
 	}
 
 	@Test
@@ -212,20 +212,20 @@ public class BenchmarkUploadCleanupTest {
 				() -> UploadBenchmark.addBenchmarkFromText("(check-sat)", "quick.smt2", OWNER, 1, false));
 
 		assertNull(id);
-		assertArrayEquals("no directory is left", new File[0], uploadDirectories());
+		assertArrayEquals(new File[0], uploadDirectories(), "no directory is left");
 	}
 
 	@Test
 	public void aBenchmarkFromAFileThatIsNotAddedLeavesNoFile() throws Exception {
-		File source = new File(tmp.getRoot(), "renamed/output.smt2");
+		File source = new File(tmp, "renamed/output.smt2");
 		write(source, "(check-sat)\n");
 
 		Integer id = withBenchmarks(benchmarks -> null,
 				() -> UploadBenchmark.addBenchmarkFromFile(source, OWNER, 1, false));
 
 		assertNull(id);
-		assertArrayEquals("no directory is left", new File[0], uploadDirectories());
-		assertTrue("the source file is not touched", source.isFile());
+		assertArrayEquals(new File[0], uploadDirectories(), "no directory is left");
+		assertTrue(source.isFile(), "the source file is not touched");
 	}
 
 	/**
@@ -340,9 +340,9 @@ public class BenchmarkUploadCleanupTest {
 	}
 
 	private void assertNothingLeftForTheOwner() {
-		assertFalse("nothing is left under the deleted user's benchmark directory",
-				new File(root, "" + OWNER).exists());
-		assertTrue("another user's benchmark is untouched", neighbour.isFile());
+		assertFalse(new File(root, "" + OWNER).exists(),
+				"nothing is left under the deleted user's benchmark directory");
+		assertTrue(neighbour.isFile(), "another user's benchmark is untouched");
 	}
 
 	/** The directories under the owner's benchmark directory. */

@@ -2,8 +2,8 @@ package org.starexec.app;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.Statistics;
@@ -15,8 +15,8 @@ import org.starexec.util.Validator;
 import javax.servlet.http.HttpServletRequest;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -38,7 +38,7 @@ public class JobGraphResponseTest {
 	private static final int JOB_SPACE_ID = 13;
 	private static final int STAGE = 1;
 
-	@BeforeClass
+	@BeforeAll
 	public static void initialize() {
 		Validator.initialize();
 	}
@@ -74,9 +74,9 @@ public class JobGraphResponseTest {
 
 	private static void assertRefusedWith(String expectedMessage, String json) {
 		JsonObject response = JsonParser.parseString(json).getAsJsonObject();
-		assertFalse("a graph that cannot be drawn must not be reported as drawn: " + json,
-				response.get("success").getAsBoolean());
-		assertEquals(json, expectedMessage, response.get("message").getAsString());
+		assertFalse(response.get("success").getAsBoolean(),
+				"a graph that cannot be drawn must not be reported as drawn: " + json);
+		assertEquals(expectedMessage, response.get("message").getAsString(), json);
 	}
 
 	@Test
@@ -166,7 +166,7 @@ public class JobGraphResponseTest {
 			return comparison();
 		});
 		JsonObject response = JsonParser.parseString(json).getAsJsonObject();
-		assertEquals(json, "/starexec/jobgraphs/comparison", response.get("src").getAsString());
-		assertEquals(json, "<map></map>", response.get("map").getAsString());
+		assertEquals("/starexec/jobgraphs/comparison", response.get("src").getAsString(), json);
+		assertEquals("<map></map>", response.get("map").getAsString(), json);
 	}
 }

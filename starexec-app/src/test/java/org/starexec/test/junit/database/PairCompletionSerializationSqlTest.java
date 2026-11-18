@@ -1,8 +1,11 @@
 package org.starexec.test.junit.database;
 
-import org.junit.*;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.starexec.constants.R;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
@@ -11,7 +14,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Concurrent pair completions must not lose the job-completion decision, and a pair status
@@ -22,7 +25,6 @@ import static org.junit.Assert.*;
  * thread, and the test waits (bounded) until that backend is either finished or blocked on a
  * lock before letting the first commit.
  */
-@RunWith(Parameterized.class)
 public class PairCompletionSerializationSqlTest {
     private static final int RUNNING = StatusCode.STATUS_RUNNING.getVal();
     private static final int COMPLETE = StatusCode.STATUS_COMPLETE.getVal();
@@ -30,19 +32,18 @@ public class PairCompletionSerializationSqlTest {
     private static final int PROCESSING = 22;
     private static final long WAIT_MILLIS = 15_000;
 
-    @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> cases() {
         return Arrays.asList(new Object[]{"legacy"}, new Object[]{"precise"}, new Object[]{"pairLevel"});
     }
 
-    private final String kind;
+    private String kind;
     private int user, job, pairA, pairB;
     private final List<Connection> open = new ArrayList<>();
     private ExecutorService executor;
 
-    public PairCompletionSerializationSqlTest(String kind) { this.kind = kind; }
+    public void initPairCompletionSerializationSqlTest(String kind) { this.kind = kind; }
 
-    @BeforeClass public static void database() {
+    @BeforeAll public static void database() {
         DatabaseTestSupport.assumeDatabaseAvailable("PairCompletionSerializationSqlTest");
     }
 
@@ -65,7 +66,7 @@ public class PairCompletionSerializationSqlTest {
         try (Statement s = c.createStatement()) { s.execute(sql); }
     }
 
-    @Before public void seed() throws Exception {
+    @BeforeEach public void seed() throws Exception {
         executor = Executors.newSingleThreadExecutor();
         Connection c = connection(true);
         // Own user with absolute values: never the shared lowest-id user.
@@ -81,7 +82,7 @@ public class PairCompletionSerializationSqlTest {
         return pair;
     }
 
-    @After public void cleanup() throws Exception {
+    @AfterEach public void cleanup() throws Exception {
         executor.shutdownNow();
         for (Connection c : open) {
             try { if (!c.isClosed() && !c.getAutoCommit()) c.rollback(); } catch (SQLException ignored) { }
@@ -125,8 +126,11 @@ public class PairCompletionSerializationSqlTest {
         }
     }
 
-    @Test(timeout = 60_000)
-    public void twoConcurrentLastPairsStillCompleteTheJob() throws Exception {
+    @MethodSource("cases")
+    @ParameterizedTest(name = "{0}")
+    @Timeout(value = 60_000, unit = TimeUnit.MILLISECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    public void twoConcurrentLastPairsStillCompleteTheJob(String kind) throws Exception {
+        initPairCompletionSerializationSqlTest(kind);
         Connection first = connection(false);
         Connection second = connection(false);
         int secondPid = (int) scalar(second, "SELECT pg_backend_pid()");
@@ -143,23 +147,29 @@ public class PairCompletionSerializationSqlTest {
         second.commit();
 
         Connection check = connection(true);
-        assertEquals("Both pairs are terminal", 2, scalar(check,
-            "SELECT count(*) FROM job_pairs WHERE job_id=" + job + " AND status_code=" + COMPLETE));
-        assertEquals("jobs.completed must be stamped once the last pair finishes", 1,
-            scalar(check, "SELECT (completed IS NOT NULL)::int FROM jobs WHERE id=" + job));
+        assertEquals(2, scalar(check,
+            "SELECT count(*) FROM job_pairs WHERE job_id=" + job + " AND status_code=" + COMPLETE), "Both pairs are terminal");
+        assertEquals(1, scalar(check, "SELECT (completed IS NOT NULL)::int FROM jobs WHERE id=" + job),
+            "jobs.completed must be stamped once the last pair finishes");
     }
 
-    @Test(timeout = 60_000)
-    public void jobStaysOpenWhileAnotherPairIsStillRunning() throws Exception {
+    @MethodSource("cases")
+    @ParameterizedTest(name = "{0}")
+    @Timeout(value = 60_000, unit = TimeUnit.MILLISECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    public void jobStaysOpenWhileAnotherPairIsStillRunning(String kind) throws Exception {
+        initPairCompletionSerializationSqlTest(kind);
         Connection first = connection(false);
         complete(first, pairA, COMPLETE);
         first.commit();
-        assertEquals("A running sibling must keep the job open", 1,
-            scalar(connection(true), "SELECT (completed IS NULL)::int FROM jobs WHERE id=" + job));
+        assertEquals(1, scalar(connection(true), "SELECT (completed IS NULL)::int FROM jobs WHERE id=" + job),
+            "A running sibling must keep the job open");
     }
 
-    @Test(timeout = 60_000)
-    public void terminalResultIsNotOverwrittenByAConcurrentNonTerminalWrite() throws Exception {
+    @MethodSource("cases")
+    @ParameterizedTest(name = "{0}")
+    @Timeout(value = 60_000, unit = TimeUnit.MILLISECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    public void terminalResultIsNotOverwrittenByAConcurrentNonTerminalWrite(String kind) throws Exception {
+        initPairCompletionSerializationSqlTest(kind);
         Connection killer = connection(false);
         Connection writer = connection(false);
         int writerPid = (int) scalar(writer, "SELECT pg_backend_pid()");
@@ -177,18 +187,21 @@ public class PairCompletionSerializationSqlTest {
             f.get(WAIT_MILLIS, TimeUnit.MILLISECONDS);
             writer.commit();
         } catch (ExecutionException expected) {
-            assertTrue("A terminal pair moved back to non-terminal is an illegal transition: " + expected.getCause(),
-                expected.getCause() instanceof SQLException
-                    && "P0001".equals(((SQLException) expected.getCause()).getSQLState()));
+            assertTrue(expected.getCause() instanceof SQLException
+                    && "P0001".equals(((SQLException) expected.getCause()).getSQLState()),
+                "A terminal pair moved back to non-terminal is an illegal transition: " + expected.getCause());
             writer.rollback();
         }
 
-        assertEquals("KILLED must survive the concurrent write", KILLED,
-            scalar(connection(true), "SELECT status_code FROM job_pairs WHERE id=" + pairA));
+        assertEquals(KILLED, scalar(connection(true), "SELECT status_code FROM job_pairs WHERE id=" + pairA),
+            "KILLED must survive the concurrent write");
     }
 
-    @Test(timeout = 60_000)
-    public void terminalWriteAfterANonTerminalOneIsApplied() throws Exception {
+    @MethodSource("cases")
+    @ParameterizedTest(name = "{0}")
+    @Timeout(value = 60_000, unit = TimeUnit.MILLISECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    public void terminalWriteAfterANonTerminalOneIsApplied(String kind) throws Exception {
+        initPairCompletionSerializationSqlTest(kind);
         Connection processing = connection(false);
         Connection killer = connection(false);
         int killerPid = (int) scalar(killer, "SELECT pg_backend_pid()");

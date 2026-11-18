@@ -1,6 +1,6 @@
 package org.starexec.test.junit.security;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.app.SessionFilter;
@@ -16,10 +16,10 @@ import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -87,7 +87,7 @@ public class SessionFilterRevocationTest {
 			new SessionFilter().doFilter(req, res, chain);
 		}
 
-		assertEquals("a deleted user must not reach the servlet", 0, chain.calls);
+		assertEquals(0, chain.calls, "a deleted user must not reach the servlet");
 	}
 
 	@Test
@@ -102,8 +102,8 @@ public class SessionFilterRevocationTest {
 			new SessionFilter().doFilter(req, mock(HttpServletResponse.class), chain);
 		}
 
-		assertTrue("the session must be invalidated", session.invalidated);
-		assertFalse("invalidation must unbind the cached user", session.attrs.containsKey(SessionUtil.USER));
+		assertTrue(session.invalidated, "the session must be invalidated");
+		assertFalse(session.attrs.containsKey(SessionUtil.USER), "invalidation must unbind the cached user");
 	}
 
 	@Test
@@ -140,8 +140,8 @@ public class SessionFilterRevocationTest {
 			new SessionFilter().doFilter(req, mock(HttpServletResponse.class), chain);
 		}
 
-		assertEquals("an active user must be served exactly once", 1, chain.calls);
-		assertFalse("an active user's session must survive", session.invalidated);
+		assertEquals(1, chain.calls, "an active user must be served exactly once");
+		assertFalse(session.invalidated, "an active user's session must survive");
 	}
 
 	@Test
@@ -157,10 +157,10 @@ public class SessionFilterRevocationTest {
 			new SessionFilter().doFilter(req, mock(HttpServletResponse.class), new CountingChain());
 		}
 
-		assertSame("the session must carry the freshly loaded user",
-				fresh, session.attrs.get(SessionUtil.USER));
-		assertEquals("a demotion must take effect on the next request",
-				R.DEFAULT_USER_ROLE_NAME, ((User) session.attrs.get(SessionUtil.USER)).getRole());
+		assertSame(fresh,
+				session.attrs.get(SessionUtil.USER), "the session must carry the freshly loaded user");
+		assertEquals(R.DEFAULT_USER_ROLE_NAME,
+				((User) session.attrs.get(SessionUtil.USER)).getRole(), "a demotion must take effect on the next request");
 	}
 
 	// ------------------------------------------------------------ DENIED
@@ -179,8 +179,8 @@ public class SessionFilterRevocationTest {
 			new SessionFilter().doFilter(req, res, chain);
 		}
 
-		assertEquals("the baseline redirected but still served the request", 0, chain.calls);
-		assertFalse("a suspended account is not a deleted one", session.invalidated);
+		assertEquals(0, chain.calls, "the baseline redirected but still served the request");
+		assertFalse(session.invalidated, "a suspended account is not a deleted one");
 		verify(res).sendRedirect(anyString());
 	}
 
@@ -213,7 +213,7 @@ public class SessionFilterRevocationTest {
 			new SessionFilter().doFilter(req, mock(HttpServletResponse.class), chain);
 		}
 
-		assertEquals("the index exemption is preserved behaviour", 1, chain.calls);
+		assertEquals(1, chain.calls, "the index exemption is preserved behaviour");
 	}
 
 	// ------------------------------------------------------------ MALFORMED
@@ -232,7 +232,7 @@ public class SessionFilterRevocationTest {
 		}
 
 		assertEquals(0, chain.calls);
-		assertFalse("the account exists; do not tell the operator it was deleted", session.invalidated);
+		assertFalse(session.invalidated, "the account exists; do not tell the operator it was deleted");
 		verify(res).sendError(Mockito.eq(HttpServletResponse.SC_FORBIDDEN), anyString());
 	}
 
@@ -251,8 +251,8 @@ public class SessionFilterRevocationTest {
 			new SessionFilter().doFilter(req, res, chain);
 		}
 
-		assertEquals("an unverifiable request must not be served", 0, chain.calls);
-		assertFalse("an outage must not log every user out", session.invalidated);
+		assertEquals(0, chain.calls, "an unverifiable request must not be served");
+		assertFalse(session.invalidated, "an outage must not log every user out");
 		verify(res).sendError(Mockito.eq(HttpServletResponse.SC_SERVICE_UNAVAILABLE), anyString());
 	}
 
@@ -276,7 +276,7 @@ public class SessionFilterRevocationTest {
 		}
 
 		assertEquals(0, outage.calls);
-		assertEquals("recovery must not require a new login", 1, recovered.calls);
+		assertEquals(1, recovered.calls, "recovery must not require a new login");
 	}
 
 	// ------------------------------------------------------------ scope
@@ -292,7 +292,7 @@ public class SessionFilterRevocationTest {
 			users.verify(() -> Users.loadAuthenticatedUserState(anyInt()), never());
 		}
 
-		assertEquals("static assets must not pay for revalidation", 1, chain.calls);
+		assertEquals(1, chain.calls, "static assets must not pay for revalidation");
 	}
 
 	@Test
@@ -306,6 +306,6 @@ public class SessionFilterRevocationTest {
 			users.verify(() -> Users.loadAuthenticatedUserState(anyInt()), never());
 		}
 
-		assertEquals("the container still owns anonymous authentication", 1, chain.calls);
+		assertEquals(1, chain.calls, "the container still owns anonymous authentication");
 	}
 }

@@ -1,16 +1,17 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * #159: {@code copyOutputIncrementally} must not take {@code $OUT_DIR/output_files} away from
@@ -22,8 +23,8 @@ import static org.junit.Assert.assertTrue;
  */
 public class IncrementalOutputSnapshotTest {
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	private static final String PROBE = """
 			export SCRIPT_DIR="$1" STAREXEC_OUTPUT_DIR="$2/starexec-out" CONTAINER_MODE=true PAIR_ID=7
@@ -69,21 +70,21 @@ public class IncrementalOutputSnapshotTest {
 		Path dir = run(0, 0);
 
 		String[] inodes = Files.readString(dir.resolve("inodes")).trim().split(" ");
-		assertEquals("output_files must keep its identity across every interval", inodes[0], inodes[1]);
-		assertTrue("the incremental copier must survive three intervals",
-				Files.exists(dir.resolve("copier-survived")));
-		assertFalse("the solver must never fail to write into its directory: "
-				+ read(dir.resolve("solver-errors")), Files.exists(dir.resolve("solver-errors"))
-				&& Files.size(dir.resolve("solver-errors")) > 0);
+		assertEquals(inodes[0], inodes[1], "output_files must keep its identity across every interval");
+		assertTrue(Files.exists(dir.resolve("copier-survived")),
+				"the incremental copier must survive three intervals");
+		assertFalse(Files.exists(dir.resolve("solver-errors"))
+				&& Files.size(dir.resolve("solver-errors")) > 0, "the solver must never fail to write into its directory: "
+				+ read(dir.resolve("solver-errors")));
 
 		// Final copy moves the (still complete) live directory, as before.
-		assertTrue("final copy must complete", Files.exists(dir.resolve("final-done")));
-		assertFalse("final copy moves the live directory once the solver is gone",
-				Files.exists(dir.resolve("out/output_files")));
+		assertTrue(Files.exists(dir.resolve("final-done")), "final copy must complete");
+		assertFalse(Files.exists(dir.resolve("out/output_files")),
+				"final copy moves the live directory once the solver is gone");
 		assertTrue(Files.exists(dir.resolve("pair/7_output/held.txt")));
 		assertTrue(Files.exists(dir.resolve("saved/1_output/held.txt")));
-		assertTrue("later output must be in the final copy, not lost with an early snapshot",
-				Files.exists(dir.resolve("pair/7_output/f5.txt")));
+		assertTrue(Files.exists(dir.resolve("pair/7_output/f5.txt")),
+				"later output must be in the final copy, not lost with an early snapshot");
 		assertNoTmpLeft(dir);
 	}
 
@@ -95,14 +96,14 @@ public class IncrementalOutputSnapshotTest {
 		assertEquals(inodes[0], inodes[1]);
 		assertTrue(Files.exists(dir.resolve("copier-survived")));
 		assertTrue(Files.exists(dir.resolve("saved/1_output/held.txt")));
-		assertFalse("option 1 does not populate the pair output directory",
-				Files.exists(dir.resolve("pair/7_output")));
+		assertFalse(Files.exists(dir.resolve("pair/7_output")),
+				"option 1 does not populate the pair output directory");
 	}
 
 	private static void assertNoTmpLeft(Path dir) throws Exception {
 		try (var s = Files.walk(dir)) {
-			assertFalse("no half-written snapshot may remain",
-					s.anyMatch(p -> p.getFileName().toString().endsWith(".incremental.tmp")));
+			assertFalse(s.anyMatch(p -> p.getFileName().toString().endsWith(".incremental.tmp")),
+					"no half-written snapshot may remain");
 		}
 	}
 
@@ -111,7 +112,7 @@ public class IncrementalOutputSnapshotTest {
 	}
 
 	private Path run(int extraSaveOption, int stdoutSaveOption) throws Exception {
-		Path dir = folder.newFolder().toPath();
+		Path dir = newFolder(folder).toPath();
 		Path sge = Path.of("src/main/java/org/starexec/config/sge").toAbsolutePath();
 		Path script = dir.resolve("probe.sh");
 		Files.writeString(script, PROBE);
@@ -123,9 +124,9 @@ public class IncrementalOutputSnapshotTest {
 		if (!finished) {
 			process.destroyForcibly();
 		}
-		assertTrue("probe must finish", finished);
+		assertTrue(finished, "probe must finish");
 		String output = Files.readString(log);
-		assertEquals(output, 0, process.exitValue());
+		assertEquals(0, process.exitValue(), output);
 		return dir;
 	}
 }

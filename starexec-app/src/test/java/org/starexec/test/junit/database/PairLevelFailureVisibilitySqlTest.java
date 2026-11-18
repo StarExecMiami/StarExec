@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.JobPairs;
@@ -26,8 +26,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * A pair that fails outside any stage is shown, filtered and counted as the failure it is (#324).
@@ -60,13 +60,13 @@ public class PairLevelFailureVisibilitySqlTest extends Common {
 	private int configId;
 	private int benchId;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("PairLevelFailureVisibilitySqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			userId = selectInt(con, "SELECT min(id) FROM starexec.users");
@@ -92,7 +92,7 @@ public class PairLevelFailureVisibilitySqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		if (jobId == 0) {
 			return;
@@ -119,7 +119,7 @@ public class PairLevelFailureVisibilitySqlTest extends Common {
 		assertEquals(List.of(DEPENDENCY_MISSING, DEPENDENCY_MISSING), stageStatuses(pair));
 		String row = "config=" + configId + " failed=1 incomplete=0";
 		assertEquals(List.of(row), summary(1));
-		assertEquals("the Primary view too", List.of(row), summary(0));
+		assertEquals(List.of(row), summary(0), "the Primary view too");
 	}
 
 	/** A stage that had already finished keeps its result under a later pair-level failure. */
@@ -218,7 +218,7 @@ public class PairLevelFailureVisibilitySqlTest extends Common {
 	private List<String> summary(int stageNumber) {
 		Collection<SolverStats> stats = Jobs.getAllJobStatsInJobSpaceHierarchyIncludeDeletedConfigs(
 				Spaces.getJobSpace(spaceId), stageNumber, PrimitivesToAnonymize.NONE, false);
-		assertNotNull("the job space must have a summary", stats);
+		assertNotNull(stats, "the job space must have a summary");
 		List<String> rows = new ArrayList<>();
 		for (SolverStats s : stats) {
 			rows.add("config=" + s.getConfiguration().getId() + " failed=" + s.getFailedJobPairs()
@@ -233,7 +233,7 @@ public class PairLevelFailureVisibilitySqlTest extends Common {
 		String sql;
 		try (InputStream in = PairLevelFailureVisibilitySqlTest.class.getClassLoader()
 				.getResourceAsStream("db/migration/V0118__pair_level_failures_reach_their_stages.sql")) {
-			assertNotNull("V0118 must be on the classpath", in);
+			assertNotNull(in, "V0118 must be on the classpath");
 			sql = new String(in.readAllBytes(), StandardCharsets.UTF_8);
 		}
 		try (Connection con = Common.getConnection(); Statement st = con.createStatement()) {

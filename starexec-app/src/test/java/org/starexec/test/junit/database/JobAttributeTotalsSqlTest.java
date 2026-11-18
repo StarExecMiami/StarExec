@@ -1,10 +1,10 @@
 package org.starexec.test.junit.database;
 
 import org.apache.commons.lang3.tuple.Triple;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.to.Status.StatusCode;
@@ -20,8 +20,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * The job attributes page's totals count each post-processor result once, with only the time of
@@ -50,13 +50,13 @@ public class JobAttributeTotalsSqlTest extends Common {
 	private int twoStagePairId;
 	private int oneStagePairId;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobAttributeTotalsSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			userId = selectInt(con, "SELECT min(id) FROM starexec.users");
@@ -90,7 +90,7 @@ public class JobAttributeTotalsSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		if (jobId == 0) {
 			return;
@@ -114,13 +114,13 @@ public class JobAttributeTotalsSqlTest extends Common {
 		Map<String, String> totals = totalsByResult();
 
 		assertEquals(
-				"Theorem is recorded on two stages (two-stage pair stage 1, one-stage pair), and"
-						+ " Unknown on one (two-stage pair stage 2); each count and each sum is"
-						+ " of those stages alone",
 				Map.of(
 						"Theorem", "2 wall=107.0000 cpu=96.0000",
 						"Unknown", "1 wall=50.0000 cpu=40.0000"),
-				totals);
+				totals,
+				"Theorem is recorded on two stages (two-stage pair stage 1, one-stage pair), and"
+						+ " Unknown on one (two-stage pair stage 2); each count and each sum is"
+						+ " of those stages alone");
 	}
 
 	/**
@@ -130,7 +130,7 @@ public class JobAttributeTotalsSqlTest extends Common {
 	@Test
 	public void theTotalsAgreeWithTheAttributesTable() throws SQLException {
 		List<AttributesTableData> table = Jobs.getJobAttributesTable(spaceId);
-		assertNotNull("getJobAttributesTable logs and returns null on a database error", table);
+		assertNotNull(table, "getJobAttributesTable logs and returns null on a database error");
 
 		Map<String, long[]> fromTable = new TreeMap<>();
 		for (AttributesTableData row : table) {
@@ -145,12 +145,12 @@ public class JobAttributeTotalsSqlTest extends Common {
 					e.getValue()[0], e.getValue()[1], e.getValue()[2]));
 		}
 
-		assertEquals("precondition: the attributes table matches each result to its stage",
-				Map.of(
+		assertEquals(Map.of(
 						"Theorem", "2 wall=107.0000 cpu=96.0000",
 						"Unknown", "1 wall=50.0000 cpu=40.0000"),
-				tableTotals);
-		assertEquals("the totals agree with the attributes table", tableTotals, totalsByResult());
+				tableTotals,
+				"precondition: the attributes table matches each result to its stage");
+		assertEquals(tableTotals, totalsByResult(), "the totals agree with the attributes table");
 	}
 
 	/**

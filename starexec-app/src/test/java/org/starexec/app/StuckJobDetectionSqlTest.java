@@ -1,10 +1,10 @@
 package org.starexec.app;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -15,10 +15,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.app.PeriodicTasks.StuckJob;
 import org.starexec.data.database.Common;
 import org.starexec.data.to.Status.StatusCode;
@@ -44,13 +44,13 @@ public class StuckJobDetectionSqlTest extends Common {
     private int activeQueue;
     private int inactiveQueue;
 
-    @BeforeClass
+    @BeforeAll
     public static void requireDatabase() {
         DatabaseTestSupport.assumeDatabaseAvailable("StuckJobDetectionSqlTest");
         Common.initialize();
     }
 
-    @Before
+    @BeforeEach
     public void createQueues() throws SQLException {
         try (Connection con = Common.getConnection();
              PreparedStatement ps = con.prepareStatement("SELECT min(id) FROM starexec.users");
@@ -62,7 +62,7 @@ public class StuckJobDetectionSqlTest extends Common {
         inactiveQueue = insertQueue("INACTIVE");
     }
 
-    @After
+    @AfterEach
     public void dropFixture() throws SQLException {
         try (Connection con = Common.getConnection()) {
             for (int job : jobIds) {
@@ -100,7 +100,7 @@ public class StuckJobDetectionSqlTest extends Common {
         assertNotNull(found);
         assertEquals(2, found.pending);
         assertEquals("INACTIVE", found.queueStatus);
-        assertTrue("idle since it was created", found.idleMinutes >= 2 * 24 * 60 - 1);
+        assertTrue(found.idleMinutes >= 2 * 24 * 60 - 1, "idle since it was created");
         assertTrue(PeriodicTasks.describeStuckJob(found).contains("is INACTIVE"));
     }
 
@@ -112,8 +112,8 @@ public class StuckJobDetectionSqlTest extends Common {
 
         StuckJob found = stuckJobs().get(job);
         assertNotNull(found);
-        assertTrue("idle since its last pair finished", found.idleMinutes >= 179
-            && found.idleMinutes <= 181);
+        assertTrue(found.idleMinutes >= 179
+            && found.idleMinutes <= 181, "idle since its last pair finished");
     }
 
     @Test

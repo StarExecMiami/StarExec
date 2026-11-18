@@ -1,7 +1,13 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.*;
-import static org.mockito.ArgumentMatchers.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.Mockito.*;
 
 import com.github.dockerjava.api.DockerClient;
@@ -15,9 +21,9 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -84,7 +90,7 @@ public class PodmanBackendTests {
     private static final String TEST_CONTAINER_NAME = "starexec-job-test";
     private static final int TEST_EXEC_ID = 1001;
 
-    @Before
+    @BeforeEach
     public void setUp() throws Exception {
         mocks = MockitoAnnotations.openMocks(this);
 
@@ -102,7 +108,7 @@ public class PodmanBackendTests {
         setupCommonMocks();
     }
 
-    @After
+    @AfterEach
     public void tearDown() throws Exception {
         if (mocks != null) {
             mocks.close();
@@ -368,11 +374,11 @@ public class PodmanBackendTests {
         verify(mockDockerClient, never()).removeContainerCmd(containerId);
         verify(mockDockerClient).removeContainerCmd(staleContainerId);
         assertTrue(
-            "valid terminal evidence must remain available for metadata retry",
-            Files.exists(outputDir.resolve("status.json"))
+            Files.exists(outputDir.resolve("status.json")),
+            "valid terminal evidence must remain available for metadata retry"
         );
-        assertTrue("exited reconciliation must not reserve a submission slot",
-            getSlotHolderSet().isEmpty());
+        assertTrue(getSlotHolderSet().isEmpty(),
+            "exited reconciliation must not reserve a submission slot");
         assertEquals(0, getActiveSubmissionSlots());
     }
 
@@ -446,16 +452,16 @@ public class PodmanBackendTests {
         );
 
         assertFalse(
-            "the container environment must not invent a CPU-time budget that the"
-                + " generated jobscript immediately replaces",
             environment.stream().anyMatch(value ->
-                value.startsWith("STAREXEC_CPU_LIMIT="))
+                value.startsWith("STAREXEC_CPU_LIMIT=")),
+            "the container environment must not invent a CPU-time budget that the"
+                + " generated jobscript immediately replaces"
         );
         assertFalse(
-            "the container environment must not invent a wallclock budget that the"
-                + " generated jobscript immediately replaces",
             environment.stream().anyMatch(value ->
-                value.startsWith("STAREXEC_WALLCLOCK_LIMIT="))
+                value.startsWith("STAREXEC_WALLCLOCK_LIMIT=")),
+            "the container environment must not invent a wallclock budget that the"
+                + " generated jobscript immediately replaces"
         );
 
         String jobscript = Files.readString(
@@ -466,12 +472,12 @@ public class PodmanBackendTests {
             Map.of("$$MAX_CPUTIME$$", "137", "$$MAX_RUNTIME$$", "251")
         );
         assertTrue(
-            "the per-pair CPU budget must remain a generated jobscript value",
-            generated.contains("export STAREXEC_CPU_LIMIT='137'")
+            generated.contains("export STAREXEC_CPU_LIMIT='137'"),
+            "the per-pair CPU budget must remain a generated jobscript value"
         );
         assertTrue(
-            "the per-pair wallclock budget must remain a generated jobscript value",
-            generated.contains("export STAREXEC_WALLCLOCK_LIMIT='251'")
+            generated.contains("export STAREXEC_WALLCLOCK_LIMIT='251'"),
+            "the per-pair wallclock budget must remain a generated jobscript value"
         );
     }
 
@@ -495,8 +501,8 @@ public class PodmanBackendTests {
             "/app/data/joboutput/job_1"
         );
         assertTrue(
-            "GetComputerInfo must still receive the cgroup memory ceiling",
-            environment.contains("STAREXEC_MEM_LIMIT=2048")
+            environment.contains("STAREXEC_MEM_LIMIT=2048"),
+            "GetComputerInfo must still receive the cgroup memory ceiling"
         );
     }
 
@@ -516,8 +522,8 @@ public class PodmanBackendTests {
             "/app/data/joboutput/job_1"
         );
         assertTrue(
-            "the job script must be told the container's cgroup is the pair's own",
-            environment.contains("STAREXEC_PAIR_HAS_OWN_CGROUP=true")
+            environment.contains("STAREXEC_PAIR_HAS_OWN_CGROUP=true"),
+            "the job script must be told the container's cgroup is the pair's own"
         );
     }
 
@@ -583,30 +589,30 @@ public class PodmanBackendTests {
     public void testGetQueues_ReturnsContainerQueue() {
         String[] queues = backend.getQueues();
 
-        assertNotNull("Queues should not be null", queues);
-        assertEquals("Should return exactly one queue", 1, queues.length);
-        assertEquals("Queue name should be container.q", "container.q", queues[0]);
+        assertNotNull(queues, "Queues should not be null");
+        assertEquals(1, queues.length, "Should return exactly one queue");
+        assertEquals("container.q", queues[0], "Queue name should be container.q");
     }
 
     @Test
     public void testGetWorkerNodes_ReturnsVirtualNode() {
         String[] nodes = backend.getWorkerNodes();
 
-        assertNotNull("Worker nodes should not be null", nodes);
-        assertEquals("Should return exactly one node", 1, nodes.length);
-        assertEquals("Node name should be container-worker-1", "container-worker-1", nodes[0]);
+        assertNotNull(nodes, "Worker nodes should not be null");
+        assertEquals(1, nodes.length, "Should return exactly one node");
+        assertEquals("container-worker-1", nodes[0], "Node name should be container-worker-1");
     }
 
     @Test
     public void testGetNodeQueueAssociations_ReturnsCorrectMapping() {
         Map<String, String> associations = backend.getNodeQueueAssociations();
 
-        assertNotNull("Associations should not be null", associations);
-        assertEquals("Should have exactly one association", 1, associations.size());
+        assertNotNull(associations, "Associations should not be null");
+        assertEquals(1, associations.size(), "Should have exactly one association");
         assertEquals(
-            "Worker node should be associated with container queue",
             "container.q",
-            associations.get("container-worker-1")
+            associations.get("container-worker-1"),
+            "Worker node should be associated with container queue"
         );
     }
 
@@ -624,9 +630,9 @@ public class PodmanBackendTests {
         String[] queues = backend.getQueues();
 
         assertArrayEquals(
-            "Partition workers should share the same container queue",
             new String[]{"container.q"},
-            queues
+            queues,
+            "Partition workers should share the same container queue"
         );
     }
 
@@ -643,9 +649,9 @@ public class PodmanBackendTests {
         String[] nodes = backend.getWorkerNodes();
 
         assertArrayEquals(
-            "Partition nodes should follow active CPU partition order",
             new String[]{"container-worker-partition-0", "container-worker-partition-1"},
-            nodes
+            nodes,
+            "Partition nodes should follow active CPU partition order"
         );
     }
 
@@ -662,8 +668,8 @@ public class PodmanBackendTests {
 
         Map<String, String> associations = backend.getNodeQueueAssociations();
 
-        assertNotNull("Associations should not be null", associations);
-        assertEquals("Should have one mapping per partition", 2, associations.size());
+        assertNotNull(associations, "Associations should not be null");
+        assertEquals(2, associations.size(), "Should have one mapping per partition");
         assertEquals(
             "container.q",
             associations.get("container-worker-partition-0")
@@ -678,19 +684,19 @@ public class PodmanBackendTests {
 
     @Test
     public void testIsError_NegativeCodeIsError() {
-        assertTrue("Negative exec code should be an error", backend.isError(-1));
-        assertTrue("Negative exec code should be an error", backend.isError(-100));
+        assertTrue(backend.isError(-1), "Negative exec code should be an error");
+        assertTrue(backend.isError(-100), "Negative exec code should be an error");
     }
 
     @Test
     public void testIsError_ZeroIsNotError() {
-        assertFalse("Zero exec code should not be an error", backend.isError(0));
+        assertFalse(backend.isError(0), "Zero exec code should not be an error");
     }
 
     @Test
     public void testIsError_PositiveCodeIsNotError() {
-        assertFalse("Positive exec code should not be an error", backend.isError(1));
-        assertFalse("Positive exec code should not be an error", backend.isError(1000));
+        assertFalse(backend.isError(1), "Positive exec code should not be an error");
+        assertFalse(backend.isError(1000), "Positive exec code should not be an error");
     }
 
     // ==================== Kill Pair Tests ====================
@@ -706,10 +712,10 @@ public class PodmanBackendTests {
         boolean result = backend.killPair(TEST_EXEC_ID);
 
         // Verify
-        assertTrue("Kill should succeed", result);
-        assertFalse("Container should be removed from tracking", execIdMap.containsKey(TEST_EXEC_ID));
-        assertFalse("Submission slot holder should be released", getSlotHolderSet().contains(TEST_EXEC_ID));
-        assertEquals("Active submission slots should be decremented", 0, getActiveSubmissionSlots());
+        assertTrue(result, "Kill should succeed");
+        assertFalse(execIdMap.containsKey(TEST_EXEC_ID), "Container should be removed from tracking");
+        assertFalse(getSlotHolderSet().contains(TEST_EXEC_ID), "Submission slot holder should be released");
+        assertEquals(0, getActiveSubmissionSlots(), "Active submission slots should be decremented");
 
         // Verify Docker commands were called
         verify(mockDockerClient).stopContainerCmd(TEST_CONTAINER_ID);
@@ -721,7 +727,7 @@ public class PodmanBackendTests {
     public void testKillPair_NonExistentExecId() {
         boolean result = backend.killPair(9999);
 
-        assertFalse("Kill should fail for non-existent exec ID", result);
+        assertFalse(result, "Kill should fail for non-existent exec ID");
     }
 
     @Test
@@ -738,7 +744,7 @@ public class PodmanBackendTests {
         boolean result = backend.killPair(TEST_EXEC_ID);
 
         // Verify - should still succeed (container gets removed)
-        assertTrue("Kill should succeed even if container already stopped", result);
+        assertTrue(result, "Kill should succeed even if container already stopped");
         verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
     }
 
@@ -756,8 +762,8 @@ public class PodmanBackendTests {
         boolean result = backend.killPair(TEST_EXEC_ID);
 
         // Verify - should still succeed (container was already gone)
-        assertTrue("Kill should succeed if container not found", result);
-        assertFalse("Container should be removed from tracking", execIdMap.containsKey(TEST_EXEC_ID));
+        assertTrue(result, "Kill should succeed if container not found");
+        assertFalse(execIdMap.containsKey(TEST_EXEC_ID), "Container should be removed from tracking");
     }
 
     // ==================== Confirmed Kill Tests ====================
@@ -810,9 +816,9 @@ public class PodmanBackendTests {
         // A COMPLETE pair: its container was ingested and removed, so nothing tracks it and
         // the engine has nothing for its exec id. This is every rerun of a finished pair.
         assertEquals(
-            "An execution with no container left is confirmed stopped",
             PodmanBackend.KillOutcome.CONFIRMED_SAFE,
-            backend.killPairConfirmed(TEST_EXEC_ID)
+            backend.killPairConfirmed(TEST_EXEC_ID),
+            "An execution with no container left is confirmed stopped"
         );
     }
 
@@ -839,8 +845,8 @@ public class PodmanBackendTests {
         );
         verify(mockDockerClient).stopContainerCmd(TEST_CONTAINER_ID);
         verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
-        assertFalse("Tracking is released", execIdMap.containsKey(TEST_EXEC_ID));
-        assertEquals("The slot is released", 0, getActiveSubmissionSlots());
+        assertFalse(execIdMap.containsKey(TEST_EXEC_ID), "Tracking is released");
+        assertEquals(0, getActiveSubmissionSlots(), "The slot is released");
     }
 
     @Test
@@ -870,7 +876,7 @@ public class PodmanBackendTests {
             PodmanBackend.KillOutcome.UNPROVEN,
             backend.killPairConfirmed(TEST_EXEC_ID)
         );
-        assertTrue("A failed kill keeps the container tracked", execIdMap.containsKey(TEST_EXEC_ID));
+        assertTrue(execIdMap.containsKey(TEST_EXEC_ID), "A failed kill keeps the container tracked");
     }
 
     @Test
@@ -923,9 +929,9 @@ public class PodmanBackendTests {
         stubInspectState("exited-unfenced", "exited", false, false, false);
 
         assertEquals(
-            "An uningested result with no attempt label could land on the replacement",
             PodmanBackend.KillOutcome.UNPROVEN,
-            backend.killPairConfirmed(TEST_EXEC_ID)
+            backend.killPairConfirmed(TEST_EXEC_ID),
+            "An uningested result with no attempt label could land on the replacement"
         );
 
         // The quarantine is held in memory: after a restart the monitor can ingest the
@@ -934,9 +940,9 @@ public class PodmanBackendTests {
         when(monitor.isQuarantined("exited-unfenced")).thenReturn(true);
         setJobMonitor(monitor);
         assertEquals(
-            "A quarantine does not outlive the application, so it proves nothing",
             PodmanBackend.KillOutcome.UNPROVEN,
-            backend.killPairConfirmed(TEST_EXEC_ID)
+            backend.killPairConfirmed(TEST_EXEC_ID),
+            "A quarantine does not outlive the application, so it proves nothing"
         );
     }
 
@@ -951,9 +957,9 @@ public class PodmanBackendTests {
             censusReturns(listedContainer(id, labels));
             stubInspectState(id, "exited", false, false, false);
             assertEquals(
-                "attempt label '" + attempt + "' fences nothing",
                 PodmanBackend.KillOutcome.UNPROVEN,
-                backend.killPairConfirmed(TEST_EXEC_ID)
+                backend.killPairConfirmed(TEST_EXEC_ID),
+                "attempt label '" + attempt + "' fences nothing"
             );
         }
     }
@@ -971,9 +977,9 @@ public class PodmanBackendTests {
 
         censusReturns(fenced, stillRunning);
         assertEquals(
-            "A safe container listed first does not decide",
             PodmanBackend.KillOutcome.UNPROVEN,
-            backend.killPairConfirmed(TEST_EXEC_ID)
+            backend.killPairConfirmed(TEST_EXEC_ID),
+            "A safe container listed first does not decide"
         );
 
         censusReturns(stillRunning, fenced);
@@ -981,9 +987,9 @@ public class PodmanBackendTests {
 
         censusReturns(fenced, neverStarted);
         assertEquals(
-            "Every container is safe, so the execution is",
             PodmanBackend.KillOutcome.CONFIRMED_SAFE,
-            backend.killPairConfirmed(TEST_EXEC_ID)
+            backend.killPairConfirmed(TEST_EXEC_ID),
+            "Every container is safe, so the execution is"
         );
     }
 
@@ -1082,9 +1088,9 @@ public class PodmanBackendTests {
         stubInspectState("maintenance", "exited", false, false, false);
 
         assertEquals(
-            "The monitor records no pair result from a maintenance container",
             PodmanBackend.KillOutcome.CONFIRMED_SAFE,
-            backend.killPairConfirmed(TEST_EXEC_ID)
+            backend.killPairConfirmed(TEST_EXEC_ID),
+            "The monitor records no pair result from a maintenance container"
         );
     }
 
@@ -1103,9 +1109,9 @@ public class PodmanBackendTests {
         censusReturns(listedContainer("no-pair", noPair));
         stubInspectState("no-pair", "exited", false, false, false);
         assertEquals(
-            "Ingestion skips a container with no pair id",
             PodmanBackend.KillOutcome.CONFIRMED_SAFE,
-            backend.killPairConfirmed(TEST_EXEC_ID)
+            backend.killPairConfirmed(TEST_EXEC_ID),
+            "Ingestion skips a container with no pair id"
         );
 
         Map<String, String> malformedPair = pairContainerLabels(TEST_EXEC_ID, null);
@@ -1113,9 +1119,9 @@ public class PodmanBackendTests {
         censusReturns(listedContainer("malformed-pair", malformedPair));
         stubInspectState("malformed-pair", "exited", false, false, false);
         assertEquals(
-            "Ingestion skips a container whose pair id does not parse",
             PodmanBackend.KillOutcome.CONFIRMED_SAFE,
-            backend.killPairConfirmed(TEST_EXEC_ID)
+            backend.killPairConfirmed(TEST_EXEC_ID),
+            "Ingestion skips a container whose pair id does not parse"
         );
     }
 
@@ -1125,7 +1131,7 @@ public class PodmanBackendTests {
     public void testKillAll_EmptyTracking() {
         boolean result = backend.killAll();
 
-        assertTrue("Kill all should succeed with no tracked containers", result);
+        assertTrue(result, "Kill all should succeed with no tracked containers");
     }
 
     @Test
@@ -1140,8 +1146,8 @@ public class PodmanBackendTests {
         boolean result = backend.killAll();
 
         // Verify
-        assertTrue("Kill all should succeed", result);
-        assertTrue("All containers should be removed from tracking", execIdMap.isEmpty());
+        assertTrue(result, "Kill all should succeed");
+        assertTrue(execIdMap.isEmpty(), "All containers should be removed from tracking");
 
         // Verify stop was called for each container
         verify(mockDockerClient).stopContainerCmd("container1");
@@ -1155,9 +1161,9 @@ public class PodmanBackendTests {
     public void testGetRunningJobsStatus_NoContainers() {
         String status = backend.getRunningJobsStatus();
 
-        assertNotNull("Status should not be null", status);
-        assertTrue("Status should contain header", status.contains("StarExec Container Backend Status"));
-        assertTrue("Status should indicate no containers", status.contains("No StarExec containers"));
+        assertNotNull(status, "Status should not be null");
+        assertTrue(status.contains("StarExec Container Backend Status"), "Status should contain header");
+        assertTrue(status.contains("No StarExec containers"), "Status should indicate no containers");
     }
 
     @Test
@@ -1175,10 +1181,10 @@ public class PodmanBackendTests {
         String status = backend.getRunningJobsStatus();
 
         // Verify
-        assertNotNull("Status should not be null", status);
-        assertTrue("Status should contain container ID", status.contains("abc123def456"));
-        assertTrue("Status should contain container name", status.contains(TEST_CONTAINER_NAME));
-        assertTrue("Status should contain container status", status.contains("Up 5 minutes"));
+        assertNotNull(status, "Status should not be null");
+        assertTrue(status.contains("abc123def456"), "Status should contain container ID");
+        assertTrue(status.contains(TEST_CONTAINER_NAME), "Status should contain container name");
+        assertTrue(status.contains("Up 5 minutes"), "Status should contain container status");
     }
 
     @Test
@@ -1190,8 +1196,8 @@ public class PodmanBackendTests {
         String status = backend.getRunningJobsStatus();
 
         // Verify - should return error message, not throw
-        assertNotNull("Status should not be null", status);
-        assertTrue("Status should contain error message", status.contains("Error"));
+        assertNotNull(status, "Status should not be null");
+        assertTrue(status.contains("Error"), "Status should contain error message");
     }
 
     // ==================== Active Execution IDs Tests ====================
@@ -1200,8 +1206,8 @@ public class PodmanBackendTests {
     public void testGetActiveExecutionIds_EmptyWhenNoContainers() throws IOException {
         Set<Integer> activeIds = backend.getActiveExecutionIds();
 
-        assertNotNull("Active IDs should not be null", activeIds);
-        assertTrue("Active IDs should be empty with no tracked containers", activeIds.isEmpty());
+        assertNotNull(activeIds, "Active IDs should not be null");
+        assertTrue(activeIds.isEmpty(), "Active IDs should be empty with no tracked containers");
     }
 
     @Test
@@ -1231,13 +1237,13 @@ public class PodmanBackendTests {
         Set<Integer> activeIds = backend.getActiveExecutionIds();
 
         // Verify
-        assertTrue("Should contain running container ID", activeIds.contains(1001));
+        assertTrue(activeIds.contains(1001), "Should contain running container ID");
         // An exited container that still exists has a result the monitor has not ingested yet
         // (#324): it stays active so the broken-pair sweep cannot file it as a submit failure.
-        assertTrue("An exited, uningested container stays active", activeIds.contains(1002));
+        assertTrue(activeIds.contains(1002), "An exited, uningested container stays active");
 
         // It no longer holds an execution slot, so it leaves slot tracking
-        assertFalse("Stopped container should be removed from tracking", execIdMap.containsKey(1002));
+        assertFalse(execIdMap.containsKey(1002), "Stopped container should be removed from tracking");
     }
 
     @Test
@@ -1259,9 +1265,9 @@ public class PodmanBackendTests {
         Set<Integer> activeIds = backend.getActiveExecutionIds();
 
         // Verify
-        assertTrue("Its result is still owed, so it stays active", activeIds.contains(TEST_EXEC_ID));
-        assertFalse("Slot holder should be released", getSlotHolderSet().contains(TEST_EXEC_ID));
-        assertEquals("Active submission slots should be decremented", 0, getActiveSubmissionSlots());
+        assertTrue(activeIds.contains(TEST_EXEC_ID), "Its result is still owed, so it stays active");
+        assertFalse(getSlotHolderSet().contains(TEST_EXEC_ID), "Slot holder should be released");
+        assertEquals(0, getActiveSubmissionSlots(), "Active submission slots should be decremented");
     }
 
     @Test
@@ -1279,8 +1285,8 @@ public class PodmanBackendTests {
         Set<Integer> activeIds = backend.getActiveExecutionIds();
 
         // Verify
-        assertTrue("Active IDs should be empty", activeIds.isEmpty());
-        assertFalse("Deleted container should be removed from tracking", execIdMap.containsKey(1001));
+        assertTrue(activeIds.isEmpty(), "Active IDs should be empty");
+        assertFalse(execIdMap.containsKey(1001), "Deleted container should be removed from tracking");
     }
 
     /** Once the monitor has ingested and removed the container, the execution is over. */
@@ -1350,7 +1356,7 @@ public class PodmanBackendTests {
 
     @Test
     public void testClearNodeErrorStates_ReturnsTrue() {
-        assertTrue("clearNodeErrorStates should return true", backend.clearNodeErrorStates());
+        assertTrue(backend.clearNodeErrorStates(), "clearNodeErrorStates should return true");
     }
 
     @Test
@@ -1362,13 +1368,13 @@ public class PodmanBackendTests {
     @Test
     public void testCreateQueue_ReturnsTrue() {
         boolean result = backend.createQueue("new-queue", new String[]{"node1"}, new String[]{"source-queue"});
-        assertTrue("createQueue should return true", result);
+        assertTrue(result, "createQueue should return true");
     }
 
     @Test
     public void testCreateQueueWithSlots_ReturnsTrue() {
         boolean result = backend.createQueueWithSlots("new-queue", new String[]{"node1"}, new String[]{"source-queue"}, 4);
-        assertTrue("createQueueWithSlots should return true", result);
+        assertTrue(result, "createQueueWithSlots should return true");
     }
 
     @Test
@@ -1389,8 +1395,8 @@ public class PodmanBackendTests {
     public void testGetCompletedContainers_EmptyWhenNoContainers() throws Exception {
         var completed = backend.getCompletedContainers();
 
-        assertNotNull("Completed list should not be null", completed);
-        assertTrue("Completed list should be empty", completed.isEmpty());
+        assertNotNull(completed, "Completed list should not be null");
+        assertTrue(completed.isEmpty(), "Completed list should be empty");
     }
 
     @Test
@@ -1402,8 +1408,8 @@ public class PodmanBackendTests {
             backend.getCompletedContainers();
             fail("Expected transient exception when listing completed containers fails");
         } catch (BackendTransientException e) {
-            assertSame("Original exception should be preserved as cause", brokenPipe, e.getCause());
-            assertEquals("Backend type should identify podman", "podman", e.getBackendType());
+            assertSame(brokenPipe, e.getCause(), "Original exception should be preserved as cause");
+            assertEquals("podman", e.getBackendType(), "Backend type should identify podman");
         }
     }
 
@@ -1420,9 +1426,9 @@ public class PodmanBackendTests {
             fail("Expected non-transient list failure to propagate");
         } catch (IllegalArgumentException e) {
             assertSame(
-                "Non-transient list failures should not be reclassified as transient",
                 nonTransientFailure,
-                e
+                e,
+                "Non-transient list failures should not be reclassified as transient"
             );
         }
     }
@@ -1449,8 +1455,8 @@ public class PodmanBackendTests {
             backend.getCompletedContainers();
             fail("Expected transient exception when inspecting completed container fails");
         } catch (BackendTransientException e) {
-            assertSame("Original inspect exception should be preserved as cause", brokenPipe, e.getCause());
-            assertEquals("Backend type should identify podman", "podman", e.getBackendType());
+            assertSame(brokenPipe, e.getCause(), "Original inspect exception should be preserved as cause");
+            assertEquals("podman", e.getBackendType(), "Backend type should identify podman");
         }
     }
 
@@ -1499,9 +1505,9 @@ public class PodmanBackendTests {
 
         backend.removeCompletedContainer(TEST_CONTAINER_ID);
 
-        assertFalse("Tracked exec should be removed after completion", execIdMap.containsKey(TEST_EXEC_ID));
-        assertFalse("Slot holder should be released", getSlotHolderSet().contains(TEST_EXEC_ID));
-        assertEquals("Active submission slots should be decremented", 0, getActiveSubmissionSlots());
+        assertFalse(execIdMap.containsKey(TEST_EXEC_ID), "Tracked exec should be removed after completion");
+        assertFalse(getSlotHolderSet().contains(TEST_EXEC_ID), "Slot holder should be released");
+        assertEquals(0, getActiveSubmissionSlots(), "Active submission slots should be decremented");
     }
 
     @Test
@@ -1553,9 +1559,9 @@ public class PodmanBackendTests {
             fail("Expected startContainerWithVerification to rethrow start failure");
         } catch (java.lang.reflect.InvocationTargetException e) {
             assertSame(
-                "Original start exception should be rethrown",
                 startFailure,
-                e.getCause()
+                e.getCause(),
+                "Original start exception should be rethrown"
             );
         }
 
@@ -1604,9 +1610,9 @@ public class PodmanBackendTests {
         );
 
         assertEquals(
-            "Only the stale unprotected exited container should be removed",
             1,
-            removedCount
+            removedCount,
+            "Only the stale unprotected exited container should be removed"
         );
         verify(mockDockerClient).removeContainerCmd("stale-container");
         verify(mockDockerClient, never()).removeContainerCmd("fresh-container");
@@ -1660,11 +1666,11 @@ public class PodmanBackendTests {
             int execId = backend.submitScript(42, scriptPath, workingDir, logPath);
 
             // Assert
-            assertTrue("Submission should succeed", execId > 0);
+            assertTrue(execId > 0, "Submission should succeed");
             assertEquals(
-                "Execution should be tracked against created container",
                 TEST_CONTAINER_ID,
-                getExecIdMap().get(execId)
+                getExecIdMap().get(execId),
+                "Execution should be tracked against created container"
             );
             verify(mockDockerClient, times(1)).createContainerCmd(anyString());
             verify(mockStartContainerCmd, times(1)).exec();
@@ -1695,17 +1701,17 @@ public class PodmanBackendTests {
                 int execId = backend.submitScript(55, scriptPath, workingDir, logPath);
                 fail("a failed attempt read must defer, not return " + execId);
             } catch (org.starexec.backend.exception.SubmissionDeferredException expected) {
-                assertTrue("names the pair: " + expected.getMessage(),
-                    expected.getMessage().contains("55"));
-                assertTrue("names the cause: " + expected.getMessage(),
-                    expected.getMessage().contains("connection reset"));
+                assertTrue(expected.getMessage().contains("55"),
+                    "names the pair: " + expected.getMessage());
+                assertTrue(expected.getMessage().contains("connection reset"),
+                    "names the cause: " + expected.getMessage());
             }
         }
 
         verify(mockDockerClient, never()).createContainerCmd(anyString());
         verify(mockStartContainerCmd, never()).exec();
-        assertTrue("no execution may be registered", getExecIdMap().isEmpty());
-        assertTrue("the partition slot must be released", getSlotHolderSet().isEmpty());
+        assertTrue(getExecIdMap().isEmpty(), "no execution may be registered");
+        assertTrue(getSlotHolderSet().isEmpty(), "the partition slot must be released");
         assertEquals(0, getActiveSubmissionSlots());
     }
 
@@ -1735,11 +1741,11 @@ public class PodmanBackendTests {
             int execId = backend.submitScript(99, scriptPath, workingDir, logPath);
 
             // Assert
-            assertTrue("Submission should succeed despite monitor failure", execId > 0);
+            assertTrue(execId > 0, "Submission should succeed despite monitor failure");
             assertEquals(
-                "Execution should still be tracked",
                 TEST_CONTAINER_ID,
-                getExecIdMap().get(execId)
+                getExecIdMap().get(execId),
+                "Execution should still be tracked"
             );
             verify(monitor, times(1)).notifyNewWorkSubmitted();
             verify(mockDockerClient, times(1)).createContainerCmd(anyString());
@@ -1768,11 +1774,11 @@ public class PodmanBackendTests {
             int execId = backend.submitScript(77, scriptPath, workingDir, logPath);
 
             // Assert
-            assertTrue("Submission should still succeed when running status update fails", execId > 0);
+            assertTrue(execId > 0, "Submission should still succeed when running status update fails");
             assertEquals(
-                "Execution should still be tracked",
                 TEST_CONTAINER_ID,
-                getExecIdMap().get(execId)
+                getExecIdMap().get(execId),
+                "Execution should still be tracked"
             );
             jobPairsMock.verify(() -> JobPairs.trySetPairRunning(77), times(1));
         }
@@ -1798,11 +1804,11 @@ public class PodmanBackendTests {
             int execId = backend.submitScript(78, scriptPath, workingDir, logPath);
 
             // Assert
-            assertTrue("Submission should still succeed when running status is stale", execId > 0);
+            assertTrue(execId > 0, "Submission should still succeed when running status is stale");
             assertEquals(
-                "Execution should still be tracked",
                 TEST_CONTAINER_ID,
-                getExecIdMap().get(execId)
+                getExecIdMap().get(execId),
+                "Execution should still be tracked"
             );
             jobPairsMock.verify(() -> JobPairs.trySetPairRunning(78), times(1));
         }
@@ -1913,12 +1919,12 @@ public class PodmanBackendTests {
 
         applyCpuLimits(hostConfig, new CpuPartition(0, "0-7", "0"));
 
-        assertEquals("the cpuset must be applied", "0-7", hostConfig.getCpusetCpus());
+        assertEquals("0-7", hostConfig.getCpusetCpus(), "the cpuset must be applied");
         assertEquals("0", hostConfig.getCpusetMems());
         assertNull(
+            hostConfig.getCpuQuota(),
             "a container pinned to a cpuset must not also carry a CFS quota: the cpuset"
-                + " already bounds it, and a mismatched quota throttles parallel solvers",
-            hostConfig.getCpuQuota()
+                + " already bounds it, and a mismatched quota throttles parallel solvers"
         );
         assertNull(hostConfig.getCpuPeriod());
     }
@@ -1935,8 +1941,8 @@ public class PodmanBackendTests {
 
         Long quota = hostConfig.getCpuQuota();
         assertFalse(
-            "a pair given 8 CPUs must not be limited to one core's bandwidth",
-            quota != null && quota <= 100000L
+            quota != null && quota <= 100000L,
+            "a pair given 8 CPUs must not be limited to one core's bandwidth"
         );
     }
 
@@ -1949,12 +1955,12 @@ public class PodmanBackendTests {
 
         applyCpuLimits(hostConfig, null);
 
-        assertNull("no cpuset is expected when no partition is configured",
-            hostConfig.getCpusetCpus());
+        assertNull(hostConfig.getCpusetCpus(),
+            "no cpuset is expected when no partition is configured");
         Long quota = hostConfig.getCpuQuota();
         assertFalse(
-            "an unpartitioned container must not inherit the old hardcoded 1-core quota",
-            quota != null && quota <= 100000L
+            quota != null && quota <= 100000L,
+            "an unpartitioned container must not inherit the old hardcoded 1-core quota"
         );
     }
 
@@ -1968,8 +1974,8 @@ public class PodmanBackendTests {
         assertNull(hostConfig.getCpusetCpus());
         Long quota = hostConfig.getCpuQuota();
         assertFalse(
-            "the no-pinning partition must behave like no partition, not like a 1-core cap",
-            quota != null && quota <= 100000L
+            quota != null && quota <= 100000L,
+            "the no-pinning partition must behave like no partition, not like a 1-core cap"
         );
     }
 
@@ -2004,11 +2010,11 @@ public class PodmanBackendTests {
                 42, "/app/data/jobin/job_1/run.sh", "/app/data/jobin/job_1",
                 tempDir.resolve("out").resolve("job.log").toString());
 
-            assertTrue("the submission succeeds on the container that exists", execId > 0);
+            assertTrue(execId > 0, "the submission succeeds on the container that exists");
             assertEquals(REUSED_CONTAINER_ID, getExecIdMap().get(execId));
             verify(mockDockerClient, times(1)).startContainerCmd(REUSED_CONTAINER_ID);
             verify(mockDockerClient, times(1)).createContainerCmd(anyString());
-            assertNotNull("the create was attempted under a name", created[0]);
+            assertNotNull(created[0], "the create was attempted under a name");
         }
     }
 
@@ -2049,16 +2055,16 @@ public class PodmanBackendTests {
                 warnings += event.getFormattedMessage() + "\n";
             }
         }
-        assertTrue("the outer message is logged: " + warnings,
-            warnings.contains("java.lang.RuntimeException: create failed"));
-        assertTrue("the cause is logged: " + warnings,
-            warnings.contains("java.io.IOException: Broken pipe while sending"));
-        assertTrue("a STAREXEC_ value is redacted: " + warnings,
-            warnings.contains("STAREXEC_OUTPUT_DIR=<redacted>"));
-        assertTrue("a value of the container's environment is redacted: " + warnings,
-            warnings.contains("CONTAINER_MODE=<redacted>"));
-        assertFalse("no environment value survives: " + warnings,
-            warnings.contains("/private/out"));
+        assertTrue(warnings.contains("java.lang.RuntimeException: create failed"),
+            "the outer message is logged: " + warnings);
+        assertTrue(warnings.contains("java.io.IOException: Broken pipe while sending"),
+            "the cause is logged: " + warnings);
+        assertTrue(warnings.contains("STAREXEC_OUTPUT_DIR=<redacted>"),
+            "a STAREXEC_ value is redacted: " + warnings);
+        assertTrue(warnings.contains("CONTAINER_MODE=<redacted>"),
+            "a value of the container's environment is redacted: " + warnings);
+        assertFalse(warnings.contains("/private/out"),
+            "no environment value survives: " + warnings);
     }
 
     /**

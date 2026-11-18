@@ -150,7 +150,6 @@ public abstract class TestSequence {
 		StarLogger.getLogger("org.apache").setLevel(StarLevel.OFF);
 		StarLogger.getLogger("org.hamcrest").setLevel(StarLevel.OFF);
 		StarLogger.getLogger("org.cyberneko").setLevel(StarLevel.OFF);
-		StarLogger.getLogger("org.testng").setLevel(StarLevel.OFF);
 
 		StarLogger.getLogger("org.w3c").setLevel(StarLevel.OFF);
 

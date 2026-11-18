@@ -3,10 +3,6 @@
 @use "../global/typography" as t;
 @use "../global/mixins" as m;
 
-#wrapper {
-  width: 100%;
-}
-
 // Keep explorer compact and aligned with other detail pages
 #explorer {
   margin-right: s.$spacing-md;

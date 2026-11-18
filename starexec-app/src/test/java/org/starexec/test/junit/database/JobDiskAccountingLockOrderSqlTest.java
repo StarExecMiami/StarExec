@@ -1,10 +1,10 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.test.util.DatabaseTestSupport;
 
@@ -23,10 +23,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * #188 follow-up: every routine that moves disk accounting between a job and its owner must
@@ -80,30 +80,30 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 	private String nodeName;
 	private boolean probeInstalled;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobDiskAccountingLockOrderSqlTest");
 		Common.initialize();
 	}
 
-	@AfterClass
+	@AfterAll
 	public static void noProbeObjectsSurvive() throws SQLException {
 		if (!DatabaseTestSupport.isDatabaseConfigured()) {
 			return;
 		}
 		try (Connection con = Common.getConnection()) {
-			assertEquals("the lock-order trigger must never outlive its test", 0,
-					selectLong(con, "SELECT count(*) FROM pg_trigger WHERE left(tgname, ?) = ?",
-							PROBE_PREFIX.length(), PROBE_PREFIX));
-			assertEquals("the lock-order function must never outlive its test", 0,
-					selectLong(con, "SELECT count(*) FROM pg_proc p"
+			assertEquals(0, selectLong(con, "SELECT count(*) FROM pg_trigger WHERE left(tgname, ?) = ?",
+							PROBE_PREFIX.length(), PROBE_PREFIX),
+					"the lock-order trigger must never outlive its test");
+			assertEquals(0, selectLong(con, "SELECT count(*) FROM pg_proc p"
 								+ " JOIN pg_namespace n ON n.oid = p.pronamespace"
 								+ " WHERE n.nspname = 'starexec' AND left(p.proname, ?) = ?",
-								PROBE_PREFIX.length(), PROBE_PREFIX));
+								PROBE_PREFIX.length(), PROBE_PREFIX),
+					"the lock-order function must never outlive its test");
 		}
 	}
 
-	@Before
+	@BeforeEach
 	public void createFixture() throws SQLException {
 		userId = 0;
 		jobId = 0;
@@ -140,7 +140,7 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 		return id;
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		SQLException failure = null;
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
@@ -279,7 +279,7 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 					"SELECT id FROM starexec.job_pairs WHERE id = ? FOR UPDATE")) {
 				lock.setInt(1, pair);
 				try (ResultSet rs = lock.executeQuery()) {
-					assertTrue("the rerun caller locks its pair", rs.next());
+					assertTrue(rs.next(), "the rerun caller locks its pair");
 				}
 			}
 			try (PreparedStatement ps = con.prepareStatement(
@@ -363,8 +363,8 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 				awaitForCleanup(contender);
 				if (!executor.awaitTermination(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
 					executor.shutdownNow();
-					assertTrue("the workers must terminate before the probe is dropped",
-							executor.awaitTermination(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+					assertTrue(executor.awaitTermination(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+							"the workers must terminate before the probe is dropped");
 				}
 			}
 		}
@@ -465,7 +465,7 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 			Future<?> worker) throws Exception {
 		boolean advisory = blockerPid < 0;
 		if (!advisory) {
-			assertTrue("the holder backend pid must be known", blockerPid > 0);
+			assertTrue(blockerPid > 0, "the holder backend pid must be known");
 		}
 		String sql = advisory
 				? "SELECT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.application_name = ?"
@@ -514,7 +514,7 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 			ps.setLong(1, key);
 			try (ResultSet rs = ps.executeQuery()) {
 				assertTrue(rs.next());
-				assertTrue("the test gate was held by its controller", rs.getBoolean(1));
+				assertTrue(rs.getBoolean(1), "the test gate was held by its controller");
 			}
 		}
 	}
@@ -523,8 +523,8 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 		try {
 			worker.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 		} catch (ExecutionException failure) {
-			assertFalse(operation + " must not deadlock (SQLSTATE 40P01)",
-					hasSqlState(failure.getCause(), "40P01"));
+			assertFalse(hasSqlState(failure.getCause(), "40P01"),
+					operation + " must not deadlock (SQLSTATE 40P01)");
 			throw new AssertionError(operation + " failed", failure.getCause());
 		} catch (TimeoutException timeout) {
 			throw new AssertionError(operation + " did not finish after the barrier was released",
@@ -563,10 +563,10 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 	// ------------------------------------------------------------------
 
 	private void assertTotals(long jobBytes, long userBytes) throws SQLException {
-		assertEquals("job disk_size", jobBytes,
-				scalar("SELECT disk_size FROM starexec.jobs WHERE id = ?", jobId));
-		assertEquals("user disk_size", userBytes,
-				scalar("SELECT disk_size FROM starexec.users WHERE id = ?", userId));
+		assertEquals(jobBytes, scalar("SELECT disk_size FROM starexec.jobs WHERE id = ?", jobId),
+				"job disk_size");
+		assertEquals(userBytes, scalar("SELECT disk_size FROM starexec.users WHERE id = ?", userId),
+				"user disk_size");
 	}
 
 	private long stageBytes(int pair) throws SQLException {

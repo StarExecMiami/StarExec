@@ -29,10 +29,6 @@ table tr td:first-child {
 }
 
 @media only screen and (max-width: 767px) {
-	fieldset {
-		width: 85%;
-	}
-
 	#solverDetails tr > *:first-child {
 		width: 33.33%;
 	}

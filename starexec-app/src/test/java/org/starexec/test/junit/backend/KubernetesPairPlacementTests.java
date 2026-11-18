@@ -1,8 +1,8 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -20,9 +20,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.slf4j.LoggerFactory;
@@ -57,7 +57,7 @@ public class KubernetesPairPlacementTests {
     private Logger logger;
     private ListAppender<ILoggingEvent> appender;
 
-    @Before
+    @BeforeEach
     public void setUp() throws Exception {
         backend = new KubernetesNativeBackend();
         setField("namespace", NAMESPACE);
@@ -69,7 +69,7 @@ public class KubernetesPairPlacementTests {
         logger.addAppender(appender);
     }
 
-    @After
+    @AfterEach
     public void tearDown() {
         logger.detachAppender(appender);
     }
@@ -84,8 +84,8 @@ public class KubernetesPairPlacementTests {
                 .thenReturn(ConditionalPairUpdateResult.UPDATED);
 
             assertTrue(
-                "recorded, so the monitor stops asking",
-                callback.onJobPlaced(execution(), NODE)
+                callback.onJobPlaced(execution(), NODE),
+                "recorded, so the monitor stops asking"
             );
             jobPairs.verify(() -> JobPairs.tryUpdatePairExecutionHost(PAIR_ID, NODE_ID));
         }
@@ -102,8 +102,8 @@ public class KubernetesPairPlacementTests {
 
             for (int poll = 1; poll <= 3; poll++) {
                 assertFalse(
-                    "poll " + poll + ": not recorded, so asked again",
-                    callback.onJobPlaced(execution(), NODE)
+                    callback.onJobPlaced(execution(), NODE),
+                    "poll " + poll + ": not recorded, so asked again"
                 );
             }
             cluster.verify(() -> Cluster.getNodeIdByName(NODE), Mockito.times(3));
@@ -111,9 +111,9 @@ public class KubernetesPairPlacementTests {
         }
 
         List<String> warnings = messagesAt(Level.WARN);
-        assertEquals("one line, not one per poll", 1, warnings.size());
-        assertTrue(warnings.get(0), warnings.get(0).contains(NODE));
-        assertTrue(warnings.get(0), warnings.get(0).contains("Pair " + PAIR_ID));
+        assertEquals(1, warnings.size(), "one line, not one per poll");
+        assertTrue(warnings.get(0).contains(NODE), warnings.get(0));
+        assertTrue(warnings.get(0).contains("Pair " + PAIR_ID), warnings.get(0));
     }
 
     /**
@@ -133,8 +133,8 @@ public class KubernetesPairPlacementTests {
 
             assertFalse(callback.onJobPlaced(execution(), NODE));
             assertFalse(callback.onJobPlaced(execution(), NODE));
-            assertTrue("registered now", callback.onJobPlaced(execution(), NODE));
-            assertFalse("missing again", callback.onJobPlaced(later, NODE));
+            assertTrue(callback.onJobPlaced(execution(), NODE), "registered now");
+            assertFalse(callback.onJobPlaced(later, NODE), "missing again");
 
             jobPairs.verify(() -> JobPairs.tryUpdatePairExecutionHost(PAIR_ID, NODE_ID));
         }
@@ -156,8 +156,8 @@ public class KubernetesPairPlacementTests {
                 .thenReturn(ConditionalPairUpdateResult.STALE);
 
             assertTrue(
-                "finished, or its job is paused, killed or deleted: nothing to record",
-                callback.onJobPlaced(execution(), NODE)
+                callback.onJobPlaced(execution(), NODE),
+                "finished, or its job is paused, killed or deleted: nothing to record"
             );
             jobPairs.verify(() -> JobPairs.tryUpdatePairExecutionHost(PAIR_ID, NODE_ID));
         }
@@ -177,10 +177,10 @@ public class KubernetesPairPlacementTests {
             jobPairs.verify(() -> JobPairs.tryUpdatePairExecutionHost(PAIR_ID, NODE_ID));
         }
         List<String> warnings = messagesAt(Level.WARN);
-        assertEquals(warnings.toString(), 1, warnings.size());
+        assertEquals(1, warnings.size(), warnings.toString());
         assertTrue(
-            warnings.get(0),
-            warnings.get(0).startsWith("Failed to record node " + NODE + " for pair " + PAIR_ID)
+            warnings.get(0).startsWith("Failed to record node " + NODE + " for pair " + PAIR_ID),
+            warnings.get(0)
         );
     }
 
@@ -192,8 +192,8 @@ public class KubernetesPairPlacementTests {
         try (MockedStatic<Cluster> cluster = Mockito.mockStatic(Cluster.class);
              MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
             assertTrue(
-                "stopped: nothing to record and nothing to retry",
-                callback.onJobPlaced(execution(), NODE)
+                callback.onJobPlaced(execution(), NODE),
+                "stopped: nothing to record and nothing to retry"
             );
             cluster.verifyNoInteractions();
             jobPairs.verifyNoInteractions();

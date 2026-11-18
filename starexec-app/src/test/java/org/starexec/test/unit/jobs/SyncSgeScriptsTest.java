@@ -1,10 +1,10 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -15,10 +15,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFile;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * The container start makes the job helpers on the data volume the image's own (#324).
@@ -33,16 +35,16 @@ public class SyncSgeScriptsTest {
 
 	private static final Path SCRIPT = Path.of("../docker/sync-sge-scripts.sh");
 
-	@Rule
-	public TemporaryFolder tmp = new TemporaryFolder();
+	@TempDir
+	public File tmp;
 
 	private Path image;
 	private Path volume;
 
-	@Before
+	@BeforeEach
 	public void layout() throws IOException {
-		image = tmp.newFolder("config-sge").toPath();
-		volume = tmp.getRoot().toPath().resolve("data").resolve("sge_scripts");
+		image = newFolder(tmp, "config-sge").toPath();
+		volume = tmp.toPath().resolve("data").resolve("sge_scripts");
 		write(image.resolve("functions.bash"), "new helper\n");
 		write(image.resolve("jobscript"), "new template\n");
 		write(image.resolve("RunSolverSource/Makefile"), "all:\n");
@@ -71,13 +73,13 @@ public class SyncSgeScriptsTest {
 
 		Result r = run();
 
-		assertEquals(r.output, 0, r.exit);
+		assertEquals(0, r.exit, r.output);
 		assertSameBytes("functions.bash");
 		List<Path> kept = backups("functions.bash");
-		assertEquals("the replaced helper must be kept exactly once", 1, kept.size());
+		assertEquals(1, kept.size(), "the replaced helper must be kept exactly once");
 		assertEquals("old helper\n", Files.readString(kept.get(0)));
-		assertTrue(r.output, r.output.contains("1 replaced"));
-		assertEquals("an identical file is not backed up", 0, backups("jobscript").size());
+		assertTrue(r.output.contains("1 replaced"), r.output);
+		assertEquals(0, backups("jobscript").size(), "an identical file is not backed up");
 	}
 
 	/** Running again over a synchronised volume changes nothing and backs nothing up. */
@@ -86,11 +88,11 @@ public class SyncSgeScriptsTest {
 		assertEquals(0, run().exit);
 		Result again = run();
 
-		assertEquals(again.output, 0, again.exit);
-		assertTrue(again.output, again.output.contains("0 installed, 0 replaced"));
+		assertEquals(0, again.exit, again.output);
+		assertTrue(again.output.contains("0 installed, 0 replaced"), again.output);
 		try (Stream<Path> s = Files.list(volume)) {
-			assertTrue("no backup directory for an unchanged volume",
-					s.noneMatch(p -> p.getFileName().toString().startsWith(".replaced-")));
+			assertTrue(s.noneMatch(p -> p.getFileName().toString().startsWith(".replaced-")),
+					"no backup directory for an unchanged volume");
 		}
 	}
 
@@ -107,26 +109,26 @@ public class SyncSgeScriptsTest {
 	/** A missing source is a failed start, not a silent one. */
 	@Test
 	public void aMissingSourceFails() throws Exception {
-		Result r = run(tmp.getRoot().toPath().resolve("absent"), volume);
+		Result r = run(tmp.toPath().resolve("absent"), volume);
 
-		assertNotEquals(r.output, 0, r.exit);
+		assertNotEquals(0, r.exit, r.output);
 	}
 
 	/** An empty source is refused: syncing nothing must not be reported as a match. */
 	@Test
 	public void anEmptySourceFails() throws Exception {
-		Path empty = tmp.newFolder("empty").toPath();
+		Path empty = newFolder(tmp, "empty").toPath();
 
 		Result r = run(empty, volume);
 
-		assertNotEquals(r.output, 0, r.exit);
-		assertTrue(r.output, r.output.contains("contains no files"));
+		assertNotEquals(0, r.exit, r.output);
+		assertTrue(r.output.contains("contains no files"), r.output);
 	}
 
 	/** A symlink or a directory standing where the image has a file is moved aside, not followed. */
 	@Test
 	public void aLinkOrDirectoryInPlaceOfAHelperIsReplaced() throws Exception {
-		Path elsewhere = tmp.newFile("elsewhere").toPath();
+		Path elsewhere = newFile(tmp, "elsewhere").toPath();
 		Files.writeString(elsewhere, "not a helper\n");
 		Files.createDirectories(volume);
 		Files.createSymbolicLink(volume.resolve("functions.bash"), elsewhere);
@@ -134,13 +136,13 @@ public class SyncSgeScriptsTest {
 
 		Result r = run();
 
-		assertEquals(r.output, 0, r.exit);
+		assertEquals(0, r.exit, r.output);
 		assertTrue(Files.isRegularFile(volume.resolve("functions.bash"),
 				java.nio.file.LinkOption.NOFOLLOW_LINKS));
 		assertSameBytes("functions.bash");
 		assertSameBytes("jobscript");
-		assertEquals("the link target is never written through", "not a helper\n",
-				Files.readString(elsewhere));
+		assertEquals("not a helper\n", Files.readString(elsewhere),
+				"the link target is never written through");
 	}
 
 	/** Directories are traversable by the sandbox users even when the container's umask is 077. */
@@ -151,17 +153,17 @@ public class SyncSgeScriptsTest {
 				.redirectErrorStream(true)
 				.start();
 		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("sync-sge-scripts.sh did not finish", p.waitFor(60, TimeUnit.SECONDS));
-		assertEquals(out, 0, p.exitValue());
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "sync-sge-scripts.sh did not finish");
+		assertEquals(0, p.exitValue(), out);
 
 		for (Path dir : List.of(volume, volume.resolve("RunSolverSource"))) {
-			assertEquals(dir.toString(), "rwxr-xr-x",
-					PosixFilePermissions.toString(Files.getPosixFilePermissions(dir)));
+			assertEquals("rwxr-xr-x", PosixFilePermissions.toString(Files.getPosixFilePermissions(dir)),
+					dir.toString());
 		}
 	}
 
 	private void assertSameBytes(String rel) throws IOException {
-		assertArrayEquals(rel, Files.readAllBytes(image.resolve(rel)), Files.readAllBytes(volume.resolve(rel)));
+		assertArrayEquals(Files.readAllBytes(image.resolve(rel)), Files.readAllBytes(volume.resolve(rel)), rel);
 	}
 
 	private List<Path> backups(String rel) throws IOException {
@@ -185,7 +187,7 @@ public class SyncSgeScriptsTest {
 				.redirectErrorStream(true)
 				.start();
 		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("sync-sge-scripts.sh did not finish", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "sync-sge-scripts.sh did not finish");
 		return new Result(p.exitValue(), out);
 	}
 

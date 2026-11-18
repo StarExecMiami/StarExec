@@ -1,12 +1,29 @@
 //noinspection CssUnknownTarget
 @import "../properties";
+@import "icon-data";
 
-@function stylesheet-url($path) {
-	@return url($rootUrl + "css/" + $path);
+// Draws a vendored icon in the current text colour. Icons are data URIs, so
+// they also work in the offline job page opened from file://. Unprefixed
+// mask needs Chrome/Edge 120, Firefox 53 or Safari 15.4; older browsers show a
+// solid square. No -webkit- fallback: .stylelintrc forbids vendor prefixes.
+@mixin icon-mask($name) {
+	background-color: currentcolor;
+	mask: icon($name) no-repeat center / contain;
 }
 
-@function image-url($path) {
-	@return url($rootUrl + "images/" + $path);
+// Rotating ring in the current text colour. The keyframes live in
+// components/_loading-spinner.scss (part of global.css, loaded on every page);
+// the global reduced-motion rule in _design-tokens.scss stops the rotation.
+@mixin loading-spinner($size: 1rem) {
+	display: inline-block;
+	box-sizing: border-box;
+	width: $size;
+	height: $size;
+	vertical-align: -0.125em;
+	border: 2px solid currentcolor;
+	border-right-color: transparent;
+	border-radius: 50%;
+	animation: loading-spinner-rotate 0.75s linear infinite;
 }
 
 @mixin mobile {
@@ -42,8 +59,13 @@ $helper-first-include: true !default;
 
 	%popup-links {
 		[target="_blank"]::after {
+			content: "";
+			display: inline-block;
+			width: 0.75em;
+			height: 0.75em;
 			margin-left: .5em;
-			content: image-url("external.png");
+
+			@include icon-mask("external-link");
 		}
 	}
 

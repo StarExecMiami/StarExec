@@ -96,7 +96,6 @@ function attachButtonActions() {
 		$('#dialog-confirm-delete').dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					log('user confirmed solver deletion.');
@@ -188,7 +187,7 @@ function refreshSolverWebsites() {
 	
 	// Injects the clickable delete button that's always present
 	$.each(jsonData, function(i, site) {
-		$('#websites tbody').append('<tr><td><a href="' + site.url + '">' + site.name + '<img class="extLink" src="'+starexecRoot+'images/external.png" alt=""/></a></td><td><a class="delWebsite" id="' + site.id + '">delete</a></td></tr>');
+		$('#websites tbody').append('<tr><td><a href="' + site.url + '">' + site.name + '<span class="ext-link-icon"></span></a></td><td><a class="delWebsite" id="' + site.id + '">delete</a></td></tr>');
 	});
 }*/
 
@@ -206,7 +205,6 @@ function attachWebsiteMonitor() {
 		$('#dialog-confirm-delete').dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					$('#dialog-confirm-delete').dialog('close');

@@ -4,7 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.Benchmarks;
@@ -40,10 +40,10 @@ import java.util.List;
 import java.util.Optional;
 import java.util.TreeMap;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RESTServicesTest {
 
@@ -437,13 +437,13 @@ public class RESTServicesTest {
 
 			assertFalse(status.isSuccess());
 			String msg = status.getMessage();
-			assertTrue("the blocking space names must survive", msg.contains("alice_smith"));
-			assertTrue("the blocking space ids must survive", msg.contains("id=85"));
-			assertTrue("the blocking space ids must survive", msg.contains("id=91"));
-			assertFalse("a typed blocker must not be reported as a missing user",
-					"User not found.".equals(msg));
-			assertFalse("a typed blocker must not fall through to the generic category",
-					msg.startsWith("Unable to delete user."));
+			assertTrue(msg.contains("alice_smith"), "the blocking space names must survive");
+			assertTrue(msg.contains("id=85"), "the blocking space ids must survive");
+			assertTrue(msg.contains("id=91"), "the blocking space ids must survive");
+			assertFalse("User not found.".equals(msg),
+					"a typed blocker must not be reported as a missing user");
+			assertFalse(msg.startsWith("Unable to delete user."),
+					"a typed blocker must not fall through to the generic category");
 		}
 	}
 
@@ -506,14 +506,14 @@ public class RESTServicesTest {
 
 			assertFalse(status.isSuccess());
 			String msg = status.getMessage();
-			assertEquals("unexpected failures must map to the stable generic category",
-					"Unable to delete user. The failure has been logged for an administrator.", msg);
-			assertFalse("SQL text must not reach the client", msg.contains("DELETE FROM"));
-			assertFalse("table names must not reach the client", msg.contains("secret_table"));
-			assertFalse("constraint names must not reach the client", msg.contains("zzz"));
-			assertFalse("SQLSTATE must not reach the client", msg.contains("23502"));
-			assertFalse("must not be classified as a missing user",
-					"User not found.".equals(msg));
+			assertEquals("Unable to delete user. The failure has been logged for an administrator.",
+					msg, "unexpected failures must map to the stable generic category");
+			assertFalse(msg.contains("DELETE FROM"), "SQL text must not reach the client");
+			assertFalse(msg.contains("secret_table"), "table names must not reach the client");
+			assertFalse(msg.contains("zzz"), "constraint names must not reach the client");
+			assertFalse(msg.contains("23502"), "SQLSTATE must not reach the client");
+			assertFalse("User not found.".equals(msg),
+					"must not be classified as a missing user");
 		}
 	}
 }

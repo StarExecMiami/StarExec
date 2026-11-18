@@ -23,10 +23,6 @@ fieldset {
 }
 
 @media only screen and (max-width: 767px) {
-	#wrapper fieldset {
-		width: 85%;
-	}
-
 	/* Mobile spacing adjustment for buttons */
 	/* Base button styles come from global components/_button.scss */
 	#wrapper button {

@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -11,10 +11,10 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.UUID;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.Backend;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
@@ -67,13 +67,13 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 	private String nodeName;
 	private Backend originalBackend;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("AttemptFencedResultWritesSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void createFixture() throws SQLException {
 		originalBackend = R.BACKEND;
 		nodeName = "attempt-fence-" + UUID.randomUUID();
@@ -111,7 +111,7 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		R.BACKEND = originalBackend;
 		try (Connection con = Common.getConnection()) {
@@ -134,15 +134,15 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 		String before = snapshot();
 
 		for (boolean force : new boolean[] {false, true}) {
-			assertEquals("force=" + force + ": the Java wrapper reports a stale attempt",
-					PairStatusResult.STALE_ATTEMPT,
+			assertEquals(PairStatusResult.STALE_ATTEMPT,
 					JobPairs.setPairStatusPreciseResult(pairId, 1, COMPLETE, NOT_REACHED, force,
-							PREVIOUS_ATTEMPT));
-			assertEquals("force=" + force + ": the routine refuses with the dedicated SQLSTATE",
-					STALE_SQLSTATE,
+							PREVIOUS_ATTEMPT),
+					"force=" + force + ": the Java wrapper reports a stale attempt");
+			assertEquals(STALE_SQLSTATE,
 					sqlStateOf("SELECT starexec.UpdatePairStatusPrecise(?, ?, ?, ?, ?, ?)",
-							pairId, 1, COMPLETE, NOT_REACHED, force, PREVIOUS_ATTEMPT));
-			assertEquals("force=" + force + ": a refusal changes no row", before, snapshot());
+							pairId, 1, COMPLETE, NOT_REACHED, force, PREVIOUS_ATTEMPT),
+					"force=" + force + ": the routine refuses with the dedicated SQLSTATE");
+			assertEquals(before, snapshot(), "force=" + force + ": a refusal changes no row");
 		}
 	}
 
@@ -155,7 +155,7 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 		assertEquals(PairStatusResult.APPLIED, JobPairs.setPairStatusPreciseResult(
 				pairId, 1, COMPLETE, NOT_REACHED, false, CURRENT_ATTEMPT));
 		assertEquals(COMPLETE, pairStatus());
-		assertNotEquals("the write changed the pair", before, snapshot());
+		assertNotEquals(before, snapshot(), "the write changed the pair");
 
 		// The override still works for the current attempt: the fence is not "force is
 		// refused", it is "a superseded attempt is refused".
@@ -201,20 +201,20 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 		assertEquals(STALE_SQLSTATE,
 				sqlStateOf("SELECT starexec.UpdatePairStatusPairLevel(?, ?, ?, ?)",
 						pairId, StatusCode.ERROR_RUNSCRIPT.getVal(), NOT_REACHED, PREVIOUS_ATTEMPT));
-		assertEquals("a refusal changes no row", before, snapshot());
+		assertEquals(before, snapshot(), "a refusal changes no row");
 
 		assertEquals(PairStatusResult.APPLIED, JobPairs.setPairLevelStatusResult(
 				pairId, StatusCode.ERROR_RUNSCRIPT.getVal(), NOT_REACHED, CURRENT_ATTEMPT));
 		assertEquals(StatusCode.ERROR_RUNSCRIPT.getVal(), pairStatus());
 
 		resetToRunning();
-		assertEquals("unfenced still works", PairStatusResult.APPLIED,
-				JobPairs.setPairLevelStatusResult(
-						pairId, StatusCode.ERROR_RUNSCRIPT.getVal(), NOT_REACHED, null));
+		assertEquals(PairStatusResult.APPLIED, JobPairs.setPairLevelStatusResult(
+						pairId, StatusCode.ERROR_RUNSCRIPT.getVal(), NOT_REACHED, null),
+				"unfenced still works");
 		resetToRunning();
-		assertEquals("the three-argument overload still works", PairStatusResult.APPLIED,
-				JobPairs.setPairLevelStatusResult(
-						pairId, StatusCode.ERROR_RUNSCRIPT.getVal(), NOT_REACHED));
+		assertEquals(PairStatusResult.APPLIED, JobPairs.setPairLevelStatusResult(
+						pairId, StatusCode.ERROR_RUNSCRIPT.getVal(), NOT_REACHED),
+				"the three-argument overload still works");
 	}
 
 	// ------------------------------------------------------------------
@@ -231,20 +231,20 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 		assertEquals(STALE_SQLSTATE,
 				sqlStateOf("SELECT starexec.UpdatePairStageStatusIfUnresolved(?, ?, ?, ?)",
 						pairId, 1, COMPLETE, PREVIOUS_ATTEMPT));
-		assertEquals("a refusal changes no row", before, snapshot());
+		assertEquals(before, snapshot(), "a refusal changes no row");
 
 		assertEquals(StageStatusBatchResult.APPLIED, JobPairs.setEarlierStageStatuses(
 				pairId, Collections.singletonMap(1, COMPLETE), CURRENT_ATTEMPT));
 		assertEquals(COMPLETE, stageStatus(1));
 
 		resetToRunning();
-		assertEquals("unfenced still works", StageStatusBatchResult.APPLIED,
-				JobPairs.setEarlierStageStatuses(pairId, Collections.singletonMap(1, COMPLETE)));
+		assertEquals(StageStatusBatchResult.APPLIED, JobPairs.setEarlierStageStatuses(pairId, Collections.singletonMap(1, COMPLETE)),
+				"unfenced still works");
 		assertEquals(COMPLETE, stageStatus(1));
 		resetToRunning();
-		assertEquals("the three-argument SQL form still resolves", "t",
-				stringOf("SELECT starexec.UpdatePairStageStatusIfUnresolved(?, ?, ?)",
-						pairId, 1, COMPLETE));
+		assertEquals("t", stringOf("SELECT starexec.UpdatePairStageStatusIfUnresolved(?, ?, ?)",
+						pairId, 1, COMPLETE),
+				"the three-argument SQL form still resolves");
 	}
 
 	// ------------------------------------------------------------------
@@ -256,29 +256,29 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 		rerunToAttemptTwo();
 		String before = snapshot();
 
-		assertFalse("a stale write reports false", JobPairs.updateRunSolverStats(
-				pairId, nodeName, 12.0, 10.0, 8.0, 2.0, 256.0, 128L, 1, 2048L, PREVIOUS_ATTEMPT));
+		assertFalse(JobPairs.updateRunSolverStats(
+				pairId, nodeName, 12.0, 10.0, 8.0, 2.0, 256.0, 128L, 1, 2048L, PREVIOUS_ATTEMPT), "a stale write reports false");
 		assertEquals(STALE_SQLSTATE, sqlStateOf(
 				"CALL starexec.UpdatePairRunSolverStats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				pairId, nodeName, 12.0, 10.0, 8.0, 2.0, 256.0, 128L, 1, 2048L, PREVIOUS_ATTEMPT));
-		assertEquals("a refusal moves neither the node, the stage nor the disk totals",
-				before, snapshot());
+		assertEquals(before,
+				snapshot(), "a refusal moves neither the node, the stage nor the disk totals");
 
 		assertTrue(JobPairs.updateRunSolverStats(
 				pairId, nodeName, 12.0, 10.0, 8.0, 2.0, 256.0, 128L, 1, 2048L, CURRENT_ATTEMPT));
 		assertEquals(2048L, longOf("SELECT disk_size FROM starexec.jobpair_stage_data"
 				+ " WHERE jobpair_id = ? AND stage_number = 1", pairId));
-		assertEquals("the user was charged once", 2048L,
-				longOf("SELECT disk_size FROM starexec.users WHERE id = ?", userId));
+		assertEquals(2048L, longOf("SELECT disk_size FROM starexec.users WHERE id = ?", userId),
+				"the user was charged once");
 		assertEquals(nodeId, (int) longOf("SELECT node_id FROM starexec.job_pairs WHERE id = ?",
 				pairId));
 
 		resetToRunning();
-		assertTrue("unfenced still works", JobPairs.updateRunSolverStats(
-				pairId, nodeName, 12.0, 10.0, 8.0, 2.0, 256.0, 128L, 1, 2048L, null));
+		assertTrue(JobPairs.updateRunSolverStats(
+				pairId, nodeName, 12.0, 10.0, 8.0, 2.0, 256.0, 128L, 1, 2048L, null), "unfenced still works");
 		resetToRunning();
-		assertTrue("the ten-argument overload still works", JobPairs.updateRunSolverStats(
-				pairId, nodeName, 12.0, 10.0, 8.0, 2.0, 256.0, 128L, 1, 2048L));
+		assertTrue(JobPairs.updateRunSolverStats(
+				pairId, nodeName, 12.0, 10.0, 8.0, 2.0, 256.0, 128L, 1, 2048L), "the ten-argument overload still works");
 	}
 
 	// ------------------------------------------------------------------
@@ -292,28 +292,28 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 		attrs.setProperty("starexec-result", "Satisfiable");
 		String before = snapshot();
 
-		assertFalse("a stale write is visible to the caller",
-				JobPairs.addJobPairAttributes(pairId, 1, attrs, PREVIOUS_ATTEMPT));
+		assertFalse(JobPairs.addJobPairAttributes(pairId, 1, attrs, PREVIOUS_ATTEMPT),
+				"a stale write is visible to the caller");
 		assertEquals(STALE_SQLSTATE, sqlStateOf("CALL starexec.AddJobAttr(?, ?, ?, ?, ?)",
 				pairId, "starexec-result", "Satisfiable", 1, PREVIOUS_ATTEMPT));
-		assertEquals("a refusal writes no attribute", before, snapshot());
+		assertEquals(before, snapshot(), "a refusal writes no attribute");
 		assertEquals(0L, attributeCount());
 
 		assertTrue(JobPairs.addJobPairAttributes(pairId, 1, attrs, CURRENT_ATTEMPT));
 		assertEquals(1L, attributeCount());
 
 		update("DELETE FROM starexec.job_attributes WHERE pair_id = ?", pairId);
-		assertTrue("unfenced still works", JobPairs.addJobPairAttributes(pairId, 1, attrs, (Integer) null));
+		assertTrue(JobPairs.addJobPairAttributes(pairId, 1, attrs, (Integer) null), "unfenced still works");
 		assertEquals(1L, attributeCount());
 
 		update("DELETE FROM starexec.job_attributes WHERE pair_id = ?", pairId);
-		assertTrue("the pre-fence Java method still works",
-				JobPairs.addJobPairAttributes(pairId, 1, attrs));
+		assertTrue(JobPairs.addJobPairAttributes(pairId, 1, attrs),
+				"the pre-fence Java method still works");
 		update("DELETE FROM starexec.job_attributes WHERE pair_id = ?", pairId);
 		sqlStateOf("CALL starexec.AddJobAttr(?, ?, ?, ?)",
 				pairId, "starexec-result", "Satisfiable", 1);
-		assertEquals("the four-argument SQL form still resolves and is unfenced",
-				1L, attributeCount());
+		assertEquals(1L,
+				attributeCount(), "the four-argument SQL form still resolves and is unfenced");
 	}
 
 	// ------------------------------------------------------------------
@@ -324,25 +324,25 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 	public void aPairWithNoAttemptRowIsOnAttemptOneAndTheFenceNeverInsertsOne() throws SQLException {
 		update("DELETE FROM starexec.job_pair_attempts WHERE pair_id = ?", pairId);
 		assertEquals(0L, attemptRows());
-		assertEquals("a missing row means attempt 1", 1, JobPairs.getCurrentAttemptNo(pairId));
-		assertEquals("reading the attempt inserts nothing", 0L, attemptRows());
+		assertEquals(1, JobPairs.getCurrentAttemptNo(pairId), "a missing row means attempt 1");
+		assertEquals(0L, attemptRows(), "reading the attempt inserts nothing");
 
-		assertEquals("attempt 1 is the current attempt", null, sqlStateOf(
-				"CALL starexec.AddJobAttr(?, ?, ?, ?, ?)", pairId, "k", "v", 1, 1));
-		assertEquals("attempt 2 is not", STALE_SQLSTATE, sqlStateOf(
-				"CALL starexec.AddJobAttr(?, ?, ?, ?, ?)", pairId, "k2", "v", 1, 2));
+		assertEquals(null, sqlStateOf(
+				"CALL starexec.AddJobAttr(?, ?, ?, ?, ?)", pairId, "k", "v", 1, 1), "attempt 1 is the current attempt");
+		assertEquals(STALE_SQLSTATE, sqlStateOf(
+				"CALL starexec.AddJobAttr(?, ?, ?, ?, ?)", pairId, "k2", "v", 1, 2), "attempt 2 is not");
 		assertEquals(STALE_SQLSTATE, sqlStateOf(
 				"SELECT starexec.UpdatePairStageStatusIfUnresolved(?, ?, ?, ?)",
 				pairId, 1, COMPLETE, 2));
 		assertEquals(null, sqlStateOf(
 				"SELECT starexec.UpdatePairStageStatusIfUnresolved(?, ?, ?, ?)",
 				pairId, 1, COMPLETE, 1));
-		assertEquals("no fence call created a row", 0L, attemptRows());
+		assertEquals(0L, attemptRows(), "no fence call created a row");
 	}
 
 	@Test
 	public void theCurrentAttemptIsReadFromTheRowARerunWrote() throws SQLException {
-		assertEquals("never rerun", 1, JobPairs.getCurrentAttemptNo(pairId));
+		assertEquals(1, JobPairs.getCurrentAttemptNo(pairId), "never rerun");
 		rerunToAttemptTwo();
 		assertEquals(CURRENT_ATTEMPT, JobPairs.getCurrentAttemptNo(pairId));
 	}
@@ -355,9 +355,9 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 	private void rerunToAttemptTwo() throws SQLException {
 		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
 		assertEquals(Jobs.RerunOutcome.COMPLETED, Jobs.rerunPairAutomatic(pairId));
-		assertEquals("the rerun bumped the attempt", CURRENT_ATTEMPT,
-				(int) longOf("SELECT current_attempt_no FROM starexec.job_pair_attempts"
-						+ " WHERE pair_id = ?", pairId));
+		assertEquals(CURRENT_ATTEMPT, (int) longOf("SELECT current_attempt_no FROM starexec.job_pair_attempts"
+						+ " WHERE pair_id = ?", pairId),
+				"the rerun bumped the attempt");
 		resetToRunning();
 	}
 
@@ -424,7 +424,7 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 				PreparedStatement ps = con.prepareStatement(sql)) {
 			bind(ps, params);
 			try (ResultSet rs = ps.executeQuery()) {
-				assertTrue("no row for " + sql, rs.next());
+				assertTrue(rs.next(), "no row for " + sql);
 				return rs.getString(1);
 			}
 		}
@@ -435,7 +435,7 @@ public class AttemptFencedResultWritesSqlTest extends Common {
 				PreparedStatement ps = con.prepareStatement(sql)) {
 			bind(ps, params);
 			try (ResultSet rs = ps.executeQuery()) {
-				assertTrue("no row for " + sql, rs.next());
+				assertTrue(rs.next(), "no row for " + sql);
 				return rs.getLong(1);
 			}
 		}

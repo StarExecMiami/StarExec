@@ -1,8 +1,8 @@
 package org.starexec.servlets;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
@@ -24,10 +24,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.stream.Stream;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -40,12 +40,12 @@ import static org.mockito.ArgumentMatchers.anyInt;
 public class UploadSpacePermissionsTest {
     private Path root;
 
-    @Before
+    @BeforeEach
     public void setUp() throws IOException {
         root = Files.createTempDirectory("space-permissions");
     }
 
-    @After
+    @AfterEach
     public void tearDown() throws IOException {
         try (Stream<Path> paths = Files.walk(root)) {
             paths.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);

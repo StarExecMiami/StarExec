@@ -1,25 +1,26 @@
 package org.starexec.test.unit.jobs;
 
 import com.google.gson.JsonParser;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /** Exercises the shipped workspace verifier against a cache another attempt is reading. */
 public class SharedSolverCacheIsolationTest {
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	@Test
 	public void aMissingConfigurationCannotDeleteAnActiveReadersSource() throws Exception {
@@ -40,20 +41,20 @@ public class SharedSolverCacheIsolationTest {
 			while (!Files.exists(ready) && reader.isAlive() && System.nanoTime() < deadline) {
 				Thread.sleep(10);
 			}
-			assertTrue("the reader must copy the first file before the other attempt fails",
-					Files.exists(ready));
+			assertTrue(Files.exists(ready),
+					"the reader must copy the first file before the other attempt fails");
 			assertEquals(1, h.verify());
 			h.assertStatus(11);
 			Files.createFile(resume);
-			assertTrue("the reader must finish", reader.waitFor(10, TimeUnit.SECONDS));
-			assertEquals("a different attempt's failure must not remove this reader's source",
-					0, reader.exitValue());
+			assertTrue(reader.waitFor(10, TimeUnit.SECONDS), "the reader must finish");
+			assertEquals(0,
+					reader.exitValue(), "a different attempt's failure must not remove this reader's source");
 			assertEquals("FIRST\n", Files.readString(copied.resolve("first")));
 			assertEquals("SECOND\n", Files.readString(copied.resolve("second")));
 			h.assertCacheIntact();
 		} finally {
 			reader.destroyForcibly();
-			assertTrue("the reader must be reaped", reader.waitFor(5, TimeUnit.SECONDS));
+			assertTrue(reader.waitFor(5, TimeUnit.SECONDS), "the reader must be reaped");
 		}
 	}
 
@@ -92,8 +93,8 @@ public class SharedSolverCacheIsolationTest {
 		final Path config;
 		final Path benchmark;
 
-		Harness(TemporaryFolder folder) throws Exception {
-			root = folder.newFolder("cache isolation").toPath();
+		Harness(File folder) throws Exception {
+			root = newFolder(folder, "cache isolation").toPath();
 			cache = Files.createDirectory(root.resolve("shared cache"));
 			Files.createDirectory(cache.resolve("finished.lock"));
 			Files.createDirectory(cache.resolve("lock.lock"));
@@ -131,11 +132,11 @@ public class SharedSolverCacheIsolationTest {
 			builder.redirectErrorStream(true).redirectOutput(log.toFile());
 			Process process = builder.start();
 			try {
-				assertTrue("the verifier must finish", process.waitFor(10, TimeUnit.SECONDS));
+				assertTrue(process.waitFor(10, TimeUnit.SECONDS), "the verifier must finish");
 				return process.exitValue();
 			} finally {
 				process.destroyForcibly();
-				assertTrue("the verifier must be reaped", process.waitFor(5, TimeUnit.SECONDS));
+				assertTrue(process.waitFor(5, TimeUnit.SECONDS), "the verifier must be reaped");
 			}
 		}
 

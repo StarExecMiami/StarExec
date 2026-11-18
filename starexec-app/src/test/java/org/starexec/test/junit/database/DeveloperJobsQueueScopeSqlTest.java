@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Queues;
 import org.starexec.test.util.DatabaseTestSupport;
@@ -16,10 +16,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assume.assumeFalse;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
  * Regression tests for #232 and #233, against the real SQL.
@@ -49,13 +48,13 @@ public class DeveloperJobsQueueScopeSqlTest extends Common {
 	private int plainUserId;
 	private final List<Integer> jobIds = new ArrayList<>();
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("DeveloperJobsQueueScopeSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			firstQueue = insertQueue(con, "0-" + tag + ".q");
@@ -66,7 +65,7 @@ public class DeveloperJobsQueueScopeSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			for (int jobId : jobIds) {
@@ -86,8 +85,8 @@ public class DeveloperJobsQueueScopeSqlTest extends Common {
 	public void aDeveloperJobIsReturnedOnlyForItsOwnQueue() throws SQLException {
 		int jobId = insertPendingJob(developerId, lastQueue);
 
-		assertFalse("job on the last queue leaked into the first queue",
-				pendingDeveloperJobs(firstQueue).contains(jobId));
+		assertFalse(pendingDeveloperJobs(firstQueue).contains(jobId),
+				"job on the last queue leaked into the first queue");
 		assertTrue(pendingDeveloperJobs(lastQueue).contains(jobId));
 	}
 
@@ -96,8 +95,8 @@ public class DeveloperJobsQueueScopeSqlTest extends Common {
 	public void anAdminJobIsReturnedOnlyForItsOwnQueue() throws SQLException {
 		int jobId = insertPendingJob(adminId, lastQueue);
 
-		assertFalse("admin job on the last queue leaked into the first queue",
-				pendingDeveloperJobs(firstQueue).contains(jobId));
+		assertFalse(pendingDeveloperJobs(firstQueue).contains(jobId),
+				"admin job on the last queue leaked into the first queue");
 		assertTrue(pendingDeveloperJobs(lastQueue).contains(jobId));
 	}
 
@@ -137,7 +136,7 @@ public class DeveloperJobsQueueScopeSqlTest extends Common {
 	@Test
 	public void developerJobsExistIsFalseWhenNoActiveQueueHasOne() throws SQLException {
 		// Other data in a shared database could legitimately make the answer true.
-		assumeFalse("database already holds a pending developer job", anyPendingDeveloperJob());
+		assumeFalse(anyPendingDeveloperJob(), "database already holds a pending developer job");
 		insertPendingJob(plainUserId, lastQueue);
 
 		assertFalse(Queues.developerJobsExist());

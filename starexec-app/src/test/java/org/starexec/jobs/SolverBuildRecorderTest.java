@@ -4,11 +4,10 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.slf4j.LoggerFactory;
 import org.starexec.data.database.Benchmarks;
@@ -20,6 +19,7 @@ import org.starexec.data.to.Status.StatusCode;
 import org.starexec.jobs.SolverBuildRecorder.Outcome;
 import org.starexec.logger.StarLevel;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,10 +27,10 @@ import java.sql.SQLException;
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -38,6 +38,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * What a finished build job does to its solver. Only the newest build job of a solver that is waiting for
@@ -53,13 +54,13 @@ public class SolverBuildRecorderTest {
 
 	private static int nextJobId = 880_000;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	private Logger logger;
 	private ListAppender<ILoggingEvent> appender;
 
-	@Before
+	@BeforeEach
 	public void captureLog() {
 		logger = (Logger) LoggerFactory.getLogger(SolverBuildRecorder.class);
 		appender = new ListAppender<>();
@@ -67,7 +68,7 @@ public class SolverBuildRecorderTest {
 		logger.addAppender(appender);
 	}
 
-	@After
+	@AfterEach
 	public void releaseLog() {
 		logger.detachAppender(appender);
 		appender.stop();
@@ -89,11 +90,11 @@ public class SolverBuildRecorderTest {
 		int checked = 0;
 		for (StatusCode status : StatusCode.values()) {
 			if (status.isTerminalExecutionResult() && status != StatusCode.STATUS_COMPLETE) {
-				assertEquals(status.name(), Outcome.FAILED, outcome(status, SolverBuildStatusCode.UNBUILT, true));
+				assertEquals(Outcome.FAILED, outcome(status, SolverBuildStatusCode.UNBUILT, true), status.name());
 				checked++;
 			}
 		}
-		assertTrue("the final statuses must include failures", checked >= 10);
+		assertTrue(checked >= 10, "the final statuses must include failures");
 	}
 
 	/** RebuildSolver leaves a failed solver's status alone, so its next build starts from BUILD_FAILED. */
@@ -109,8 +110,8 @@ public class SolverBuildRecorderTest {
 	public void aSolverThatIsNotWaitingForABuildIsLeftAlone() {
 		for (SolverBuildStatusCode status : new SolverBuildStatusCode[] {SolverBuildStatusCode.BUILT,
 				SolverBuildStatusCode.BUILT_BY_STAREXEC, SolverBuildStatusCode.STATUS_UNKNOWN}) {
-			assertEquals(status.name(), Outcome.NONE, outcome(StatusCode.STATUS_COMPLETE, status, true));
-			assertEquals(status.name(), Outcome.NONE, outcome(StatusCode.ERROR_RUNSCRIPT, status, true));
+			assertEquals(Outcome.NONE, outcome(StatusCode.STATUS_COMPLETE, status, true), status.name());
+			assertEquals(Outcome.NONE, outcome(StatusCode.ERROR_RUNSCRIPT, status, true), status.name());
 		}
 	}
 
@@ -137,22 +138,22 @@ public class SolverBuildRecorderTest {
 	public void aPairThatHasNotFinishedDecidesNothing() {
 		for (StatusCode status : StatusCode.values()) {
 			if (!status.isTerminalExecutionResult()) {
-				assertEquals(status.name(), Outcome.NONE, outcome(status, SolverBuildStatusCode.UNBUILT, true));
+				assertEquals(Outcome.NONE, outcome(status, SolverBuildStatusCode.UNBUILT, true), status.name());
 			}
 		}
 	}
 
 	@Test
 	public void onlyADirectoryWithSomethingInItCountsAsCopiedBack() throws Exception {
-		Path root = folder.getRoot().toPath();
-		assertFalse("missing", SolverBuildRecorder.hasFiles(root.resolve("missing")));
+		Path root = folder.toPath();
+		assertFalse(SolverBuildRecorder.hasFiles(root.resolve("missing")), "missing");
 		Path empty = Files.createDirectory(root.resolve("empty"));
-		assertFalse("empty", SolverBuildRecorder.hasFiles(empty));
+		assertFalse(SolverBuildRecorder.hasFiles(empty), "empty");
 		Path file = Files.writeString(root.resolve("file"), "x");
-		assertFalse("a file", SolverBuildRecorder.hasFiles(file));
+		assertFalse(SolverBuildRecorder.hasFiles(file), "a file");
 		Path built = Files.createDirectory(root.resolve("built"));
 		Files.createDirectory(built.resolve("bin"));
-		assertTrue("a directory with something in it", SolverBuildRecorder.hasFiles(built));
+		assertTrue(SolverBuildRecorder.hasFiles(built), "a directory with something in it");
 	}
 
 	@Test
@@ -212,7 +213,7 @@ public class SolverBuildRecorderTest {
 
 			db.solvers.verify(() -> Solvers.recordBuildOutcome(eq(build), any()), times(3));
 			db.benchmarks.verify(() -> Benchmarks.delete(build.getBenchmarkId()));
-			assertEquals("reported once, not every pass", 1, logged(Level.ERROR, "could not apply " + build));
+			assertEquals(1, logged(Level.ERROR, "could not apply " + build), "reported once, not every pass");
 			assertEquals(1, logged(Level.INFO, "recorded " + build + ": built"));
 		}
 	}
@@ -270,7 +271,7 @@ public class SolverBuildRecorderTest {
 	private FinishedSolverBuild waitingBuild() throws IOException {
 		int job = nextJobId;
 		nextJobId += 10;
-		Path built = Files.createDirectory(folder.newFolder().toPath().resolve("20261025-12.00.00.000"));
+		Path built = Files.createDirectory(newFolder(folder).toPath().resolve("20261025-12.00.00.000"));
 		Files.writeString(built.resolve("probe-solver"), "BUILT");
 		return new FinishedSolverBuild(job, job + 1, StatusCode.STATUS_COMPLETE, job + 2, job + 3, built + "_src",
 				SolverBuildStatusCode.UNBUILT, true);

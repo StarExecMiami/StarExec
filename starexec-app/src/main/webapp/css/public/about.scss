@@ -152,7 +152,9 @@ $spacing-2xs: s.$spacing-2xs;
 
 .features-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+
+  // min(..., 100%): a card column is never wider than a narrow screen.
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: $spacing-lg;
   margin-top: $spacing-xl;
   margin-bottom: $spacing-2xl;
@@ -166,8 +168,7 @@ $spacing-2xs: s.$spacing-2xs;
   @include m.transition-default;
   display: flex;
   flex-direction: column;
-  height: 100%;
-  
+
   &:hover {
     border-color: $accent-blue;
     @include m.card-shadow;
@@ -217,7 +218,7 @@ $spacing-2xs: s.$spacing-2xs;
 
 .resources-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr));
   gap: $spacing-md;
   margin-top: $spacing-lg;
   margin-bottom: $spacing-2xl;
@@ -269,7 +270,7 @@ $spacing-2xs: s.$spacing-2xs;
 
 .committee-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
   gap: $spacing-md;
   margin-top: $spacing-lg;
   margin-bottom: $spacing-2xl;
@@ -307,7 +308,7 @@ $spacing-2xs: s.$spacing-2xs;
 
 .funding-links {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
   gap: $spacing-md;
   margin: $spacing-lg 0 $spacing-2xl 0;
 }
@@ -369,12 +370,13 @@ $spacing-2xs: s.$spacing-2xs;
   
   .features-grid,
   .resources-grid {
-    grid-template-columns: 1fr;
+    // minmax(0, 1fr), not 1fr: long content wraps or scrolls instead of widening the column.
+    grid-template-columns: minmax(0, 1fr);
     gap: $spacing-md;
   }
   
   .committee-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   
   .section-title {

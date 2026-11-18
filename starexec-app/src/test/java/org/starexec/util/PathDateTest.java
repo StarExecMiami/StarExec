@@ -1,6 +1,6 @@
 package org.starexec.util;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.R;
 import org.starexec.data.database.Solvers;
 import org.starexec.servlets.ProcessorManager;
@@ -25,9 +25,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Uploads and copies name the directories they create with {@link Util#pathDate()}. It replaced
@@ -74,7 +74,7 @@ public class PathDateTest {
 			DateFormat before = new SimpleDateFormat(R.PATH_DATE_FORMAT, Locale.US);
 			before.setTimeZone(TimeZone.getTimeZone("UTC"));
 			String expected = before.format(Date.from(time.toInstant(ZoneOffset.UTC)));
-			assertEquals(time.toString(), expected, Util.pathDate(time));
+			assertEquals(expected, Util.pathDate(time), time.toString());
 		}
 	}
 
@@ -82,7 +82,7 @@ public class PathDateTest {
 	@Test
 	public void theUploadCleanupAcceptsTheNames() {
 		for (LocalDateTime time : TIMES) {
-			assertTrue(time.toString(), UploadArtifactPathGuard.isUploadDirectoryName(Util.pathDate(time)));
+			assertTrue(UploadArtifactPathGuard.isUploadDirectoryName(Util.pathDate(time)), time.toString());
 		}
 		assertTrue(UploadArtifactPathGuard.isUploadDirectoryName(Util.pathDate()));
 	}
@@ -143,8 +143,8 @@ public class PathDateTest {
 			stopped = pool.awaitTermination(60, TimeUnit.SECONDS);
 		}
 		// After the finally block, so that a worker's own failure is the one reported.
-		assertTrue("the formatting threads did not stop within 60 seconds", stopped);
-		assertEquals(allWrong.isEmpty() ? "" : allWrong.get(0), 0, allWrong.size());
+		assertTrue(stopped, "the formatting threads did not stop within 60 seconds");
+		assertEquals(0, allWrong.size(), allWrong.isEmpty() ? "" : allWrong.get(0));
 	}
 
 	/**
@@ -159,8 +159,8 @@ public class PathDateTest {
 		};
 		for (Class<?> namer : namers) {
 			for (Field field : namer.getDeclaredFields()) {
-				assertFalse(namer.getSimpleName() + "." + field.getName(),
-						DateFormat.class.isAssignableFrom(field.getType()));
+				assertFalse(DateFormat.class.isAssignableFrom(field.getType()),
+						namer.getSimpleName() + "." + field.getName());
 			}
 		}
 	}

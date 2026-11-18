@@ -1,6 +1,6 @@
 package org.starexec.test.integration.security;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.security.SettingSecurity;
 import org.starexec.data.to.DefaultSettings;
@@ -25,12 +25,12 @@ public class SettingSecurityTests extends TestSequence {
 	@StarexecTest
 	private void canModifySettingsTest() {
 		try {
-			Assert.assertTrue(SettingSecurity.canModifySettings(s.getId(), u.getId()).isSuccess());
-			Assert.assertTrue(SettingSecurity.canModifySettings(s.getId(), admin.getId()).isSuccess());
-			Assert.assertFalse(SettingSecurity.canModifySettings(s.getId(), u2.getId()).isSuccess());
-			Assert.assertFalse(SettingSecurity.canModifySettings(-1, u2.getId()).isSuccess());
+			Assertions.assertTrue(SettingSecurity.canModifySettings(s.getId(), u.getId()).isSuccess());
+			Assertions.assertTrue(SettingSecurity.canModifySettings(s.getId(), admin.getId()).isSuccess());
+			Assertions.assertFalse(SettingSecurity.canModifySettings(s.getId(), u2.getId()).isSuccess());
+			Assertions.assertFalse(SettingSecurity.canModifySettings(-1, u2.getId()).isSuccess());
 		} catch (SQLException e) {
-			Assert.fail("Caught SQLException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught SQLException: " + Util.getStackTrace(e));
 		}
 	}
 	

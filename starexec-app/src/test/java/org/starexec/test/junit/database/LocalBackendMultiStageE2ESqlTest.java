@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.LocalBackend;
 import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.database.Common;
@@ -25,8 +25,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A real LocalBackend execution, end to end.
@@ -79,13 +79,13 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 	private Path work;
 	private Path outputDir;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("LocalBackendMultiStageE2ESqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws Exception {
 		cleanUp();
 		work = Files.createTempDirectory("local-e2e");
@@ -120,7 +120,7 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws SQLException {
 		if (backend != null) {
 			try {
@@ -162,11 +162,11 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 
 		awaitTerminal();
 
-		assertEquals("stage 1 ran and must say so", COMPLETE, stageStatus(1));
-		assertEquals("stage 2 ran and must say so", COMPLETE, stageStatus(2));
-		assertEquals("stage 3 was never reached", NOT_REACHED, stageStatus(3));
+		assertEquals(COMPLETE, stageStatus(1), "stage 1 ran and must say so");
+		assertEquals(COMPLETE, stageStatus(2), "stage 2 ran and must say so");
+		assertEquals(NOT_REACHED, stageStatus(3), "stage 3 was never reached");
 		assertEquals(COMPLETE, pairStatus());
-		assertEquals("pair completion fires once", 1, completions());
+		assertEquals(1, completions(), "pair completion fires once");
 
 		// The process really did write the protocol, rather than the test writing it.
 		assertTrue(Files.exists(outputDir.resolve("stage-status/1.json")));
@@ -176,7 +176,7 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 		// StageStatusSnapshots itself, so this fixture cannot drift into a private dialect
 		// that only this test understands. If the production contract changes, this fails.
 		Map<Integer, Integer> parsed = StageStatusSnapshots.read(outputDir, PAIR_ID);
-		assertEquals("the shared validator must see both stages", 2, parsed.size());
+		assertEquals(2, parsed.size(), "the shared validator must see both stages");
 		assertEquals(Integer.valueOf(COMPLETE), parsed.get(1));
 		assertEquals(Integer.valueOf(COMPLETE), parsed.get(2));
 	}
@@ -201,8 +201,8 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 		awaitTerminal();
 
 		assertEquals(COMPLETE, stageStatus(1));
-		assertEquals("configured but never reached", NOT_REACHED, stageStatus(2));
-		assertEquals("configured but never reached", NOT_REACHED, stageStatus(3));
+		assertEquals(NOT_REACHED, stageStatus(2), "configured but never reached");
+		assertEquals(NOT_REACHED, stageStatus(3), "configured but never reached");
 		assertEquals(COMPLETE, pairStatus());
 		assertEquals(1, completions());
 	}
@@ -222,12 +222,12 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 		awaitTerminal();
 
 		try (Connection con = Common.getConnection()) {
-			assertEquals("start_time must be recorded", 1, scalar(con,
+			assertEquals(1, scalar(con,
 					"SELECT count(*) FROM starexec.job_pairs WHERE id=" + PAIR_ID
-							+ " AND start_time IS NOT NULL"));
-			assertEquals("the pair cannot start after it ended", 1, scalar(con,
+							+ " AND start_time IS NOT NULL"), "start_time must be recorded");
+			assertEquals(1, scalar(con,
 					"SELECT count(*) FROM starexec.job_pairs WHERE id=" + PAIR_ID
-							+ " AND start_time <= coalesce(end_time, now())"));
+							+ " AND start_time <= coalesce(end_time, now())"), "the pair cannot start after it ended");
 		}
 	}
 
@@ -261,10 +261,10 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 
 		submitStarted(heldScript(release));
 		try {
-			assertEquals("the pair must run on its node (status/node_id)",
-					RUNNING + "/" + nodeId, awaitRunningOn(nodeId));
-			assertEquals("the node's view must list the running pair",
-					List.of(PAIR_ID), pairIds(Queues.getPairsRunningOnNode(nodeId)));
+			assertEquals(RUNNING + "/" + nodeId,
+					awaitRunningOn(nodeId), "the pair must run on its node (status/node_id)");
+			assertEquals(List.of(PAIR_ID),
+					pairIds(Queues.getPairsRunningOnNode(nodeId)), "the node's view must list the running pair");
 		} finally {
 			Files.writeString(release, "");
 		}
@@ -296,7 +296,7 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 				scriptPath.toString(),
 				work.toString(),
 				outputDir.resolve(PAIR_ID + ".txt").toString());
-		assertTrue("submission must be accepted, got execId " + execId, execId > 0);
+		assertTrue(execId > 0, "submission must be accepted, got execId " + execId);
 	}
 
 	/** Polls the database, not a sleep: the real monitor decides when this becomes true. */
@@ -413,7 +413,7 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 						"SELECT node_id FROM starexec.job_pairs WHERE id = ?")) {
 			ps.setInt(1, PAIR_ID);
 			try (ResultSet rs = ps.executeQuery()) {
-				assertTrue("pair " + PAIR_ID + " has no row", rs.next());
+				assertTrue(rs.next(), "pair " + PAIR_ID + " has no row");
 				return String.valueOf(rs.getObject(1));
 			}
 		}
@@ -433,7 +433,7 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 	}
 
 	private static List<Integer> pairIds(List<JobPair> pairs) {
-		assertTrue("the node view's query failed", pairs != null);
+		assertTrue(pairs != null, "the node view's query failed");
 		List<Integer> ids = new ArrayList<>();
 		for (JobPair pair : pairs) {
 			ids.add(pair.getId());
@@ -449,7 +449,7 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 
 	private static int scalar(Connection con, String sql) throws SQLException {
 		try (Statement s = con.createStatement(); ResultSet rs = s.executeQuery(sql)) {
-			assertTrue("query returned no row: " + sql, rs.next());
+			assertTrue(rs.next(), "query returned no row: " + sql);
 			return rs.getInt(1);
 		}
 	}

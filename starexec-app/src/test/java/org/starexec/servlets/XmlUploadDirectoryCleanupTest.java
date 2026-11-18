@@ -1,10 +1,9 @@
 package org.starexec.servlets;
 
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 import org.starexec.constants.R;
@@ -31,10 +30,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.RejectedExecutionException;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.endsWith;
@@ -47,6 +46,7 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * A space or job XML upload extracts its archive into a directory of its own, and deletes that
@@ -65,8 +65,8 @@ public class XmlUploadDirectoryCleanupTest {
 	/** The millisecond that every upload in these tests starts in. */
 	private static final String DATE = "20261018-10.00.00.000";
 
-	@Rule
-	public TemporaryFolder tmp = new TemporaryFolder();
+	@TempDir
+	public File tmp;
 
 	private File root;
 	private HashMap<String, Object> form;
@@ -92,14 +92,14 @@ public class XmlUploadDirectoryCleanupTest {
 	private boolean realJobUtil;
 
 	/** The job XML request validation checks the archive name; the application compiles the patterns at startup. */
-	@BeforeClass
+	@BeforeAll
 	public static void compileValidatorPatterns() {
 		Validator.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void uploadRoot() throws IOException {
-		root = tmp.newFolder("uploads");
+		root = newFolder(tmp, "uploads");
 	}
 
 	@Test
@@ -112,7 +112,7 @@ public class XmlUploadDirectoryCleanupTest {
 
 		assertEquals(List.of("spaces.xml"), seen);
 		assertArrayEquals(new String[0], left(spaceUploads()));
-		assertEquals("deleted before the upload is marked complete", Boolean.FALSE, filesLeftAtCompletion);
+		assertEquals(Boolean.FALSE, filesLeftAtCompletion, "deleted before the upload is marked complete");
 	}
 
 	@Test
@@ -126,7 +126,7 @@ public class XmlUploadDirectoryCleanupTest {
 
 		assertEquals(List.of("spaces.xml"), seen);
 		assertArrayEquals(new String[0], left(spaceUploads()));
-		assertEquals("the upload is still marked complete", Boolean.FALSE, filesLeftAtCompletion);
+		assertEquals(Boolean.FALSE, filesLeftAtCompletion, "the upload is still marked complete");
 	}
 
 	@Test
@@ -178,7 +178,7 @@ public class XmlUploadDirectoryCleanupTest {
 
 		assertTrue(tasks.isEmpty());
 		for (File other : others) {
-			assertTrue(other + " is untouched", new File(other, "other.xml").isFile());
+			assertTrue(new File(other, "other.xml").isFile(), other + " is untouched");
 		}
 	}
 
@@ -191,7 +191,7 @@ public class XmlUploadDirectoryCleanupTest {
 
 		assertEquals(List.of("spaces.xml"), seen);
 		assertArrayEquals(new String[0], left(spaceUploads()));
-		assertEquals("deleted before the upload is marked complete", Boolean.FALSE, filesLeftAtCompletion);
+		assertEquals(Boolean.FALSE, filesLeftAtCompletion, "deleted before the upload is marked complete");
 	}
 
 	/**
@@ -207,8 +207,8 @@ public class XmlUploadDirectoryCleanupTest {
 
 		assertThrows(SyntheticError.class, () -> withBoundaries(() -> uploadSpaceXml(archive("spaces.zip"))));
 
-		assertEquals("the other upload got the name this one released", List.of(new File(spaceUploads(), DATE)), other);
-		assertTrue("the other upload's file is untouched", new File(other.get(0), "other.xml").isFile());
+		assertEquals(List.of(new File(spaceUploads(), DATE)), other, "the other upload got the name this one released");
+		assertTrue(new File(other.get(0), "other.xml").isFile(), "the other upload's file is untouched");
 	}
 
 	/**
@@ -220,13 +220,13 @@ public class XmlUploadDirectoryCleanupTest {
 		pool = Pool.QUEUES_THEN_FAILS;
 
 		assertThrows(SyntheticError.class, () -> withBoundaries(() -> uploadSpaceXml(archive("spaces.zip"))));
-		assertArrayEquals("the request deleted the directory", new String[0], left(spaceUploads()));
+		assertArrayEquals(new String[0], left(spaceUploads()), "the request deleted the directory");
 		File other = claimAsAnotherUpload(spaceUploads(), "spaces.zip");
 
 		withBoundaries(this::runTasks);
 
-		assertTrue("no spaces are created from the other upload's archive", seen.isEmpty());
-		assertTrue("the other upload's archive is untouched", new File(other, "spaces.zip").isFile());
+		assertTrue(seen.isEmpty(), "no spaces are created from the other upload's archive");
+		assertTrue(new File(other, "spaces.zip").isFile(), "the other upload's archive is untouched");
 	}
 
 	/** A damaged archive is reported on the upload's status, instead of passing for one that holds no XML. */
@@ -240,10 +240,10 @@ public class XmlUploadDirectoryCleanupTest {
 		});
 
 		assertEquals(List.of(ArchiveUtil.NOT_EXTRACTED), xmlErrors);
-		assertTrue("the file was received, as a benchmark upload marks it before it extracts", fileUploadComplete);
-		assertTrue("no spaces are created", seen.isEmpty());
+		assertTrue(fileUploadComplete, "the file was received, as a benchmark upload marks it before it extracts");
+		assertTrue(seen.isEmpty(), "no spaces are created");
 		assertArrayEquals(new String[0], left(spaceUploads()));
-		assertEquals("the upload is marked complete, with no file left", Boolean.FALSE, filesLeftAtCompletion);
+		assertEquals(Boolean.FALSE, filesLeftAtCompletion, "the upload is marked complete, with no file left");
 	}
 
 	@Test
@@ -274,7 +274,7 @@ public class XmlUploadDirectoryCleanupTest {
 		HttpServletResponse response = postJobXml(archive("jobs.zip"));
 
 		verify(response, never()).sendRedirect(anyString());
-		assertTrue("no job is created", seen.isEmpty());
+		assertTrue(seen.isEmpty(), "no job is created");
 		assertArrayEquals(new String[0], left(jobUploads()));
 	}
 
@@ -288,7 +288,7 @@ public class XmlUploadDirectoryCleanupTest {
 
 		verify(response).sendError(HttpServletResponse.SC_BAD_REQUEST,
 				"Failed to upload Job XML:\n" + ArchiveUtil.NOT_EXTRACTED);
-		assertTrue("no job is created", seen.isEmpty());
+		assertTrue(seen.isEmpty(), "no job is created");
 		assertArrayEquals(new String[0], left(jobUploads()));
 	}
 
@@ -299,9 +299,9 @@ public class XmlUploadDirectoryCleanupTest {
 		HttpServletResponse response = postJobXml(archive("jobs.zip"));
 
 		verify(response).sendError(eq(HttpServletResponse.SC_INTERNAL_SERVER_ERROR), anyString());
-		assertTrue("no job is created", seen.isEmpty());
+		assertTrue(seen.isEmpty(), "no job is created");
 		for (File other : others) {
-			assertTrue(other + " is untouched", new File(other, "other.xml").isFile());
+			assertTrue(new File(other, "other.xml").isFile(), other + " is untouched");
 		}
 	}
 

@@ -5,6 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/lib/cli-output.sh"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEMPLATE_FILE="$PROJECT_ROOT/render.yaml.template"
 OUTPUT_FILE="$PROJECT_ROOT/render.yaml"
@@ -22,12 +23,15 @@ elif [ -n "${STAREXEC_DB_PASSWORD:-}" ]; then
     export STAREXEC_DB_PASSWORD
 else
     if [ "$ENVIRONMENT" != "dev" ] && [ "$ENVIRONMENT" != "local" ]; then
-        echo "ERROR: STAREXEC_DB_PASSWORD is not set for '$ENVIRONMENT' environment." \
-             "Set STAREXEC_DB_PASSWORD or STAREXEC_DB_PASSWORD_FILE before deploying." >&2
+        ui_error "STAREXEC_DB_PASSWORD is not set for '$ENVIRONMENT' environment."
+        ui_info "  Set STAREXEC_DB_PASSWORD or STAREXEC_DB_PASSWORD_FILE before deploying."
         exit 1
     fi
-    echo "WARNING: STAREXEC_DB_PASSWORD is not set. Using insecure dev default. Only acceptable for local dev." >&2
     export STAREXEC_DB_PASSWORD="starexec_dev_password"
+fi
+if [ "$STAREXEC_DB_PASSWORD" = "starexec_dev_password" ]; then
+    ui_warn "Using default development database credentials. Only acceptable for local dev."
+    ui_info "  Set STAREXEC_DB_PASSWORD or STAREXEC_DB_PASSWORD_FILE before deploying outside local development."
 fi
 export STAREXEC_DB_NAME="${STAREXEC_DB_NAME:-starexec}"
 export STAREXEC_DB_PORT="${STAREXEC_DB_PORT:-5432}"
@@ -44,12 +48,12 @@ export IMAGE_TAG="${IMAGE_TAG:-latest}"
 
 # Check if template exists
 if [ ! -f "$TEMPLATE_FILE" ]; then
-    echo "Error: Template file not found: $TEMPLATE_FILE" >&2
+    ui_error "Template file not found: $TEMPLATE_FILE"
     exit 1
 fi
 
 fail() {
-    echo "ERROR: $*" >&2
+    ui_error "$@"
     exit 1
 }
 
@@ -93,9 +97,9 @@ if [ "$STAREXEC_BACKEND_TYPE" = podman ]; then
         # On a first deploy the data volume does not exist yet, and podman play kube would create it. Create it
         # now instead, the same way, so that its path on the host is known.
         if ! "${podman_cmd[@]}" volume exists "$STAREXEC_DATA_VOL"; then
-            "${podman_cmd[@]}" volume create "$STAREXEC_DATA_VOL" > /dev/null ||
+            ui_run "${podman_cmd[@]}" volume create "$STAREXEC_DATA_VOL" ||
                 fail "cannot create the data volume $STAREXEC_DATA_VOL. Or set STAREXEC_CONTAINER_HOST_DATA_PATH."
-            echo "Created the data volume $STAREXEC_DATA_VOL"
+            ui_success "Created the data volume $STAREXEC_DATA_VOL"
         fi
         if ! STAREXEC_CONTAINER_HOST_DATA_PATH=$("${podman_cmd[@]}" volume inspect --format '{{.Mountpoint}}' \
             "$STAREXEC_DATA_VOL") || [ -z "$STAREXEC_CONTAINER_HOST_DATA_PATH" ]; then
@@ -115,19 +119,18 @@ else
     sections=(-e '/# BEGIN podman-backend/,/# END podman-backend/d')
 fi
 
-echo "Generating render.yaml from template..."
-echo "  Using environment:"
-echo "    DB_USER:    $STAREXEC_DB_USER"
-echo "    DB_NAME:    $STAREXEC_DB_NAME"
-echo "    APP_PORT:   $APP_PORT"
-echo "    DATA_VOL:   $STAREXEC_DATA_VOL"
-echo "    POSTGRES_VOL: $STAREXEC_POSTGRES_VOL"
-echo "    IMAGE:      $IMAGE_NAME:$IMAGE_TAG"
-echo "    BACKEND:    $STAREXEC_BACKEND_TYPE"
+ui_info "Generating render.yaml from template..."
+ui_detail "DB_USER: $STAREXEC_DB_USER"
+ui_detail "DB_NAME: $STAREXEC_DB_NAME"
+ui_detail "APP_PORT: $APP_PORT"
+ui_detail "DATA_VOL: $STAREXEC_DATA_VOL"
+ui_detail "POSTGRES_VOL: $STAREXEC_POSTGRES_VOL"
+ui_detail "IMAGE: $IMAGE_NAME:$IMAGE_TAG"
+ui_detail "BACKEND: $STAREXEC_BACKEND_TYPE"
 if [ "$STAREXEC_BACKEND_TYPE" = podman ]; then
-    echo "    SOCKET:     $PODMAN_SOCKET_PATH (group $PODMAN_SOCKET_GID)"
-    echo "    HOST_DATA:  $STAREXEC_CONTAINER_HOST_DATA_PATH"
-    echo "    JOB_IMAGE:  $STAREXEC_CONTAINER_JOB_IMAGE"
+    ui_detail "SOCKET: $PODMAN_SOCKET_PATH (group $PODMAN_SOCKET_GID)"
+    ui_detail "HOST_DATA: $STAREXEC_CONTAINER_HOST_DATA_PATH"
+    ui_detail "JOB_IMAGE: $STAREXEC_CONTAINER_JOB_IMAGE"
 fi
 
 # Use sed to replace placeholders with actual values.
@@ -149,4 +152,4 @@ sed "${sections[@]}" "$TEMPLATE_FILE" |
     -e "s|\${IMAGE_TAG:-latest}|$IMAGE_TAG|g" \
     ${backend_subs[@]+"${backend_subs[@]}"} > "$OUTPUT_FILE"
 
-echo "✓ Generated: $OUTPUT_FILE"
+ui_success "Generated: $OUTPUT_FILE"

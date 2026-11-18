@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -15,9 +14,10 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * A monitor reading {@code attributes.txt} or {@code stats.json} while the job script replaces
@@ -58,8 +58,8 @@ public class LegacyResultFileAtomicityTest {
 	private static final String STAGE_1_ATTRIBUTES = "starexec-result=Theorem\nSZSStatus=THM\n";
 	private static final String STAGE_2_ATTRIBUTES = "starexec-result=Unknown\nSZSStatus=UNK\n";
 
-	@ClassRule
-	public static TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public static File folder;
 
 	/**
 	 * One traced run serves every test. The trace is deterministic, so rerunning it per test
@@ -86,8 +86,8 @@ public class LegacyResultFileAtomicityTest {
 
 	@Test
 	public void attributesAreNeverObservedEmpty() throws Exception {
-		assertFalse("a reader observed an empty attributes.txt",
-				run().observed("attributes.txt").contains(""));
+		assertFalse(run().observed("attributes.txt").contains(""),
+				"a reader observed an empty attributes.txt");
 	}
 
 	/** Empty is the test above; anything else that is not exactly one stage's file is here. */
@@ -100,28 +100,28 @@ public class LegacyResultFileAtomicityTest {
 				wrong.add(quote(state));
 			}
 		}
-		assertTrue("a reader observed attributes.txt states that are not one stage's file: "
-				+ wrong, wrong.isEmpty());
+		assertTrue(wrong.isEmpty(), "a reader observed attributes.txt states that are not one stage's file: "
+				+ wrong);
 	}
 
 	@Test
 	public void statsAreNeverObservedEmpty() throws Exception {
-		assertFalse("a reader observed an empty stats.json",
-				run().observed("stats.json").contains(""));
+		assertFalse(run().observed("stats.json").contains(""),
+				"a reader observed an empty stats.json");
 	}
 
 	@Test
 	public void statsAreNeverObservedIncomplete() throws Exception {
 		Set<String> settled = run().settled("stats.json");
-		assertEquals("each stage settles one stats.json: " + settled, 2, settled.size());
+		assertEquals(2, settled.size(), "each stage settles one stats.json: " + settled);
 		Set<String> wrong = new LinkedHashSet<>();
 		for (String state : run().observed("stats.json")) {
 			if (!state.isEmpty() && !settled.contains(state)) {
 				wrong.add(quote(state));
 			}
 		}
-		assertTrue("a reader observed stats.json states that are not one stage's record: "
-				+ wrong, wrong.isEmpty());
+		assertTrue(wrong.isEmpty(), "a reader observed stats.json states that are not one stage's record: "
+				+ wrong);
 	}
 
 	/**
@@ -132,17 +132,17 @@ public class LegacyResultFileAtomicityTest {
 	public void theObserverSeesBothStagesAndTheFinalFilesAreUnchanged() throws Exception {
 		Run run = run();
 		List<String> attributes = run.observed("attributes.txt");
-		assertTrue("stage 1's attributes must have been observed: " + attributes,
-				attributes.contains(STAGE_1_ATTRIBUTES));
-		assertTrue("stage 2's attributes must have been observed: " + attributes,
-				attributes.contains(STAGE_2_ATTRIBUTES));
+		assertTrue(attributes.contains(STAGE_1_ATTRIBUTES),
+				"stage 1's attributes must have been observed: " + attributes);
+		assertTrue(attributes.contains(STAGE_2_ATTRIBUTES),
+				"stage 2's attributes must have been observed: " + attributes);
 		assertEquals(STAGE_2_ATTRIBUTES, Files.readString(run.out.resolve("attributes.txt")));
 
 		String stats = Files.readString(run.out.resolve("stats.json"));
-		assertTrue("the final stats.json names the last stage: " + stats,
-				stats.contains("\"stageNumber\": 2,"));
-		assertTrue("the final stats.json is complete: " + stats,
-				stats.trim().endsWith("}"));
+		assertTrue(stats.contains("\"stageNumber\": 2,"),
+				"the final stats.json names the last stage: " + stats);
+		assertTrue(stats.trim().endsWith("}"),
+				"the final stats.json is complete: " + stats);
 	}
 
 	/**
@@ -163,11 +163,11 @@ public class LegacyResultFileAtomicityTest {
 				continue;
 			}
 			published++;
-			assertEquals(name + " must be renamed from its own directory, not from " + source,
-					target.getParent(), source.getParent());
+			assertEquals(target.getParent(),
+					source.getParent(), name + " must be renamed from its own directory, not from " + source);
 		}
-		assertEquals("one rename per stage for each of the two files: " + run.renames().size(),
-				4, published);
+		assertEquals(4,
+				published, "one rename per stage for each of the two files: " + run.renames().size());
 	}
 
 	/**
@@ -183,18 +183,18 @@ public class LegacyResultFileAtomicityTest {
 				wrong.add(quote(state));
 			}
 		}
-		assertTrue("only stage 1's file or the empty one may be observed: " + wrong,
-				wrong.isEmpty());
+		assertTrue(wrong.isEmpty(),
+				"only stage 1's file or the empty one may be observed: " + wrong);
 
 		List<Boolean> present = run.presence("attributes.txt");
 		int first = present.indexOf(Boolean.TRUE);
-		assertTrue("attributes.txt must have been published at all", first >= 0);
-		assertFalse("attributes.txt disappeared after it was published",
-				present.subList(first, present.size()).contains(Boolean.FALSE));
+		assertTrue(first >= 0, "attributes.txt must have been published at all");
+		assertFalse(present.subList(first, present.size()).contains(Boolean.FALSE),
+				"attributes.txt disappeared after it was published");
 
 		Path published = run.out.resolve("attributes.txt");
-		assertTrue("an empty result is still published", Files.isRegularFile(published));
-		assertEquals("and it is empty, not stage 1's leftovers", 0, Files.size(published));
+		assertTrue(Files.isRegularFile(published), "an empty result is still published");
+		assertEquals(0, Files.size(published), "and it is empty, not stage 1's leftovers");
 	}
 
 	/** A rename leaves nothing behind for a cleanup list or a monitor to trip over. */
@@ -203,7 +203,7 @@ public class LegacyResultFileAtomicityTest {
 		Run run = run();
 		try (var entries = Files.list(run.out)) {
 			entries.map(p -> p.getFileName().toString())
-					.forEach(name -> assertFalse("left behind: " + name, name.endsWith(".tmp")));
+					.forEach(name -> assertFalse(name.endsWith(".tmp"), "left behind: " + name));
 		}
 	}
 
@@ -270,7 +270,7 @@ public class LegacyResultFileAtomicityTest {
 	}
 
 	private static Run runTwoStages(String stage2Attributes) throws Exception {
-		Path dir = folder.newFolder("pair-" + System.nanoTime()).toPath();
+		Path dir = newFolder(folder, "pair-" + System.nanoTime()).toPath();
 		Path out = dir.resolve("out");
 		Files.createDirectories(out);
 		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
@@ -359,10 +359,10 @@ public class LegacyResultFileAtomicityTest {
 		File script = dir.resolve("generated.sh").toFile();
 		Files.writeString(script.toPath(), b.toString());
 		Result parse = exec(Bash.PATH, "-n", script.getAbsolutePath());
-		assertEquals("generated script must parse:\n" + parse.out, 0, parse.exit);
+		assertEquals(0, parse.exit, "generated script must parse:\n" + parse.out);
 		Result run = exec(Bash.PATH, script.getAbsolutePath());
-		assertEquals("the helper must not abort:\n" + run.out, 0, run.exit);
-		assertTrue("the observer must have recorded something", Files.size(log) > 0);
+		assertEquals(0, run.exit, "the helper must not abort:\n" + run.out);
+		assertTrue(Files.size(log) > 0, "the observer must have recorded something");
 		return new Run(out, Files.readAllLines(log));
 	}
 
@@ -379,7 +379,7 @@ public class LegacyResultFileAtomicityTest {
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "command must not hang");
 		return new Result(p.exitValue(), output);
 	}
 

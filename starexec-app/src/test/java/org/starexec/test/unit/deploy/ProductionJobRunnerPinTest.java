@@ -1,16 +1,16 @@
 package org.starexec.test.unit.deploy;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+
+import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Collectors;
-
-import org.junit.Test;
 
 /**
  * Guards the production job-runner reference in the Helm values.
@@ -38,8 +38,8 @@ public class ProductionJobRunnerPinTest {
 
     private List<String> settingLines(String key) throws IOException {
         assertTrue(
-            PROD_VALUES + " must exist; it is the authoritative production values file",
-            Files.isRegularFile(PROD_VALUES)
+            Files.isRegularFile(PROD_VALUES),
+            PROD_VALUES + " must exist; it is the authoritative production values file"
         );
         return Files.readAllLines(PROD_VALUES, StandardCharsets.UTF_8).stream()
             .map(String::trim)
@@ -50,28 +50,28 @@ public class ProductionJobRunnerPinTest {
     @Test
     public void productionPinsTheJobRunnerByDigest() throws Exception {
         List<String> lines = settingLines("jobImage");
-        assertTrue("values-prod.yaml must set kubernetes.jobImage", lines.size() == 1);
+        assertTrue(lines.size() == 1, "values-prod.yaml must set kubernetes.jobImage");
 
         String value = lines.get(0);
         assertTrue(
-            "production must reference the validated linux/amd64 manifest, but found: " + value,
-            value.contains("@" + PINNED_DIGEST)
+            value.contains("@" + PINNED_DIGEST),
+            "production must reference the validated linux/amd64 manifest, but found: " + value
         );
         assertFalse(
+            value.contains("starexec-job-runner:latest"),
             "production must not reference a mutable tag; isolated workers cannot re-resolve"
-                + " it, and it makes Kubernetes derive Always. Found: " + value,
-            value.contains("starexec-job-runner:latest")
+                + " it, and it makes Kubernetes derive Always. Found: " + value
         );
     }
 
     @Test
     public void productionStatesThePullPolicyItReliesOn() throws Exception {
         List<String> lines = settingLines("jobImagePullPolicy");
-        assertTrue("values-prod.yaml must set kubernetes.jobImagePullPolicy", lines.size() == 1);
+        assertTrue(lines.size() == 1, "values-prod.yaml must set kubernetes.jobImagePullPolicy");
         assertTrue(
+            lines.get(0).endsWith("IfNotPresent"),
             "isolated workers must be allowed to use the image they already hold, but found: "
-                + lines.get(0),
-            lines.get(0).endsWith("IfNotPresent")
+                + lines.get(0)
         );
     }
 }

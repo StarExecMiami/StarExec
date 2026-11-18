@@ -105,9 +105,7 @@
 							<tr>
 								<td>Email Address</td>
 								<td>
-									<a href="mailto:${t_user.email}">${t_user.email}<img
-											class="extLink"
-											src="${starexecRoot}/images/external.png"/></a>
+									<a href="mailto:${t_user.email}">${t_user.email}<span class="ext-link-icon"></span></a>
 								</td>
 							</tr>
 							<tr>
@@ -130,8 +128,7 @@
 										<ul>
 											<c:forEach var="site"
 											           items="${sites}">
-												<li>${site}<img class="extLink"
-												                src="${starexecRoot}/images/external.png"/>
+												<li>${site}<span class="ext-link-icon"></span>
 												</li>
 											</c:forEach>
 										</ul>

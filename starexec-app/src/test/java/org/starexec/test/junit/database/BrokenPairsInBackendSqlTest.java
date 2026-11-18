@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.Backend;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.JobPairs;
@@ -20,7 +20,7 @@ import java.sql.SQLException;
 import java.util.HashSet;
 import java.util.Set;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * The periodic broken-pair sweep, {@link Jobs#setBrokenPairsToErrorStatus(Backend)}, and the
@@ -58,13 +58,13 @@ public class BrokenPairsInBackendSqlTest extends Common {
 	private int stage2ConfigId;
 	private int pairId;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("BrokenPairsInBackendSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			userId = selectInt(con, "SELECT min(id) FROM starexec.users");
@@ -93,7 +93,7 @@ public class BrokenPairsInBackendSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		if (jobId == 0) {
 			return;
@@ -122,13 +122,13 @@ public class BrokenPairsInBackendSqlTest extends Common {
 			try (ResultSet rs = ps.executeQuery()) {
 				while (rs.next()) {
 					rows++;
-					assertEquals("the primary stage's solver", stage2SolverId, rs.getInt("solver_id"));
-					assertEquals("the primary stage's configuration", stage2ConfigId,
-							rs.getInt("config_id"));
+					assertEquals(stage2SolverId, rs.getInt("solver_id"), "the primary stage's solver");
+					assertEquals(stage2ConfigId, rs.getInt("config_id"),
+							"the primary stage's configuration");
 				}
 			}
 		}
-		assertEquals("exactly one row per pair", 1, rows);
+		assertEquals(1, rows, "exactly one row per pair");
 
 		long listed = JobPairs.getPairsByStatus(StatusCode.STATUS_ENQUEUED.getVal()).stream()
 				.filter(p -> p.getId() == pairId)
@@ -151,10 +151,10 @@ public class BrokenPairsInBackendSqlTest extends Common {
 		try (Connection con = Common.getConnection()) {
 			assertEquals(StatusCode.ERROR_SUBMIT_FAIL.getVal(), selectInt(con,
 					"SELECT status_code FROM starexec.job_pairs WHERE id = " + pairId));
-			assertEquals("the primary stage's solver failed to build",
-					SolverBuildStatusCode.BUILD_FAILED.getVal(), buildStatus(con, stage2SolverId));
-			assertEquals("the other stage's solver is not this pair's primary",
-					SolverBuildStatusCode.UNBUILT.getVal(), buildStatus(con, stage1SolverId));
+			assertEquals(SolverBuildStatusCode.BUILD_FAILED.getVal(),
+					buildStatus(con, stage2SolverId), "the primary stage's solver failed to build");
+			assertEquals(SolverBuildStatusCode.UNBUILT.getVal(),
+					buildStatus(con, stage1SolverId), "the other stage's solver is not this pair's primary");
 		}
 	}
 

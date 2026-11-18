@@ -1,19 +1,19 @@
 package org.starexec.test.junit.database;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
@@ -44,14 +44,14 @@ public class RerunClearsJobCompletionSqlTest extends Common {
     private int pairB;
     private int pairC;
 
-    @BeforeClass
+    @BeforeAll
     public static void requireDatabase() {
         DatabaseTestSupport.assumeDatabaseAvailable("RerunClearsJobCompletionSqlTest");
         Common.initialize();
     }
 
     /** Two completed jobs: one with pairs A and B, the other with pair C, all finished. */
-    @Before
+    @BeforeEach
     public void createCompletedJobs() throws SQLException {
         try (Connection con = Common.getConnection()) {
             int userId = queryInt(con, "SELECT min(id) FROM starexec.users");
@@ -64,7 +64,7 @@ public class RerunClearsJobCompletionSqlTest extends Common {
         assertEquals(FIRST_COMPLETION, completed(jobId));
     }
 
-    @After
+    @AfterEach
     public void dropFixture() throws SQLException {
         try (Connection con = Common.getConnection()) {
             for (int job : new int[] {jobId, otherJobId}) {
@@ -93,8 +93,8 @@ public class RerunClearsJobCompletionSqlTest extends Common {
     public void aCheckedManualRerunMakesTheJobIncompleteAgain() throws SQLException {
         assertEquals(1, callInt("SELECT starexec.RerunJobPairsBatchChecked(ARRAY[?], ARRAY[?])",
             pairA, EXEC_A));
-        assertNull("its pair runs again, so the job has not completed", completed(jobId));
-        assertEquals("another job keeps its completion", FIRST_COMPLETION, completed(otherJobId));
+        assertNull(completed(jobId), "its pair runs again, so the job has not completed");
+        assertEquals(FIRST_COMPLETION, completed(otherJobId), "another job keeps its completion");
     }
 
     @Test
@@ -124,9 +124,9 @@ public class RerunClearsJobCompletionSqlTest extends Common {
             StatusCode.STATUS_PENDING_SUBMIT.getVal(), StatusCode.ERROR_SUBMIT_FAIL.getVal());
 
         Timestamp restamped = completed(jobId);
-        assertNotNull("the job is complete again", restamped);
-        assertTrue("and records when the rerun finished, not its first completion",
-            restamped.after(FIRST_COMPLETION));
+        assertNotNull(restamped, "the job is complete again");
+        assertTrue(restamped.after(FIRST_COMPLETION),
+            "and records when the rerun finished, not its first completion");
     }
 
     /** Only the last of the rerun's pairs to finish completes the job. */
@@ -138,11 +138,11 @@ public class RerunClearsJobCompletionSqlTest extends Common {
 
         callVoid("SELECT starexec.SetBrokenPairStatus(?, ?, ?)", pairA,
             StatusCode.STATUS_PENDING_SUBMIT.getVal(), StatusCode.ERROR_SUBMIT_FAIL.getVal());
-        assertNull("B is still pending", completed(jobId));
+        assertNull(completed(jobId), "B is still pending");
 
         callVoid("SELECT starexec.SetBrokenPairStatus(?, ?, ?)", pairB,
             StatusCode.STATUS_PENDING_SUBMIT.getVal(), StatusCode.ERROR_SUBMIT_FAIL.getVal());
-        assertNotNull("the last one completes it", completed(jobId));
+        assertNotNull(completed(jobId), "the last one completes it");
     }
 
     @Test

@@ -1,0 +1,88 @@
+// =============================================================================
+// JQUERY UI ICONS
+// =============================================================================
+// jQuery UI draws .ui-icon-* from a PNG sprite. Every class StarExec uses, and
+// every class the jQuery UI widgets emit themselves (dialog close and resize,
+// datepicker, menus), is mapped to a vendored Lucide icon and drawn as a mask in
+// the current text colour (see global/_icon-data.scss).
+// An unmapped class stays invisible rather than showing a solid square, and
+// WebAssetReferencesTest fails the build when a used class is missing from this map.
+// =============================================================================
+
+$ui-icons: (
+  "alert": "triangle-alert",
+  "arrowrefresh-1-e": "refresh-cw",
+  "arrowrefresh-1-s": "refresh-ccw",
+  "arrowreturnthick-1-e": "redo-2",
+  "arrowreturnthick-1-w": "undo-2",
+  "arrowthick-1-e": "arrow-right",
+  "arrowthick-1-n": "arrow-up",
+  "arrowthick-1-s": "arrow-down",
+  "arrowthick-1-w": "arrow-left",
+  "arrowthick-2-n-s": "arrow-up-down",
+  "carat-2-n-s": "chevrons-up-down",
+  "caret-1-e": "chevron-right",
+  "check": "check",
+  "circle-arrow-n": "circle-arrow-up",
+  "circle-check": "circle-check",
+  "circle-close": "circle-x",
+  "circle-triangle-e": "circle-chevron-right",
+  "circle-triangle-w": "circle-chevron-left",
+  "circlesmall-minus": "circle-minus",
+  "circlesmall-plus": "circle-plus",
+  "clipboard": "clipboard",
+  "close": "x",
+  "closethick": "x",
+  "copy": "copy",
+  "disk": "save",
+  "document": "file-text",
+  "extlink": "external-link",
+  "folder-collapsed": "folder",
+  "folder-open": "folder-open",
+  "gear": "settings",
+  "gripsmall-diagonal-se": "grip",
+  "help": "circle-question-mark",
+  "home": "house",
+  "info": "info",
+  "lightbulb": "lightbulb",
+  "link": "link",
+  "locked": "lock",
+  "mail-closed": "mail",
+  "minus": "minus",
+  "minusthick": "minus",
+  "newwin": "square-arrow-out-up-right",
+  "pause": "pause",
+  "pencil": "pencil",
+  "person": "user",
+  "play": "play",
+  "plus": "plus",
+  "plusthick": "plus",
+  "power": "power",
+  "refresh": "refresh-cw",
+  "script": "scroll-text",
+  "search": "search",
+  "star": "star",
+  "transferthick-e-w": "arrow-left-right",
+  "trash": "trash-2",
+  "triangle-1-e": "chevron-right",
+  "triangle-1-n": "chevron-up",
+  "triangle-1-s": "chevron-down",
+  "unlocked": "lock-open",
+);
+
+.ui-icon {
+  // !important: jquery-ui.css sets the sprite through selectors such as
+  // .ui-state-hover .ui-icon that a component rule cannot otherwise outrank.
+  background-image: none !important;
+  background-color: transparent;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+}
+
+@each $class, $icon in $ui-icons {
+  .ui-icon-#{$class} {
+    background-color: currentcolor;
+    mask-image: icon($icon);
+  }
+}

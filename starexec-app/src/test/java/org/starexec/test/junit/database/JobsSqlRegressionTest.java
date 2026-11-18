@@ -1,7 +1,7 @@
 package org.starexec.test.junit.database;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.PaginationQueries;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
@@ -25,13 +25,12 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 public class JobsSqlRegressionTest extends Common {
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() throws IOException {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobsSqlRegressionTest");
 		Common.initialize();
@@ -46,10 +45,10 @@ public class JobsSqlRegressionTest extends Common {
 		withFixture(fixture -> {
 			Job matrixJob = Jobs.getJobForMatrix(fixture.jobId);
 
-			assertNotNull("Matrix job should load", matrixJob);
-			assertEquals("Loaded job id should match fixture", fixture.jobId, matrixJob.getId());
-			assertNotNull("Matrix job pairs should be populated", matrixJob.getJobPairs());
-			assertEquals("Matrix job should contain exactly one pair", 1, matrixJob.getJobPairs().size());
+			assertNotNull(matrixJob, "Matrix job should load");
+			assertEquals(fixture.jobId, matrixJob.getId(), "Loaded job id should match fixture");
+			assertNotNull(matrixJob.getJobPairs(), "Matrix job pairs should be populated");
+			assertEquals(1, matrixJob.getJobPairs().size(), "Matrix job should contain exactly one pair");
 
 			assertPairLoaded(matrixJob.getJobPairs().get(0), fixture, false);
 		});
@@ -60,8 +59,8 @@ public class JobsSqlRegressionTest extends Common {
 		withFixture(fixture -> {
 			List<JobPair> pairs = Jobs.getNewCompletedPairsDetailed(fixture.jobId, 0);
 
-			assertNotNull("Completed job pairs should load", pairs);
-			assertEquals("Completed query should return exactly one pair", 1, pairs.size());
+			assertNotNull(pairs, "Completed job pairs should load");
+			assertEquals(1, pairs.size(), "Completed query should return exactly one pair");
 
 			assertPairLoaded(pairs.get(0), fixture, true);
 		});
@@ -114,14 +113,14 @@ public class JobsSqlRegressionTest extends Common {
 		for (String pairType : Arrays.asList("solved", "wrong", "unknown")) {
 			int expectedCount = pairType.equals(expectedType) ? 1 : 0;
 			assertEquals(
-					"Count classification should match for pairType=" + pairType,
 					expectedCount,
 					Jobs.getCountOfJobPairsByConfigInJobSpaceHierarchy(
 							fixture.jobSpaceId,
 							fixture.configId,
 							pairType,
 							"",
-							stageNumber));
+							stageNumber),
+					"Count classification should match for pairType=" + pairType);
 
 			List<JobPair> pairs = Jobs.getJobPairsForTableInJobSpaceHierarchy(
 					fixture.jobSpaceId,
@@ -129,11 +128,11 @@ public class JobsSqlRegressionTest extends Common {
 					fixture.configId,
 					stageNumber,
 					pairType);
-			assertNotNull("Pagination query should return a non-null list", pairs);
+			assertNotNull(pairs, "Pagination query should return a non-null list");
 			assertEquals(
-					"Pagination classification should match for pairType=" + pairType,
 					expectedCount,
-					pairs.size());
+					pairs.size(),
+					"Pagination classification should match for pairType=" + pairType);
 		}
 	}
 
@@ -441,36 +440,36 @@ public class JobsSqlRegressionTest extends Common {
 	}
 
 	private static void assertPairLoaded(JobPair pair, Fixture fixture, boolean expectCompletionId) {
-		assertNotNull("Job pair should be present", pair);
-		assertEquals("Pair id should match fixture", fixture.pairId, pair.getId());
-		assertEquals("Pair job id should match fixture", fixture.jobId, pair.getJobId());
-		assertEquals("Pair status should round-trip through the detailed pair query",
-				StatusCode.STATUS_COMPLETE, pair.getStatus().getCode());
-		assertEquals("Pair job space id should match fixture", fixture.jobSpaceId, pair.getJobSpaceId());
-		assertFalse("Pair path should be populated", pair.getPath().isEmpty());
+		assertNotNull(pair, "Job pair should be present");
+		assertEquals(fixture.pairId, pair.getId(), "Pair id should match fixture");
+		assertEquals(fixture.jobId, pair.getJobId(), "Pair job id should match fixture");
+		assertEquals(StatusCode.STATUS_COMPLETE,
+				pair.getStatus().getCode(), "Pair status should round-trip through the detailed pair query");
+		assertEquals(fixture.jobSpaceId, pair.getJobSpaceId(), "Pair job space id should match fixture");
+		assertFalse(pair.getPath().isEmpty(), "Pair path should be populated");
 
 		if (expectCompletionId) {
-			assertEquals("Completion id should round-trip through the completed-pair query",
-					fixture.completionId, pair.getCompletionId());
+			assertEquals(fixture.completionId,
+					pair.getCompletionId(), "Completion id should round-trip through the completed-pair query");
 		}
 
-		assertNotNull("Primary stage should be present", pair.getPrimaryStage());
-		assertEquals("Primary stage number should match fixture", Integer.valueOf(1), pair.getPrimaryStage().getStageNumber());
-		assertNotNull("Primary stage solver should be present", pair.getPrimaryStage().getSolver());
+		assertNotNull(pair.getPrimaryStage(), "Primary stage should be present");
+		assertEquals(Integer.valueOf(1), pair.getPrimaryStage().getStageNumber(), "Primary stage number should match fixture");
+		assertNotNull(pair.getPrimaryStage().getSolver(), "Primary stage solver should be present");
 
 		Solver solver = pair.getPrimaryStage().getSolver();
-		assertEquals("Solver id should round-trip through the detailed pair query", fixture.solverId, solver.getId());
-		assertEquals("Solver name should round-trip through the detailed pair query", fixture.solverName, solver.getName());
+		assertEquals(fixture.solverId, solver.getId(), "Solver id should round-trip through the detailed pair query");
+		assertEquals(fixture.solverName, solver.getName(), "Solver name should round-trip through the detailed pair query");
 
-		assertEquals("Configuration id should round-trip through the detailed pair query", fixture.configId,
-				pair.getPrimaryStage().getConfiguration().getId());
-		assertEquals("Configuration name should round-trip through the detailed pair query", fixture.configName,
-				pair.getPrimaryStage().getConfiguration().getName());
+		assertEquals(fixture.configId, pair.getPrimaryStage().getConfiguration().getId(),
+				"Configuration id should round-trip through the detailed pair query");
+		assertEquals(fixture.configName, pair.getPrimaryStage().getConfiguration().getName(),
+				"Configuration name should round-trip through the detailed pair query");
 
 		Benchmark benchmark = pair.getBench();
-		assertNotNull("Benchmark should be present", benchmark);
-		assertEquals("Benchmark id should round-trip through the detailed pair query", fixture.benchmarkId, benchmark.getId());
-		assertEquals("Benchmark name should round-trip through the detailed pair query", fixture.benchmarkName, benchmark.getName());
+		assertNotNull(benchmark, "Benchmark should be present");
+		assertEquals(fixture.benchmarkId, benchmark.getId(), "Benchmark id should round-trip through the detailed pair query");
+		assertEquals(fixture.benchmarkName, benchmark.getName(), "Benchmark name should round-trip through the detailed pair query");
 	}
 
 	private static final class Fixture {

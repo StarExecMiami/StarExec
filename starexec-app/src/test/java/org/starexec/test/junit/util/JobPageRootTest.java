@@ -1,14 +1,14 @@
 package org.starexec.test.junit.util;
 
 import javax.servlet.http.HttpServletRequest;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.starexec.util.JspHelpers;
 import org.starexec.util.Util;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
  * The root the job page builds its links on: matrix view, attributes, solver comparison,
@@ -27,7 +27,7 @@ public class JobPageRootTest {
 
 	private HttpServletRequest request;
 
-	@Before
+	@BeforeEach
 	public void requestBehindTwoProxies() {
 		request = Mockito.mock(HttpServletRequest.class);
 		Mockito.when(request.getContextPath()).thenReturn("/starexec");

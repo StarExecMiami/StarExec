@@ -44,7 +44,6 @@
     "no-duplicate-selectors": true,
     "font-family-name-quotes": "always-where-recommended",
     "function-url-quotes": "always",
-    "string-quotes": "double",
     "unit-allowed-list": ["rem", "em", "px", "%", "vh", "vw", "vmin", "vmax", "s", "ms", "deg", "fr"],
     "scss/at-import-partial-extension": null,
     "scss/at-import-no-partial-leading-underscore": null,
@@ -58,7 +57,7 @@
   ],
   "overrides": [
     {
-      "files": ["**/components/buttons.scss", "**/components/jquery-ui-dark.scss"],
+      "files": ["**/components/_button.scss", "**/components/_jquery-ui-dark.scss"],
       "rules": {
         "declaration-no-important": null
       }

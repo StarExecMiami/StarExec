@@ -25,7 +25,7 @@
 
 	<div id="explorer">
 		<h3>official</h3>
-		<ul id="exploreList"></ul>
+		<ul id="exploreList" class="community-tree"></ul>
 		<div id="explorerAction">
 			<ul id="exploreActions">
 				<li><a type="btnRun" id="newCommunity"

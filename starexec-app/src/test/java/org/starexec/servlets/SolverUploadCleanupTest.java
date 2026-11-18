@@ -1,11 +1,10 @@
 package org.starexec.servlets;
 
 import org.apache.commons.io.FileUtils;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.starexec.constants.R;
 import org.starexec.data.database.ErrorLogs;
@@ -33,10 +32,10 @@ import java.util.HashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -48,6 +47,7 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * A solver upload that does not add its solver leaves no files behind, including when its user
@@ -65,8 +65,8 @@ public class SolverUploadCleanupTest {
 	private static final int SOLVER_ID = 77;
 	private static final String NAME = "synthetic-solver";
 
-	@Rule
-	public TemporaryFolder tmp = new TemporaryFolder();
+	@TempDir
+	public File tmp;
 
 	private final AtomicBoolean ownerExists = new AtomicBoolean(true);
 	private final AtomicInteger inserts = new AtomicInteger();
@@ -86,15 +86,15 @@ public class SolverUploadCleanupTest {
 	private String descriptionInArchive;
 	private long diskQuota = 1_000_000;
 
-	@BeforeClass
+	@BeforeAll
 	public static void compileValidatorPatterns() {
 		Validator.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void upload() throws IOException {
-		root = tmp.newFolder("Solvers");
-		sandbox = tmp.newFolder("sandbox");
+		root = newFolder(tmp, "Solvers");
+		sandbox = newFolder(tmp, "sandbox");
 		neighbour = new File(root, "6/cvc5/20261018-10.00.00.000/bin/starexec_run_default");
 		write(neighbour, "#!/bin/sh\n");
 
@@ -127,7 +127,7 @@ public class SolverUploadCleanupTest {
 
 		verify(response).sendRedirect(endsWith("secure/details/solver.jsp?id=" + SOLVER_ID));
 		assertTrue(new File(onlySolverDirectory(), "bin/starexec_run_default").isFile());
-		assertFalse("the sandbox is deleted", sandbox.exists());
+		assertFalse(sandbox.exists(), "the sandbox is deleted");
 	}
 
 	@Test
@@ -156,7 +156,7 @@ public class SolverUploadCleanupTest {
 		post();
 
 		verifyInternalError();
-		assertEquals("the insert was attempted and refused", 1, inserts.get());
+		assertEquals(1, inserts.get(), "the insert was attempted and refused");
 		assertNothingLeftForTheOwner();
 	}
 
@@ -168,7 +168,7 @@ public class SolverUploadCleanupTest {
 		post();
 
 		verifyInternalError();
-		assertEquals("the archive was extracted, so the deletion ran mid-upload", 1, extractions.get());
+		assertEquals(1, extractions.get(), "the archive was extracted, so the deletion ran mid-upload");
 		assertNothingLeftForTheOwner();
 	}
 
@@ -181,7 +181,7 @@ public class SolverUploadCleanupTest {
 
 		verify(response).sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
 				"Could not find the user uploading this solver");
-		assertEquals("no insert is attempted", 0, inserts.get());
+		assertEquals(0, inserts.get(), "no insert is attempted");
 		assertNothingLeftForTheOwner();
 	}
 
@@ -218,7 +218,7 @@ public class SolverUploadCleanupTest {
 
 		verify(response).sendError(HttpServletResponse.SC_BAD_REQUEST,
 				UploadSolverStatus.DESCRIPTION_MALFORMED.message);
-		assertEquals("the files were copied before the description was read", 1, extractions.get());
+		assertEquals(1, extractions.get(), "the files were copied before the description was read");
 		assertEquals(0, inserts.get());
 		assertArrayEquals(new File[0], solverDirectories());
 	}
@@ -319,10 +319,10 @@ public class SolverUploadCleanupTest {
 	}
 
 	private void assertNothingLeftForTheOwner() {
-		assertFalse("nothing is left under the deleted user's solver directory",
-				new File(root, "" + OWNER).exists());
-		assertTrue("another user's solver is untouched", neighbour.isFile());
-		assertFalse("the sandbox is deleted", sandbox.exists());
+		assertFalse(new File(root, "" + OWNER).exists(),
+				"nothing is left under the deleted user's solver directory");
+		assertTrue(neighbour.isFile(), "another user's solver is untouched");
+		assertFalse(sandbox.exists(), "the sandbox is deleted");
 	}
 
 	/** The directories under the owner's directory for the solver's name. */

@@ -1,9 +1,8 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.After;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -13,10 +12,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * Whether the jobscript reads a stage's deadlock watchdog as having fired.
@@ -43,8 +43,8 @@ public class DeadlockWatchdogFiredTest {
 
 	private static final String REPORT = "echo \"T-DEADLOCKED=$JOB_PAIR_DEADLOCKED\"\n";
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	/** A watchdog that slept out the stage's budget and killed its tree: the stage was deadlocked. */
 	@Test
@@ -55,8 +55,8 @@ public class DeadlockWatchdogFiredTest {
 				+ JobscriptBlocks.deadlockCheck() + "\n"
 				+ REPORT);
 
-		assertEquals(r.out, 0, r.exit);
-		assertTrue("a watchdog that fired must be read as a deadlock:\n" + r.out, r.out.contains("T-DEADLOCKED=true"));
+		assertEquals(0, r.exit, r.out);
+		assertTrue(r.out.contains("T-DEADLOCKED=true"), "a watchdog that fired must be read as a deadlock:\n" + r.out);
 	}
 
 	/**
@@ -71,11 +71,11 @@ public class DeadlockWatchdogFiredTest {
 				+ JobscriptBlocks.deadlockCheck() + "\n"
 				+ REPORT);
 
-		assertEquals(r.out, 0, r.exit);
+		assertEquals(0, r.exit, r.out);
 		JobscriptBlocks.assertEndedBeforeItFired(r.out);
-		assertTrue("a watchdog killed before it fired is no deadlock:\n" + r.out, r.out.contains("T-DEADLOCKED=false"));
-		assertTrue("and the pair log must say it ended without firing:\n" + r.out,
-				r.out.contains("The deadlock watchdog ended without firing"));
+		assertTrue(r.out.contains("T-DEADLOCKED=false"), "a watchdog killed before it fired is no deadlock:\n" + r.out);
+		assertTrue(r.out.contains("The deadlock watchdog ended without firing"),
+				"and the pair log must say it ended without firing:\n" + r.out);
 	}
 
 	/** The same for a watchdog a stray TERM stopped: its trap ends it without firing. */
@@ -87,9 +87,9 @@ public class DeadlockWatchdogFiredTest {
 				+ JobscriptBlocks.deadlockCheck() + "\n"
 				+ REPORT);
 
-		assertEquals(r.out, 0, r.exit);
+		assertEquals(0, r.exit, r.out);
 		JobscriptBlocks.assertEndedBeforeItFired(r.out);
-		assertTrue("a watchdog stopped before it fired is no deadlock:\n" + r.out, r.out.contains("T-DEADLOCKED=false"));
+		assertTrue(r.out.contains("T-DEADLOCKED=false"), "a watchdog stopped before it fired is no deadlock:\n" + r.out);
 	}
 
 	/**
@@ -113,11 +113,11 @@ public class DeadlockWatchdogFiredTest {
 				+ ": > \"$SCRIPT_DIR/checked\"\n"
 				+ "wait \"$KILL_DEADLOCKED_JOB_PAIR_PID\" 2>/dev/null || true\n");
 
-		assertEquals(r.out, 0, r.exit);
-		assertFalse("the watchdog must fire:\n" + r.out, r.out.contains("T-NEVER-KILLED"));
-		assertTrue("the check must run while the watchdog is still killing, or this proves nothing:\n" + r.out,
-				r.out.contains("T-WATCHDOG-STILL-KILLING"));
-		assertTrue("a watchdog that is killing has fired:\n" + r.out, r.out.contains("T-DEADLOCKED=true"));
+		assertEquals(0, r.exit, r.out);
+		assertFalse(r.out.contains("T-NEVER-KILLED"), "the watchdog must fire:\n" + r.out);
+		assertTrue(r.out.contains("T-WATCHDOG-STILL-KILLING"),
+				"the check must run while the watchdog is still killing, or this proves nothing:\n" + r.out);
+		assertTrue(r.out.contains("T-DEADLOCKED=true"), "a watchdog that is killing has fired:\n" + r.out);
 	}
 
 	/** An earlier stage's watchdog that fired leaves its record; the next stage's check must not read it. */
@@ -130,9 +130,9 @@ public class DeadlockWatchdogFiredTest {
 				+ JobscriptBlocks.deadlockCheck() + "\n"
 				+ REPORT);
 
-		assertEquals(r.out, 0, r.exit);
+		assertEquals(0, r.exit, r.out);
 		JobscriptBlocks.assertEndedBeforeItFired(r.out);
-		assertTrue("this stage's watchdog did not fire:\n" + r.out, r.out.contains("T-DEADLOCKED=false"));
+		assertTrue(r.out.contains("T-DEADLOCKED=false"), "this stage's watchdog did not fire:\n" + r.out);
 	}
 
 	/** A record that cannot be removed ends the pair before the stage starts, rather than be read as the stage's. */
@@ -144,8 +144,8 @@ public class DeadlockWatchdogFiredTest {
 				+ "echo T-ARMED\n"
 				+ "stopDeadlockWatchdog\n");
 
-		assertNotEquals("the pair must end:\n" + r.out, 0, r.exit);
-		assertFalse("before the stage's watchdog is armed:\n" + r.out, r.out.contains("T-ARMED"));
+		assertNotEquals(0, r.exit, "the pair must end:\n" + r.out);
+		assertFalse(r.out.contains("T-ARMED"), "before the stage's watchdog is armed:\n" + r.out);
 	}
 
 	/**
@@ -165,11 +165,11 @@ public class DeadlockWatchdogFiredTest {
 				+ "sleep 0.2\n"
 				+ "if kill -0 \"$GC\" 2>/dev/null; then echo T-GRANDCHILD-ALIVE; else echo T-GRANDCHILD-GONE; fi\n");
 
-		assertEquals(r.out, 0, r.exit);
-		assertTrue("the hung child must be killed:\n" + r.out, r.out.contains("T-FOREGROUND-ENDED"));
-		assertTrue("its grandchild must be killed too:\n" + r.out, r.out.contains("T-GRANDCHILD-GONE"));
-		assertTrue("the pair log must say the record could not be written:\n" + r.out,
-				r.out.contains("could not record that it fired"));
+		assertEquals(0, r.exit, r.out);
+		assertTrue(r.out.contains("T-FOREGROUND-ENDED"), "the hung child must be killed:\n" + r.out);
+		assertTrue(r.out.contains("T-GRANDCHILD-GONE"), "its grandchild must be killed too:\n" + r.out);
+		assertTrue(r.out.contains("could not record that it fired"),
+				"the pair log must say the record could not be written:\n" + r.out);
 	}
 
 	// ----------------------------------------------------------------- harness
@@ -177,7 +177,7 @@ public class DeadlockWatchdogFiredTest {
 	private final List<Path> scriptDirs = new ArrayList<>();
 
 	/** Every PID a case records in its pids file is killed here, pass or fail: a watchdog's sleep outlives it. */
-	@After
+	@AfterEach
 	public void killRecordedProcesses() throws Exception {
 		for (Path dir : scriptDirs) {
 			Path pids = dir.resolve("pids");
@@ -195,7 +195,7 @@ public class DeadlockWatchdogFiredTest {
 
 	/** Runs {@code body} after sourcing the shipped functions.bash, in container mode, as DeadlockWatchdogReapTest does. */
 	private Result runWithHelper(String body) throws Exception {
-		Path dir = folder.newFolder("fired-" + System.nanoTime()).toPath();
+		Path dir = newFolder(folder, "fired-" + System.nanoTime()).toPath();
 		scriptDirs.add(dir);
 		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
 		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
@@ -227,7 +227,7 @@ public class DeadlockWatchdogFiredTest {
 			p.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
 		}
 		String out = Files.readString(log.toPath(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang:\n" + out, finished);
+		assertTrue(finished, "command must not hang:\n" + out);
 		return new Result(p.exitValue(), out);
 	}
 

@@ -1,6 +1,6 @@
 package org.starexec.data.database;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.starexec.data.to.UploadJob;
 
@@ -8,8 +8,8 @@ import java.lang.reflect.Method;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * An upload by URL is enqueued with its address, and the worker reads it back from the claimed

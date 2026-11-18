@@ -1,10 +1,11 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.lang.reflect.Method;
-import org.junit.Test;
+
+import org.junit.jupiter.api.Test;
 import org.starexec.data.to.Status.StatusCode;
 
 /**
@@ -39,8 +40,8 @@ public class RunsolverVerdictTests {
     @Test
     public void aCleanRunIsNotClassifiedAsALimitBreach() throws Exception {
         assertNull(
-            "with no limit reported, the caller decides the status by other means",
-            classify(false, false, false, false, false)
+            classify(false, false, false, false, false),
+            "with no limit reported, the caller decides the status by other means"
         );
     }
 
@@ -53,10 +54,10 @@ public class RunsolverVerdictTests {
     @Test
     public void aTimeoutWithNoProseIsStillATimeout() throws Exception {
         assertEquals(
-            "TIMEOUT=true must classify a limit breach on its own; depending on the"
-                + " English prose is what let timeouts be recorded as completions",
             StatusCode.EXCEED_CPU,
-            classify(true, false, false, false, false)
+            classify(true, false, false, false, false),
+            "TIMEOUT=true must classify a limit breach on its own; depending on the"
+                + " English prose is what let timeouts be recorded as completions"
         );
     }
 
@@ -108,9 +109,9 @@ public class RunsolverVerdictTests {
     @Test
     public void memoryProseOutranksAnAmbiguousTimeout() throws Exception {
         assertEquals(
-            "a named memory kill is more specific than an undiscriminated TIMEOUT",
             StatusCode.EXCEED_MEM,
-            classify(true, false, false, false, true)
+            classify(true, false, false, false, true),
+            "a named memory kill is more specific than an undiscriminated TIMEOUT"
         );
     }
 }

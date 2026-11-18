@@ -1,6 +1,6 @@
 package org.starexec.servlets;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.UploadArtifactCleanupRepository;
@@ -12,9 +12,9 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.util.List;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 public class UploadArtifactCleanupWorkerTests {
@@ -120,8 +120,8 @@ public class UploadArtifactCleanupWorkerTests {
             UploadArtifactCleanupWorker.CleanupSummary summary = worker.runSweep(connection);
 
             assertEquals(1, summary.failed);
-            assertTrue("Artifact directory must remain when symlink deletion is rejected", Files.exists(directory));
-            assertTrue("Symlink target must not be deleted", Files.exists(outside));
+            assertTrue(Files.exists(directory), "Artifact directory must remain when symlink deletion is rejected");
+            assertTrue(Files.exists(outside), "Symlink target must not be deleted");
             repo.verify(() -> UploadArtifactCleanupRepository.markFailed(
                 Mockito.eq(connection),
                 Mockito.eq(artifact.getId()),
@@ -176,7 +176,7 @@ public class UploadArtifactCleanupWorkerTests {
             UploadArtifactCleanupWorker.CleanupSummary summary = worker.runSweep(connection);
 
             assertEquals(1, summary.failed);
-            assertTrue("Unowned artifact must not be deleted", Files.exists(archive));
+            assertTrue(Files.exists(archive), "Unowned artifact must not be deleted");
             repo.verify(() -> UploadArtifactCleanupRepository.markFailed(
                 connection,
                 artifact.getId(),

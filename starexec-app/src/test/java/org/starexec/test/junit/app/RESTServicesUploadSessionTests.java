@@ -1,6 +1,6 @@
 package org.starexec.test.junit.app;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.app.RESTServices;
@@ -24,8 +24,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RESTServicesUploadSessionTests {
 
@@ -370,9 +370,9 @@ public class RESTServicesUploadSessionTests {
 			threw = e.getCause() instanceof java.nio.file.FileAlreadyExistsException;
 		}
 
-		assertTrue("Expected FileAlreadyExistsException when target exists", threw);
-		assertTrue("Target file should remain present", Files.exists(target));
-		assertTrue("Source file should remain present after failed move", Files.exists(source));
+		assertTrue(threw, "Expected FileAlreadyExistsException when target exists");
+		assertTrue(Files.exists(target), "Target file should remain present");
+		assertTrue(Files.exists(source), "Source file should remain present after failed move");
 		assertTrue(new String(Files.readAllBytes(target), StandardCharsets.UTF_8).equals("target-data"));
 
 		Files.deleteIfExists(source);
@@ -474,8 +474,8 @@ public class RESTServicesUploadSessionTests {
 
 			String response = services.uploadSessionChunk(4343L, 0, request);
 
-			assertFalse("the deleted user's directory is created again", Files.exists(userDir));
-			assertTrue(response, response.contains("\"success\":false"));
+			assertFalse(Files.exists(userDir), "the deleted user's directory is created again");
+			assertTrue(response.contains("\"success\":false"), response);
 		} finally {
 			org.apache.commons.io.FileUtils.deleteQuietly(userDir.toFile());
 		}

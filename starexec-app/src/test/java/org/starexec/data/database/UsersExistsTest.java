@@ -1,7 +1,7 @@
 package org.starexec.data.database;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
 import java.sql.Connection;
@@ -9,10 +9,10 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -32,7 +32,7 @@ public class UsersExistsTest {
 	private final PreparedStatement statement = mock(PreparedStatement.class);
 	private final ResultSet results = mock(ResultSet.class);
 
-	@Before
+	@BeforeEach
 	public void stubTheConnection() throws SQLException {
 		when(connection.prepareStatement(anyString())).thenReturn(statement);
 		when(statement.executeQuery()).thenReturn(results);

@@ -1,6 +1,6 @@
 package org.starexec.test.unit.database;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,8 +12,8 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * On the job-creation path, a method that takes a {@code Connection} borrows it.
@@ -85,10 +85,10 @@ public class BorrowedConnectionPolicyTest {
 			}
 		}
 
-		assertTrue("the path is no longer being read; check the method names in PATH",
-				borrowedSeen >= PATH.values().stream().mapToInt(List::size).sum());
-		assertEquals("borrowed-connection methods must leave the transaction to its owner",
-				List.of(), violations);
+		assertTrue(borrowedSeen >= PATH.values().stream().mapToInt(List::size).sum(),
+				"the path is no longer being read; check the method names in PATH");
+		assertEquals(List.of(),
+				violations, "borrowed-connection methods must leave the transaction to its owner");
 	}
 
 	/** The owners must still exist, or "nothing manages the connection" is trivially true. */
@@ -100,8 +100,8 @@ public class BorrowedConnectionPolicyTest {
 				owners.add(method.name);
 			}
 		}
-		assertTrue("Common must provide the transaction owner: " + owners,
-				owners.contains("runTransactional") && owners.contains("inTransaction"));
+		assertTrue(owners.contains("runTransactional") && owners.contains("inTransaction"),
+				"Common must provide the transaction owner: " + owners);
 	}
 
 	// ------------------------------------------------------------------ parsing

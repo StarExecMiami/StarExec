@@ -1,6 +1,6 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.R;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.to.SolverStats;
@@ -14,9 +14,9 @@ import java.util.EnumSet;
 import java.util.Properties;
 import java.util.Set;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * How one stage is counted in a job's per-solver summary (#198).
@@ -65,8 +65,8 @@ public class SolverStatsClassificationTest {
 		for (StatusCode code : StatusCode.values()) {
 			int buckets = (FAILED.contains(code) ? 1 : 0) + (INCOMPLETE.contains(code) ? 1 : 0)
 					+ (COMPLETE.contains(code) ? 1 : 0);
-			assertEquals(code + " must be exactly one of failed, incomplete or complete",
-					1, buckets);
+			assertEquals(1,
+					buckets, code + " must be exactly one of failed, incomplete or complete");
 		}
 	}
 
@@ -80,12 +80,12 @@ public class SolverStatsClassificationTest {
 		add(stats, stage(StatusCode.EXCEED_RUNTIME));
 		add(stats, stage(StatusCode.EXCEED_RUNTIME));
 
-		assertEquals("complete", 5, stats.getCompleteJobPairs());
-		assertEquals("resource out", 2, stats.getResourceOutJobPairs());
-		assertEquals("correct", 2, stats.getCorrectJobPairs());
-		assertEquals("incorrect", 0, stats.getIncorrectJobPairs());
-		assertEquals("unknown", 1, stats.getUnknown());
-		assertEquals("solved column", "2/5", stats.getCorrectOverCompleted());
+		assertEquals(5, stats.getCompleteJobPairs(), "complete");
+		assertEquals(2, stats.getResourceOutJobPairs(), "resource out");
+		assertEquals(2, stats.getCorrectJobPairs(), "correct");
+		assertEquals(0, stats.getIncorrectJobPairs(), "incorrect");
+		assertEquals(1, stats.getUnknown(), "unknown");
+		assertEquals("2/5", stats.getCorrectOverCompleted(), "solved column");
 	}
 
 	@Test
@@ -94,8 +94,8 @@ public class SolverStatsClassificationTest {
 		for (StatusCode code : RESOURCE_OUT) {
 			add(stats, stage(code));
 		}
-		assertEquals("unknown", 0, stats.getUnknown());
-		assertEquals("complete", RESOURCE_OUT.size(), stats.getCompleteJobPairs());
+		assertEquals(0, stats.getUnknown(), "unknown");
+		assertEquals(RESOURCE_OUT.size(), stats.getCompleteJobPairs(), "complete");
 	}
 
 	/** One stage for every status code, plus the three outcomes a completed stage can have. */
@@ -112,15 +112,15 @@ public class SolverStatsClassificationTest {
 		add(stats, unknownResult());
 
 		int completedStages = 3;
-		assertEquals("failed", FAILED.size(), stats.getFailedJobPairs());
-		assertEquals("incomplete", INCOMPLETE.size(), stats.getIncompleteJobPairs());
-		assertEquals("resource out", RESOURCE_OUT.size(), stats.getResourceOutJobPairs());
-		assertEquals("complete", completedStages + RESOURCE_OUT.size(),
-				stats.getCompleteJobPairs());
-		assertEquals("correct", 1, stats.getCorrectJobPairs());
-		assertEquals("incorrect", 1, stats.getIncorrectJobPairs());
-		assertEquals("unknown", 1, stats.getUnknown());
-		assertTrue("unknown is never negative", stats.getUnknown() >= 0);
+		assertEquals(FAILED.size(), stats.getFailedJobPairs(), "failed");
+		assertEquals(INCOMPLETE.size(), stats.getIncompleteJobPairs(), "incomplete");
+		assertEquals(RESOURCE_OUT.size(), stats.getResourceOutJobPairs(), "resource out");
+		assertEquals(completedStages + RESOURCE_OUT.size(), stats.getCompleteJobPairs(),
+				"complete");
+		assertEquals(1, stats.getCorrectJobPairs(), "correct");
+		assertEquals(1, stats.getIncorrectJobPairs(), "incorrect");
+		assertEquals(1, stats.getUnknown(), "unknown");
+		assertTrue(stats.getUnknown() >= 0, "unknown is never negative");
 	}
 
 	private static JoblineStage stage(StatusCode code) {

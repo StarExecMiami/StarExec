@@ -2,10 +2,9 @@ package org.starexec.data.database;
 
 import com.google.gson.Gson;
 import org.apache.commons.io.FileUtils;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
@@ -23,15 +22,16 @@ import java.sql.SQLException;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * An upload session that is not created leaves no directory behind, including when its user is
@@ -47,8 +47,8 @@ public class UploadSessionCreateCleanupTest {
 	private static final int OWNER = 5;
 	private static final long SESSION_ID = 17L;
 
-	@Rule
-	public TemporaryFolder tmp = new TemporaryFolder();
+	@TempDir
+	public File tmp;
 
 	private final AtomicBoolean ownerExists = new AtomicBoolean(true);
 	private File root;
@@ -57,9 +57,9 @@ public class UploadSessionCreateCleanupTest {
 	/** Runs once, the first time the benchmark root is asked for: just before the directory is made. */
 	private Runnable beforeDirectory = () -> { };
 
-	@Before
+	@BeforeEach
 	public void setUp() throws IOException {
-		root = tmp.newFolder("Benchmarks");
+		root = newFolder(tmp, "Benchmarks");
 		neighbour = new File(root, "6/20261018-10.00.00.000/other.smt2");
 		Files.createDirectories(neighbour.getParentFile().toPath());
 		Files.writeString(neighbour.toPath(), "(check-sat)\n");
@@ -84,7 +84,7 @@ public class UploadSessionCreateCleanupTest {
 		Optional<UploadSession> session = create();
 
 		assertFalse(session.isPresent());
-		assertArrayEquals("no directory is left", new File[0], ownerDirectories());
+		assertArrayEquals(new File[0], ownerDirectories(), "no directory is left");
 	}
 
 	/** The race from #275: the user is deleted just before the session's directory is made. */
@@ -95,9 +95,9 @@ public class UploadSessionCreateCleanupTest {
 		Optional<UploadSession> session = create();
 
 		assertFalse(session.isPresent());
-		assertFalse("nothing is left under the deleted user's benchmark directory",
-				new File(root, "" + OWNER).exists());
-		assertTrue("another user's benchmark is untouched", neighbour.isFile());
+		assertFalse(new File(root, "" + OWNER).exists(),
+				"nothing is left under the deleted user's benchmark directory");
+		assertTrue(neighbour.isFile(), "another user's benchmark is untouched");
 	}
 
 	/** Users.deleteUser's end: the row is gone and the user's benchmark directory is deleted. */

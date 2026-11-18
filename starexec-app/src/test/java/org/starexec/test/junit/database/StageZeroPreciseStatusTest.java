@@ -1,13 +1,13 @@
 package org.starexec.test.junit.database;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.to.Status.StatusCode;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 /**
  * A precise stage write has to name a stage.
@@ -80,9 +80,9 @@ public class StageZeroPreciseStatusTest {
 	@Test
 	public void aStageNumberInRangeIsNotRefusedByTheGuard() {
 		for (int stage : new int[]{1, 2, 3, 99, Integer.MAX_VALUE}) {
-			assertNotEquals("stage " + stage + " is in range and must reach the database,"
-							+ " whether or not the pair actually has such a stage",
-					PairStatusResult.REJECTED_INVALID_STAGE, write(stage));
+			assertNotEquals(PairStatusResult.REJECTED_INVALID_STAGE,
+					write(stage), "stage " + stage + " is in range and must reach the database,"
+							+ " whether or not the pair actually has such a stage");
 		}
 	}
 

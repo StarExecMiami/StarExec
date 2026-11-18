@@ -1,6 +1,6 @@
 package org.starexec.app;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.invocation.InvocationOnMock;
 import org.starexec.data.database.Common;
@@ -29,9 +29,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 
@@ -65,12 +65,12 @@ public class ErrorLogReportTaskTest {
 		runTheTask();
 
 		assertEquals(List.of(List.of("root@example.org")), mailedTo);
-		assertTrue("the report was built from both lines", reports.get(0).contains("first old line")
-				&& reports.get(0).contains("second old line"));
-		assertTrue("no one got them, so both lines wait for the next report",
-				table.messages().containsAll(List.of("first old line", "second old line")));
-		assertTrue("the log says the lines were kept: " + table.added(),
-				table.added().stream().anyMatch(m -> m.contains("reached no one") && m.contains("kept")));
+		assertTrue(reports.get(0).contains("first old line")
+				&& reports.get(0).contains("second old line"), "the report was built from both lines");
+		assertTrue(table.messages().containsAll(List.of("first old line", "second old line")),
+				"no one got them, so both lines wait for the next report");
+		assertTrue(table.added().stream().anyMatch(m -> m.contains("reached no one") && m.contains("kept")),
+				"the log says the lines were kept: " + table.added());
 		assertRanThrough();
 	}
 
@@ -83,10 +83,10 @@ public class ErrorLogReportTaskTest {
 
 		runTheTask();
 
-		assertFalse("kept for five days, then given up", table.messages().contains("six days old"));
-		assertTrue("younger lines still wait for the next report", table.messages().contains("four days old"));
-		assertTrue("the log says what was given up: " + table.added(), table.added().stream()
-				.anyMatch(m -> m.contains("1 line(s) older than 5 days are deleted unsent")));
+		assertFalse(table.messages().contains("six days old"), "kept for five days, then given up");
+		assertTrue(table.messages().contains("four days old"), "younger lines still wait for the next report");
+		assertTrue(table.added().stream()
+				.anyMatch(m -> m.contains("1 line(s) older than 5 days are deleted unsent")), "the log says what was given up: " + table.added());
 		assertRanThrough();
 	}
 
@@ -101,10 +101,10 @@ public class ErrorLogReportTaskTest {
 		runTheTask();
 
 		assertEquals(List.of(List.of("root@example.org")), mailedTo);
-		assertFalse("the report's lines are deleted", table.messages().contains("first old line"));
-		assertFalse("the report's lines are deleted", table.messages().contains("second old line"));
-		assertTrue("a line the report did not contain waits for the next one",
-				table.messages().contains("written while sending"));
+		assertFalse(table.messages().contains("first old line"), "the report's lines are deleted");
+		assertFalse(table.messages().contains("second old line"), "the report's lines are deleted");
+		assertTrue(table.messages().contains("written while sending"),
+				"a line the report did not contain waits for the next one");
 		assertRanThrough();
 	}
 
@@ -130,8 +130,8 @@ public class ErrorLogReportTaskTest {
 
 		runTheTask();
 
-		assertFalse("no one asked for them", table.messages().contains("first old line"));
-		assertFalse("no one asked for them", table.messages().contains("second old line"));
+		assertFalse(table.messages().contains("first old line"), "no one asked for them");
+		assertFalse(table.messages().contains("second old line"), "no one asked for them");
 		assertRanThrough();
 	}
 
@@ -144,11 +144,11 @@ public class ErrorLogReportTaskTest {
 
 		runTheTask();
 
-		assertEquals("only admins and developers get the report", List.of(List.of("root@example.org")), mailedTo);
-		assertTrue("the log names the user: " + table.added(),
-				table.added().stream().anyMatch(m -> m.toLowerCase().contains("user 9")));
-		assertTrue("the log does not print the address: " + table.added(),
-				table.added().stream().noneMatch(m -> m.contains("former-admin@example.org")));
+		assertEquals(List.of(List.of("root@example.org")), mailedTo, "only admins and developers get the report");
+		assertTrue(table.added().stream().anyMatch(m -> m.toLowerCase().contains("user 9")),
+				"the log names the user: " + table.added());
+		assertTrue(table.added().stream().noneMatch(m -> m.contains("former-admin@example.org")),
+				"the log does not print the address: " + table.added());
 		assertRanThrough();
 	}
 
@@ -174,20 +174,20 @@ public class ErrorLogReportTaskTest {
 
 		runTheTask();
 
-		assertTrue("nothing is deleted when the delete fails",
-				table.messages().containsAll(List.of("first old line", "second old line")));
-		assertTrue("the failure is logged: " + table.added(), table.added().stream()
-				.anyMatch(m -> m.contains("the database refused the delete")));
+		assertTrue(table.messages().containsAll(List.of("first old line", "second old line")),
+				"nothing is deleted when the delete fails");
+		assertTrue(table.added().stream()
+				.anyMatch(m -> m.contains("the database refused the delete")), "the failure is logged: " + table.added());
 		assertEquals(List.of(), table.unexpected);
 		assertResourcesClosed();
 
 		int loggedBefore = table.added().size();
 		runTheTask();
 
-		assertEquals("the next report is sent", 2, reports.size());
-		assertTrue("with the lines the failed delete kept", reports.get(1).contains("first old line")
-				&& reports.get(1).contains("second old line"));
-		assertEquals("once it is delivered, they are deleted", List.of(), table.messages());
+		assertEquals(2, reports.size(), "the next report is sent");
+		assertTrue(reports.get(1).contains("first old line")
+				&& reports.get(1).contains("second old line"), "with the lines the failed delete kept");
+		assertEquals(List.of(), table.messages(), "once it is delivered, they are deleted");
 		assertRanThroughSince(loggedBefore);
 	}
 
@@ -200,14 +200,14 @@ public class ErrorLogReportTaskTest {
 	private void assertRanThroughSince(int from) {
 		assertEquals(List.of(), table.unexpected);
 		List<String> logged = table.added().subList(from, table.added().size());
-		assertTrue("the task failed: " + logged, logged.stream()
-				.noneMatch(m -> m.contains("caught throwable") || m.contains("Failed to send error log emails")));
+		assertTrue(logged.stream()
+				.noneMatch(m -> m.contains("caught throwable") || m.contains("Failed to send error log emails")), "the task failed: " + logged);
 		assertResourcesClosed();
 	}
 
 	private void assertResourcesClosed() {
-		assertEquals("every connection the task opened is closed", table.connections, table.closedConnections);
-		assertEquals("every statement the task prepared is closed", table.statements, table.closedStatements);
+		assertEquals(table.connections, table.closedConnections, "every connection the task opened is closed");
+		assertEquals(table.statements, table.closedStatements, "every statement the task prepared is closed");
 	}
 
 	private void twoOldLines() {

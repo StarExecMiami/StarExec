@@ -1,10 +1,10 @@
 package org.starexec.test.junit.database;
 
 import org.apache.commons.lang3.tuple.Triple;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.to.Benchmark;
@@ -21,7 +21,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * A benchmark's solver results and its conflicts are judged within one stage (#187).
@@ -84,13 +84,13 @@ public class StageMatchedConflictsSqlTest extends Common {
 	private int otherJobId;
 	private int otherSpaceId;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("StageMatchedConflictsSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			userId = selectInt(con, "SELECT min(id) FROM starexec.users");
@@ -122,7 +122,7 @@ public class StageMatchedConflictsSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		if (jobId == 0) {
 			return;
@@ -147,12 +147,12 @@ public class StageMatchedConflictsSqlTest extends Common {
 
 	@Test
 	public void eachConfigurationsConflictsAreCountedOnItsOwnStage() throws SQLException {
-		assertEquals("c1p's stage-1 result is unknown; its stage-2 result is not its conflict",
-				0, conflicts(c1p, 1));
-		assertEquals("Theorem against CounterSatisfiable", 1, conflicts(c1q, 1));
+		assertEquals(0,
+				conflicts(c1p, 1), "c1p's stage-1 result is unknown; its stage-2 result is not its conflict");
+		assertEquals(1, conflicts(c1q, 1), "Theorem against CounterSatisfiable");
 		assertEquals(1, conflicts(c1r, 1));
 
-		assertEquals("stage 2 agrees", 0, conflicts(c2p, 2));
+		assertEquals(0, conflicts(c2p, 2), "stage 2 agrees");
 		assertEquals(0, conflicts(c2q, 2));
 		assertEquals(0, conflicts(c2r, 2));
 	}
@@ -177,8 +177,8 @@ public class StageMatchedConflictsSqlTest extends Common {
 		assertEquals(List.of(), conflictingBenchmarks(c2q, 2));
 		assertEquals(List.of(), conflictingBenchmarks(c2r, 2));
 
-		assertEquals("a stage the configuration did not run",
-				List.of(), conflictingBenchmarks(c2q, 1));
+		assertEquals(List.of(),
+				conflictingBenchmarks(c2q, 1), "a stage the configuration did not run");
 	}
 
 	// ------------------------------------------------------------------- another job
@@ -229,8 +229,8 @@ public class StageMatchedConflictsSqlTest extends Common {
 					c1q, "CounterSatisfiable");
 		}
 		try {
-			assertEquals("only the stage-2 result differs between the two pairs' primaries",
-					1, conflicts(mixedJobId, c1q, 0));
+			assertEquals(1,
+					conflicts(mixedJobId, c1q, 0), "only the stage-2 result differs between the two pairs' primaries");
 			assertEquals(List.of(benchId), conflictingBenchmarks(mixedJobId, c1q, 0));
 		} finally {
 			try (Connection con = Common.getConnection()) {
@@ -249,10 +249,10 @@ public class StageMatchedConflictsSqlTest extends Common {
 	public void anotherJobsResultIsNotThisJobsConflict() throws SQLException {
 		seedOtherJob();
 
-		assertEquals("c1p's Theorem is in the other job", 0, conflicts(jobId, c1p, 1));
+		assertEquals(0, conflicts(jobId, c1p, 1), "c1p's Theorem is in the other job");
 		assertEquals(List.of(), conflictingBenchmarks(jobId, c1p, 1));
 
-		assertEquals("c1r ran only in this job", 0, conflicts(otherJobId, c1r, 1));
+		assertEquals(0, conflicts(otherJobId, c1r, 1), "c1r ran only in this job");
 		assertEquals(List.of(), conflictingBenchmarks(otherJobId, c1r, 1));
 	}
 
@@ -271,7 +271,7 @@ public class StageMatchedConflictsSqlTest extends Common {
 		assertEquals(List.of(), conflictingBenchmarks(jobId, c2q, 2));
 		assertEquals(List.of("c1q=Theorem", "c1r=CounterSatisfiable"), results(1));
 
-		assertEquals("the other job conflicts on its own results", 1, conflicts(otherJobId, c1p, 1));
+		assertEquals(1, conflicts(otherJobId, c1p, 1), "the other job conflicts on its own results");
 		assertEquals(1, conflicts(otherJobId, c1q, 1));
 		assertEquals(0, conflicts(otherJobId, c2p, 2));
 	}

@@ -1,7 +1,7 @@
 package org.starexec.test.junit.data.to;
 
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.to.Permission;
 
 import java.util.List;
@@ -28,9 +28,9 @@ public class PermissionTests {
 	public void getOffPermissionsTest() {
 		Permission p = getTestPermission();
 		List<String> perms = p.getOffPermissions();
-		Assert.assertEquals(5, perms.size());
+		Assertions.assertEquals(5, perms.size());
 		for (String s : new String[] {"addJob", "addSpace", "removeBench", "removeSolver", "removeUser"}) {
-			Assert.assertTrue(perms.contains(s));
+			Assertions.assertTrue(perms.contains(s));
 		}
 	}
 	
@@ -38,9 +38,9 @@ public class PermissionTests {
 	public void getOnPermissionsTest() {
 		Permission p = getTestPermission();
 		List<String> perms = p.getOnPermissions();
-		Assert.assertEquals(5, perms.size());
+		Assertions.assertEquals(5, perms.size());
 		for (String s : new String[] {"addBench", "addSolver", "addUser", "removeJob", "removeSpace"}) {
-			Assert.assertTrue(perms.contains(s));
+			Assertions.assertTrue(perms.contains(s));
 		}
 	}
 	

@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.R;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
 import org.starexec.data.database.Common;
@@ -22,8 +22,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * The job page's Primary solver summary (stage 0) is built from each pair's primary stage (#206).
@@ -52,13 +52,13 @@ public class PrimaryStageSummarySqlTest extends Common {
 	private int stageTwoConfig;
 	private int benchId;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("PrimaryStageSummarySqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			userId = selectInt(con, "SELECT min(id) FROM starexec.users");
@@ -107,7 +107,7 @@ public class PrimaryStageSummarySqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		if (jobId == 0) {
 			return;
@@ -129,7 +129,7 @@ public class PrimaryStageSummarySqlTest extends Common {
 	@Test
 	public void aPairReadForTheSummaryCarriesItsPrimaryStage() {
 		List<JobPair> pairs = Jobs.getJobPairsInJobSpaceHierarchy(spaceId, PrimitivesToAnonymize.NONE);
-		assertNotNull("the pairs load", pairs);
+		assertNotNull(pairs, "the pairs load");
 		assertEquals(1, pairs.size());
 		assertEquals(Integer.valueOf(2), pairs.get(0).getPrimaryStageNumber());
 	}
@@ -139,8 +139,8 @@ public class PrimaryStageSummarySqlTest extends Common {
 	public void thePrimarySummaryIsThePrimaryStagesConfigurationAndCounts() {
 		assertEquals(List.of("config=" + stageTwoConfig + " solved=1/1 wrong=0 unknown=0"),
 				summary(0));
-		assertEquals("stage 1 is still its own row",
-				List.of("config=" + stageOneConfig + " solved=0/1 wrong=1 unknown=0"), summary(1));
+		assertEquals(List.of("config=" + stageOneConfig + " solved=0/1 wrong=1 unknown=0"),
+				summary(1), "stage 1 is still its own row");
 	}
 
 	private List<String> summary(int stageNumber) {

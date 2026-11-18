@@ -1,8 +1,8 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.Backend;
@@ -31,12 +31,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -74,13 +74,13 @@ public class UsersDeletionSqlRegressionTest extends Common {
 	private int runningJobId;
 	private int runningPairId;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("UsersDeletionSqlRegressionTest");
 		Common.initialize();
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws Exception {
 		// Guaranteed teardown: DDL first, so a failed assertion can never leave a
 		// trigger armed on starexec.users for other tests.
@@ -211,7 +211,7 @@ public class UsersDeletionSqlRegressionTest extends Common {
 				ps.setObject(i + 1, values[i]);
 			}
 			try (ResultSet rs = ps.executeQuery()) {
-				assertTrue("insert must return an id", rs.next());
+				assertTrue(rs.next(), "insert must return an id");
 				return rs.getInt(1);
 			}
 		}
@@ -281,7 +281,7 @@ public class UsersDeletionSqlRegressionTest extends Common {
 	private int firstQueueId(Connection con) throws Exception {
 		try (Statement st = con.createStatement();
 			 ResultSet rs = st.executeQuery("SELECT id FROM starexec.queues ORDER BY id LIMIT 1")) {
-			assertTrue("the database fixture must provide at least one queue", rs.next());
+			assertTrue(rs.next(), "the database fixture must provide at least one queue");
 			return rs.getInt(1);
 		}
 	}
@@ -336,14 +336,14 @@ public class UsersDeletionSqlRegressionTest extends Common {
 	public void deletingAUserWithAnalyticsRowsSucceedsAndReapsItsPermissions() throws Exception {
 		int perm = buildVictimWithAnalytics();
 
-		assertTrue("deleteUser should succeed for a user with analytics rows",
-				Users.deleteUser(victimId));
+		assertTrue(Users.deleteUser(victimId),
+				"deleteUser should succeed for a user with analytics rows");
 
-		assertEquals("user row must be gone", 0, countUsers(victimId));
-		assertEquals("analytics_users rows must be gone", 0,
-				countWhere("SELECT count(*) FROM starexec.analytics_users WHERE user_id = ?", victimId));
-		assertEquals("personal space must be gone", 0, countSpaces(personalSpaceId));
-		assertEquals("the membership's permission row must not leak", 0, countPermissions(perm));
+		assertEquals(0, countUsers(victimId), "user row must be gone");
+		assertEquals(0, countWhere("SELECT count(*) FROM starexec.analytics_users WHERE user_id = ?", victimId),
+				"analytics_users rows must be gone");
+		assertEquals(0, countSpaces(personalSpaceId), "personal space must be gone");
+		assertEquals(0, countPermissions(perm), "the membership's permission row must not leak");
 	}
 
 	@Test
@@ -356,14 +356,14 @@ public class UsersDeletionSqlRegressionTest extends Common {
 		R.BACKEND = backend;
 		when(backend.killPairConfirmed(execId)).thenReturn(Backend.KillOutcome.CONFIRMED_SAFE);
 		try {
-			assertTrue("user deletion should proceed after the execution is safely retired",
-					Users.deleteUser(victimId));
+			assertTrue(Users.deleteUser(victimId),
+					"user deletion should proceed after the execution is safely retired");
 			verify(backend).killPairConfirmed(execId);
 			verify(backend).clearPairTracking(runningPairId);
-			assertEquals("the owned job must be cascaded only after its pair was stopped", 0,
-					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
-			assertEquals("the active pair must be gone after successful user deletion", 0,
-					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			assertEquals(0, countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId),
+					"the owned job must be cascaded only after its pair was stopped");
+			assertEquals(0, countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId),
+					"the active pair must be gone after successful user deletion");
 		} finally {
 			R.BACKEND = original;
 		}
@@ -389,25 +389,25 @@ public class UsersDeletionSqlRegressionTest extends Common {
 						expected.getReasonCode());
 			}
 
-			assertEquals("user must remain after tracking cleanup fails", 1, countUsers(victimId));
-			assertEquals("job must remain after tracking cleanup fails", 1,
-					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
-			assertEquals("pair must remain after tracking cleanup fails", 1,
-					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
-			assertEquals("confirmed stop must be persisted for a safe retry",
-					StatusCode.STATUS_KILLED.getVal(),
-					countWhere("SELECT status_code FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			assertEquals(1, countUsers(victimId), "user must remain after tracking cleanup fails");
+			assertEquals(1, countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId),
+					"job must remain after tracking cleanup fails");
+			assertEquals(1, countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId),
+					"pair must remain after tracking cleanup fails");
+			assertEquals(StatusCode.STATUS_KILLED.getVal(),
+					countWhere("SELECT status_code FROM starexec.job_pairs WHERE id = ?", runningPairId),
+					"confirmed stop must be persisted for a safe retry");
 			verify(backend).killPairConfirmed(execId);
 			verify(backend).clearPairTracking(runningPairId);
 
-			assertTrue("retry must retire tracking before deleting the retained rows",
-					Users.deleteUser(victimId));
-			assertEquals("user deletion should complete after tracking retirement", 0,
-					countUsers(victimId));
-			assertEquals("job must be cascaded only after tracking retirement", 0,
-					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
-			assertEquals("pair must be cascaded only after tracking retirement", 0,
-					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			assertTrue(Users.deleteUser(victimId),
+					"retry must retire tracking before deleting the retained rows");
+			assertEquals(0, countUsers(victimId),
+					"user deletion should complete after tracking retirement");
+			assertEquals(0, countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId),
+					"job must be cascaded only after tracking retirement");
+			assertEquals(0, countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId),
+					"pair must be cascaded only after tracking retirement");
 			verify(backend, Mockito.times(2)).clearPairTracking(runningPairId);
 			verify(backend, Mockito.times(1)).killPairConfirmed(execId);
 		} finally {
@@ -425,9 +425,9 @@ public class UsersDeletionSqlRegressionTest extends Common {
 		R.BACKEND = backend;
 		when(backend.killPairConfirmed(execId)).thenReturn(Backend.KillOutcome.CONFIRMED_SAFE);
 		try {
-			assertTrue("the pair should be marked killed only after a confirmed stop",
-					JobPairs.killPairConfirmed(runningPairId, execId));
-			assertTrue("a job containing only terminal pairs is complete", Jobs.isJobComplete(runningJobId));
+			assertTrue(JobPairs.killPairConfirmed(runningPairId, execId),
+					"the pair should be marked killed only after a confirmed stop");
+			assertTrue(Jobs.isJobComplete(runningJobId), "a job containing only terminal pairs is complete");
 			Mockito.doThrow(new IllegalStateException("injected one-time tracking failure"))
 					.doNothing().when(backend).clearPairTracking(runningPairId);
 
@@ -438,16 +438,16 @@ public class UsersDeletionSqlRegressionTest extends Common {
 				assertEquals(UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
 						expected.getReasonCode());
 			}
-			assertEquals("the user must remain after tracking cleanup fails", 1, countUsers(victimId));
-			assertEquals("the complete job must remain", 1,
-					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
-			assertEquals("the killed pair must remain", 1,
-					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			assertEquals(1, countUsers(victimId), "the user must remain after tracking cleanup fails");
+			assertEquals(1, countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId),
+					"the complete job must remain");
+			assertEquals(1, countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId),
+					"the killed pair must remain");
 
-			assertTrue("retry must clear tracking even though the job is already complete",
-					Users.deleteUser(victimId));
-			assertEquals("user deletion should complete after tracking retirement", 0,
-					countUsers(victimId));
+			assertTrue(Users.deleteUser(victimId),
+					"retry must clear tracking even though the job is already complete");
+			assertEquals(0, countUsers(victimId),
+					"user deletion should complete after tracking retirement");
 			verify(backend, Mockito.times(2)).clearPairTracking(runningPairId);
 			verify(backend, Mockito.times(1)).killPairConfirmed(execId);
 		} finally {
@@ -472,11 +472,11 @@ public class UsersDeletionSqlRegressionTest extends Common {
 				assertEquals(UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
 						expected.getReasonCode());
 			}
-			assertEquals("the user must remain after an unproven kill", 1, countUsers(victimId));
-			assertEquals("the job must remain after an unproven kill", 1,
-					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
-			assertEquals("the pair must remain after an unproven kill", 1,
-					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			assertEquals(1, countUsers(victimId), "the user must remain after an unproven kill");
+			assertEquals(1, countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId),
+					"the job must remain after an unproven kill");
+			assertEquals(1, countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId),
+					"the pair must remain after an unproven kill");
 			assertEquals(StatusCode.STATUS_RUNNING.getVal(),
 					countWhere("SELECT status_code FROM starexec.job_pairs WHERE id = ?", runningPairId));
 			verify(backend, org.mockito.Mockito.never()).clearPairTracking(org.mockito.ArgumentMatchers.anyInt());
@@ -504,13 +504,13 @@ public class UsersDeletionSqlRegressionTest extends Common {
 						expected.getReasonCode());
 			}
 
-			assertEquals("the user must remain when active pairs could not be enumerated",
-					1, countUsers(victimId));
-			assertEquals("the job must remain when active pairs could not be enumerated",
-					1, countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
-			assertEquals("the running pair must remain when enumeration failed",
-					1, countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?"
-							+ " AND status_code = " + StatusCode.STATUS_RUNNING.getVal(), runningPairId));
+			assertEquals(1,
+					countUsers(victimId), "the user must remain when active pairs could not be enumerated");
+			assertEquals(1,
+					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId), "the job must remain when active pairs could not be enumerated");
+			assertEquals(1,
+					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?"
+							+ " AND status_code = " + StatusCode.STATUS_RUNNING.getVal(), runningPairId), "the running pair must remain when enumeration failed");
 			Mockito.verify(backend, Mockito.never())
 					.killPairConfirmed(Mockito.anyInt());
 		} finally {
@@ -543,8 +543,8 @@ public class UsersDeletionSqlRegressionTest extends Common {
 		Future<Integer> concurrentAdd = null;
 		try {
 			deletion = executor.submit(() -> Users.deleteUser(victimId));
-			assertTrue("deletion should reach the backend after acquiring the lifecycle lock",
-					killEntered.await(5, TimeUnit.SECONDS));
+			assertTrue(killEntered.await(5, TimeUnit.SECONDS),
+					"deletion should reach the backend after acquiring the lifecycle lock");
 
 			int queueId;
 			try (Connection con = Common.getConnection()) {
@@ -574,7 +574,7 @@ public class UsersDeletionSqlRegressionTest extends Common {
 						ps.setInt(15, 0);
 						ps.setString(16, "BENCHEXEC");
 						try (ResultSet rs = ps.executeQuery()) {
-							assertTrue("AddJob should return an id if it succeeds", rs.next());
+							assertTrue(rs.next(), "AddJob should return an id if it succeeds");
 							return rs.getInt(1);
 						}
 					}
@@ -585,19 +585,19 @@ public class UsersDeletionSqlRegressionTest extends Common {
 			// stop so deletion can commit and the competing AddJob resumes afterward.
 			boolean addWaitedForDelete = awaitAdvisoryWait(contenderApplicationName, 5000);
 			allowKill.countDown();
-			assertTrue("AddJob must wait on the deletion transaction's advisory lock", addWaitedForDelete);
-			assertTrue("deletion should complete after the active pair is stopped",
-					deletion.get(15, TimeUnit.SECONDS));
+			assertTrue(addWaitedForDelete, "AddJob must wait on the deletion transaction's advisory lock");
+			assertTrue(deletion.get(15, TimeUnit.SECONDS),
+					"deletion should complete after the active pair is stopped");
 			try {
 				concurrentAdd.get(15, TimeUnit.SECONDS);
 				fail("AddJob must not create an owned job after its user has been deleted");
 			} catch (ExecutionException expected) {
-				assertTrue("the competing insert should fail with a foreign-key error",
-					expected.getCause() instanceof SQLException);
+				assertTrue(expected.getCause() instanceof SQLException,
+					"the competing insert should fail with a foreign-key error");
 				assertEquals("23503", ((SQLException) expected.getCause()).getSQLState());
 			}
-			assertEquals("no concurrent job may remain after deletion", 0,
-					countJobsByName(concurrentJobName));
+			assertEquals(0, countJobsByName(concurrentJobName),
+					"no concurrent job may remain after deletion");
 		} finally {
 			allowKill.countDown();
 			awaitFutureForCleanup(deletion);
@@ -628,13 +628,13 @@ public class UsersDeletionSqlRegressionTest extends Common {
 		int perm = buildVictimWithAnalytics();
 		injectDeletionFailure(victimId, false);
 
-		assertFalse("deleteUser must report failure, not success", Users.deleteUser(victimId));
+		assertFalse(Users.deleteUser(victimId), "deleteUser must report failure, not success");
 
-		assertEquals("user must survive", 1, countUsers(victimId));
-		assertEquals("personal space must survive the rolled-back attempt", 1, countSpaces(personalSpaceId));
-		assertEquals("membership permission must survive", 1, countPermissions(perm));
-		assertEquals("membership must survive", 1,
-				countWhere("SELECT count(*) FROM starexec.user_assoc WHERE user_id = ?", victimId));
+		assertEquals(1, countUsers(victimId), "user must survive");
+		assertEquals(1, countSpaces(personalSpaceId), "personal space must survive the rolled-back attempt");
+		assertEquals(1, countPermissions(perm), "membership permission must survive");
+		assertEquals(1, countWhere("SELECT count(*) FROM starexec.user_assoc WHERE user_id = ?", victimId),
+				"membership must survive");
 	}
 
 	/**
@@ -648,12 +648,12 @@ public class UsersDeletionSqlRegressionTest extends Common {
 		int perm = buildVictimWithAnalytics();
 		injectDeletionFailure(victimId, true);
 
-		assertFalse("a failure raised during COMMIT must be reported as failure",
-				Users.deleteUser(victimId));
+		assertFalse(Users.deleteUser(victimId),
+				"a failure raised during COMMIT must be reported as failure");
 
-		assertEquals("user must survive a failed commit", 1, countUsers(victimId));
-		assertEquals("personal space must survive a failed commit", 1, countSpaces(personalSpaceId));
-		assertEquals("membership permission must survive", 1, countPermissions(perm));
+		assertEquals(1, countUsers(victimId), "user must survive a failed commit");
+		assertEquals(1, countSpaces(personalSpaceId), "personal space must survive a failed commit");
+		assertEquals(1, countPermissions(perm), "membership permission must survive");
 	}
 
 	/**
@@ -668,9 +668,9 @@ public class UsersDeletionSqlRegressionTest extends Common {
 		dropInjectedTrigger();
 
 		try (Connection con = Common.getConnection()) {
-			assertTrue("pooled connection must have autoCommit restored", con.getAutoCommit());
+			assertTrue(con.getAutoCommit(), "pooled connection must have autoCommit restored");
 			try (Statement st = con.createStatement(); ResultSet rs = st.executeQuery("SELECT 1")) {
-				assertTrue("a subsequent request must be able to use the pool", rs.next());
+				assertTrue(rs.next(), "a subsequent request must be able to use the pool");
 			}
 		}
 	}
@@ -691,8 +691,8 @@ public class UsersDeletionSqlRegressionTest extends Common {
 		}
 
 		Space resolved = Spaces.getPersonalSpace(victimId);
-		assertNotNull("personal space must still resolve after a rename", resolved);
-		assertEquals("and must be the right space", personalSpaceId.intValue(), resolved.getId());
+		assertNotNull(resolved, "personal space must still resolve after a rename");
+		assertEquals(personalSpaceId.intValue(), resolved.getId(), "and must be the right space");
 	}
 
 	/** A user with no personal space resolves to null rather than throwing. */
@@ -701,7 +701,7 @@ public class UsersDeletionSqlRegressionTest extends Common {
 		try (Connection con = Common.getConnection()) {
 			bystanderId = newUser(con, "nospace", "Udel", "Nospace");
 		}
-		assertNull("no personal space should resolve to null", Spaces.getPersonalSpace(bystanderId));
+		assertNull(Spaces.getPersonalSpace(bystanderId), "no personal space should resolve to null");
 	}
 
 	/**
@@ -728,14 +728,14 @@ public class UsersDeletionSqlRegressionTest extends Common {
 		} catch (UserDeletionBlockedException expected) {
 			// The administrator-useful detail lives in STRUCTURED fields, not in the
 			// message, so no caller has to parse text to render it.
-			assertEquals("the blocker must be typed",
-					UserDeletionBlockedException.AMBIGUOUS_PERSONAL_SPACE, expected.getReasonCode());
-			assertEquals("both candidate spaces must be reported",
-					2, expected.getBlockingSpaceIds().size());
-			assertEquals("candidate names must accompany the ids",
-					2, expected.getBlockingSpaceNames().size());
-			assertTrue("the resolved personal space must be among the candidates",
-					expected.getBlockingSpaceIds().contains(personalSpaceId));
+			assertEquals(UserDeletionBlockedException.AMBIGUOUS_PERSONAL_SPACE,
+					expected.getReasonCode(), "the blocker must be typed");
+			assertEquals(2,
+					expected.getBlockingSpaceIds().size(), "both candidate spaces must be reported");
+			assertEquals(2,
+					expected.getBlockingSpaceNames().size(), "candidate names must accompany the ids");
+			assertTrue(expected.getBlockingSpaceIds().contains(personalSpaceId),
+					"the resolved personal space must be among the candidates");
 		}
 	}
 
@@ -764,15 +764,15 @@ public class UsersDeletionSqlRegressionTest extends Common {
 			Users.deleteUser(victimId);
 			fail("deleteUser must propagate the ambiguity rather than returning false");
 		} catch (UserDeletionBlockedException expected) {
-			assertEquals("the blocker must be typed",
-					UserDeletionBlockedException.AMBIGUOUS_PERSONAL_SPACE, expected.getReasonCode());
-			assertEquals("the admin must be told which spaces are ambiguous",
-					2, expected.getBlockingSpaceIds().size());
+			assertEquals(UserDeletionBlockedException.AMBIGUOUS_PERSONAL_SPACE,
+					expected.getReasonCode(), "the blocker must be typed");
+			assertEquals(2,
+					expected.getBlockingSpaceIds().size(), "the admin must be told which spaces are ambiguous");
 		}
 
 		// and it must have refused before touching anything
-		assertEquals("user must be untouched after a refusal", 1, countUsers(victimId));
-		assertEquals("personal space must be untouched after a refusal", 1, countSpaces(personalSpaceId));
+		assertEquals(1, countUsers(victimId), "user must be untouched after a refusal");
+		assertEquals(1, countSpaces(personalSpaceId), "personal space must be untouched after a refusal");
 	}
 
 	/**
@@ -817,21 +817,21 @@ public class UsersDeletionSqlRegressionTest extends Common {
 			join(con, victimId, defaultSpace, defaultPerm);
 		}
 
-		assertTrue("deleteUser should succeed", Users.deleteUser(victimId));
+		assertTrue(Users.deleteUser(victimId), "deleteUser should succeed");
 
-		assertEquals("target must be gone", 0, countUsers(victimId));
-		assertEquals("bystander user must survive", 1, countUsers(bystanderId));
-		assertEquals("bystander login must survive", 1,
-				countWhere("SELECT count(*) FROM starexec.logins WHERE user_id = ?", bystanderId));
-		assertEquals("bystander analytics row must survive", 1,
-				countWhere("SELECT count(*) FROM starexec.analytics_users WHERE user_id = ?", bystanderId));
-		assertEquals("bystander membership must survive", 1,
-				countWhere("SELECT count(*) FROM starexec.user_assoc WHERE user_id = ?", bystanderId));
-		assertEquals("a permission still used by another membership must survive",
-				1, countPermissions(sharedPerm));
-		assertEquals("a space default_permission must survive", 1, countPermissions(defaultPerm));
-		assertEquals("the space default must still be set", 1,
-				countWhere("SELECT count(*) FROM starexec.spaces WHERE id = ?"
-						+ " AND default_permission IS NOT NULL", defaultSpace));
+		assertEquals(0, countUsers(victimId), "target must be gone");
+		assertEquals(1, countUsers(bystanderId), "bystander user must survive");
+		assertEquals(1, countWhere("SELECT count(*) FROM starexec.logins WHERE user_id = ?", bystanderId),
+				"bystander login must survive");
+		assertEquals(1, countWhere("SELECT count(*) FROM starexec.analytics_users WHERE user_id = ?", bystanderId),
+				"bystander analytics row must survive");
+		assertEquals(1, countWhere("SELECT count(*) FROM starexec.user_assoc WHERE user_id = ?", bystanderId),
+				"bystander membership must survive");
+		assertEquals(1,
+				countPermissions(sharedPerm), "a permission still used by another membership must survive");
+		assertEquals(1, countPermissions(defaultPerm), "a space default_permission must survive");
+		assertEquals(1, countWhere("SELECT count(*) FROM starexec.spaces WHERE id = ?"
+						+ " AND default_permission IS NOT NULL", defaultSpace),
+				"the space default must still be set");
 	}
 }

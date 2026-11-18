@@ -13,7 +13,7 @@ $(document).ready(function() {
 	var $dialog = null;
 
 	var createDialog = function() {
-		$dialog = $("<div><p/></div>");
+		$dialog = $("<div><p></p></div>");
 		$dialog.dialog({
 			modal: true,
 			dialogClass: "delaySpinner",

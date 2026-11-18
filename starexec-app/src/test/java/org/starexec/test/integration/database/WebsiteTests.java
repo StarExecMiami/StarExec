@@ -1,6 +1,6 @@
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Websites;
@@ -14,6 +14,7 @@ import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
 
 import java.util.List;
+
 /**
  * Tests for org.starexec.data.database.Websites.java
  * @author Eric
@@ -27,55 +28,55 @@ public class WebsiteTests extends TestSequence {
 	@StarexecTest
 	private void addAndRemoveSolverWebsite() {
 		String name=TestUtil.getRandomUserName();
-		Assert.assertTrue(Websites.add(solver.getId(), "http://www.uiowa.edu", name, WebsiteType.SOLVER));
+		Assertions.assertTrue(Websites.add(solver.getId(), "http://www.uiowa.edu", name, WebsiteType.SOLVER));
 		List<Website> sites=Websites.getAll(solver.getId(), WebsiteType.SOLVER);
 		Integer id=websitesHaveName(sites,name);
 		
-		Assert.assertNotNull(id);
+		Assertions.assertNotNull(id);
 		
-		Assert.assertTrue(Websites.delete(id));
+		Assertions.assertTrue(Websites.delete(id));
 		sites=Websites.getAll(solver.getId(), WebsiteType.SOLVER);
 
 		id=websitesHaveName(sites,name);
-		Assert.assertNull(id);
+		Assertions.assertNull(id);
 	}
 	
 	@StarexecTest
 	private void addAndRemoveUserWebsite() {
 		String name=TestUtil.getRandomUserName();
-		Assert.assertTrue(Websites.add(user.getId(), "http://www.uiowa.edu", name, WebsiteType.USER));
+		Assertions.assertTrue(Websites.add(user.getId(), "http://www.uiowa.edu", name, WebsiteType.USER));
 		List<Website> sites=Websites.getAll(user.getId(), WebsiteType.USER);
 		Integer id=websitesHaveName(sites,name);
 		
-		Assert.assertNotNull(id);
+		Assertions.assertNotNull(id);
 		
-		Assert.assertTrue(Websites.delete(id));
+		Assertions.assertTrue(Websites.delete(id));
 		sites=Websites.getAll(user.getId(), WebsiteType.USER);
 
 		id=websitesHaveName(sites,name);
-		Assert.assertNull(id);
+		Assertions.assertNull(id);
 	}
 	
 	@StarexecTest
 	private void getAllforHTMLTest() {
 		List<Website> sites=Websites.getAllForHTML(solver.getId(), WebsiteType.SOLVER);
-		Assert.assertNotNull(sites);
+		Assertions.assertNotNull(sites);
 	}
 	
 	@StarexecTest
 	private void addAndRemoveSpaceWebsite() {
 		String name=TestUtil.getRandomUserName();
-		Assert.assertTrue(Websites.add(space.getId(), "http://www.uiowa.edu", name, WebsiteType.SPACE));
+		Assertions.assertTrue(Websites.add(space.getId(), "http://www.uiowa.edu", name, WebsiteType.SPACE));
 		List<Website> sites=Websites.getAll(space.getId(), WebsiteType.SPACE);
 		Integer id=websitesHaveName(sites,name);
 		
-		Assert.assertNotNull(id);
+		Assertions.assertNotNull(id);
 		
-		Assert.assertTrue(Websites.delete(id));
+		Assertions.assertTrue(Websites.delete(id));
 		sites=Websites.getAll(space.getId(), WebsiteType.SPACE);
 
 		id=websitesHaveName(sites,name);
-		Assert.assertNull(id);
+		Assertions.assertNull(id);
 		
 		
 	}

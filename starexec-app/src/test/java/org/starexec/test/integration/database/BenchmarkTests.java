@@ -1,7 +1,7 @@
 package org.starexec.test.integration.database;
 
 import org.apache.commons.io.FileUtils;
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.DB;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
@@ -58,21 +58,21 @@ public class BenchmarkTests extends TestSequence {
 	@StarexecTest
 	private void GetByUser() {
 		List<Benchmark> benches=Benchmarks.getByOwner(user.getId());
-		Assert.assertNotNull(benches);
-		Assert.assertEquals(benchmarks.size(),benches.size());
+		Assertions.assertNotNull(benches);
+		Assertions.assertEquals(benchmarks.size(),benches.size());
 		for (Benchmark b : benches) {
-			Assert.assertTrue(containsBenchmark(benchmarks,b));
+			Assertions.assertTrue(containsBenchmark(benchmarks,b));
 		}
 	}
 
 	@StarexecTest
 	private void GetBySpace() {
 		List<Benchmark> benches=Benchmarks.getBySpace(space.getId());
-		Assert.assertNotNull(benches);
-		Assert.assertEquals(benchmarks.size(),benches.size());
+		Assertions.assertNotNull(benches);
+		Assertions.assertEquals(benchmarks.size(),benches.size());
 		for (Benchmark b : benches) {
 			log.debug(String.valueOf(b.getId()));
-			Assert.assertTrue(containsBenchmark(benchmarks,b));
+			Assertions.assertTrue(containsBenchmark(benchmarks,b));
 		}
 	}
 
@@ -90,12 +90,12 @@ public class BenchmarkTests extends TestSequence {
 
 			// Assert that all the benchmarks in the job are in the benchmarks we retrieved.
 			for (JobPair pair : job.getJobPairs()) {
-				Assert.assertTrue(
-						"Job pair had bench with bench id: " + pair.getBench().getId() + " but this benchmark was contained in benchmarks retrieved.",
-						benchmarkIds.contains(pair.getBench().getId()));
+				Assertions.assertTrue(
+						benchmarkIds.contains(pair.getBench().getId()),
+						"Job pair had bench with bench id: " + pair.getBench().getId() + " but this benchmark was contained in benchmarks retrieved.");
 			}
 		} catch (SQLException e) {
-			Assert.fail("Call threw SQL Exception.");
+			Assertions.fail("Call threw SQL Exception.");
 			log.error("Caught SQLException: " + e.getMessage(), e);
 		}
 
@@ -103,21 +103,21 @@ public class BenchmarkTests extends TestSequence {
 
 	@StarexecTest
 	private void GetCountInSpaceTest() {
-		Assert.assertEquals(benchmarks.size(),Benchmarks.getCountInSpace(space.getId()));
+		Assertions.assertEquals(benchmarks.size(),Benchmarks.getCountInSpace(space.getId()));
 	}
 
 	@StarexecTest
 	private void GetCountInSpaceWithQuery() {
-		Assert.assertEquals(benchmarks.size(), Benchmarks.getCountInSpace(space.getId(),""));
+		Assertions.assertEquals(benchmarks.size(), Benchmarks.getCountInSpace(space.getId(),""));
 		String name=benchmarks.get(0).getName();
-		Assert.assertEquals(1,Benchmarks.getCountInSpace(space.getId(),name));
+		Assertions.assertEquals(1,Benchmarks.getCountInSpace(space.getId(),name));
 	}
 
 	@StarexecTest
 	private void GetBenchmarkTest() {
 		Benchmark b=Benchmarks.get(benchmarks.get(0).getId());
-		Assert.assertNotNull(b);
-		Assert.assertEquals(b.getName(),benchmarks.get(0).getName());
+		Assertions.assertNotNull(b);
+		Assertions.assertEquals(b.getName(),benchmarks.get(0).getName());
 
 	}
 
@@ -125,19 +125,19 @@ public class BenchmarkTests extends TestSequence {
 
 	@StarexecTest
 	private void GetAssociatedSpaceIds() {
-		Assert.assertEquals(space.getId(),(int)Benchmarks.getAssociatedSpaceIds(benchmarks.get(0).getId()).get(0));
+		Assertions.assertEquals(space.getId(),(int)Benchmarks.getAssociatedSpaceIds(benchmarks.get(0).getId()).get(0));
 	}
 	@StarexecTest
 	private void associateSingleBenchmarkTest() {
-		Assert.assertTrue(Benchmarks.associate(benchmarks.get(0).getId(), space2.getId()));
+		Assertions.assertTrue(Benchmarks.associate(benchmarks.get(0).getId(), space2.getId()));
 		boolean found=false;
 		for (Benchmark b : Spaces.getDetails(space2.getId(), admin.getId()).getBenchmarks()) {
 			found = found || b.getId()==benchmarks.get(0).getId();
 		}
-		Assert.assertTrue(found);
+		Assertions.assertTrue(found);
 		List<Integer> temp = new ArrayList<>();
 		temp.add(benchmarks.get(0).getId());
-		Assert.assertTrue(Spaces.removeBenches(temp, space2.getId()));
+		Assertions.assertTrue(Spaces.removeBenches(temp, space2.getId()));
 	}
 
 	@StarexecTest
@@ -147,10 +147,10 @@ public class BenchmarkTests extends TestSequence {
 		for (Benchmark b : benchmarks) {
 			ids.add(b.getId());
 		}
-		Assert.assertTrue(Benchmarks.associate(ids, subspace.getId()));
+		Assertions.assertTrue(Benchmarks.associate(ids, subspace.getId()));
 
 		List<Benchmark> spaceBenchmarks=Spaces.getDetails(subspace.getId(),admin.getId()).getBenchmarks();
-		Assert.assertEquals(spaceBenchmarks.size(),benchmarks.size());
+		Assertions.assertEquals(spaceBenchmarks.size(),benchmarks.size());
 
 		Spaces.removeSubspace(subspace.getId());
 	}
@@ -161,9 +161,9 @@ public class BenchmarkTests extends TestSequence {
 		Benchmark b=benchmarks.get(0);
 		try {
 			Optional<String> str = Benchmarks.getContents(b.getId(), -1);
-			Assert.assertTrue("Benchmark contents were not available.",str.isPresent());
+			Assertions.assertTrue(str.isPresent(),"Benchmark contents were not available.");
 		} catch (IOException e) {
-			Assert.fail("Caught IOException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught IOException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -171,44 +171,44 @@ public class BenchmarkTests extends TestSequence {
 	private void RecycleAndRestoreTest() {
 		Benchmark b= benchmarks.get(0);
 		String name=b.getName();
-		Assert.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
-		Assert.assertEquals(0,Benchmarks.getRecycledBenchmarkCountByUser(user.getId()));
-		Assert.assertEquals(0,Benchmarks.getRecycledBenchmarkCountByUser(user.getId(),name));
+		Assertions.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
+		Assertions.assertEquals(0,Benchmarks.getRecycledBenchmarkCountByUser(user.getId()));
+		Assertions.assertEquals(0,Benchmarks.getRecycledBenchmarkCountByUser(user.getId(),name));
 
-		Assert.assertTrue(Benchmarks.recycle(b.getId()));
-		Assert.assertTrue(Benchmarks.isBenchmarkRecycled(b.getId()));
-		Assert.assertEquals(1,Benchmarks.getRecycledBenchmarkCountByUser(user.getId()));
-		Assert.assertEquals(0,Benchmarks.getRecycledBenchmarkCountByUser(user.getId(),name+"a")); //now it shouldn't match the query
+		Assertions.assertTrue(Benchmarks.recycle(b.getId()));
+		Assertions.assertTrue(Benchmarks.isBenchmarkRecycled(b.getId()));
+		Assertions.assertEquals(1,Benchmarks.getRecycledBenchmarkCountByUser(user.getId()));
+		Assertions.assertEquals(0,Benchmarks.getRecycledBenchmarkCountByUser(user.getId(),name+"a")); //now it shouldn't match the query
 
-		Assert.assertTrue(Benchmarks.restore(b.getId()));
-		Assert.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
-		Assert.assertEquals(0,Benchmarks.getRecycledBenchmarkCountByUser(user.getId()));
-		Assert.assertEquals(0,Benchmarks.getRecycledBenchmarkCountByUser(user.getId(),name));
+		Assertions.assertTrue(Benchmarks.restore(b.getId()));
+		Assertions.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
+		Assertions.assertEquals(0,Benchmarks.getRecycledBenchmarkCountByUser(user.getId()));
+		Assertions.assertEquals(0,Benchmarks.getRecycledBenchmarkCountByUser(user.getId(),name));
 	}
 
 	@StarexecTest
 	private void recycleAndRestoreAllTest() {
 		for (Benchmark b : benchmarks) {
-			Assert.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
+			Assertions.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
 		}
 
-		Assert.assertTrue(Benchmarks.recycleAllOwnedByUser(benchmarks, user.getId()));
+		Assertions.assertTrue(Benchmarks.recycleAllOwnedByUser(benchmarks, user.getId()));
 		for (Benchmark b : benchmarks) {
-			Assert.assertTrue(Benchmarks.isBenchmarkRecycled(b.getId()));
+			Assertions.assertTrue(Benchmarks.isBenchmarkRecycled(b.getId()));
 		}
-		Assert.assertTrue(Benchmarks.restoreRecycledBenchmarks(user.getId()));
+		Assertions.assertTrue(Benchmarks.restoreRecycledBenchmarks(user.getId()));
 
 		for (Benchmark b : benchmarks) {
-			Assert.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
+			Assertions.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
 		}
 
 	}
 
 	@StarexecTest
 	private void recycleAllByWrongUserTest() {
-		Assert.assertTrue(Benchmarks.recycleAllOwnedByUser(benchmarks, user2.getId()));
+		Assertions.assertTrue(Benchmarks.recycleAllOwnedByUser(benchmarks, user2.getId()));
 		for (Benchmark b : benchmarks) {
-			Assert.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
+			Assertions.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
 		}
 	}
 
@@ -217,13 +217,13 @@ public class BenchmarkTests extends TestSequence {
 		Benchmark b=benchmarks.get(0);
 		String newName=TestUtil.getRandomSolverName();
 		String newDesc=TestUtil.getRandomSolverName();
-		Assert.assertTrue(Benchmarks.updateDetails(b.getId(), newName, newDesc, !b.isDownloadable(), b.getType().getId()));
+		Assertions.assertTrue(Benchmarks.updateDetails(b.getId(), newName, newDesc, !b.isDownloadable(), b.getType().getId()));
 
 		Benchmark newBench=Benchmarks.get(b.getId());
 
-		Assert.assertEquals(newName,newBench.getName());
-		Assert.assertEquals(newDesc,newBench.getDescription());
-		Assert.assertNotEquals(b.isDownloadable(),newBench.isDownloadable());
+		Assertions.assertEquals(newName,newBench.getName());
+		Assertions.assertEquals(newDesc,newBench.getDescription());
+		Assertions.assertNotEquals(b.isDownloadable(),newBench.isDownloadable());
 		b.setName(newName);
 		b.setDescription(newDesc);
 		b.setDownloadable(!b.isDownloadable());
@@ -234,11 +234,11 @@ public class BenchmarkTests extends TestSequence {
 	private void deleteBenchTest() throws StarExecDatabaseException {
 		List<Integer> ids=loader.loadBenchmarksIntoDatabase("benchmarks.zip", scratchSpace.getId(), user.getId());
 		for (Integer id : ids) {
-			Assert.assertNotNull(Benchmarks.get(id));
-			Assert.assertTrue(Benchmarks.delete(id));
-			Assert.assertNull(Benchmarks.get(id));
-			Assert.assertNotNull(Benchmarks.getIncludeDeletedAndRecycled(id, false));
-			Assert.assertTrue(Benchmarks.deleteAndRemoveBenchmark(id));
+			Assertions.assertNotNull(Benchmarks.get(id));
+			Assertions.assertTrue(Benchmarks.delete(id));
+			Assertions.assertNull(Benchmarks.get(id));
+			Assertions.assertNotNull(Benchmarks.getIncludeDeletedAndRecycled(id, false));
+			Assertions.assertTrue(Benchmarks.deleteAndRemoveBenchmark(id));
 		}
 	}
 
@@ -248,25 +248,25 @@ public class BenchmarkTests extends TestSequence {
 		List<Integer> ids2=loader.loadBenchmarksIntoDatabase("benchmarks.zip", scratchSpace.getId(), user2.getId());
 
 		for (Integer id : ids) {
-			Assert.assertTrue(Benchmarks.recycle(id));
+			Assertions.assertTrue(Benchmarks.recycle(id));
 		}
 		for (Integer id : ids2) {
-			Assert.assertTrue(Benchmarks.recycle(id));
+			Assertions.assertTrue(Benchmarks.recycle(id));
 		}
-		Assert.assertTrue(Benchmarks.setRecycledBenchmarksToDeleted(user.getId()));
+		Assertions.assertTrue(Benchmarks.setRecycledBenchmarksToDeleted(user.getId()));
 		for (Integer id :ids) {
-			Assert.assertTrue(Benchmarks.isBenchmarkDeleted(id));
-			Assert.assertTrue(Benchmarks.deleteAndRemoveBenchmark(id));
+			Assertions.assertTrue(Benchmarks.isBenchmarkDeleted(id));
+			Assertions.assertTrue(Benchmarks.deleteAndRemoveBenchmark(id));
 		}
 		//make sure we aren't deleting non-recycled benchmarks
 		for (Benchmark b : benchmarks) {
-			Assert.assertFalse(Benchmarks.isBenchmarkDeleted(b.getId()));
+			Assertions.assertFalse(Benchmarks.isBenchmarkDeleted(b.getId()));
 		}
 
 		//make sure we aren't deleting benchmarks from another user
 		for (Integer id : ids2) {
-			Assert.assertFalse(Benchmarks.isBenchmarkDeleted(id));
-			Assert.assertTrue(Benchmarks.deleteAndRemoveBenchmark(id));
+			Assertions.assertFalse(Benchmarks.isBenchmarkDeleted(id));
+			Assertions.assertTrue(Benchmarks.deleteAndRemoveBenchmark(id));
 		}
 	}
 
@@ -274,8 +274,8 @@ public class BenchmarkTests extends TestSequence {
 	private void addBenchmarkFromTextTest() throws Exception {
 		Integer id = UploadBenchmark.addBenchmarkFromText("new benchmark", "test bench", user.getId(), Processors.getNoTypeProcessor().getId(), false);
 		Benchmark b = Benchmarks.get(id);
-		Assert.assertEquals("new benchmark", FileUtils.readFileToString(new File(b.getPath())));
-		Assert.assertTrue(Benchmarks.deleteAndRemoveBenchmark(id));
+		Assertions.assertEquals("new benchmark", FileUtils.readFileToString(new File(b.getPath())));
+		Assertions.assertTrue(Benchmarks.deleteAndRemoveBenchmark(id));
 	}
 
 	@StarexecTest
@@ -286,20 +286,20 @@ public class BenchmarkTests extends TestSequence {
 		FileUtils.writeStringToFile(benchFile, "new benchmark");
 		int benchId = UploadBenchmark.addBenchmarkFromFile(benchFile, user.getId(), Processors.getNoTypeProcessor().getId(), false);
 		Benchmark b = Benchmarks.get(benchId);
-		Assert.assertEquals("new benchmark", FileUtils.readFileToString(new File(b.getPath())));
-		Assert.assertTrue(Benchmarks.deleteAndRemoveBenchmark(benchId));
+		Assertions.assertEquals("new benchmark", FileUtils.readFileToString(new File(b.getPath())));
+		Assertions.assertTrue(Benchmarks.deleteAndRemoveBenchmark(benchId));
 	}
 
 	@StarexecTest
 	private void addBenchmarkDependencyTest() {
 		int primaryBench = benchmarks.get(0).getId();
 		int secondaryBench = benchmarks.get(1).getId();
-		Assert.assertTrue(Benchmarks.addBenchDependency(primaryBench, secondaryBench, "test path"));
+		Assertions.assertTrue(Benchmarks.addBenchDependency(primaryBench, secondaryBench, "test path"));
 		List<BenchmarkDependency> deps = Benchmarks.getBenchDependencies(primaryBench);
-		Assert.assertEquals(1, deps.size());
-		Assert.assertEquals(deps.get(0).getDependencyPath(), "test path");
-		Assert.assertEquals(deps.get(0).getSecondaryBench().getId(), secondaryBench);
-		Assert.assertEquals(deps.get(0).getPrimaryBench().getId(), primaryBench);
+		Assertions.assertEquals(1, deps.size());
+		Assertions.assertEquals(deps.get(0).getDependencyPath(), "test path");
+		Assertions.assertEquals(deps.get(0).getSecondaryBench().getId(), secondaryBench);
+		Assertions.assertEquals(deps.get(0).getPrimaryBench().getId(), primaryBench);
 	}
 
 	@StarexecTest
@@ -309,18 +309,18 @@ public class BenchmarkTests extends TestSequence {
 		int[] totals = new int[2];
 		List<Benchmark> page = Benchmarks.getBenchmarksForNextPageByUser(new DataTablesQuery(0, 10, 0, true, ""), user.getId(), totals);
 		//ensures the query did not filter anything
-		Assert.assertEquals(totals[0], totals[1]);
-		Assert.assertTrue(page.size()<=10);
+		Assertions.assertEquals(totals[0], totals[1]);
+		Assertions.assertTrue(page.size()<=10);
 		//ensures benchmarks are sorted ASC
-		Assert.assertTrue(page.get(1).getName().compareTo(page.get(0).getName())>=0);
+		Assertions.assertTrue(page.get(1).getName().compareTo(page.get(0).getName())>=0);
 	}
 
 	@StarexecTest
 	private void getBenchmarksForNextPageByUserWithQueryTest() {
 		int[] totals = new int[2];
 		List<Benchmark> page = Benchmarks.getBenchmarksForNextPageByUser(new DataTablesQuery(0, 10, 0, false, benchmarks.get(0).getName()), user.getId(), totals);
-		Assert.assertEquals(1, totals[1]);
-		Assert.assertEquals(benchmarks.get(0).getName(),page.get(0).getName());
+		Assertions.assertEquals(1, totals[1]);
+		Assertions.assertEquals(benchmarks.get(0).getName(),page.get(0).getName());
 	}
 
 	private void assertPageResultsEqualsBenchmarksArray(List<Benchmark> page) {
@@ -329,11 +329,11 @@ public class BenchmarkTests extends TestSequence {
 			pageIds.add(b.getId());
 		}
 		for (Benchmark b : benchmarks) {
-			Assert.assertTrue(pageIds.contains(b.getId()));
+			Assertions.assertTrue(pageIds.contains(b.getId()));
 		}
 		//ensures benchmarks are sorted ASC
-		Assert.assertTrue(page.get(1).getName().compareTo(page.get(0).getName())>0);
-		Assert.assertEquals(benchmarks.size(),page.size());
+		Assertions.assertTrue(page.get(1).getName().compareTo(page.get(0).getName())>0);
+		Assertions.assertEquals(benchmarks.size(),page.size());
 	}
 
 	// test getting pages of benchmarks a user owns
@@ -355,13 +355,13 @@ public class BenchmarkTests extends TestSequence {
 		// output should have just one line
 		try {
 			Optional<String> contentsFromBench = Benchmarks.getContents(benchmarks.get(0), 1);
-			Assert.assertTrue("Benchmark.getContents returned an empty optional.",contentsFromBench.isPresent());
-			Assert.assertEquals(1, contentsFromBench.get().split("\r\n|\r|\n").length);
+			Assertions.assertTrue(contentsFromBench.isPresent(),"Benchmark.getContents returned an empty optional.");
+			Assertions.assertEquals(1, contentsFromBench.get().split("\r\n|\r|\n").length);
 			Optional<String> contentsFromBenchId = Benchmarks.getContents(benchmarks.get(0).getId(), 1);
-			Assert.assertTrue("Benchmark.getContents returned empty when called on bench id.", contentsFromBenchId.isPresent());
-			Assert.assertEquals(1, contentsFromBenchId.get().split("\r\n|\r|\n").length);
+			Assertions.assertTrue(contentsFromBenchId.isPresent(), "Benchmark.getContents returned empty when called on bench id.");
+			Assertions.assertEquals(1, contentsFromBenchId.get().split("\r\n|\r|\n").length);
 		} catch(IOException e) {
-			Assert.fail("Caught IOException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught IOException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -371,16 +371,16 @@ public class BenchmarkTests extends TestSequence {
 		for (int id : benchIds) {
 			Benchmarks.delete(id);
 		}
-		Assert.assertTrue(Benchmarks.cleanOrphanedDeletedBenchmarks());
+		Assertions.assertTrue(Benchmarks.cleanOrphanedDeletedBenchmarks());
 		for (int id : benchIds) {
-			Assert.assertNotNull(Benchmarks.getIncludeDeletedAndRecycled(id, false));
+			Assertions.assertNotNull(Benchmarks.getIncludeDeletedAndRecycled(id, false));
 		}
 
 		Spaces.removeBenches(benchIds, space.getId());
 
-		Assert.assertTrue(Benchmarks.cleanOrphanedDeletedBenchmarks());
+		Assertions.assertTrue(Benchmarks.cleanOrphanedDeletedBenchmarks());
 		for (int id : benchIds) {
-			Assert.assertNull(Benchmarks.getIncludeDeletedAndRecycled(id, false));
+			Assertions.assertNull(Benchmarks.getIncludeDeletedAndRecycled(id, false));
 		}
 
 	}
@@ -388,20 +388,20 @@ public class BenchmarkTests extends TestSequence {
 	@StarexecTest
 	private void copyBenchmarksTest() {
 		List<Integer> newIds = Benchmarks.copyBenchmarks(benchmarks, user2.getId(), space2.getId());
-		Assert.assertEquals(newIds.size(), benchmarks.size());
+		Assertions.assertEquals(newIds.size(), benchmarks.size());
 		int index=0;
 		for (Benchmark b : benchmarks) {
 			// ids should be new
-			Assert.assertFalse(newIds.contains(b.getId()));
+			Assertions.assertFalse(newIds.contains(b.getId()));
 			Benchmark newBenchmark = Benchmarks.get(newIds.get(index));
-			Assert.assertEquals(b.getName(), newBenchmark.getName());
-			Assert.assertEquals(user2.getId(), newBenchmark.getUserId());
+			Assertions.assertEquals(b.getName(), newBenchmark.getName());
+			Assertions.assertEquals(user2.getId(), newBenchmark.getUserId());
 			index++;
 		}
 
 		// make sure space2 contains the new benchmarks
 		for (Benchmark b : Spaces.getDetails(space2.getId(), user2.getId()).getBenchmarks()) {
-			Assert.assertTrue(newIds.contains(b.getId()));
+			Assertions.assertTrue(newIds.contains(b.getId()));
 		}
 		for (int id : newIds) {
 			Benchmarks.deleteAndRemoveBenchmark(id);
@@ -412,13 +412,13 @@ public class BenchmarkTests extends TestSequence {
 	private void copyBenchmarkTest() {
 		Benchmark old= benchmarks.get(0);
 		int newId = Benchmarks.copyBenchmark(old, user2.getId(), space2.getId());
-		Assert.assertNotEquals(old, newId);
+		Assertions.assertNotEquals(old, newId);
 		Benchmark newB = Benchmarks.get(newId);
-		Assert.assertEquals(old.getName(), newB.getName());
-		Assert.assertEquals(old.getDescription(), newB.getDescription());
-		Assert.assertEquals(old.getDiskSize(), newB.getDiskSize());
-		Assert.assertEquals(user2.getId(), newB.getUserId());
-		Assert.assertEquals(Spaces.getDetails(space2.getId(), user2.getId()).getBenchmarks().get(0).getId(), newId);
+		Assertions.assertEquals(old.getName(), newB.getName());
+		Assertions.assertEquals(old.getDescription(), newB.getDescription());
+		Assertions.assertEquals(old.getDiskSize(), newB.getDiskSize());
+		Assertions.assertEquals(user2.getId(), newB.getUserId());
+		Assertions.assertEquals(Spaces.getDetails(space2.getId(), user2.getId()).getBenchmarks().get(0).getId(), newId);
 		Benchmarks.deleteAndRemoveBenchmark(newId);
 	}
 
@@ -426,9 +426,9 @@ public class BenchmarkTests extends TestSequence {
 	private void getAttributesTest() {
 		Benchmark b = benchmarks.get(0);
 		Map<String,String> attrs = Benchmarks.getAttributes(b.getId());
-		Assert.assertEquals(b.getAttributes().size(), attrs.size());
+		Assertions.assertEquals(b.getAttributes().size(), attrs.size());
 		for (String s : b.getAttributes().keySet()) {
-			Assert.assertEquals(b.getAttributes().get(s), attrs.get(s));
+			Assertions.assertEquals(b.getAttributes().get(s), attrs.get(s));
 		}
 	}
 
@@ -437,41 +437,41 @@ public class BenchmarkTests extends TestSequence {
 		Integer id = benchmarks.get(0).getId();
 		Integer minusOne = -1;
 		String name = benchmarks.get(0).getName();
-		Assert.assertEquals(id, Benchmarks.getBenchIdByName(space.getId(), name));
-		Assert.assertEquals(minusOne, Benchmarks.getBenchIdByName(space.getId(), TestUtil.getRandomAlphaString(DB.BENCH_NAME_LEN-2)));
-		Assert.assertEquals(minusOne, Benchmarks.getBenchIdByName(-1, name));
+		Assertions.assertEquals(id, Benchmarks.getBenchIdByName(space.getId(), name));
+		Assertions.assertEquals(minusOne, Benchmarks.getBenchIdByName(space.getId(), TestUtil.getRandomAlphaString(DB.BENCH_NAME_LEN-2)));
+		Assertions.assertEquals(minusOne, Benchmarks.getBenchIdByName(-1, name));
 	}
 
 	@StarexecTest
 	private void getBenchmarkCountByUserTest() {
-		Assert.assertEquals(benchmarks.size(), Benchmarks.getBenchmarkCountByUser(user.getId()));
-		Assert.assertEquals(0, Benchmarks.getBenchmarkCountByUser(user2.getId()));
+		Assertions.assertEquals(benchmarks.size(), Benchmarks.getBenchmarkCountByUser(user.getId()));
+		Assertions.assertEquals(0, Benchmarks.getBenchmarkCountByUser(user2.getId()));
 	}
 
 	@StarexecTest
 	private void getBenchmarkCountByUserWithQueryTest() {
-		Assert.assertEquals(benchmarks.size(), Benchmarks.getBenchmarkCountByUser(user.getId(), ""));
-		Assert.assertEquals(1, Benchmarks.getBenchmarkCountByUser(user.getId(), benchmarks.get(0).getName()));
-		Assert.assertEquals(0, Benchmarks.getBenchmarkCountByUser(user2.getId(), ""));
+		Assertions.assertEquals(benchmarks.size(), Benchmarks.getBenchmarkCountByUser(user.getId(), ""));
+		Assertions.assertEquals(1, Benchmarks.getBenchmarkCountByUser(user.getId(), benchmarks.get(0).getName()));
+		Assertions.assertEquals(0, Benchmarks.getBenchmarkCountByUser(user2.getId(), ""));
 	}
 
 	@StarexecTest
 	private void getSortedAttribuesTest() {
 		TreeMap<String,String> mapping = Benchmarks.getSortedAttributes(benchmarks.get(0).getId());
-		Assert.assertEquals(benchmarks.get(0).getAttributes().size(), mapping.size());
+		Assertions.assertEquals(benchmarks.get(0).getAttributes().size(), mapping.size());
 		for (Object s : benchmarks.get(0).getAttributes().keySet()) {
-			Assert.assertEquals(benchmarks.get(0).getAttributes().get(s), mapping.get(s));
+			Assertions.assertEquals(benchmarks.get(0).getAttributes().get(s), mapping.get(s));
 		}
 	}
 
 	@StarexecTest
 	private void benchmarkExistsTest() {
-		Assert.assertTrue(Benchmarks.benchmarkExists(benchmarks.get(0).getId()));
+		Assertions.assertTrue(Benchmarks.benchmarkExists(benchmarks.get(0).getId()));
 	}
 
 	@StarexecTest
 	private void benchmarkDoesntExistsTest() {
-		Assert.assertFalse(Benchmarks.benchmarkExists(-1));
+		Assertions.assertFalse(Benchmarks.benchmarkExists(-1));
 	}
 
 	@StarexecTest
@@ -480,20 +480,20 @@ public class BenchmarkTests extends TestSequence {
 		Spaces.setPublicSpace(newSpace.getId(), user.getId(), true, false);
 		int id = benchmarks.get(0).getId();
 		Benchmarks.associate(id, newSpace.getId());
-		Assert.assertTrue(Benchmarks.isPublic(id));
+		Assertions.assertTrue(Benchmarks.isPublic(id));
 		Spaces.removeSubspace(newSpace.getId());
 	}
 
 	@StarexecTest
 	private void isNotPublicTest() {
 		int id = benchmarks.get(0).getId();
-		Assert.assertFalse(Benchmarks.isPublic(id));
+		Assertions.assertFalse(Benchmarks.isPublic(id));
 	}
 
 	@StarexecTest
 	private void clearAttributesTest() {
-		Assert.assertTrue(Benchmarks.clearAttributes(benchmarks.get(0).getId()));
-		Assert.assertEquals(0, Benchmarks.getAttributes(benchmarks.get(0).getId()).size());
+		Assertions.assertTrue(Benchmarks.clearAttributes(benchmarks.get(0).getId()));
+		Assertions.assertEquals(0, Benchmarks.getAttributes(benchmarks.get(0).getId()).size());
 		for (Object o : benchmarks.get(0).getAttributes().keySet()) {
 			Benchmarks.addBenchAttr(benchmarks.get(0).getId(), (String)o, benchmarks.get(0).getAttributes().get(o));
 		}
@@ -506,32 +506,32 @@ public class BenchmarkTests extends TestSequence {
 
 		List<Integer> benchIds = Benchmarks.copyBenchmarks(benchmarks, tempUser.getId(), tempSpace.getId());
 		Integer statusId = Benchmarks.process(tempSpace.getId(), benchProcessor, false, tempUser.getId(), true);
-		Assert.assertTrue(statusId>0);
+		Assertions.assertTrue(statusId>0);
 		int MAX_LOOPS = 50;
 		while (!Uploads.getBenchmarkStatus(statusId).isEverythingComplete()) {
 			Thread.sleep(1000);
 			MAX_LOOPS--;
-			Assert.assertTrue(MAX_LOOPS>=0);
+			Assertions.assertTrue(MAX_LOOPS>=0);
 		}
 		for (int benchId : benchIds) {
 			Map<String,String> attrs = Benchmarks.getAttributes(benchId);
 			addMessage(benchId+"");
-			Assert.assertEquals(1, attrs.size());
-			Assert.assertEquals("test", attrs.get("test-attribute"));
+			Assertions.assertEquals(1, attrs.size());
+			Assertions.assertEquals("test", attrs.get("test-attribute"));
 			Benchmarks.deleteAndRemoveBenchmark(benchId);
 		}
 	}
 
 	@StarexecTest
 	private void getNoOrphansTest() {
-		Assert.assertEquals(0, Benchmarks.getOrphanedBenchmarks(user.getId()).size());
+		Assertions.assertEquals(0, Benchmarks.getOrphanedBenchmarks(user.getId()).size());
 	}
 
 	@StarexecTest
 	private void recycleNoOrphansTest() {
-		Assert.assertTrue(Benchmarks.recycleOrphanedBenchmarks(user.getId()));
+		Assertions.assertTrue(Benchmarks.recycleOrphanedBenchmarks(user.getId()));
 		for (Benchmark b : benchmarks) {
-			Assert.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
+			Assertions.assertFalse(Benchmarks.isBenchmarkRecycled(b.getId()));
 		}
 	}
 
@@ -541,25 +541,25 @@ public class BenchmarkTests extends TestSequence {
 		for (Benchmark b : benchmarks) {
 			benchIds.add(b.getId());
 		}
-		Assert.assertTrue(Spaces.removeBenches(benchIds, space.getId()));
-		Assert.assertEquals(3, Benchmarks.getOrphanedBenchmarks(user.getId()).size());
-		Assert.assertTrue(Benchmarks.associate(benchIds, space.getId()));
+		Assertions.assertTrue(Spaces.removeBenches(benchIds, space.getId()));
+		Assertions.assertEquals(3, Benchmarks.getOrphanedBenchmarks(user.getId()).size());
+		Assertions.assertTrue(Benchmarks.associate(benchIds, space.getId()));
 	}
 
 	@StarexecTest
 	private void recycleOrphansTest() {
 		List<Integer> newBenchmarks = loader.loadBenchmarksIntoDatabase(space.getId(), user.getId());
 		Spaces.removeBenches(newBenchmarks, space.getId());
-		Assert.assertTrue(Benchmarks.recycleOrphanedBenchmarks(user.getId()));
+		Assertions.assertTrue(Benchmarks.recycleOrphanedBenchmarks(user.getId()));
 		for (Integer i : newBenchmarks) {
-			Assert.assertTrue(Benchmarks.isBenchmarkRecycled(i));
+			Assertions.assertTrue(Benchmarks.isBenchmarkRecycled(i));
 			Benchmarks.deleteAndRemoveBenchmark(i);
 		}
 	}
 
 	@StarexecTest
 	private void getBenchmarksInSharedSpacesTest() {
-		Assert.assertEquals(benchmarks.size(), Benchmarks.getBenchmarksInSharedSpaces(user.getId()).size());
+		Assertions.assertEquals(benchmarks.size(), Benchmarks.getBenchmarksInSharedSpaces(user.getId()).size());
 	}
 
 

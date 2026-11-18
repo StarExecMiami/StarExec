@@ -1,13 +1,13 @@
 package org.starexec.servlets;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Creating a user must never shorten the administrator's own session.
@@ -68,18 +68,18 @@ public class AdminSessionNotShortenedTest {
 			}
 			called = true;
 			String argument = line.substring(line.indexOf("setMaxInactiveInterval(")).trim();
-			assertTrue("Registration.java:" + (i + 1) + " must set the interval through"
-							+ " atLeastWithoutShortening, not directly: " + argument,
-					argument.contains("atLeastWithoutShortening") || argument.endsWith("setMaxInactiveInterval("));
+			assertTrue(argument.contains("atLeastWithoutShortening") || argument.endsWith("setMaxInactiveInterval("),
+					"Registration.java:" + (i + 1) + " must set the interval through"
+							+ " atLeastWithoutShortening, not directly: " + argument);
 		}
-		assertTrue("Registration must still set a session interval, or this test is vacuous", called);
+		assertTrue(called, "Registration must still set a session interval, or this test is vacuous");
 	}
 
 	/** A container default of zero, meaning "never expires", must not be cut to 30 minutes. */
 	@Test
 	public void aSessionThatNeverExpiresIsNotGivenAnExpiry() {
-		assertEquals("a non-positive interval means the session never expires; shortening it to the"
-						+ " minimum would impose one",
-				0, Registration.atLeastWithoutShortening(0, Registration.ADMIN_MINIMUM_SESSION_SECONDS));
+		assertEquals(0,
+				Registration.atLeastWithoutShortening(0, Registration.ADMIN_MINIMUM_SESSION_SECONDS), "a non-positive interval means the session never expires; shortening it to the"
+						+ " minimum would impose one");
 	}
 }

@@ -5,9 +5,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Blocks of the shipped jobscript, read from the file so that tests run the jobscript's own code rather than a
@@ -30,7 +30,7 @@ final class JobscriptBlocks {
 				break;
 			}
 		}
-		assertTrue("the stage loop must exist", start >= 0);
+		assertTrue(start >= 0, "the stage loop must exist");
 		int end = -1;
 		for (int i = start; i < lines.size(); i++) {
 			if (lines.get(i).equals("done")) {
@@ -38,7 +38,7 @@ final class JobscriptBlocks {
 				break;
 			}
 		}
-		assertTrue("the stage loop must end", end > start);
+		assertTrue(end > start, "the stage loop must end");
 		return lines.subList(start + 1, end);
 	}
 
@@ -67,22 +67,22 @@ final class JobscriptBlocks {
 		List<String> loop = stageLoop();
 		int arm = armingIndex(loop);
 		int clear = indexOfLineStartingWith(loop, "rm -f \"$(deadlockWatchdogFiredFile)\"");
-		assertTrue("the jobscript must remove an earlier watchdog's record before it arms the next one",
-				clear >= 0 && clear < arm);
+		assertTrue(clear >= 0 && clear < arm,
+				"the jobscript must remove an earlier watchdog's record before it arms the next one");
 		return String.join("\n", loop.subList(clear, pidIndex(loop, arm) + 1));
 	}
 
 	private static int armingIndex(List<String> loop) {
 		int arm = indexOfLineStartingWith(loop, "killDeadlockedJobPair ");
-		assertTrue("the stage loop must arm the watchdog", arm >= 0);
-		assertEquals("the stage loop must arm it once", -1,
-				indexOfLineStartingWith(loop.subList(arm + 1, loop.size()), "killDeadlockedJobPair "));
+		assertTrue(arm >= 0, "the stage loop must arm the watchdog");
+		assertEquals(-1, indexOfLineStartingWith(loop.subList(arm + 1, loop.size()), "killDeadlockedJobPair "),
+				"the stage loop must arm it once");
 		return arm;
 	}
 
 	private static int pidIndex(List<String> loop, int arm) {
 		int pid = indexOfLineStartingWith(loop, "KILL_DEADLOCKED_JOB_PAIR_PID=$!");
-		assertTrue("the jobscript must record the watchdog's PID right after arming it", pid > arm && pid - arm <= 3);
+		assertTrue(pid > arm && pid - arm <= 3, "the jobscript must record the watchdog's PID right after arming it");
 		return pid;
 	}
 
@@ -93,10 +93,10 @@ final class JobscriptBlocks {
 	static String deadlockCheck() throws IOException {
 		List<String> loop = stageLoop();
 		int start = indexOfLineStartingWith(loop, "JOB_PAIR_DEADLOCKED=false");
-		assertTrue("the deadlock check must exist", start >= 0 && start + 1 < loop.size());
+		assertTrue(start >= 0 && start + 1 < loop.size(), "the deadlock check must exist");
 		String ifLine = loop.get(start + 1);
-		assertTrue("an if statement must follow JOB_PAIR_DEADLOCKED=false: " + ifLine,
-				ifLine.strip().startsWith("if "));
+		assertTrue(ifLine.strip().startsWith("if "),
+				"an if statement must follow JOB_PAIR_DEADLOCKED=false: " + ifLine);
 		String fi = ifLine.substring(0, ifLine.indexOf("if ")) + "fi";
 		int end = -1;
 		for (int i = start + 2; i < loop.size(); i++) {
@@ -105,7 +105,7 @@ final class JobscriptBlocks {
 				break;
 			}
 		}
-		assertTrue("the deadlock check must end", end > start);
+		assertTrue(end > start, "the deadlock check must end");
 		return String.join("\n", loop.subList(start, end + 1));
 	}
 
@@ -139,9 +139,9 @@ final class JobscriptBlocks {
 
 	/** Fails if {@link #endWatchdogBeforeItFires} reported that its case proves nothing. */
 	static void assertEndedBeforeItFired(String out) {
-		assertFalse("the watchdog must have started its sleep, or this proves nothing:\n" + out,
-				out.contains("T-NO-WATCHDOG-SLEEP"));
-		assertFalse("the watchdog must still be running when it is ended, or this proves nothing:\n" + out,
-				out.contains("T-WATCHDOG-ALREADY-GONE"));
+		assertFalse(out.contains("T-NO-WATCHDOG-SLEEP"),
+				"the watchdog must have started its sleep, or this proves nothing:\n" + out);
+		assertFalse(out.contains("T-WATCHDOG-ALREADY-GONE"),
+				"the watchdog must still be running when it is ended, or this proves nothing:\n" + out);
 	}
 }

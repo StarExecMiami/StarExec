@@ -1,7 +1,7 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyDouble;
@@ -20,9 +20,9 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.LocalJobMonitor;
@@ -44,12 +44,12 @@ public class LocalAttemptFenceTest {
 
     private LocalJobMonitor monitor;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         monitor = new LocalJobMonitor();
     }
 
-    @After
+    @AfterEach
     public void tearDown() {
         monitor.stop();
     }
@@ -158,8 +158,8 @@ public class LocalAttemptFenceTest {
                 .thenReturn(PairStatusResult.STALE_ATTEMPT);
 
             // No RetryableIngestionException / InvalidSnapshotException: it returns.
-            assertTrue("a stale execution is finished, so the pair is retired",
-                process(dir, ATTEMPT));
+            assertTrue(process(dir, ATTEMPT),
+                "a stale execution is finished, so the pair is retired");
 
             db.verify(() -> JobPairs.updateRunSolverStats(anyInt(), anyString(), anyDouble(),
                 anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyLong(), anyInt(),

@@ -305,9 +305,11 @@ public interface Backend {
 │   ┌─────────────────────────────────────────────────────┐   │
 │   │            ThreadPoolExecutor                        │   │
 │   │   ┌─────────────────────────────────────────────┐   │   │
-│   │   │ Core pool: min(4, CPU_cores)                │   │   │
-│   │   │ Max pool: configurable                      │   │   │
-│   │   │ Queue: bounded (10,000)                     │   │   │
+│   │   │ Core = max pool: one thread per CPU lease   │   │   │
+│   │   │ Leases: STAREXEC_LOCAL_CORE_LIST, else      │   │   │
+│   │   │   STAREXEC_LOCAL_CONCURRENCY, else up to    │   │   │
+│   │   │   min(4, CPUs), one per physical core       │   │   │
+│   │   │ Queue: bounded (default 10,000)             │   │   │
 │   │   │ Policy: AbortPolicy (submission deferred)   │   │   │
 │   │   └─────────────────────────────────────────────┘   │   │
 │   └─────────────────────────────────────────────────────┘   │

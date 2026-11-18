@@ -5,7 +5,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.slf4j.LoggerFactory;
 import org.starexec.app.RESTServices;
@@ -32,8 +32,12 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
-import static org.junit.Assert.*;
-import static org.mockito.ArgumentMatchers.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.*;
 
 /**
@@ -137,7 +141,7 @@ public class RequestsBearerLoggingRegressionTest {
 					List.of(generatedCode::get, () -> newEmail), () -> {
 				String response = new RESTServices().editUserInfoFromBody(userId, request);
 				assertTrue(response.contains("verification link has been sent"));
-				assertNotNull("Expected the production route to generate a bearer code", generatedCode.get());
+				assertNotNull(generatedCode.get(), "Expected the production route to generate a bearer code");
 				verify(lookupStatement).setString(1, newEmail);
 				verify(claimStatement).setString(2, newEmail);
 				verify(claimStatement).setString(3, generatedCode.get());
@@ -168,9 +172,9 @@ public class RequestsBearerLoggingRegressionTest {
 			}
 
 			assertNotNull(thrown);
-			assertFalse("New email leaked into exception message", contains(thrown.getMessage(), newEmail));
-			assertFalse("Verification code leaked into exception message", contains(thrown.getMessage(), code));
-			assertNull("A database cause can echo bound values", thrown.getCause());
+			assertFalse(contains(thrown.getMessage(), newEmail), "New email leaked into exception message");
+			assertFalse(contains(thrown.getMessage(), code), "Verification code leaked into exception message");
+			assertNull(thrown.getCause(), "A database cause can echo bound values");
 			verify(statement).setInt(1, userId);
 			verify(statement).setString(2, newEmail);
 			verify(statement).setString(3, code);
@@ -200,12 +204,12 @@ public class RequestsBearerLoggingRegressionTest {
 				return Optional.of(1);
 			});
 			operation.run();
-			assertFalse("Expected the failure to be logged", logs.events.isEmpty());
-			assertFalse("Expected the failure to be recorded through ErrorLogs.add", persistedMessages.isEmpty());
+			assertFalse(logs.events.isEmpty(), "Expected the failure to be logged");
+			assertFalse(persistedMessages.isEmpty(), "Expected the failure to be recorded through ErrorLogs.add");
 
 			for (Supplier<String> bearerSupplier : bearerSuppliers) {
 				String bearer = bearerSupplier.get();
-				assertNotNull("Expected a synthetic bearer value", bearer);
+				assertNotNull(bearer, "Expected a synthetic bearer value");
 				List<String> leakChannels = new ArrayList<>();
 				if (logs.events.stream().anyMatch(event -> contains(event.getFormattedMessage(), bearer))) {
 					leakChannels.add("formatted-message");
@@ -216,7 +220,7 @@ public class RequestsBearerLoggingRegressionTest {
 				if (persistedMessages.stream().anyMatch(message -> contains(message, bearer))) {
 					leakChannels.add("ErrorLogs.add");
 				}
-				assertTrue("Synthetic bearer leaked through " + leakChannels, leakChannels.isEmpty());
+				assertTrue(leakChannels.isEmpty(), "Synthetic bearer leaked through " + leakChannels);
 			}
 		}
 	}

@@ -1,222 +1,223 @@
 package org.starexec.test.integration.security;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.constants.DB;
 import org.starexec.test.TestUtil;
 import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
 import org.starexec.util.Validator;
+
 public class ValidatorTests extends TestSequence {
 
 
 	@StarexecTest
 	private void DescriptionRegexTest() {
-		Assert.assertTrue(Validator.isValidPrimDescription(""));
-		Assert.assertTrue(Validator.isValidPrimDescription("hello world"));
-		Assert.assertTrue(Validator.isValidPrimDescription("This is a sentence, and it has some punctuation."));
-		Assert.assertTrue(Validator.isValidPrimDescription("293md03 32idiu"));
-		Assert.assertTrue(Validator.isValidPrimDescription(TestUtil.getRandomAlphaString(DB.BENCH_DESC_LEN)));
-		Assert.assertTrue(Validator.isValidPrimDescription("2017-05-22"));
-		Assert.assertTrue(Validator.isValidPrimDescription("C++"));
-		Assert.assertTrue(Validator.isValidPrimDescription("https://my-tool.example.com"));
-		Assert.assertFalse(Validator.isValidPrimDescription(TestUtil.getRandomAlphaString(DB.BENCH_DESC_LEN+1)));
-		Assert.assertFalse(Validator.isValidPrimDescription(null));
-		Assert.assertFalse(Validator.isValidPrimDescription("\"\""));
-		Assert.assertFalse(Validator.isValidPrimDescription("<script>"));
+		Assertions.assertTrue(Validator.isValidPrimDescription(""));
+		Assertions.assertTrue(Validator.isValidPrimDescription("hello world"));
+		Assertions.assertTrue(Validator.isValidPrimDescription("This is a sentence, and it has some punctuation."));
+		Assertions.assertTrue(Validator.isValidPrimDescription("293md03 32idiu"));
+		Assertions.assertTrue(Validator.isValidPrimDescription(TestUtil.getRandomAlphaString(DB.BENCH_DESC_LEN)));
+		Assertions.assertTrue(Validator.isValidPrimDescription("2017-05-22"));
+		Assertions.assertTrue(Validator.isValidPrimDescription("C++"));
+		Assertions.assertTrue(Validator.isValidPrimDescription("https://my-tool.example.com"));
+		Assertions.assertFalse(Validator.isValidPrimDescription(TestUtil.getRandomAlphaString(DB.BENCH_DESC_LEN+1)));
+		Assertions.assertFalse(Validator.isValidPrimDescription(null));
+		Assertions.assertFalse(Validator.isValidPrimDescription("\"\""));
+		Assertions.assertFalse(Validator.isValidPrimDescription("<script>"));
 	}
 
 	@StarexecTest
 	private void WebsiteRegexTest() {
-		Assert.assertTrue(Validator.isValidWebsite("http://www.uiowa.edu"));
-		Assert.assertTrue(Validator.isValidWebsite("https://cs.starexec.uiowa.edu"));
-		Assert.assertTrue(Validator.isValidWebsite("http://www.google.com"));
+		Assertions.assertTrue(Validator.isValidWebsite("http://www.uiowa.edu"));
+		Assertions.assertTrue(Validator.isValidWebsite("https://cs.starexec.uiowa.edu"));
+		Assertions.assertTrue(Validator.isValidWebsite("http://www.google.com"));
 
-		Assert.assertFalse(Validator.isValidWebsite(null));
-		Assert.assertFalse(Validator.isValidWebsite("google.com"));
-		Assert.assertFalse(Validator.isValidWebsite("<script></script>"));
+		Assertions.assertFalse(Validator.isValidWebsite(null));
+		Assertions.assertFalse(Validator.isValidWebsite("google.com"));
+		Assertions.assertFalse(Validator.isValidWebsite("<script></script>"));
 
 	}
 
 	@StarexecTest
 	private void QueueNameTest() {
-		Assert.assertTrue(Validator.isValidQueueName("hello world"));
-		Assert.assertTrue(Validator.isValidQueueName("Mark"));
-		Assert.assertTrue(Validator.isValidQueueName("293md03 32idiu"));
+		Assertions.assertTrue(Validator.isValidQueueName("hello world"));
+		Assertions.assertTrue(Validator.isValidQueueName("Mark"));
+		Assertions.assertTrue(Validator.isValidQueueName("293md03 32idiu"));
 
-		Assert.assertTrue(Validator.isValidQueueName(TestUtil.getRandomAlphaString(DB.QUEUE_NAME_LEN)));
+		Assertions.assertTrue(Validator.isValidQueueName(TestUtil.getRandomAlphaString(DB.QUEUE_NAME_LEN)));
 
-		Assert.assertFalse(Validator.isValidQueueName(TestUtil.getRandomAlphaString(DB.QUEUE_NAME_LEN+1)));
-		Assert.assertFalse(Validator.isValidQueueName(""));
-		Assert.assertFalse(Validator.isValidQueueName(null));
-		Assert.assertFalse(Validator.isValidQueueName("\"\""));
-		Assert.assertFalse(Validator.isValidQueueName("<script>"));
+		Assertions.assertFalse(Validator.isValidQueueName(TestUtil.getRandomAlphaString(DB.QUEUE_NAME_LEN+1)));
+		Assertions.assertFalse(Validator.isValidQueueName(""));
+		Assertions.assertFalse(Validator.isValidQueueName(null));
+		Assertions.assertFalse(Validator.isValidQueueName("\"\""));
+		Assertions.assertFalse(Validator.isValidQueueName("<script>"));
 	}
 
 	@StarexecTest
 	private void JobNameTest() {
-		Assert.assertTrue(Validator.isValidJobName("hello world"));
-		Assert.assertTrue(Validator.isValidJobName("Mark"));
-		Assert.assertTrue(Validator.isValidJobName("293md03 32idiu"));
-		Assert.assertTrue(Validator.isValidJobName(TestUtil.getRandomAlphaString(DB.JOB_NAME_LEN)));
+		Assertions.assertTrue(Validator.isValidJobName("hello world"));
+		Assertions.assertTrue(Validator.isValidJobName("Mark"));
+		Assertions.assertTrue(Validator.isValidJobName("293md03 32idiu"));
+		Assertions.assertTrue(Validator.isValidJobName(TestUtil.getRandomAlphaString(DB.JOB_NAME_LEN)));
 
-		Assert.assertFalse(Validator.isValidJobName(TestUtil.getRandomAlphaString(DB.JOB_NAME_LEN+1)));
-		Assert.assertFalse(Validator.isValidJobName(""));
-		Assert.assertFalse(Validator.isValidJobName(null));
-		Assert.assertFalse(Validator.isValidJobName("\"\""));
-		Assert.assertFalse(Validator.isValidJobName("<script>"));
+		Assertions.assertFalse(Validator.isValidJobName(TestUtil.getRandomAlphaString(DB.JOB_NAME_LEN+1)));
+		Assertions.assertFalse(Validator.isValidJobName(""));
+		Assertions.assertFalse(Validator.isValidJobName(null));
+		Assertions.assertFalse(Validator.isValidJobName("\"\""));
+		Assertions.assertFalse(Validator.isValidJobName("<script>"));
 	}
 
 	@StarexecTest
 	private void ConfigurationNameTest() {
-		Assert.assertTrue(Validator.isValidConfigurationName("hello world"));
-		Assert.assertTrue(Validator.isValidConfigurationName("Mark"));
-		Assert.assertTrue(Validator.isValidConfigurationName("293md03 32idiu"));
-		Assert.assertTrue(Validator.isValidConfigurationName(TestUtil.getRandomAlphaString(DB.CONFIGURATION_NAME_LEN)));
-		Assert.assertFalse(Validator.isValidConfigurationName(TestUtil.getRandomAlphaString(DB.CONFIGURATION_NAME_LEN+1)));
-		Assert.assertFalse(Validator.isValidConfigurationName(""));
-		Assert.assertFalse(Validator.isValidConfigurationName(null));
-		Assert.assertFalse(Validator.isValidConfigurationName("\"\""));
-		Assert.assertFalse(Validator.isValidConfigurationName("<script>"));
+		Assertions.assertTrue(Validator.isValidConfigurationName("hello world"));
+		Assertions.assertTrue(Validator.isValidConfigurationName("Mark"));
+		Assertions.assertTrue(Validator.isValidConfigurationName("293md03 32idiu"));
+		Assertions.assertTrue(Validator.isValidConfigurationName(TestUtil.getRandomAlphaString(DB.CONFIGURATION_NAME_LEN)));
+		Assertions.assertFalse(Validator.isValidConfigurationName(TestUtil.getRandomAlphaString(DB.CONFIGURATION_NAME_LEN+1)));
+		Assertions.assertFalse(Validator.isValidConfigurationName(""));
+		Assertions.assertFalse(Validator.isValidConfigurationName(null));
+		Assertions.assertFalse(Validator.isValidConfigurationName("\"\""));
+		Assertions.assertFalse(Validator.isValidConfigurationName("<script>"));
 	}
 
 	@StarexecTest
 	private void ProcessorNameTest() {
-		Assert.assertTrue(Validator.isValidProcessorName("hello world"));
-		Assert.assertTrue(Validator.isValidProcessorName("Mark"));
-		Assert.assertTrue(Validator.isValidProcessorName("293md03 32idiu"));
-		Assert.assertTrue(Validator.isValidProcessorName(TestUtil.getRandomAlphaString(DB.PROCESSOR_NAME_LEN)));
-		Assert.assertFalse(Validator.isValidProcessorName(TestUtil.getRandomAlphaString(DB.PROCESSOR_NAME_LEN+1)));
-		Assert.assertFalse(Validator.isValidProcessorName(""));
-		Assert.assertFalse(Validator.isValidProcessorName(null));
-		Assert.assertFalse(Validator.isValidProcessorName("\"\""));
-		Assert.assertFalse(Validator.isValidProcessorName("<script>"));
+		Assertions.assertTrue(Validator.isValidProcessorName("hello world"));
+		Assertions.assertTrue(Validator.isValidProcessorName("Mark"));
+		Assertions.assertTrue(Validator.isValidProcessorName("293md03 32idiu"));
+		Assertions.assertTrue(Validator.isValidProcessorName(TestUtil.getRandomAlphaString(DB.PROCESSOR_NAME_LEN)));
+		Assertions.assertFalse(Validator.isValidProcessorName(TestUtil.getRandomAlphaString(DB.PROCESSOR_NAME_LEN+1)));
+		Assertions.assertFalse(Validator.isValidProcessorName(""));
+		Assertions.assertFalse(Validator.isValidProcessorName(null));
+		Assertions.assertFalse(Validator.isValidProcessorName("\"\""));
+		Assertions.assertFalse(Validator.isValidProcessorName("<script>"));
 	}
 
 	@StarexecTest
 	private void BenchmarkNameTest() {
-		Assert.assertTrue(Validator.isValidBenchName("hello world"));
-		Assert.assertTrue(Validator.isValidBenchName("Mark"));
-		Assert.assertTrue(Validator.isValidBenchName("293md03 32idiu"));
-		Assert.assertTrue(Validator.isValidBenchName(TestUtil.getRandomAlphaString(DB.BENCH_NAME_LEN)));
+		Assertions.assertTrue(Validator.isValidBenchName("hello world"));
+		Assertions.assertTrue(Validator.isValidBenchName("Mark"));
+		Assertions.assertTrue(Validator.isValidBenchName("293md03 32idiu"));
+		Assertions.assertTrue(Validator.isValidBenchName(TestUtil.getRandomAlphaString(DB.BENCH_NAME_LEN)));
 
-		Assert.assertFalse(Validator.isValidBenchName(TestUtil.getRandomAlphaString(DB.BENCH_NAME_LEN+1)));
-		Assert.assertFalse(Validator.isValidBenchName(""));
-		Assert.assertFalse(Validator.isValidBenchName(null));
-		Assert.assertFalse(Validator.isValidBenchName("\"\""));
-		Assert.assertFalse(Validator.isValidBenchName("<script>"));
+		Assertions.assertFalse(Validator.isValidBenchName(TestUtil.getRandomAlphaString(DB.BENCH_NAME_LEN+1)));
+		Assertions.assertFalse(Validator.isValidBenchName(""));
+		Assertions.assertFalse(Validator.isValidBenchName(null));
+		Assertions.assertFalse(Validator.isValidBenchName("\"\""));
+		Assertions.assertFalse(Validator.isValidBenchName("<script>"));
 	}
 
 	@StarexecTest
 	private void SolverNameRegexTest() {
-		Assert.assertTrue(Validator.isValidSolverName("hello world"));
-		Assert.assertTrue(Validator.isValidSolverName("Mark"));
-		Assert.assertTrue(Validator.isValidSolverName("293md03 32idiu"));
-		Assert.assertTrue(Validator.isValidSolverName(TestUtil.getRandomAlphaString(DB.SOLVER_NAME_LEN)));
+		Assertions.assertTrue(Validator.isValidSolverName("hello world"));
+		Assertions.assertTrue(Validator.isValidSolverName("Mark"));
+		Assertions.assertTrue(Validator.isValidSolverName("293md03 32idiu"));
+		Assertions.assertTrue(Validator.isValidSolverName(TestUtil.getRandomAlphaString(DB.SOLVER_NAME_LEN)));
 
-		Assert.assertFalse(Validator.isValidSolverName(TestUtil.getRandomAlphaString(DB.SOLVER_NAME_LEN+1)));
-		Assert.assertFalse(Validator.isValidSolverName(""));
-		Assert.assertFalse(Validator.isValidSolverName(null));
-		Assert.assertFalse(Validator.isValidSolverName("\"\""));
-		Assert.assertFalse(Validator.isValidSolverName("<script>"));
+		Assertions.assertFalse(Validator.isValidSolverName(TestUtil.getRandomAlphaString(DB.SOLVER_NAME_LEN+1)));
+		Assertions.assertFalse(Validator.isValidSolverName(""));
+		Assertions.assertFalse(Validator.isValidSolverName(null));
+		Assertions.assertFalse(Validator.isValidSolverName("\"\""));
+		Assertions.assertFalse(Validator.isValidSolverName("<script>"));
 	}
 
 	@StarexecTest
 	private void BoolRegexTest() {
-		Assert.assertTrue(Validator.isValidBool("true"));
-		Assert.assertTrue(Validator.isValidBool("false"));
-		Assert.assertTrue(Validator.isValidBool("TruE"));
-		Assert.assertTrue(Validator.isValidBool("FALsE"));
-		Assert.assertFalse(Validator.isValidBool(""));
-		Assert.assertFalse(Validator.isValidBool("94"));
-		Assert.assertFalse(Validator.isValidBool("adsfc"));
-		Assert.assertFalse(Validator.isValidBool("4ks"));
-		Assert.assertFalse(Validator.isValidBool("itisfalsethatthisshouldreturntrue"));
-		Assert.assertFalse(Validator.isValidBool(null));
+		Assertions.assertTrue(Validator.isValidBool("true"));
+		Assertions.assertTrue(Validator.isValidBool("false"));
+		Assertions.assertTrue(Validator.isValidBool("TruE"));
+		Assertions.assertTrue(Validator.isValidBool("FALsE"));
+		Assertions.assertFalse(Validator.isValidBool(""));
+		Assertions.assertFalse(Validator.isValidBool("94"));
+		Assertions.assertFalse(Validator.isValidBool("adsfc"));
+		Assertions.assertFalse(Validator.isValidBool("4ks"));
+		Assertions.assertFalse(Validator.isValidBool("itisfalsethatthisshouldreturntrue"));
+		Assertions.assertFalse(Validator.isValidBool(null));
 
 	}
 
 	@StarexecTest
 	private void InstitutionRegexTest() {
-		Assert.assertTrue(Validator.isValidInstitution("The University Of Iowa"));
-		Assert.assertTrue(Validator.isValidInstitution("test"));
+		Assertions.assertTrue(Validator.isValidInstitution("The University Of Iowa"));
+		Assertions.assertTrue(Validator.isValidInstitution("test"));
 
 		StringBuilder sb=new StringBuilder();
 		for (int i=0; i<DB.INSTITUTION_LEN+2;i++) {
 			sb.append("a");
 		}
-		Assert.assertFalse(Validator.isValidInstitution(sb.toString()));
-		Assert.assertFalse(Validator.isValidInstitution(""));
-		Assert.assertFalse(Validator.isValidInstitution(null));
-		Assert.assertFalse(Validator.isValidInstitution("The University @ Iowa"));
-		Assert.assertFalse(Validator.isValidInstitution("<script>"));
+		Assertions.assertFalse(Validator.isValidInstitution(sb.toString()));
+		Assertions.assertFalse(Validator.isValidInstitution(""));
+		Assertions.assertFalse(Validator.isValidInstitution(null));
+		Assertions.assertFalse(Validator.isValidInstitution("The University @ Iowa"));
+		Assertions.assertFalse(Validator.isValidInstitution("<script>"));
 	}
 
 	@StarexecTest
 	private void IntRegexTest() {
-		Assert.assertTrue(Validator.isValidInteger("4"));
-		Assert.assertTrue(Validator.isValidInteger("-3835"));
-		Assert.assertTrue(Validator.isValidInteger("3420202"));
-		Assert.assertTrue(Validator.isValidInteger("0"));
-		Assert.assertFalse(Validator.isValidInteger("p"));
-		Assert.assertFalse(Validator.isValidInteger("402kj"));
-		Assert.assertFalse(Validator.isValidInteger("2378942398743289732"));
-		Assert.assertFalse(Validator.isValidInteger(".4"));
-		Assert.assertFalse(Validator.isValidInteger("4-4"));
-		Assert.assertFalse(Validator.isValidInteger(null));
+		Assertions.assertTrue(Validator.isValidInteger("4"));
+		Assertions.assertTrue(Validator.isValidInteger("-3835"));
+		Assertions.assertTrue(Validator.isValidInteger("3420202"));
+		Assertions.assertTrue(Validator.isValidInteger("0"));
+		Assertions.assertFalse(Validator.isValidInteger("p"));
+		Assertions.assertFalse(Validator.isValidInteger("402kj"));
+		Assertions.assertFalse(Validator.isValidInteger("2378942398743289732"));
+		Assertions.assertFalse(Validator.isValidInteger(".4"));
+		Assertions.assertFalse(Validator.isValidInteger("4-4"));
+		Assertions.assertFalse(Validator.isValidInteger(null));
 
 	}
 	@StarexecTest
 	private void ArchiveRegexTest() {
-		Assert.assertTrue(Validator.isValidArchiveType(".zip"));
-		Assert.assertTrue(Validator.isValidArchiveType(".tar"));
-		Assert.assertTrue(Validator.isValidArchiveType(".tar.gz"));
-		Assert.assertTrue(Validator.isValidArchiveType(".tgz"));
-		Assert.assertFalse(Validator.isValidArchiveType(".rar"));
-		Assert.assertFalse(Validator.isValidArchiveType(".exe"));
-		Assert.assertFalse(Validator.isValidArchiveType(""));
-		Assert.assertFalse(Validator.isValidArchiveType("."));
-		Assert.assertFalse(Validator.isValidArchiveType(null));
-		Assert.assertFalse(Validator.isValidArchiveType("<script>"));
+		Assertions.assertTrue(Validator.isValidArchiveType(".zip"));
+		Assertions.assertTrue(Validator.isValidArchiveType(".tar"));
+		Assertions.assertTrue(Validator.isValidArchiveType(".tar.gz"));
+		Assertions.assertTrue(Validator.isValidArchiveType(".tgz"));
+		Assertions.assertFalse(Validator.isValidArchiveType(".rar"));
+		Assertions.assertFalse(Validator.isValidArchiveType(".exe"));
+		Assertions.assertFalse(Validator.isValidArchiveType(""));
+		Assertions.assertFalse(Validator.isValidArchiveType("."));
+		Assertions.assertFalse(Validator.isValidArchiveType(null));
+		Assertions.assertFalse(Validator.isValidArchiveType("<script>"));
 
 	}
 	@StarexecTest
 	private void DoubleRegexTest() {
-		Assert.assertTrue(Validator.isValidPosDouble("4.0"));
-		Assert.assertFalse(Validator.isValidPosDouble("-.9"));
-		Assert.assertFalse(Validator.isValidPosDouble("-4"));
-		Assert.assertTrue(Validator.isValidPosDouble("493."));
-		Assert.assertFalse(Validator.isValidPosDouble("-393.245"));
-		Assert.assertTrue(Validator.isValidPosDouble("4022.2935"));
-		Assert.assertFalse(Validator.isValidPosDouble("."));
-		Assert.assertFalse(Validator.isValidPosDouble("3.52.34"));
-		Assert.assertFalse(Validator.isValidPosDouble("-."));
-		Assert.assertFalse(Validator.isValidPosDouble("dsd"));
-		Assert.assertFalse(Validator.isValidPosDouble("3493.2de"));
-		Assert.assertFalse(Validator.isValidPosDouble(null));
+		Assertions.assertTrue(Validator.isValidPosDouble("4.0"));
+		Assertions.assertFalse(Validator.isValidPosDouble("-.9"));
+		Assertions.assertFalse(Validator.isValidPosDouble("-4"));
+		Assertions.assertTrue(Validator.isValidPosDouble("493."));
+		Assertions.assertFalse(Validator.isValidPosDouble("-393.245"));
+		Assertions.assertTrue(Validator.isValidPosDouble("4022.2935"));
+		Assertions.assertFalse(Validator.isValidPosDouble("."));
+		Assertions.assertFalse(Validator.isValidPosDouble("3.52.34"));
+		Assertions.assertFalse(Validator.isValidPosDouble("-."));
+		Assertions.assertFalse(Validator.isValidPosDouble("dsd"));
+		Assertions.assertFalse(Validator.isValidPosDouble("3493.2de"));
+		Assertions.assertFalse(Validator.isValidPosDouble(null));
 	}
 	@StarexecTest
 	private void EmailRegexTest() {
-		Assert.assertTrue(Validator.isValidEmail("test@uiowa.edu"));
-		Assert.assertTrue(Validator.isValidEmail("test_two@hotmail.com"));
-		Assert.assertTrue(Validator.isValidEmail("AebEdxjkei382@fake.net"));
-		Assert.assertFalse(Validator.isValidEmail("testuiowaedu"));
-		Assert.assertFalse(Validator.isValidEmail("testuiowa.com"));
-		Assert.assertFalse(Validator.isValidEmail("test@uiowanet"));
-		Assert.assertFalse(Validator.isValidEmail(null));
-		Assert.assertFalse(Validator.isValidEmail("<script>"));
+		Assertions.assertTrue(Validator.isValidEmail("test@uiowa.edu"));
+		Assertions.assertTrue(Validator.isValidEmail("test_two@hotmail.com"));
+		Assertions.assertTrue(Validator.isValidEmail("AebEdxjkei382@fake.net"));
+		Assertions.assertFalse(Validator.isValidEmail("testuiowaedu"));
+		Assertions.assertFalse(Validator.isValidEmail("testuiowa.com"));
+		Assertions.assertFalse(Validator.isValidEmail("test@uiowanet"));
+		Assertions.assertFalse(Validator.isValidEmail(null));
+		Assertions.assertFalse(Validator.isValidEmail("<script>"));
 
 
 	}
 	@StarexecTest
 	private void IntegerListTest() {
-		Assert.assertTrue(Validator.isValidIntegerList(new String[]{"3","1"}));
-		Assert.assertTrue(Validator.isValidIntegerList(new String[]{"0","132929","3492"}));
-		Assert.assertTrue(Validator.isValidIntegerList(new String[]{"3"}));
-		Assert.assertTrue(Validator.isValidIntegerList(new String[]{}));
-		Assert.assertFalse(Validator.isValidIntegerList(new String[]{"3kd"}));
-		Assert.assertFalse(Validator.isValidIntegerList(new String[]{"0","132929","3492","d"}));
-		Assert.assertFalse(Validator.isValidIntegerList((String[])null));
+		Assertions.assertTrue(Validator.isValidIntegerList(new String[]{"3","1"}));
+		Assertions.assertTrue(Validator.isValidIntegerList(new String[]{"0","132929","3492"}));
+		Assertions.assertTrue(Validator.isValidIntegerList(new String[]{"3"}));
+		Assertions.assertTrue(Validator.isValidIntegerList(new String[]{}));
+		Assertions.assertFalse(Validator.isValidIntegerList(new String[]{"3kd"}));
+		Assertions.assertFalse(Validator.isValidIntegerList(new String[]{"0","132929","3492","d"}));
+		Assertions.assertFalse(Validator.isValidIntegerList((String[])null));
 
 
 	}

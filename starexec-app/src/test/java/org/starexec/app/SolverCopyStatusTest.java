@@ -2,8 +2,8 @@ package org.starexec.app;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
@@ -19,9 +19,9 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * What the copy handler tells the user when some solvers could not be copied.
@@ -35,7 +35,7 @@ public class SolverCopyStatusTest {
 	private static final int SPACE_ID = 3;
 	private static final int USER_ID = 7;
 
-	@BeforeClass
+	@BeforeAll
 	public static void initialize() {
 		Validator.initialize();
 	}
@@ -44,7 +44,7 @@ public class SolverCopyStatusTest {
 	public void aCleanCopyIsReportedAsSuccess() {
 		JsonObject response = copyTwoSolvers(List.of(101, 102));
 
-		assertTrue(response.toString(), response.get("success").getAsBoolean());
+		assertTrue(response.get("success").getAsBoolean(), response.toString());
 		assertEquals("Solver(s) copied successfully", response.get("message").getAsString());
 	}
 
@@ -53,11 +53,11 @@ public class SolverCopyStatusTest {
 	public void aFailedCopyIsReportedByTheHandler() {
 		JsonObject response = copyTwoSolvers(List.of(101, -1));
 
-		assertFalse("a failed copy must not be reported as success: " + response,
-				response.get("success").getAsBoolean());
+		assertFalse(response.get("success").getAsBoolean(),
+				"a failed copy must not be reported as success: " + response);
 		String message = response.get("message").getAsString();
-		assertTrue("the message must say how many failed: " + message, message.contains("1 of 2"));
-		assertTrue("the message must say the rest were copied: " + message, message.contains("1 was copied"));
+		assertTrue(message.contains("1 of 2"), "the message must say how many failed: " + message);
+		assertTrue(message.contains("1 was copied"), "the message must say the rest were copied: " + message);
 	}
 
 	/**
@@ -68,7 +68,7 @@ public class SolverCopyStatusTest {
 	public void everyCopyFailingIsReportedWithoutClaimingSuccesses() {
 		JsonObject response = copyTwoSolvers(List.of(-1, -1));
 
-		assertFalse(response.toString(), response.get("success").getAsBoolean());
+		assertFalse(response.get("success").getAsBoolean(), response.toString());
 		String message = response.get("message").getAsString();
 		assertEquals("None of the 2 solver(s) could be copied", message);
 	}
@@ -78,7 +78,7 @@ public class SolverCopyStatusTest {
 	public void aSingleSurvivingCopyIsWordedInTheSingular() {
 		String message = RESTServices.solverCopyStatus(1, 1, true).getMessage();
 
-		assertTrue(message, message.contains("the remaining 1 was copied successfully"));
+		assertTrue(message.contains("the remaining 1 was copied successfully"), message);
 	}
 
 	/**
@@ -89,7 +89,7 @@ public class SolverCopyStatusTest {
 	public void aLinkNeverReportsAPartialCopy() {
 		JsonObject response = linkTwoSolvers();
 
-		assertTrue(response.toString(), response.get("success").getAsBoolean());
+		assertTrue(response.get("success").getAsBoolean(), response.toString());
 		assertEquals("Solver(s) linked successfully", response.get("message").getAsString());
 	}
 

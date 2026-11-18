@@ -235,13 +235,13 @@
 					<button id="selectPairTimeGraph" class="btn btn-secondary" type="button"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> Show Pairs vs. Time</button>
 				</fieldset>
 				<img id="spaceOverview"
-			     		src="${starexecRoot}/images/loadingGraph.png" width="300"
+			     		src="${starexecRoot}/images/loadingGraph.svg" width="300"
 			     		height="300" alt="Space overview chart"/>
 				<img id="solverComparison300" width="300" height="300"
-			     		src="${starexecRoot}/images/loadingGraph.png"
+			     		src="${starexecRoot}/images/loadingGraph.svg"
 			     		usemap="#solverComparisonMap300" alt="Solver comparison chart"/>
 				<img id="pairTimeGraph" width="300" height="300" 
-			     		src="${starexecRoot}/images/loadingGraph.png" alt="Completed pairs vs time chart"/>
+			     		src="${starexecRoot}/images/loadingGraph.svg" alt="Completed pairs vs time chart"/>
 				<br>
 				<fieldset id="optionField">
 					<legend>options</legend>

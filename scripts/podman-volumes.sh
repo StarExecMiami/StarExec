@@ -46,19 +46,16 @@ else
     PODMAN_IS_ROOTFUL=false
 fi
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/lib/cli-output.sh"
 
-log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
+log_info() { ui_info "$@"; }
+log_warn() { ui_warn "$@"; }
+log_error() { ui_error "$@"; }
 
 # List all StarExec volumes
 list_volumes() {
-    log_info "StarExec volumes:"
+    printf '%s\n' 'StarExec volumes:'
     ${PODMAN_CMD:-podman} volume ls --filter "name=${VOLUME_PREFIX}" --format "table {{.Name}}\t{{.Driver}}\t{{.Mountpoint}}"
 }
 
@@ -110,10 +107,12 @@ create_volumes() {
 
     for vol in "$data_vol" "$sandbox_vol" "$backend_vol" "$work_vol"; do
         if ${PODMAN_CMD:-podman} volume exists "$vol" 2>/dev/null; then
-            log_warn "Volume $vol already exists (skipping)"
+            ui_detail "Volume $vol already exists (skipping)"
         else
-            ${PODMAN_CMD:-podman} volume create "$vol"
-            log_info "Created $vol"
+            # PODMAN_CMD intentionally contains a command prefix and options.
+            # shellcheck disable=SC2086
+            ui_run ${PODMAN_CMD:-podman} volume create "$vol"
+            ui_success "Created $vol"
         fi
     done
 
@@ -121,10 +120,11 @@ create_volumes() {
     # We use 'podman unshare chown' so the chown runs inside the rootless user namespace
     # (mapping host UID → container UID 999) without requiring sudo on the host.
     if ${PODMAN_CMD:-podman} volume exists "$pg_vol" 2>/dev/null; then
-        log_warn "Volume $pg_vol already exists (skipping creation)"
+        ui_detail "Volume $pg_vol already exists (skipping creation)"
     else
-        ${PODMAN_CMD:-podman} volume create "$pg_vol"
-        log_info "Created $pg_vol"
+        # shellcheck disable=SC2086
+        ui_run ${PODMAN_CMD:-podman} volume create "$pg_vol"
+        ui_success "Created $pg_vol"
     fi
 
     # Validate write access for postgres user under --userns=keep-id and repair
@@ -134,13 +134,13 @@ create_volumes() {
     pg_mountpoint=$(${PODMAN_CMD:-podman} volume inspect "$pg_vol" --format '{{.Mountpoint}}' 2>/dev/null || true)
     if [ -n "$pg_mountpoint" ]; then
         if verify_postgres_volume_access "$pg_vol" >/dev/null 2>&1; then
-            log_info "✓ PostgreSQL volume permissions already valid for user 999:999"
+            ui_detail "PostgreSQL volume permissions already valid for user 999:999"
         else
             log_warn "PostgreSQL volume not writable by user 999:999. Attempting repair..."
 
             if [ "$PODMAN_IS_ROOTFUL" = "true" ]; then
                 if chown -R 999:999 "$pg_mountpoint" && verify_postgres_volume_access "$pg_vol" >/dev/null 2>&1; then
-                    log_info "✓ PostgreSQL volume ownership repaired to 999:999 (rootful)"
+                    ui_success "PostgreSQL volume ownership repaired to 999:999 (rootful)"
                 else
                     log_error "Could not fix ownership for $pg_mountpoint"
                     return 1
@@ -148,19 +148,19 @@ create_volumes() {
             else
                 # Rootless + keep-id: first repair inside keep-id namespace, then fallback.
                 if repair_postgres_volume_keepid "$pg_vol" >/dev/null 2>&1 && verify_postgres_volume_access "$pg_vol" >/dev/null 2>&1; then
-                    log_info "✓ PostgreSQL volume repaired via keep-id namespace chown"
+                    ui_success "PostgreSQL volume repaired via keep-id namespace chown"
                 elif ${PODMAN_CMD:-podman} unshare chown -R 999:999 "$pg_mountpoint" && verify_postgres_volume_access "$pg_vol" >/dev/null 2>&1; then
-                    log_info "✓ PostgreSQL volume repaired via podman unshare chown 999:999"
+                    ui_success "PostgreSQL volume repaired via podman unshare chown 999:999"
                 else
                     log_error "Could not fix ownership for $pg_mountpoint"
-                    log_error "Manual check: ${PODMAN_CMD:-podman} run --rm --network=none --userns=keep-id --user 999:999 -v $pg_vol:/var/lib/postgresql/data alpine:latest sh -c 'id && ls -ld /var/lib/postgresql/data'"
-                    log_error "Manual repair: ${PODMAN_CMD:-podman} run --rm --network=none --userns=keep-id --user 0:0 -v $pg_vol:/var/lib/postgresql/data alpine:latest sh -c 'chown -R 999:999 /var/lib/postgresql/data'"
+                    ui_info "  Manual check: ${PODMAN_CMD:-podman} run --rm --network=none --userns=keep-id --user 999:999 -v $pg_vol:/var/lib/postgresql/data alpine:latest sh -c 'id && ls -ld /var/lib/postgresql/data'"
+                    ui_info "  Manual repair: ${PODMAN_CMD:-podman} run --rm --network=none --userns=keep-id --user 0:0 -v $pg_vol:/var/lib/postgresql/data alpine:latest sh -c 'chown -R 999:999 /var/lib/postgresql/data'"
                     return 1
                 fi
             fi
         fi
     else
-        log_warn "Could not determine mountpoint for $pg_vol — skipping ownership fix"
+        log_warn "Could not determine mountpoint for $pg_vol; skipping ownership fix"
     fi
 }
 
@@ -214,8 +214,8 @@ export_volume() {
             actual_size=0
         fi
         if [ "$actual_size" -lt "$MIN_ARCHIVE_BYTES" ]; then
-            log_error "❌ Exported archive seems too small (${actual_size} bytes): $output_file"
-            log_error "   This likely indicates an empty or failed export. Aborting backup."
+            log_error "Exported archive seems too small (${actual_size} bytes): $output_file"
+            ui_info "  This may indicate an empty or failed export. Aborting backup."
             rm -f "$output_file" 2>/dev/null || true
             exit 1
         fi
@@ -239,11 +239,12 @@ import_volume() {
 
     # Create volume if it doesn't exist
     if ! ${PODMAN_CMD:-podman} volume exists "$volume_name" 2>/dev/null; then
-        ${PODMAN_CMD:-podman} volume create "$volume_name"
-        log_info "Created new volume: $volume_name"
+        # shellcheck disable=SC2086
+        ui_run ${PODMAN_CMD:-podman} volume create "$volume_name"
+        ui_success "Created new volume: $volume_name"
     else
         log_warn "Volume $volume_name exists, will overwrite contents"
-        printf "Continue? (y/N): "
+        printf '%s' "Continue? (y/N): " >&2
         read -r REPLY
         if [ "$REPLY" != "y" ] && [ "$REPLY" != "Y" ]; then
             log_error "Import cancelled"
@@ -380,7 +381,7 @@ record_checksum() {
         mkdir -p "${BACKUP_DIR}"
         sha256sum "$file" >> "${BACKUP_DIR}/checksums.txt"
     else
-        log_warn "Cannot record checksum – file missing: $file"
+        log_warn "Cannot record checksum; file missing: $file"
     fi
 }
 
@@ -391,13 +392,13 @@ verify_checksum() {
 
     # Verify file exists first
     if [ ! -f "$file" ]; then
-        log_error "❌ Archive file not found: $file"
+        log_error "Archive file not found: $file"
         return 1
     fi
 
     # Check file is readable
     if [ ! -r "$file" ]; then
-        log_error "❌ Archive file is not readable: $file"
+        log_error "Archive file is not readable: $file"
         return 1
     fi
 
@@ -406,7 +407,7 @@ verify_checksum() {
     if command -v stat >/dev/null 2>&1; then
         file_size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "0")
         if [ "$file_size" -lt 1024 ]; then
-            log_error "❌ Archive file suspiciously small (${file_size} bytes): $file"
+            log_error "Archive file suspiciously small (${file_size} bytes): $file"
             return 1
         fi
     fi
@@ -426,14 +427,14 @@ verify_checksum() {
     local actual=$(sha256sum "$file" | awk '{print $1}')
 
     if [ "$expected" != "$actual" ]; then
-        log_error "❌ CHECKSUM MISMATCH for $file"
-        log_error "   Expected: $expected"
-        log_error "   Got:      $actual"
-        log_error "   File may be corrupted or tampered with!"
+        log_error "Checksum mismatch for $file"
+        ui_info "  Expected: $expected"
+        ui_info "  Got:      $actual"
+        ui_info "  File may be corrupted or tampered with."
         return 1
     fi
 
-    log_info "✅ Checksum verified: $(basename "$file")"
+    ui_success "Checksum verified: $(basename "$file")"
     return 0
 }
 
@@ -549,8 +550,9 @@ delete_volumes() {
     if [ "${FORCE:-0}" = "1" ]; then
         log_warn "FORCE=1 detected, skipping confirmation"
     else
-        read -p "Are you absolutely sure? Type 'DELETE' to confirm: " -r
-        echo
+        printf '%s' "Are you absolutely sure? Type 'DELETE' to confirm: " >&2
+        read -r REPLY
+        printf '\n' >&2
 
         if [ "$REPLY" != "DELETE" ]; then
             log_error "Deletion cancelled"
@@ -561,26 +563,28 @@ delete_volumes() {
     # Remove the named volumes for this env
     for vol in "${vols[@]}"; do
         if ${PODMAN_CMD:-podman} volume exists "$vol" 2>/dev/null; then
-            if ${PODMAN_CMD:-podman} volume rm -f "$vol" 2>/dev/null; then
-                log_info "Deleted volume: $vol"
+            # shellcheck disable=SC2086
+            if ui_run ${PODMAN_CMD:-podman} volume rm -f "$vol"; then
+                ui_success "Deleted volume: $vol"
             else
-                log_warn "Failed to delete volume (in use?): $vol"
+                log_warn "Failed to delete volume: $vol"
             fi
         else
-            log_info "Volume already absent (skipping): $vol"
+            ui_detail "Volume absent or existence query failed (skipping): $vol"
         fi
     done
 
     # Attempt to remove legacy (non-env suffixed) volumes as well
     for vol in "${legacy_vols[@]}"; do
         if ${PODMAN_CMD:-podman} volume exists "$vol" 2>/dev/null; then
-            if ${PODMAN_CMD:-podman} volume rm -f "$vol" 2>/dev/null; then
-                log_info "Deleted legacy volume: $vol"
+            # shellcheck disable=SC2086
+            if ui_run ${PODMAN_CMD:-podman} volume rm -f "$vol"; then
+                ui_success "Deleted legacy volume: $vol"
             else
-                log_warn "Could not delete legacy volume (in use?): $vol"
+                log_warn "Could not delete legacy volume: $vol"
             fi
         else
-            log_info "Legacy volume already absent (skipping): $vol"
+            ui_detail "Legacy volume absent or existence query failed (skipping): $vol"
         fi
     done
 
@@ -588,17 +592,17 @@ delete_volumes() {
     local failed=0
     for vol in "${vols[@]}" "${legacy_vols[@]}"; do
         if ${PODMAN_CMD:-podman} volume exists "$vol" 2>/dev/null; then
-            log_error "❌ Volume still exists after deletion attempt: $vol"
+            log_error "Volume still exists after deletion attempt: $vol"
             # Try to find containers using the volume (best-effort)
             local holders
             holders=$(${PODMAN_CMD:-podman} ps -a --format "{{.Id}}: {{.Names}}" --filter "volume=$vol" 2>/dev/null || true)
             if [ -n "$holders" ]; then
-                log_error "  Containers referencing $vol:"
-                echo "$holders" | sed 's/^/    /'
+                ui_info "  Containers referencing $vol:"
+                printf '%s\n' "$holders" | sed 's/^/    /' >&2
             else
                 # Show some diagnostic info
                 log_info "  Inspecting volume metadata for: $vol"
-                ${PODMAN_CMD:-podman} volume inspect "$vol" 2>/dev/null || true
+                ${PODMAN_CMD:-podman} volume inspect "$vol" >&2 2>/dev/null || true
             fi
             failed=1
         fi
@@ -606,7 +610,7 @@ delete_volumes() {
 
     if [ $failed -ne 0 ]; then
         log_warn "One or more volumes could not be removed. They may be in use by containers or the system."
-        log_warn "Try: podman ps -a | podman rm -f <container> and retry, or reboot to clear lingering mounts."
+        ui_info "  Inspect: ${PODMAN_CMD:-podman} volume inspect <volume>"
     fi
 
     # Optional hostPath cleanup (VERY DESTRUCTIVE)
@@ -616,8 +620,8 @@ delete_volumes() {
             rm -rf -- "$hostpath_data" "$hostpath_postgres" 2>/dev/null || log_warn "Could not remove some host paths (check permissions)"
             log_info "HostPath cleanup attempted for: $hostpath_data, $hostpath_postgres"
         else
-            echo ""
-            printf "Also remove host paths '%s' and '%s'? This will permanently delete data (y/N): " "$hostpath_data" "$hostpath_postgres"
+            printf '\n' >&2
+            printf "Also remove host paths '%s' and '%s'? This will permanently delete data (y/N): " "$hostpath_data" "$hostpath_postgres" >&2
             read -r ans
             if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
                 rm -rf -- "$hostpath_data" "$hostpath_postgres" 2>/dev/null || log_warn "Could not remove some host paths (check permissions)"
@@ -628,7 +632,13 @@ delete_volumes() {
         fi
     fi
 
-    log_info "Volume cleanup complete for environment: $env"
+    # Historical return policy remains success even when verification found
+    # remaining volumes. This presentation-only change does not strengthen it.
+    if [ "$failed" -ne 0 ]; then
+        log_warn "Volume cleanup steps finished for environment: $env; some volumes remain."
+    else
+        log_info "Volume cleanup steps finished for environment: $env; review any warnings above."
+    fi
 }
 
 # Cleanup old backups (retention policy)
@@ -683,13 +693,13 @@ cleanup_old_backups() {
 inspect_volume() {
     local volume_name="$1"
 
-    log_info "Volume details: $volume_name"
+    printf 'Volume details: %s\n' "$volume_name"
     ${PODMAN_CMD:-podman} volume inspect "$volume_name"
 
-    log_info "Disk usage:"
+    printf '%s\n' 'Disk usage:'
     ${PODMAN_CMD:-podman} run --rm --network=none -v "$volume_name:/data:ro" docker.io/library/alpine:latest du -sh /data || true
 
-    log_info "Top-level contents:"
+    printf '%s\n' 'Top-level contents:'
     ${PODMAN_CMD:-podman} run --rm --network=none -v "$volume_name:/data:ro" docker.io/library/alpine:latest ls -lah /data || true
 }
 
@@ -805,7 +815,7 @@ health_check() {
     echo ""
 
     # Check volume existence
-    log_info "=== Volume Existence Check ==="
+    printf '%s\n' 'Volume existence:'
     local vols=(
         "${VOLUME_PREFIX}-${env}-data"
         "${VOLUME_PREFIX}-${env}-sandbox"
@@ -815,37 +825,37 @@ health_check() {
     )
     for vol in "${vols[@]}"; do
         if ! ${PODMAN_CMD:-podman} volume exists "$vol" 2>/dev/null; then
-            log_error "❌ Volume missing: $vol"
-            log_error "   Fix: make volumes-create ENV=$env"
+            log_error "Volume missing or existence query failed: $vol"
+            ui_info "  Fix: make volumes-create ENV=$env"
             errors=$((errors + 1))
         else
-            log_info "✅ Volume exists: $vol"
+            ui_success "Volume exists: $vol"
         fi
     done
     echo ""
 
     # Check volume mountability
-    log_info "=== Volume Mount Check ==="
+    printf '%s\n' 'Volume mounts:'
     for vol in "${vols[@]}"; do
         if ${PODMAN_CMD:-podman} volume exists "$vol" 2>/dev/null; then
             if ${PODMAN_CMD:-podman} run --rm --network=none -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test 2>/dev/null; then
-                log_info "✅ Volume mountable: $vol"
+                ui_success "Volume mountable: $vol"
                 
                 # Special check for data volume items
                 if [[ "$vol" == *"-data" ]]; then
                     if ${PODMAN_CMD:-podman} run --rm --network=none -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test/Solvers && \
                        ${PODMAN_CMD:-podman} run --rm --network=none -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test/Benchmarks; then
-                         log_info "   ✅ Data volume structure verified (Solvers/Benchmarks found)"
+                         ui_success "Data volume structure verified (Solvers/Benchmarks found)"
                     else
-                         log_warn "   ⚠️  Data volume missing Solvers or Benchmarks directories!"
-                         log_warn "       This might indicate an incomplete backup or fresh install."
+                         log_warn "Data volume missing Solvers or Benchmarks directories, or directory check failed."
+                         ui_info "  This might indicate an incomplete backup or fresh install."
                          warnings=$((warnings + 1))
                     fi
                 fi
             else
-                log_error "❌ Volume mount failed: $vol"
-                log_error "   Volume may be corrupted"
-                log_error "   Fix: make volumes-restore ENV=$env (from backup)"
+                log_error "Volume mount check failed: $vol"
+                ui_info "  Inspect the volume before choosing recovery."
+                ui_info "  Restore from backup: make volumes-restore ENV=$env"
                 errors=$((errors + 1))
             fi
         fi
@@ -853,7 +863,7 @@ health_check() {
     echo ""
 
     # Check volume sizes
-    log_info "=== Volume Size Check ==="
+    printf '%s\n' 'Volume sizes:'
     local warn_threshold_gb=80
     local critical_threshold_gb=95
 
@@ -863,31 +873,31 @@ health_check() {
                 du -sb /data 2>/dev/null | awk '{print $1}')
             local size_gb=$((size_bytes / 1024 / 1024 / 1024))
 
-            log_info "📊 Volume: $vol - Size: ${size_gb}GB"
+            printf '  %s: %sGB\n' "$vol" "$size_gb"
 
             if [ $size_gb -gt $critical_threshold_gb ]; then
-                log_error "  ⚠️  CRITICAL: Volume size exceeds ${critical_threshold_gb}GB"
-                log_error "  Action required: Immediate backup and cleanup"
-                log_error "  Run: make volumes-backup ENV=$env"
+                log_error "Volume size exceeds ${critical_threshold_gb}GB"
+                ui_info "  Action required: immediate backup and cleanup"
+                ui_info "  Run: make volumes-backup ENV=$env"
                 errors=$((errors + 1))
             elif [ $size_gb -gt $warn_threshold_gb ]; then
-                log_warn "  ⚠️  WARNING: Volume size exceeds ${warn_threshold_gb}GB threshold"
-                log_warn "  Recommended: make volumes-backup ENV=$env"
+                log_warn "Volume size exceeds ${warn_threshold_gb}GB threshold"
+                ui_info "  Recommended: make volumes-backup ENV=$env"
                 warnings=$((warnings + 1))
             else
-                log_info "  ✅ Size within normal range"
+                ui_detail "Size within configured range"
             fi
         fi
     done
     echo ""
 
     # Check last backup age
-    log_info "=== Backup Status Check ==="
+    printf '%s\n' 'Backup status:'
     local latest_backup=$(ls -1t "${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-"*-data.tar.gz 2>/dev/null | head -1)
 
     if [ -z "$latest_backup" ]; then
-        log_warn "⚠️  No backups found for environment: $env"
-        log_warn "   Recommended: make volumes-backup ENV=$env"
+        log_warn "No backups found for environment: $env"
+        ui_info "  Recommended: make volumes-backup ENV=$env"
         warnings=$((warnings + 1))
     else
         local backup_age_days
@@ -898,27 +908,25 @@ health_check() {
         fi
 
         if [ $backup_age_days -gt 7 ]; then
-            log_warn "⚠️  Latest backup is ${backup_age_days} days old"
-            log_warn "   Recommended: make volumes-backup ENV=$env"
+            log_warn "Latest backup is ${backup_age_days} days old"
+            ui_info "  Recommended: make volumes-backup ENV=$env"
             warnings=$((warnings + 1))
         else
-            log_info "✅ Recent backup found (${backup_age_days} days old)"
+            ui_success "Recent backup found (${backup_age_days} days old)"
         fi
     fi
     echo ""
 
     # Summary
-    log_info "=== Health Check Summary ==="
+    printf '%s\n' 'Volume check summary:'
     if [ $errors -eq 0 ] && [ $warnings -eq 0 ]; then
-        log_info "✅ All health checks passed - system is healthy"
+        ui_success "Volume checks passed"
         return 0
     elif [ $errors -eq 0 ]; then
-        log_warn "⚠️  Health check completed with $warnings warning(s)"
-        log_warn "System is operational but attention recommended"
+        log_warn "Volume checks finished with $warnings warning(s)"
         return 0
     else
-        log_error "❌ Health check FAILED with $errors error(s) and $warnings warning(s)"
-        log_error "System requires immediate attention"
+        log_error "Volume checks failed with $errors error(s) and $warnings warning(s)"
         return 1
     fi
 }
@@ -971,6 +979,7 @@ Examples:
 
 Environment Variables:
     VOLUME_PREFIX             Volume name prefix (default: starexec)
+    VERBOSE                   Technical output and details: 0 or 1 (default: 0)
 
 Notes:
     - Empty volumes are recorded using a small placeholder archive and listed in a manifest file

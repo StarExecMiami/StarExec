@@ -1,6 +1,6 @@
 package org.starexec.util;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.w3c.dom.ls.LSInput;
 
 import java.io.InputStream;
@@ -10,10 +10,10 @@ import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * The resolver, driven directly.
@@ -42,13 +42,13 @@ public class BundledSchemaResolverTest {
 				TYPE, "https://www.starexec.org/starexec/public/jobSchemaTypes.xsd", null,
 				"https://www.starexec.org/starexec/public/jobSchemaTypes.xsd", null);
 
-		assertNotNull("a bundled import must resolve", input);
+		assertNotNull(input, "a bundled import must resolve");
 		try (InputStream stream = input.getByteStream()) {
-			assertNotNull("the resolved input must carry the packaged bytes", stream);
+			assertNotNull(stream, "the resolved input must carry the packaged bytes");
 			String schema = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-			assertTrue("the resolved document must be jobSchemaTypes.xsd, was:\n"
-							+ schema.substring(0, Math.min(200, schema.length())),
-					schema.contains("targetNamespace=\"https://www.starexec.org/starexec/public/jobSchemaTypes.xsd\""));
+			assertTrue(schema.contains("targetNamespace=\"https://www.starexec.org/starexec/public/jobSchemaTypes.xsd\""),
+					"the resolved document must be jobSchemaTypes.xsd, was:\n"
+							+ schema.substring(0, Math.min(200, schema.length())));
 		}
 	}
 
@@ -58,9 +58,9 @@ public class BundledSchemaResolverTest {
 		for (String name : new String[]{"batchJobSchema.xsd", "batchSpaceSchema.xsd",
 				"jobSchemaTypes.xsd", "runSolverOnUploadBatchJobSchema.xsd"}) {
 			LSInput input = resolver.resolveResource(TYPE, null, null, "any/path/" + name, null);
-			assertNotNull(name + " is allowlisted but did not resolve", input);
+			assertNotNull(input, name + " is allowlisted but did not resolve");
 			try (InputStream stream = input.getByteStream()) {
-				assertNotNull(name + " is allowlisted but is not packaged", stream);
+				assertNotNull(stream, name + " is allowlisted but is not packaged");
 			}
 		}
 	}
@@ -85,8 +85,8 @@ public class BundledSchemaResolverTest {
 				resolver.resolveResource(TYPE, "urn:whatever", null, unlisted, null);
 				fail("'" + unlisted + "' must not be resolvable");
 			} catch (XMLUtil.UnresolvableSchemaReference expected) {
-				assertTrue("the diagnostic should name the refused reference",
-						expected.getMessage().contains("outside the bundled set"));
+				assertTrue(expected.getMessage().contains("outside the bundled set"),
+						"the diagnostic should name the refused reference");
 			}
 		}
 	}
@@ -116,7 +116,7 @@ public class BundledSchemaResolverTest {
 					break;
 				}
 			}
-			assertEquals("the refused reference was fetched", 0, connections);
+			assertEquals(0, connections, "the refused reference was fetched");
 		}
 	}
 }

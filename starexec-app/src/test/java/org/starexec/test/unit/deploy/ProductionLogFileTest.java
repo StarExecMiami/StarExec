@@ -1,19 +1,17 @@
 package org.starexec.test.unit.deploy;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assume.assumeTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 import java.io.File;
 import java.io.InputStream;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
-
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.joran.JoranConfigurator;
@@ -35,12 +33,12 @@ import ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy;
  */
 public class ProductionLogFileTest {
 
-    @Rule
-    public TemporaryFolder tmp = new TemporaryFolder();
+    @TempDir
+    public File tmp;
 
     private static URL productionConfig() {
         URL config = ProductionLogFileTest.class.getResource("/logback.xml");
-        assertNotNull("the production logback.xml must be on the test classpath", config);
+        assertNotNull(config, "the production logback.xml must be on the test classpath");
         return config;
     }
 
@@ -57,20 +55,20 @@ public class ProductionLogFileTest {
 
     private static RollingFileAppender<?> fileAppender(LoggerContext context) {
         Appender<?> appender = context.getLogger(Logger.ROOT_LOGGER_NAME).getAppender("STAREXEC");
-        assertTrue("STAREXEC must be a rolling file appender: " + appender,
-                appender instanceof RollingFileAppender);
+        assertTrue(appender instanceof RollingFileAppender,
+                "STAREXEC must be a rolling file appender: " + appender);
         return (RollingFileAppender<?>) appender;
     }
 
     @Test
     public void theFileIsWrittenUnderStarexecLogDir() throws Exception {
-        File dir = tmp.newFolder("logs");
+        File dir = newFolder(tmp, "logs");
         File expected = new File(dir, "starexec.log");
         LoggerContext context = configure(dir.getAbsolutePath());
         try {
             assertEquals(expected.getAbsolutePath(), fileAppender(context).getFile());
             context.getLogger("org.starexec.test").info("written by ProductionLogFileTest");
-            assertTrue("the appender must have created its file", expected.isFile());
+            assertTrue(expected.isFile(), "the appender must have created its file");
         } finally {
             context.stop();
         }
@@ -78,8 +76,8 @@ public class ProductionLogFileTest {
 
     @Test
     public void withoutTheVariableItUsesTheDirectoryTheImageCreates() throws Exception {
-        assumeTrue("STAREXEC_LOG_DIR is set in this environment and would take precedence",
-                System.getenv("STAREXEC_LOG_DIR") == null);
+        assumeTrue(System.getenv("STAREXEC_LOG_DIR") == null,
+                "STAREXEC_LOG_DIR is set in this environment and would take precedence");
         LoggerContext context = configure(null);
         try {
             assertEquals("/var/log/starexec/starexec.log", context.getProperty("STAREXEC_LOG_FILE"));
@@ -94,11 +92,11 @@ public class ProductionLogFileTest {
      */
     @Test
     public void rotationIsBoundedBySizeAsWellAsAge() throws Exception {
-        LoggerContext context = configure(tmp.newFolder("bounded").getAbsolutePath());
+        LoggerContext context = configure(newFolder(tmp, "bounded").getAbsolutePath());
         try {
             Object policy = fileAppender(context).getRollingPolicy();
-            assertTrue("rotation must cap size, not only age: " + policy,
-                    policy instanceof SizeAndTimeBasedRollingPolicy);
+            assertTrue(policy instanceof SizeAndTimeBasedRollingPolicy,
+                    "rotation must cap size, not only age: " + policy);
         } finally {
             context.stop();
         }
@@ -106,7 +104,7 @@ public class ProductionLogFileTest {
         try (InputStream in = productionConfig().openStream()) {
             text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
-        assertTrue("logback.xml must cap the total size of the archive", text.contains("<totalSizeCap>"));
-        assertTrue("logback.xml must cap the size of each file", text.contains("<maxFileSize>"));
+        assertTrue(text.contains("<totalSizeCap>"), "logback.xml must cap the total size of the archive");
+        assertTrue(text.contains("<maxFileSize>"), "logback.xml must cap the size of each file");
     }
 }

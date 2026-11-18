@@ -1,9 +1,10 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.LocalJobMonitor;
 import org.starexec.data.database.Common;
 import org.starexec.data.to.Status.StatusCode;
@@ -17,9 +18,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * What does {@code LocalJobMonitor} actually do when completion processing fails?
@@ -63,13 +64,13 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 
 	private Path logDir;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("LocalMonitorLifecycleSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws Exception {
 		cleanUp();
 		logDir = Files.createTempDirectory("local-lifecycle-probe");
@@ -102,7 +103,7 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws SQLException {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			quietly(s, "DROP TRIGGER IF EXISTS probe_block_pair ON starexec.job_pairs");
@@ -145,16 +146,16 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 			unblockPairWrites();
 		}
 
-		assertEquals("a database outage is not a runscript error",
-				ENQUEUED, pairStatus());
-		assertEquals("and it must not be stamped across every stage",
-				ENQUEUED, stageStatus(1));
+		assertEquals(ENQUEUED,
+				pairStatus(), "a database outage is not a runscript error");
+		assertEquals(ENQUEUED,
+				stageStatus(1), "and it must not be stamped across every stage");
 		assertEquals(ENQUEUED, stageStatus(2));
 		assertEquals(ENQUEUED, stageStatus(3));
-		assertTrue("the pair must remain tracked so a later poll can retry it",
-				isTracked(monitor));
-		assertTrue("the solver's output must survive for that retry",
-				Files.exists(logDir.resolve("status.json")));
+		assertTrue(isTracked(monitor),
+				"the pair must remain tracked so a later poll can retry it");
+		assertTrue(Files.exists(logDir.resolve("status.json")),
+				"the solver's output must survive for that retry");
 	}
 
 	/** And having survived, the retry must actually converge. */
@@ -177,7 +178,7 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 
 		// Still inside the backoff window: the poll must decline to reprocess.
 		poll(monitor);
-		assertEquals("a retry must not fire before its deadline", ENQUEUED, pairStatus());
+		assertEquals(ENQUEUED, pairStatus(), "a retry must not fire before its deadline");
 
 		clock.advanceMillis(60_000);
 		poll(monitor);
@@ -204,13 +205,13 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 			for (int attempt = 1; attempt <= 12; attempt++) {
 				poll(monitor);
 				long delay = nextRetryDelayMillis(monitor, clock);
-				assertTrue("attempt " + attempt + " must schedule a future retry", delay > 0);
+				assertTrue(delay > 0, "attempt " + attempt + " must schedule a future retry");
 				if (delay == previous) {
 					capped = delay;
 					cappedRuns++;
 				} else {
-					assertTrue("delay must grow until it caps: " + previous + " -> " + delay,
-							delay > previous);
+					assertTrue(delay > previous,
+							"delay must grow until it caps: " + previous + " -> " + delay);
 				}
 				previous = delay;
 				clock.advanceMillis(delay);
@@ -219,9 +220,9 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 			unblockPairWrites();
 		}
 
-		assertTrue("the delay must stop growing rather than run away", cappedRuns > 0);
-		assertTrue("and the cap must be a sane bound, was " + capped, capped <= 600_000L);
-		assertEquals("no attempt count may fabricate a solver status", ENQUEUED, pairStatus());
+		assertTrue(cappedRuns > 0, "the delay must stop growing rather than run away");
+		assertTrue(capped <= 600_000L, "and the cap must be a sane bound, was " + capped);
+		assertEquals(ENQUEUED, pairStatus(), "no attempt count may fabricate a solver status");
 		assertEquals(ENQUEUED, stageStatus(1));
 	}
 
@@ -259,20 +260,20 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 				"INT, INT, INT, INT, BOOLEAN, INT");
 		try {
 			poll(monitor);
-			assertEquals("no solver status may be invented", ENQUEUED, pairStatus());
+			assertEquals(ENQUEUED, pairStatus(), "no solver status may be invented");
 			assertEquals(ENQUEUED, stageStatus(1));
-			assertTrue("the pair must stay tracked with its evidence", isTracked(monitor));
+			assertTrue(isTracked(monitor), "the pair must stay tracked with its evidence");
 
 			// Bounded, not hot: within the backoff window nothing is reprocessed at all.
 			int before = ingestionFailures(monitor);
 			poll(monitor);
-			assertEquals("a retry must not fire before its deadline",
-					before, ingestionFailures(monitor));
+			assertEquals(before,
+					ingestionFailures(monitor), "a retry must not fire before its deadline");
 
 			clock.advanceMillis(3_600_000);
 			poll(monitor);
-			assertEquals("still no fabricated status after further attempts",
-					ENQUEUED, pairStatus());
+			assertEquals(ENQUEUED,
+					pairStatus(), "still no fabricated status after further attempts");
 		} finally {
 			renameRoutine("UpdatePairStatusPrecise_hidden", "UpdatePairStatusPrecise",
 					"INT, INT, INT, INT, BOOLEAN, INT");
@@ -300,13 +301,13 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		} finally {
 			unblockPairWrites();
 		}
-		assertTrue("generation A must be in backoff", ingestionFailures(monitor) > 0);
+		assertTrue(ingestionFailures(monitor) > 0, "generation A must be in backoff");
 
 		// Generation B: the same pair, rerun.
 		monitor.registerJob(logDir.toString(), PAIR_ID);
 
-		assertEquals("B must not inherit A's failure count", 0, ingestionFailures(monitor));
-		assertTrue("B must not inherit A's blocked state", !isBlocked(monitor));
+		assertEquals(0, ingestionFailures(monitor), "B must not inherit A's failure count");
+		assertTrue(!isBlocked(monitor), "B must not inherit A's blocked state");
 
 		// B is immediately eligible, with no inherited deadline to wait out.
 		poll(monitor);
@@ -328,13 +329,13 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 	public void retryPendingTrackingCannotHoldExecutionCapacity() throws Exception {
 		for (java.lang.reflect.Field f : LocalJobMonitor.class.getDeclaredFields()) {
 			String type = f.getType().getName();
-			assertTrue("LocalJobMonitor must not hold execution capacity state: "
-							+ f.getName() + " is " + type,
-					!type.contains("LocalBackend") && !type.contains("Semaphore"));
-			assertTrue("suspicious capacity-shaped field: " + f.getName(),
-					!f.getName().toLowerCase().contains("core")
+			assertTrue(!type.contains("LocalBackend") && !type.contains("Semaphore"),
+					"LocalJobMonitor must not hold execution capacity state: "
+							+ f.getName() + " is " + type);
+			assertTrue(!f.getName().toLowerCase().contains("core")
 							&& !f.getName().toLowerCase().contains("slot")
-							&& !f.getName().toLowerCase().contains("activejobs"));
+							&& !f.getName().toLowerCase().contains("activejobs"),
+					"suspicious capacity-shaped field: " + f.getName());
 		}
 
 		// And behaviourally: a pair held for retry is still tracked, which is the state that
@@ -348,8 +349,8 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		} finally {
 			unblockPairWrites();
 		}
-		assertTrue("retry-pending means tracked", isTracked(monitor));
-		assertEquals("and unresolved, not failed", ENQUEUED, pairStatus());
+		assertTrue(isTracked(monitor), "retry-pending means tracked");
+		assertEquals(ENQUEUED, pairStatus(), "and unresolved, not failed");
 	}
 
 	// ------------------------------------------------------- cleanup is link-safe
@@ -373,11 +374,11 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		Files.writeString(snapshots.resolve("1.json"), "{}");
 		assumeSymlinks(() -> Files.createSymbolicLink(snapshots.resolve("link"), external));
 
-		assertTrue("cleanup must succeed", clearPreviousAttempt());
+		assertTrue(clearPreviousAttempt(), "cleanup must succeed");
 
-		assertFalse("the tree must be gone", Files.exists(snapshots));
-		assertTrue("the link's TARGET must be untouched", Files.exists(external));
-		assertTrue("and everything inside it", Files.exists(sentinel));
+		assertFalse(Files.exists(snapshots), "the tree must be gone");
+		assertTrue(Files.exists(external), "the link's TARGET must be untouched");
+		assertTrue(Files.exists(sentinel), "and everything inside it");
 	}
 
 	/** The same when the tree root itself is a link: unlink it, never follow it. */
@@ -390,9 +391,9 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 
 		assertTrue(clearPreviousAttempt());
 
-		assertFalse("the link must be gone",
-				Files.exists(logDir.resolve("stage-status"), java.nio.file.LinkOption.NOFOLLOW_LINKS));
-		assertTrue("its target must survive", Files.exists(sentinel));
+		assertFalse(Files.exists(logDir.resolve("stage-status"), java.nio.file.LinkOption.NOFOLLOW_LINKS),
+				"the link must be gone");
+		assertTrue(Files.exists(sentinel), "its target must survive");
 	}
 
 	/** A dangling link is still an entry that must be removed, not skipped as "absent". */
@@ -426,9 +427,9 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		try {
 			action.run();
 		} catch (UnsupportedOperationException | java.io.IOException e) {
-			org.junit.Assume.assumeNoException(
+			Assumptions.abort(
 					"this platform will not create symbolic links; the link-boundary"
-							+ " behaviour is NOT covered here", e);
+							+ " behaviour is NOT covered here: " + e);
 		}
 	}
 
@@ -449,13 +450,13 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		writeStatus(COMPLETE, 1);
 		// Make the parent unwritable so the entry cannot be unlinked.
 		java.io.File readOnly = logDir.toFile();
-		org.junit.Assume.assumeTrue("needs a filesystem where chmod bites",
-				readOnly.setWritable(false, false));
+		Assumptions.assumeTrue(readOnly.setWritable(false, false),
+				"needs a filesystem where chmod bites");
 		try {
-			assertFalse("a stale authoritative artifact must refuse the attempt",
-					clearPreviousAttempt());
+			assertFalse(clearPreviousAttempt(),
+					"a stale authoritative artifact must refuse the attempt");
 		} finally {
-			assertTrue("restore write permission", readOnly.setWritable(true, false));
+			assertTrue(readOnly.setWritable(true, false), "restore write permission");
 		}
 	}
 
@@ -477,12 +478,12 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 			poll(monitor);
 		}
 
-		assertEquals("no solver status may be invented", ENQUEUED, pairStatus());
+		assertEquals(ENQUEUED, pairStatus(), "no solver status may be invented");
 		assertEquals(ENQUEUED, stageStatus(1));
-		assertEquals("nothing may complete the pair", 0, completions());
-		assertTrue("the unreadable evidence must be retained",
-				Files.exists(logDir.resolve("status.json")));
-		assertTrue("and the pair held for intervention", isBlocked(monitor));
+		assertEquals(0, completions(), "nothing may complete the pair");
+		assertTrue(Files.exists(logDir.resolve("status.json")),
+				"the unreadable evidence must be retained");
+		assertTrue(isBlocked(monitor), "and the pair held for intervention");
 	}
 
 	/** A truncated file that is later repaired must converge, not block permanently. */
@@ -493,7 +494,7 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 
 		LocalJobMonitor monitor = freshMonitor();
 		poll(monitor);
-		assertEquals("a truncated read must not mutate anything", ENQUEUED, pairStatus());
+		assertEquals(ENQUEUED, pairStatus(), "a truncated read must not mutate anything");
 
 		writeStatus(COMPLETE, 1);
 		poll(monitor);
@@ -512,7 +513,7 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		Files.delete(logDir.resolve("status.json"));
 		poll(monitor);
 
-		assertEquals("a vanished file is not a runscript error", ENQUEUED, pairStatus());
+		assertEquals(ENQUEUED, pairStatus(), "a vanished file is not a runscript error");
 		assertEquals(ENQUEUED, stageStatus(1));
 		assertEquals(0, completions());
 	}
@@ -538,10 +539,10 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 			poll(monitor);
 
 			if (code.isTerminalExecutionResult()) {
-				assertFalse(code + " is a result and must retire tracking", isTracked(monitor));
+				assertFalse(isTracked(monitor), code + " is a result and must retire tracking");
 			} else {
-				assertTrue(code + " is not a result and must NOT retire tracking",
-						isTracked(monitor));
+				assertTrue(isTracked(monitor),
+						code + " is not a result and must NOT retire tracking");
 			}
 		}
 	}
@@ -559,8 +560,8 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 			LocalJobMonitor monitor = freshMonitor();
 			poll(monitor);
 
-			assertTrue(code + "(" + code.getVal() + ") means work is still owed",
-					isTracked(monitor));
+			assertTrue(isTracked(monitor),
+					code + "(" + code.getVal() + ") means work is still owed");
 		}
 	}
 
@@ -583,9 +584,9 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		writeSnapshot(2, PAIR_ID, 2, COMPLETE);
 		Files.writeString(logDir.resolve("stage-status/2.json.tmp"), "partial");
 
-		assertTrue("the attempt boundary must clear it", clearPreviousAttempt());
-		assertFalse("the whole tree must be gone",
-				Files.exists(logDir.resolve("stage-status")));
+		assertTrue(clearPreviousAttempt(), "the attempt boundary must clear it");
+		assertFalse(Files.exists(logDir.resolve("stage-status")),
+				"the whole tree must be gone");
 
 		// Attempt B: one stage only.
 		writeStatus(COMPLETE, 1);
@@ -595,22 +596,22 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		poll(freshMonitor());
 
 		assertEquals(COMPLETE, stageStatus(1));
-		assertEquals("attempt A's stage 2 must not be observed", NOT_REACHED, stageStatus(2));
+		assertEquals(NOT_REACHED, stageStatus(2), "attempt A's stage 2 must not be observed");
 		assertEquals(COMPLETE, pairStatus());
 	}
 
 	/** Missing and empty trees are both success; a leftover temp file goes with the tree. */
 	@Test
 	public void clearingToleratesMissingEmptyAndPartialTrees() throws Exception {
-		assertTrue("missing directory", clearPreviousAttempt());
+		assertTrue(clearPreviousAttempt(), "missing directory");
 
 		Files.createDirectories(logDir.resolve("stage-status"));
-		assertTrue("empty directory", clearPreviousAttempt());
+		assertTrue(clearPreviousAttempt(), "empty directory");
 		assertFalse(Files.exists(logDir.resolve("stage-status")));
 
 		Files.createDirectories(logDir.resolve("stage-status"));
 		Files.writeString(logDir.resolve("stage-status/1.json.tmp"), "partial");
-		assertTrue("leftover temp file", clearPreviousAttempt());
+		assertTrue(clearPreviousAttempt(), "leftover temp file");
 		assertFalse(Files.exists(logDir.resolve("stage-status")));
 	}
 
@@ -621,14 +622,14 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		Files.createDirectories(dir);
 		Files.writeString(dir.resolve("1.json"), "{}");
 		java.io.File readOnly = dir.toFile();
-		org.junit.Assume.assumeTrue("needs a filesystem where chmod bites",
-				readOnly.setWritable(false, false));
+		Assumptions.assumeTrue(readOnly.setWritable(false, false),
+				"needs a filesystem where chmod bites");
 		try {
-			assertFalse("an unclearable tree must be reported, not ignored",
-					clearPreviousAttempt());
+			assertFalse(clearPreviousAttempt(),
+					"an unclearable tree must be reported, not ignored");
 		} finally {
-			assertTrue("restore write permission on " + readOnly,
-					readOnly.setWritable(true, false));
+			assertTrue(readOnly.setWritable(true, false),
+					"restore write permission on " + readOnly);
 		}
 	}
 
@@ -655,7 +656,7 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		assertEquals(COMPLETE, stageStatus(1));
 		assertEquals(COMPLETE, stageStatus(2));
 		assertEquals(COMPLETE, pairStatus());
-		assertEquals("pair completion fires once", 1, completions());
+		assertEquals(1, completions(), "pair completion fires once");
 	}
 
 	@Test
@@ -681,7 +682,7 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 
 		poll(freshMonitor());
 
-		assertEquals("no earlier stage may be invented", ENQUEUED, stageStatus(1));
+		assertEquals(ENQUEUED, stageStatus(1), "no earlier stage may be invented");
 		assertEquals(COMPLETE, stageStatus(2));
 		assertEquals(NOT_REACHED, stageStatus(3));
 		assertEquals(COMPLETE, pairStatus());
@@ -724,8 +725,8 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		writeCleanRun();
 
 		assertBlockedWithoutWriting();
-		assertTrue("evidence must be kept for diagnosis",
-				Files.exists(logDir.resolve("stage-status/1.json")));
+		assertTrue(Files.exists(logDir.resolve("stage-status/1.json")),
+				"evidence must be kept for diagnosis");
 	}
 
 	/**
@@ -744,7 +745,7 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 
 		LocalJobMonitor first = freshMonitor();
 		poll(first);
-		assertTrue("tracking retires after success", !isTracked(first));
+		assertTrue(!isTracked(first), "tracking retires after success");
 		int completionBefore = completionId();
 		String endTimeBefore = pairEndTime();
 		int stage1Before = stageStatus(1);
@@ -756,8 +757,8 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		assertEquals(EXCEED_CPU, stageStatus(2));
 		assertEquals(EXCEED_CPU, pairStatus());
 		assertEquals(1, completions());
-		assertEquals("the completion row must be the same one", completionBefore, completionId());
-		assertEquals("end_time must not drift", endTimeBefore, pairEndTime());
+		assertEquals(completionBefore, completionId(), "the completion row must be the same one");
+		assertEquals(endTimeBefore, pairEndTime(), "end_time must not drift");
 	}
 
 	private LocalJobMonitor freshMonitor() throws Exception {
@@ -772,12 +773,12 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		LocalJobMonitor monitor = freshMonitor();
 		poll(monitor);
 
-		assertTrue("an invalid artifact must block, not retry forever", isBlocked(monitor));
-		assertEquals("stage 1 untouched", ENQUEUED, stageStatus(1));
-		assertEquals("stage 2 untouched", ENQUEUED, stageStatus(2));
-		assertEquals("no solver status may be fabricated", ENQUEUED, pairStatus());
-		assertEquals("nothing may complete the pair", 0, completions());
-		assertTrue("the pair stays tracked with its evidence", isTracked(monitor));
+		assertTrue(isBlocked(monitor), "an invalid artifact must block, not retry forever");
+		assertEquals(ENQUEUED, stageStatus(1), "stage 1 untouched");
+		assertEquals(ENQUEUED, stageStatus(2), "stage 2 untouched");
+		assertEquals(ENQUEUED, pairStatus(), "no solver status may be fabricated");
+		assertEquals(0, completions(), "nothing may complete the pair");
+		assertTrue(isTracked(monitor), "the pair stays tracked with its evidence");
 	}
 
 	private void writeSnapshot(int fileStage, int pairId, int recordStage, int status)
@@ -939,7 +940,7 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 
 	private static int scalar(Connection con, String sql) throws SQLException {
 		try (Statement s = con.createStatement(); ResultSet rs = s.executeQuery(sql)) {
-			assertTrue("query returned no row: " + sql, rs.next());
+			assertTrue(rs.next(), "query returned no row: " + sql);
 			return rs.getInt(1);
 		}
 	}

@@ -7,10 +7,7 @@ import javax.ws.rs.core.Response.ResponseBuilder;
 
 /**
  * Exceptions that can be thrown from JAX-RS methods.
- * Right now, so as to keep pervious behavior, all exceptions produce the same
- * error message with an HTTP status of 200 (sucess). However, by making these
- * seperate messages, it gives us the flexibility to return more syntactically
- * correct error messages in the future.
+ * Missing and forbidden resources use HTTP 404. Internal failures use HTTP 500.
  */
 public class RESTException extends WebApplicationException {
 	private RESTException() throws UnsupportedOperationException {
@@ -28,7 +25,7 @@ public class RESTException extends WebApplicationException {
 		return rb.build();
 	}
 
-	public static final RESTException NOT_FOUND = new RESTException(Status.OK, "not available");
-	public static final RESTException FORBIDDEN = new RESTException(Status.OK, "not available");
-	public static final RESTException INTERNAL_SERVER_ERROR = new RESTException(Status.OK, "not available");
+	public static final RESTException NOT_FOUND = new RESTException(Status.NOT_FOUND, "not available");
+	public static final RESTException FORBIDDEN = new RESTException(Status.NOT_FOUND, "not available");
+	public static final RESTException INTERNAL_SERVER_ERROR = new RESTException(Status.INTERNAL_SERVER_ERROR, "not available");
 }

@@ -57,8 +57,7 @@
 					<tr>
 						<td><input name="pid" type="hidden" value="${proc.id}"/><a
 								href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}
-							<img class="extLink"
-							     src="${starexecRoot}/images/external.png"/>
+							<span class="ext-link-icon"></span>
 						</a></td>
 						<td>${proc.description}</td>
 					</tr>

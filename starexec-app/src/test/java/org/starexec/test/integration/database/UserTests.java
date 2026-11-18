@@ -1,6 +1,6 @@
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.to.*;
@@ -45,9 +45,9 @@ public class UserTests extends TestSequence {
 
 	@StarexecTest
 	private void getUserByEmailTest() {
-		Assert.assertFalse(Users.getUserByEmail(TestUtil.getRandomEmail()));
-		Assert.assertTrue(Users.getUserByEmail(user1.getEmail()));
-		Assert.assertTrue(Users.getUserByEmail(admin.getEmail()));
+		Assertions.assertFalse(Users.getUserByEmail(TestUtil.getRandomEmail()));
+		Assertions.assertTrue(Users.getUserByEmail(user1.getEmail()));
+		Assertions.assertTrue(Users.getUserByEmail(admin.getEmail()));
 
 	}
 
@@ -55,42 +55,42 @@ public class UserTests extends TestSequence {
 	private void setPasswordTest() {
 		String randomPass = TestUtil.getRandomPassword();
 		try {
-			Assert.assertTrue(Users.updatePassword(user1.getId(), randomPass));
+			Assertions.assertTrue(Users.updatePassword(user1.getId(), randomPass));
 			String dbHash = Users.getPassword(user1.getId());
-			Assert.assertTrue(PasswordHasher.verify(randomPass, dbHash));
+			Assertions.assertTrue(PasswordHasher.verify(randomPass, dbHash));
 			user1.setPassword(randomPass);
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
 	@StarexecTest
 	private void getCommunitiesTest() {
 		List<Integer> commIds = Users.getCommunities(user1.getId());
-		Assert.assertEquals(0, commIds.size());
+		Assertions.assertEquals(0, commIds.size());
 		commIds = Users.getCommunities(admin.getId());
-		Assert.assertTrue(!commIds.isEmpty());
+		Assertions.assertTrue(!commIds.isEmpty());
 		boolean found = false;
 		for (Integer i : commIds) {
 			found = found || comm.getId() == i;
 		}
-		Assert.assertTrue(found);
+		Assertions.assertTrue(found);
 	}
 
 	@StarexecTest
 	private void subscribeToErrorLogsTest() {
-		Assert.assertFalse("Test user shouldn't be subscribed to error reports yet.",
-				testUser.isSubscribedToErrorLogs());
+		Assertions.assertFalse(testUser.isSubscribedToErrorLogs(),
+				"Test user shouldn't be subscribed to error reports yet.");
 		try {
 			Users.subscribeToErrorLogs(testUser.getId());
 			User test = Users.get(testUser.getId());
-			Assert.assertTrue("Test user should be subscribed to error reports.", test.isSubscribedToErrorLogs());
+			Assertions.assertTrue(test.isSubscribedToErrorLogs(), "Test user should be subscribed to error reports.");
 			Users.unsubscribeUserFromErrorLogs(test.getId());
 			test = Users.get(test.getId());
-			Assert.assertFalse("Test user should not be subscribed to error reports any more.",
-					test.isSubscribedToErrorLogs());
+			Assertions.assertFalse(test.isSubscribedToErrorLogs(),
+					"Test user should not be subscribed to error reports any more.");
 		} catch (StarExecDatabaseException | SQLException e) {
-			Assert.fail("Caught an exception: " + Util.getStackTrace(e));
+			Assertions.fail("Caught an exception: " + Util.getStackTrace(e));
 		}
 
 	}
@@ -104,19 +104,19 @@ public class UserTests extends TestSequence {
 
 			List<User> users = Users.getUsersSubscribedToErrorLogs();
 
-			Assert.assertTrue("testUser should be subscribed to error logs.",
-					users.stream().anyMatch(u -> u.getId() == testUser.getId()));
-			Assert.assertTrue("user1 should be subscribed to error logs.",
-					users.stream().anyMatch(u -> u.getId() == user1.getId()));
-			Assert.assertTrue("user2 should be subscribed to error logs.",
-					users.stream().anyMatch(u -> u.getId() == user2.getId()));
+			Assertions.assertTrue(users.stream().anyMatch(u -> u.getId() == testUser.getId()),
+					"testUser should be subscribed to error logs.");
+			Assertions.assertTrue(users.stream().anyMatch(u -> u.getId() == user1.getId()),
+					"user1 should be subscribed to error logs.");
+			Assertions.assertTrue(users.stream().anyMatch(u -> u.getId() == user2.getId()),
+					"user2 should be subscribed to error logs.");
 
 			Users.unsubscribeUserFromErrorLogs(testUser.getId());
 			Users.unsubscribeUserFromErrorLogs(user1.getId());
 			Users.unsubscribeUserFromErrorLogs(user2.getId());
 
 		} catch (StarExecDatabaseException | SQLException e) {
-			Assert.fail("Caught an exception: " + Util.getStackTrace(e));
+			Assertions.fail("Caught an exception: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -130,74 +130,74 @@ public class UserTests extends TestSequence {
 		u.setInstitution(TestUtil.getRandomAlphaString(10));
 		String randomCode = UUID.randomUUID().toString();
 		String randomMessage = TestUtil.getRandomAlphaString(20);
-		Assert.assertTrue(Users.register(u, comm.getId(), randomCode, randomMessage));
-		Assert.assertNotNull(Users.get(u.getId()));
-		Assert.assertTrue(Requests.declineCommunityRequest(u.getId(), comm.getId()));
-		Assert.assertNull(Users.get(u.getId()));
+		Assertions.assertTrue(Users.register(u, comm.getId(), randomCode, randomMessage));
+		Assertions.assertNotNull(Users.get(u.getId()));
+		Assertions.assertTrue(Requests.declineCommunityRequest(u.getId(), comm.getId()));
+		Assertions.assertNull(Users.get(u.getId()));
 	}
 
 	@StarexecTest
 	private void AssociateOneUserOneSpace() {
-		Assert.assertFalse(Users.isMemberOfSpace(user1.getId(), space.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user2.getId(), space.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user3.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user1.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user2.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user3.getId(), space.getId()));
 
-		Assert.assertTrue(Users.associate(user1.getId(), space.getId()));
+		Assertions.assertTrue(Users.associate(user1.getId(), space.getId()));
 
-		Assert.assertTrue(Users.isMemberOfSpace(user1.getId(), space.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user2.getId(), space.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user3.getId(), space.getId()));
-		Assert.assertTrue(removeUserFromSpace(user1, space));
+		Assertions.assertTrue(Users.isMemberOfSpace(user1.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user2.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user3.getId(), space.getId()));
+		Assertions.assertTrue(removeUserFromSpace(user1, space));
 	}
 
 	@StarexecTest
 	private void AssociateManyUsersOneSpace() {
-		Assert.assertFalse(Users.isMemberOfSpace(user1.getId(), space.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user2.getId(), space.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user3.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user1.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user2.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user3.getId(), space.getId()));
 
 		List<Integer> ids = new ArrayList<>();
 		ids.add(user1.getId());
 		ids.add(user2.getId());
 		ids.add(user3.getId());
 
-		Assert.assertTrue(Users.associate(ids, space.getId()));
-		Assert.assertTrue(Users.isMemberOfSpace(user1.getId(), space.getId()));
-		Assert.assertTrue(Users.isMemberOfSpace(user2.getId(), space.getId()));
-		Assert.assertTrue(Users.isMemberOfSpace(user3.getId(), space.getId()));
-		Assert.assertTrue(removeUserFromSpace(user1, space));
-		Assert.assertTrue(removeUserFromSpace(user2, space));
-		Assert.assertTrue(removeUserFromSpace(user3, space));
+		Assertions.assertTrue(Users.associate(ids, space.getId()));
+		Assertions.assertTrue(Users.isMemberOfSpace(user1.getId(), space.getId()));
+		Assertions.assertTrue(Users.isMemberOfSpace(user2.getId(), space.getId()));
+		Assertions.assertTrue(Users.isMemberOfSpace(user3.getId(), space.getId()));
+		Assertions.assertTrue(removeUserFromSpace(user1, space));
+		Assertions.assertTrue(removeUserFromSpace(user2, space));
+		Assertions.assertTrue(removeUserFromSpace(user3, space));
 	}
 
 	@StarexecTest
 	private void AssociateManyUsersSpaceHierarchy() {
-		Assert.assertFalse(Users.isMemberOfSpace(user1.getId(), space.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user1.getId(), subspace.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user2.getId(), space.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user2.getId(), subspace.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user1.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user1.getId(), subspace.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user2.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user2.getId(), subspace.getId()));
 
 		List<Integer> ids = new ArrayList<>();
 		ids.add(user1.getId());
 		ids.add(user2.getId());
-		Assert.assertTrue(Users.associate(ids, space.getId(), true, testUser.getId()));
-		Assert.assertTrue(Users.isMemberOfSpace(user1.getId(), space.getId()));
-		Assert.assertTrue(Users.isMemberOfSpace(user1.getId(), subspace.getId()));
-		Assert.assertTrue(Users.isMemberOfSpace(user2.getId(), space.getId()));
-		Assert.assertTrue(Users.isMemberOfSpace(user2.getId(), subspace.getId()));
+		Assertions.assertTrue(Users.associate(ids, space.getId(), true, testUser.getId()));
+		Assertions.assertTrue(Users.isMemberOfSpace(user1.getId(), space.getId()));
+		Assertions.assertTrue(Users.isMemberOfSpace(user1.getId(), subspace.getId()));
+		Assertions.assertTrue(Users.isMemberOfSpace(user2.getId(), space.getId()));
+		Assertions.assertTrue(Users.isMemberOfSpace(user2.getId(), subspace.getId()));
 
-		Assert.assertTrue(removeUserFromSpace(user1, space));
-		Assert.assertTrue(removeUserFromSpace(user1, subspace));
-		Assert.assertTrue(removeUserFromSpace(user2, space));
-		Assert.assertTrue(removeUserFromSpace(user2, subspace));
+		Assertions.assertTrue(removeUserFromSpace(user1, space));
+		Assertions.assertTrue(removeUserFromSpace(user1, subspace));
+		Assertions.assertTrue(removeUserFromSpace(user2, space));
+		Assertions.assertTrue(removeUserFromSpace(user2, subspace));
 	}
 
 	@StarexecTest
 	private void AssociateManyUsersManySpaces() {
-		Assert.assertFalse(Users.isMemberOfSpace(user1.getId(), space.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user1.getId(), subspace.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user2.getId(), space.getId()));
-		Assert.assertFalse(Users.isMemberOfSpace(user2.getId(), subspace.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user1.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user1.getId(), subspace.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user2.getId(), space.getId()));
+		Assertions.assertFalse(Users.isMemberOfSpace(user2.getId(), subspace.getId()));
 
 		List<Integer> ids = new ArrayList<>();
 		List<Integer> spaceIds = new ArrayList<>();
@@ -207,16 +207,16 @@ public class UserTests extends TestSequence {
 		spaceIds.add(space.getId());
 		spaceIds.add(subspace.getId());
 
-		Assert.assertTrue(Users.associate(ids, spaceIds));
-		Assert.assertTrue(Users.isMemberOfSpace(user1.getId(), space.getId()));
-		Assert.assertTrue(Users.isMemberOfSpace(user1.getId(), subspace.getId()));
-		Assert.assertTrue(Users.isMemberOfSpace(user2.getId(), space.getId()));
-		Assert.assertTrue(Users.isMemberOfSpace(user2.getId(), subspace.getId()));
+		Assertions.assertTrue(Users.associate(ids, spaceIds));
+		Assertions.assertTrue(Users.isMemberOfSpace(user1.getId(), space.getId()));
+		Assertions.assertTrue(Users.isMemberOfSpace(user1.getId(), subspace.getId()));
+		Assertions.assertTrue(Users.isMemberOfSpace(user2.getId(), space.getId()));
+		Assertions.assertTrue(Users.isMemberOfSpace(user2.getId(), subspace.getId()));
 
-		Assert.assertTrue(removeUserFromSpace(user1, space));
-		Assert.assertTrue(removeUserFromSpace(user1, subspace));
-		Assert.assertTrue(removeUserFromSpace(user2, space));
-		Assert.assertTrue(removeUserFromSpace(user2, subspace));
+		Assertions.assertTrue(removeUserFromSpace(user1, space));
+		Assertions.assertTrue(removeUserFromSpace(user1, subspace));
+		Assertions.assertTrue(removeUserFromSpace(user2, space));
+		Assertions.assertTrue(removeUserFromSpace(user2, subspace));
 
 	}
 
@@ -224,13 +224,13 @@ public class UserTests extends TestSequence {
 	private void DeleteUserTest() {
 		try {
 			User temp = loader.loadUserIntoDatabase();
-			Assert.assertNotNull(Users.get(temp.getId()));
+			Assertions.assertNotNull(Users.get(temp.getId()));
 
-			Assert.assertTrue(Users.deleteUser(temp.getId()));
+			Assertions.assertTrue(Users.deleteUser(temp.getId()));
 
-			Assert.assertNull(Users.get(temp.getId()));
+			Assertions.assertNull(Users.get(temp.getId()));
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -247,9 +247,9 @@ public class UserTests extends TestSequence {
 
 			Users.deleteUser(tempUser.getId());
 
-			Assert.assertNull(Solvers.get(tempSolver.getId()));
+			Assertions.assertNull(Solvers.get(tempSolver.getId()));
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -264,13 +264,13 @@ public class UserTests extends TestSequence {
 			User tempUser = loader.loadUserIntoDatabase();
 			loader.loadSolverIntoDatabase(space.getId(), tempUser.getId());
 			File tempUsersSolverDirectory = new File(R.getSolverPath() + "/" + tempUser.getId());
-			Assert.assertTrue(tempUsersSolverDirectory.exists());
+			Assertions.assertTrue(tempUsersSolverDirectory.exists());
 
 			Users.deleteUser(tempUser.getId());
 
-			Assert.assertFalse(tempUsersSolverDirectory.exists());
+			Assertions.assertFalse(tempUsersSolverDirectory.exists());
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -289,11 +289,11 @@ public class UserTests extends TestSequence {
 			Users.deleteUser(tempUser.getId());
 
 			for (Integer benchmarkId : tempBenchmarkIds) {
-				Assert.assertNotNull(benchmarkId);
-				Assert.assertNull(Benchmarks.get(benchmarkId));
+				Assertions.assertNotNull(benchmarkId);
+				Assertions.assertNull(Benchmarks.get(benchmarkId));
 			}
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -308,13 +308,13 @@ public class UserTests extends TestSequence {
 			User tempUser = loader.loadUserIntoDatabase();
 			loader.loadBenchmarksIntoDatabase(BENCH_ARCHIVE, space.getId(), tempUser.getId());
 			File tempUsersBenchmarkDirectory = new File(R.getBenchmarkPath() + "/" + tempUser.getId());
-			Assert.assertTrue(tempUsersBenchmarkDirectory.exists());
+			Assertions.assertTrue(tempUsersBenchmarkDirectory.exists());
 
 			Users.deleteUser(tempUser.getId());
 
-			Assert.assertFalse(tempUsersBenchmarkDirectory.exists());
+			Assertions.assertFalse(tempUsersBenchmarkDirectory.exists());
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -335,13 +335,13 @@ public class UserTests extends TestSequence {
 			Job tempJob = loader.loadJobIntoDatabase(
 					space.getId(), tempUser.getId(), -1, postProc.getId(), tempSolverIds, tempBenchmarkIds, cpuTimeout,
 					wallclockTimeout, gbMemory);
-			Assert.assertNotNull(tempJob);
+			Assertions.assertNotNull(tempJob);
 
 			Users.deleteUser(tempUser.getId());
 
-			Assert.assertNull(Jobs.get(tempJob.getId()));
+			Assertions.assertNull(Jobs.get(tempJob.getId()));
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -362,22 +362,22 @@ public class UserTests extends TestSequence {
 			Job tempJob = loader.loadJobIntoDatabase(
 					space.getId(), tempUser.getId(), -1, postProc.getId(), tempSolverIds, tempBenchmarkIds, cpuTimeout,
 					wallclockTimeout, gbMemory);
-			Assert.assertNotNull(tempJob);
+			Assertions.assertNotNull(tempJob);
 
-			Assert.assertNotNull(tempJob.getJobPairs());
-			Assert.assertTrue(!tempJob.getJobPairs().isEmpty());
+			Assertions.assertNotNull(tempJob.getJobPairs());
+			Assertions.assertTrue(!tempJob.getJobPairs().isEmpty());
 
 			for (JobPair pair : tempJob.getJobPairs()) {
-				Assert.assertNotNull(pair);
+				Assertions.assertNotNull(pair);
 			}
 			Users.deleteUser(tempUser.getId());
 
 			for (JobPair pair : tempJob.getJobPairs()) {
 				JobPair currentPair = JobPairs.getPair(pair.getId());
-				Assert.assertNull(currentPair);
+				Assertions.assertNull(currentPair);
 			}
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -393,17 +393,17 @@ public class UserTests extends TestSequence {
 			Job tempJob = loader.loadJobIntoDatabase(
 					space.getId(), tempUser.getId(), -1, postProc.getId(), tempSolverIds, tempBenchmarkIds, cpuTimeout,
 					wallclockTimeout, gbMemory);
-			Assert.assertNotNull(tempJob);
+			Assertions.assertNotNull(tempJob);
 
 			File jobDirectory = new File(Jobs.getDirectory(tempJob.getId()));
 
-			Assert.assertTrue("Job directory was not created.", jobDirectory.exists());
+			Assertions.assertTrue(jobDirectory.exists(), "Job directory was not created.");
 
 			Users.deleteUser(tempUser.getId());
 
-			Assert.assertFalse("Job directory still exists.", jobDirectory.exists());
+			Assertions.assertFalse(jobDirectory.exists(), "Job directory still exists.");
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -411,26 +411,26 @@ public class UserTests extends TestSequence {
 	private void GetUserTest() {
 		User temp = Users.get(user1.getId());
 
-		Assert.assertNotNull(temp);
+		Assertions.assertNotNull(temp);
 
-		Assert.assertEquals(user1.getId(), temp.getId());
-		Assert.assertEquals(user1.getFirstName(), temp.getFirstName());
+		Assertions.assertEquals(user1.getId(), temp.getId());
+		Assertions.assertEquals(user1.getFirstName(), temp.getFirstName());
 
 		// should get null for a non-user
-		Assert.assertNull(Users.get(-1));
+		Assertions.assertNull(Users.get(-1));
 	}
 
 	@StarexecTest
 	private void GetUserByEmailTest() {
 		User temp = Users.get(user1.getEmail());
 
-		Assert.assertNotNull(temp);
+		Assertions.assertNotNull(temp);
 
-		Assert.assertEquals(user1.getId(), temp.getId());
-		Assert.assertEquals(user1.getFirstName(), temp.getFirstName());
+		Assertions.assertEquals(user1.getId(), temp.getId());
+		Assertions.assertEquals(user1.getFirstName(), temp.getFirstName());
 
 		// should get null for a non-user
-		Assert.assertNull(Users.get(-1));
+		Assertions.assertNull(Users.get(-1));
 
 	}
 
@@ -438,9 +438,9 @@ public class UserTests extends TestSequence {
 	private void GetAdminsTest() {
 		List<User> admins = Users.getAdmins();
 		for (User u : admins) {
-			Assert.assertTrue(Users.get(u.getId()).getRole().equals("admin"));
-			Assert.assertTrue(Users.isAdmin(u.getId()));
-			Assert.assertFalse(Users.isNormalUser(u.getId()));
+			Assertions.assertTrue(Users.get(u.getId()).getRole().equals("admin"));
+			Assertions.assertTrue(Users.isAdmin(u.getId()));
+			Assertions.assertFalse(Users.isNormalUser(u.getId()));
 		}
 	}
 
@@ -448,33 +448,33 @@ public class UserTests extends TestSequence {
 	private void GetCountTest() {
 		try {
 			int count = Users.getCount();
-			Assert.assertNotEquals(0, count);
+			Assertions.assertNotEquals(0, count);
 			User temp = loader.loadUserIntoDatabase();
 
 			// this might fail if another user is added to the system at exactly this time,
 			// but that would be atypical, and failure is not highly costly
-			Assert.assertEquals(count + 1, Users.getCount());
-			Assert.assertTrue(Users.deleteUser(temp.getId()));
+			Assertions.assertEquals(count + 1, Users.getCount());
+			Assertions.assertTrue(Users.deleteUser(temp.getId()));
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
 	@StarexecTest
 	private void GetCountInSpaceTest() {
 		int count = Spaces.getUsers(space.getId()).size();
-		Assert.assertEquals(count, Users.getCountInSpace(space.getId()));
+		Assertions.assertEquals(count, Users.getCountInSpace(space.getId()));
 	}
 
 	@StarexecTest
 	private void GetCountInSpaceQueryTest() {
-		Assert.assertEquals(1, Users.getCountInSpace(space.getId(), testUser.getFirstName()));
+		Assertions.assertEquals(1, Users.getCountInSpace(space.getId(), testUser.getFirstName()));
 	}
 
 	@StarexecTest
 	private void GetDiskUsageTest() {
 		try {
-			Assert.assertEquals(0, Users.getDiskUsage(user1.getId()));
+			Assertions.assertEquals(0, Users.getDiskUsage(user1.getId()));
 			Solver solver = loader.loadSolverIntoDatabase("CVC4.zip", space.getId(), user1.getId());
 
 			long size = Solvers.get(solver.getId()).getDiskSize();
@@ -483,21 +483,21 @@ public class UserTests extends TestSequence {
 			for (Integer i : benchmarkIds) {
 				size += Benchmarks.get(i).getDiskSize();
 			}
-			Assert.assertEquals(size, Users.getDiskUsage(user1.getId()));
-			Assert.assertTrue(Solvers.deleteAndRemoveSolver(solver.getId()));
+			Assertions.assertEquals(size, Users.getDiskUsage(user1.getId()));
+			Assertions.assertTrue(Solvers.deleteAndRemoveSolver(solver.getId()));
 			for (Integer i : benchmarkIds) {
-				Assert.assertTrue(Benchmarks.deleteAndRemoveBenchmark(i));
+				Assertions.assertTrue(Benchmarks.deleteAndRemoveBenchmark(i));
 			}
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
 	@StarexecTest
 	private void SetDiskQuotaTest() {
 		long quota = Users.get(user1.getId()).getDiskQuota();
-		Assert.assertTrue(Users.setDiskQuota(user1.getId(), quota + 1));
-		Assert.assertEquals(quota + 1, Users.get(user1.getId()).getDiskQuota());
+		Assertions.assertTrue(Users.setDiskQuota(user1.getId(), quota + 1));
+		Assertions.assertEquals(quota + 1, Users.get(user1.getId()).getDiskQuota());
 
 	}
 
@@ -505,16 +505,16 @@ public class UserTests extends TestSequence {
 	private void SetAndGetDefaultPageSize() {
 		try {
 			int pageSize = Users.getDefaultPageSize(user1.getId());
-			Assert.assertTrue(Users.setDefaultPageSize(user1.getId(), pageSize + 1));
-			Assert.assertEquals(pageSize + 1, Users.getDefaultPageSize(user1.getId()));
+			Assertions.assertTrue(Users.setDefaultPageSize(user1.getId(), pageSize + 1));
+			Assertions.assertEquals(pageSize + 1, Users.getDefaultPageSize(user1.getId()));
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
-		Assert.assertFalse(Users.isAdmin(user3.getId()));
-		Assert.assertFalse(Users.isAdmin(testUser.getId()));
+		Assertions.assertFalse(Users.isAdmin(user3.getId()));
+		Assertions.assertFalse(Users.isAdmin(testUser.getId()));
 		List<Integer> admins = new ArrayList<>();
 		for (Integer i : admins) {
-			Assert.assertTrue(Users.isAdmin(i));
+			Assertions.assertTrue(Users.isAdmin(i));
 		}
 	}
 
@@ -523,12 +523,12 @@ public class UserTests extends TestSequence {
 		try {
 			String originalName = user1.getFirstName();
 			String newName = TestUtil.getRandomUserName();
-			Assert.assertEquals(originalName, Users.get(user1.getId()).getFirstName());
-			Assert.assertTrue(Users.updateFirstName(user1.getId(), newName));
-			Assert.assertEquals(newName, Users.get(user1.getId()).getFirstName());
+			Assertions.assertEquals(originalName, Users.get(user1.getId()).getFirstName());
+			Assertions.assertTrue(Users.updateFirstName(user1.getId(), newName));
+			Assertions.assertEquals(newName, Users.get(user1.getId()).getFirstName());
 			user1.setFirstName(newName);
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -537,12 +537,12 @@ public class UserTests extends TestSequence {
 		try {
 			String originalName = user1.getLastName();
 			String newName = TestUtil.getRandomUserName();
-			Assert.assertEquals(originalName, Users.get(user1.getId()).getLastName());
-			Assert.assertTrue(Users.updateLastName(user1.getId(), newName));
-			Assert.assertEquals(newName, Users.get(user1.getId()).getLastName());
+			Assertions.assertEquals(originalName, Users.get(user1.getId()).getLastName());
+			Assertions.assertTrue(Users.updateLastName(user1.getId(), newName));
+			Assertions.assertEquals(newName, Users.get(user1.getId()).getLastName());
 			user1.setLastName(newName);
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -551,22 +551,22 @@ public class UserTests extends TestSequence {
 		try {
 			String originalInst = user1.getInstitution();
 			String newInst = TestUtil.getRandomUserName();
-			Assert.assertEquals(originalInst, Users.get(user1.getId()).getInstitution());
-			Assert.assertTrue(Users.updateInstitution(user1.getId(), newInst));
-			Assert.assertEquals(newInst, Users.get(user1.getId()).getInstitution());
+			Assertions.assertEquals(originalInst, Users.get(user1.getId()).getInstitution());
+			Assertions.assertTrue(Users.updateInstitution(user1.getId(), newInst));
+			Assertions.assertEquals(newInst, Users.get(user1.getId()).getInstitution());
 			user1.setInstitution(newInst);
 		} catch (StarExecDatabaseException e) {
-			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
 		}
 	}
 
 	@StarexecTest
 	private void SuspendAndReinstateTest() {
-		Assert.assertFalse(Users.isSuspended(user1.getId()));
-		Assert.assertTrue(Users.suspend(user1.getId()));
-		Assert.assertTrue(Users.isSuspended(user1.getId()));
-		Assert.assertTrue(Users.reinstate(user1.getId()));
-		Assert.assertFalse(Users.isSuspended(user1.getId()));
+		Assertions.assertFalse(Users.isSuspended(user1.getId()));
+		Assertions.assertTrue(Users.suspend(user1.getId()));
+		Assertions.assertTrue(Users.isSuspended(user1.getId()));
+		Assertions.assertTrue(Users.reinstate(user1.getId()));
+		Assertions.assertFalse(Users.isSuspended(user1.getId()));
 	}
 
 	@StarexecTest
@@ -576,36 +576,36 @@ public class UserTests extends TestSequence {
 		d.setWallclockTimeout(2421);
 		int id = Users.createNewDefaultSettings(d);
 		try {
-			Assert.assertEquals(d, Settings.getProfileById(id));
+			Assertions.assertEquals(d, Settings.getProfileById(id));
 		} catch (SQLException e) {
-			Assert.fail("Caught SQLException: " + Util.getStackTrace(e));
+			Assertions.fail("Caught SQLException: " + Util.getStackTrace(e));
 		}
 	}
 
 	@StarexecTest
 	private void subscribeAndUnsubscribeTest() {
-		Assert.assertTrue(Users.subscribeToReports(user1.getId()));
+		Assertions.assertTrue(Users.subscribeToReports(user1.getId()));
 		boolean found = false;
 		for (User u : Users.getAllUsersSubscribedToReports()) {
 			found = found || u.getId() == user1.getId();
 		}
 
-		Assert.assertTrue(found);
+		Assertions.assertTrue(found);
 
-		Assert.assertTrue(Users.unsubscribeFromReports(user1.getId()));
+		Assertions.assertTrue(Users.unsubscribeFromReports(user1.getId()));
 		found = false;
 		for (User u : Users.getAllUsersSubscribedToReports()) {
 			found = found || u.getId() == user1.getId();
 		}
-		Assert.assertFalse(found);
+		Assertions.assertFalse(found);
 	}
 
 	@StarexecTest
 	private void getUnregisteredTest() {
-		Assert.assertNull(Users.getUnregistered(user1.getId()));
+		Assertions.assertNull(Users.getUnregistered(user1.getId()));
 		User unregisteredUser = loader.loadUserIntoDatabase("test", "user", "temp@fake.com", "abc", "Iowa",
 				R.UNAUTHORIZED_ROLE_NAME);
-		Assert.assertEquals(unregisteredUser.getId(), Users.getUnregistered(unregisteredUser.getId()).getId());
+		Assertions.assertEquals(unregisteredUser.getId(), Users.getUnregistered(unregisteredUser.getId()).getId());
 	}
 
 	@Override

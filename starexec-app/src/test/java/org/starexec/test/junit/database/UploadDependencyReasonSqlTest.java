@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Common;
 import org.starexec.data.to.Benchmark;
@@ -18,8 +18,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * Does a refused upload say which include failed and where it was looked for?
@@ -41,13 +41,13 @@ public class UploadDependencyReasonSqlTest extends Common {
 	private static final int AXIOM_SPACE = 90802;
 	private static final int AXIOM_BENCH = 90801;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("UploadDependencyReasonSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws Exception {
 		cleanUp();
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
@@ -68,7 +68,7 @@ public class UploadDependencyReasonSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws Exception {
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			s.execute("DELETE FROM starexec.bench_assoc WHERE space_id IN (" + ROOT_SPACE + "," + AXIOM_SPACE + ")");

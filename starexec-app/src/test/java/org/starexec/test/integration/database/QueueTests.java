@@ -1,6 +1,6 @@
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.to.*;
@@ -43,17 +43,17 @@ public class QueueTests extends TestSequence {
 		HashMap<Integer, Integer> map = new HashMap<>();
 		map.put(testQueue.getId(), -1);
 		Queues.pauseJobsIfNoRemainingNodes(map);
-		Assert.assertFalse(Jobs.isJobPaused(job.getId()));
+		Assertions.assertFalse(Jobs.isJobPaused(job.getId()));
 	}
 	
 	@StarexecTest
 	private void associateTest() {
-		Assert.assertTrue(Queues.associate(testQueue.getName(), fakeNode.getName()));
+		Assertions.assertTrue(Queues.associate(testQueue.getName(), fakeNode.getName()));
 		boolean found = false;
 		for (WorkerNode n : Queues.getNodes(testQueue.getId())) {
 			found = found || n.getName().equals(fakeNode.getName());
 		}
-		Assert.assertTrue(found);
+		Assertions.assertTrue(found);
 		refreshFakeNode();
 	}
 	
@@ -65,7 +65,7 @@ public class QueueTests extends TestSequence {
 		HashMap<Integer, Integer> map = new HashMap<>();
 		map.put(testQueue.getId(), Cluster.getNodesForQueue(testQueue.getId()).size());
 		Queues.pauseJobsIfNoRemainingNodes(map);
-		Assert.assertTrue(Jobs.isJobPaused(job.getId()));
+		Assertions.assertTrue(Jobs.isJobPaused(job.getId()));
 		for (JobPair pair : job.getJobPairs()) {
 			JobPairs.setStatusForPairAndStages(pair.getId(), StatusCode.STATUS_COMPLETE.getVal());
 		}
@@ -76,63 +76,63 @@ public class QueueTests extends TestSequence {
 	@StarexecTest
 	private void getQueueTest() {
 		Queue q=Queues.get(allQueue.getId());
-		Assert.assertEquals(allQueue.getName(),q.getName());
+		Assertions.assertEquals(allQueue.getName(),q.getName());
 	}
 	
 	@StarexecTest
 	private void getIdByNameTest() {
-		Assert.assertEquals(allQueue.getId(),Queues.getIdByName(allQueue.getName()));
+		Assertions.assertEquals(allQueue.getId(),Queues.getIdByName(allQueue.getName()));
 	}
 	
 	@StarexecTest
 	private void getNameByIdTest() {
-		Assert.assertEquals(allQueue.getName(),Queues.getNameById(allQueue.getId()));
+		Assertions.assertEquals(allQueue.getName(),Queues.getNameById(allQueue.getId()));
 	}
 	
 	@StarexecTest
 	private void getNullNamebyFakeIdTest() {
-		Assert.assertNull(Queues.getNameById(-1));
+		Assertions.assertNull(Queues.getNameById(-1));
 
 	}
 	
 	@StarexecTest
 	private void setGlobalTest() {
-		Assert.assertTrue(Queues.removeGlobal(testQueue.getId()));
-		Assert.assertFalse(Queues.isQueueGlobal(testQueue.getId()));
-		Assert.assertTrue(Queues.makeGlobal(testQueue.getId()));
-		Assert.assertTrue(Queues.get(testQueue.getId()).getGlobalAccess());
+		Assertions.assertTrue(Queues.removeGlobal(testQueue.getId()));
+		Assertions.assertFalse(Queues.isQueueGlobal(testQueue.getId()));
+		Assertions.assertTrue(Queues.makeGlobal(testQueue.getId()));
+		Assertions.assertTrue(Queues.get(testQueue.getId()).getGlobalAccess());
 	}
 	
 	@StarexecTest
 	private void updateCpuTimeoutTest() {
 		int cpuTimeout=testQueue.getCpuTimeout();
-		Assert.assertTrue(Queues.updateQueueCpuTimeout(testQueue.getId(), cpuTimeout+1));
-		Assert.assertEquals(cpuTimeout+1,Queues.get(testQueue.getId()).getCpuTimeout());		
+		Assertions.assertTrue(Queues.updateQueueCpuTimeout(testQueue.getId(), cpuTimeout+1));
+		Assertions.assertEquals(cpuTimeout+1,Queues.get(testQueue.getId()).getCpuTimeout());		
 	}
 	
 	@StarexecTest
 	private void updateWallclockTimeoutTest() {
 		int wallTimeout=testQueue.getWallTimeout();
-		Assert.assertTrue(Queues.updateQueueWallclockTimeout(testQueue.getId(), wallTimeout+1));
-		Assert.assertEquals(wallTimeout+1,Queues.get(testQueue.getId()).getWallTimeout());
+		Assertions.assertTrue(Queues.updateQueueWallclockTimeout(testQueue.getId(), wallTimeout+1));
+		Assertions.assertEquals(wallTimeout+1,Queues.get(testQueue.getId()).getWallTimeout());
 	}
 	
 	@StarexecTest
 	private void deleteQueueTest() {
 		Queue tempQueue=loader.loadQueueIntoDatabase(1000,1000);
-		Assert.assertNotNull(Queues.get(tempQueue.getId()));
-		Assert.assertTrue(Queues.removeQueue(tempQueue.getId()));
-		Assert.assertNull(Queues.get(tempQueue.getId()));		
+		Assertions.assertNotNull(Queues.get(tempQueue.getId()));
+		Assertions.assertTrue(Queues.removeQueue(tempQueue.getId()));
+		Assertions.assertNull(Queues.get(tempQueue.getId()));		
 	}
 	
 	@StarexecTest
 	private void notUniqueQueueNameTest() {
-		Assert.assertTrue(Queues.notUniquePrimitiveName(testQueue.getName()));
-		Assert.assertTrue(Queues.notUniquePrimitiveName(allQueue.getName()));
+		Assertions.assertTrue(Queues.notUniquePrimitiveName(testQueue.getName()));
+		Assertions.assertTrue(Queues.notUniquePrimitiveName(allQueue.getName()));
 		
 		//random names are long, so they should not appear in the queues just by chance
 		for (int x=0;x<10;x++) {
-			Assert.assertFalse(Queues.notUniquePrimitiveName(TestUtil.getRandomQueueName()));
+			Assertions.assertFalse(Queues.notUniquePrimitiveName(TestUtil.getRandomQueueName()));
 		}		
 	}
 	
@@ -140,39 +140,39 @@ public class QueueTests extends TestSequence {
 	private void setStatusTest() {
 		String oldStatus=Queues.get(testQueue.getId()).getStatus();
 		String status=TestUtil.getRandomAlphaString(10);
-		Assert.assertTrue(Queues.setStatus(testQueue.getName(),status));
-		Assert.assertEquals(status,Queues.get(testQueue.getId()).getStatus());
+		Assertions.assertTrue(Queues.setStatus(testQueue.getName(),status));
+		Assertions.assertEquals(status,Queues.get(testQueue.getId()).getStatus());
 		
-		Assert.assertTrue(Queues.setStatus(testQueue.getName(),oldStatus));
+		Assertions.assertTrue(Queues.setStatus(testQueue.getName(),oldStatus));
 	}
 	
 	@StarexecTest
 	private void getAllActiveTest() {
 		List<Queue> queues=Queues.getAllActive();
-		Assert.assertNotNull(queues);
+		Assertions.assertNotNull(queues);
 		
 		for (Queue q : queues) {
-			Assert.assertEquals("ACTIVE",q.getStatus());
+			Assertions.assertEquals("ACTIVE",q.getStatus());
 		}		
 	}
 	
 	@StarexecTest
 	private void getUserQueuesAdminTest() {
 		List<Queue> queues=Queues.getUserQueues(admin.getId());
-		Assert.assertNotNull(queues);
+		Assertions.assertNotNull(queues);
 		
 		for (Queue q : queues) {
-			Assert.assertEquals("ACTIVE",q.getStatus());
+			Assertions.assertEquals("ACTIVE",q.getStatus());
 		}
 	}
 	
 	@StarexecTest
 	private void getUserQueuesTest() {
 		List<Queue> queues=Queues.getUserQueues(owner.getId());
-		Assert.assertNotNull(queues);
+		Assertions.assertNotNull(queues);
 		
 		for (Queue q : queues) {
-			Assert.assertEquals("ACTIVE",q.getStatus());
+			Assertions.assertEquals("ACTIVE",q.getStatus());
 		}
 	}
 	
@@ -180,13 +180,13 @@ public class QueueTests extends TestSequence {
 	@StarexecTest
 	private void getAllAdminTest() {
 		List<Queue> queues=Queues.getAllAdmin();
-		Assert.assertNotNull(queues);
+		Assertions.assertNotNull(queues);
 		// need to make sure the inactive test queue is present
 		boolean found = false;
 		for (Queue q : queues) {
 			found = found || q.getName().equals(testQueue.getName());
 		}
-		Assert.assertTrue(found);
+		Assertions.assertTrue(found);
 	}
 	
 	@StarexecTest
@@ -194,7 +194,7 @@ public class QueueTests extends TestSequence {
 		for (JobPair pair : job.getJobPairs()) {
 			JobPairs.setStatusForPairAndStages(pair.getId(), StatusCode.STATUS_ENQUEUED.getVal());
 		}
-		Assert.assertEquals(job.getJobPairs().size(), Queues.getCountOfEnqueuedPairsByQueue(testQueue.getId()));
+		Assertions.assertEquals(job.getJobPairs().size(), Queues.getCountOfEnqueuedPairsByQueue(testQueue.getId()));
 		
 		for (JobPair pair : job.getJobPairs()) {
 			JobPairs.setStatusForPairAndStages(pair.getId(), StatusCode.STATUS_COMPLETE.getVal());
@@ -207,8 +207,8 @@ public class QueueTests extends TestSequence {
 		JobPairs.updatePairExecutionHost(jp.getId(), fakeNode.getId());
 		JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_RUNNING.getVal());
 		List<JobPair> pairs = Queues.getPairsRunningOnNode(fakeNode.getId());
-		Assert.assertEquals(1, pairs.size());
-		Assert.assertEquals(jp.getId(), pairs.get(0).getId());
+		Assertions.assertEquals(1, pairs.size());
+		Assertions.assertEquals(jp.getId(), pairs.get(0).getId());
 		
 		JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_COMPLETE.getVal());
 	}
@@ -219,15 +219,15 @@ public class QueueTests extends TestSequence {
 		JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_ENQUEUED.getVal());
 		
 		List<JobPair> pairs = Queues.getJobPairsForNextClusterPage(new DataTablesQuery(0,10,0,true,""), testQueue.getId());
-		Assert.assertEquals(1, pairs.size());
-		Assert.assertEquals(jp.getId(), pairs.get(0).getId());
+		Assertions.assertEquals(1, pairs.size());
+		Assertions.assertEquals(jp.getId(), pairs.get(0).getId());
 		JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_COMPLETE.getVal());
 
 	}
 	
 	@StarexecTest
 	private void getNodesEmptyTest() {
-		Assert.assertEquals(0, Queues.getNodes(testQueue.getId()).size());
+		Assertions.assertEquals(0, Queues.getNodes(testQueue.getId()).size());
 	}
 	
 	@StarexecTest
@@ -236,14 +236,14 @@ public class QueueTests extends TestSequence {
 		JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_PENDING_SUBMIT.getVal());
 		
 		List<Job> jobs = Queues.getPendingJobs(testQueue.getId());
-		Assert.assertEquals(1, jobs.size());
-		Assert.assertEquals(job.getId(), jobs.get(0).getId());
+		Assertions.assertEquals(1, jobs.size());
+		Assertions.assertEquals(job.getId(), jobs.get(0).getId());
 		JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_COMPLETE.getVal());
 	}
 	
 	@StarexecTest
 	private void getPendingJobsEmptyTest() {
-		Assert.assertEquals(0, Queues.getPendingJobs(testQueue.getId()).size());
+		Assertions.assertEquals(0, Queues.getPendingJobs(testQueue.getId()).size());
 	}
 	
 	private void refreshFakeNode() {
@@ -256,14 +256,14 @@ public class QueueTests extends TestSequence {
 	
 	@StarexecTest 
 	private void getUserLoadOnEmptyQueueTest() {
-		Assert.assertEquals((long)0, (long)Queues.getUserLoadOnQueue(testQueue.getId(), owner.getId()));
+		Assertions.assertEquals((long)0, (long)Queues.getUserLoadOnQueue(testQueue.getId(), owner.getId()));
 	}
 	
 	@StarexecTest
 	private void getUserLoadOnQueueTest() {
 		JobPair jp =job.getJobPairs().get(0);
 		JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_RUNNING.getVal());
-		Assert.assertEquals((long)job.getWallclockTimeout(), (long)Queues.getUserLoadOnQueue(testQueue.getId(), owner.getId()));
+		Assertions.assertEquals((long)job.getWallclockTimeout(), (long)Queues.getUserLoadOnQueue(testQueue.getId(), owner.getId()));
 		JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_COMPLETE.getVal());
 	}
 	
@@ -271,35 +271,35 @@ public class QueueTests extends TestSequence {
 	private void getSizeOfQueueTest() {
 		JobPair jp =job.getJobPairs().get(0);
 		JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_ENQUEUED.getVal());
-		Assert.assertEquals((Integer)1, Queues.getSizeOfQueue(testQueue.getId()));
+		Assertions.assertEquals((Integer)1, Queues.getSizeOfQueue(testQueue.getId()));
 		JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_COMPLETE.getVal());
 	}
 	
 	@StarexecTest
 	private void isQueueGlobalTest() {
-		Assert.assertTrue(Queues.isQueueGlobal(allQueue.getId()));
+		Assertions.assertTrue(Queues.isQueueGlobal(allQueue.getId()));
 	}
 	
 	@StarexecTest
 	private void setTestQueueTest() {
 		int id = Queues.getTestQueue();
-		Assert.assertTrue(Queues.setTestQueue(testQueue.getId()));
-		Assert.assertEquals(testQueue.getId(), Queues.getTestQueue());
-		Assert.assertTrue(Queues.setTestQueue(id));
+		Assertions.assertTrue(Queues.setTestQueue(testQueue.getId()));
+		Assertions.assertEquals(testQueue.getId(), Queues.getTestQueue());
+		Assertions.assertTrue(Queues.setTestQueue(id));
 	}
 	
 	@StarexecTest
 	private void getAllQTest() {
 		Queue q = Queues.getAllQ();
-		Assert.assertEquals(R.DEFAULT_QUEUE_ID, q.getId());
-		Assert.assertEquals(R.DEFAULT_QUEUE_NAME, q.getName());
+		Assertions.assertEquals(R.DEFAULT_QUEUE_ID, q.getId());
+		Assertions.assertEquals(R.DEFAULT_QUEUE_NAME, q.getName());
 	}
 	
 	@StarexecTest
 	private void setQueueCommunityAccessTest() {
 		List<Integer> ids = new ArrayList<>();
 		ids.add(Communities.getTestCommunity().getId());
-		Assert.assertTrue(Queues.setQueueCommunityAccess(ids, testQueue.getId()));
+		Assertions.assertTrue(Queues.setQueueCommunityAccess(ids, testQueue.getId()));
 	}
 	
 	@Override
@@ -315,7 +315,7 @@ public class QueueTests extends TestSequence {
 		job = loader.loadJobIntoDatabase(space.getId(), owner.getId(), solver.getId(), benchmarkIds);
 		Jobs.changeQueue(job.getId(), testQueue.getId());
 		admin = loader.loadUserIntoDatabase(TestUtil.getRandomAlphaString(10),TestUtil.getRandomAlphaString(10),TestUtil.getRandomPassword(),TestUtil.getRandomPassword(),"The University of Miami",R.ADMIN_ROLE_NAME);
-		Assert.assertNotNull(testQueue);
+		Assertions.assertNotNull(testQueue);
 		refreshFakeNode();
 	}
 

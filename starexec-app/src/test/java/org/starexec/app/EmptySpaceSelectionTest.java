@@ -2,8 +2,8 @@ package org.starexec.app;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.security.SpaceSecurity;
@@ -14,8 +14,8 @@ import org.starexec.util.Validator;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Copying with an empty selection must answer, not fail.
@@ -31,7 +31,7 @@ public class EmptySpaceSelectionTest {
 
 	private static final int SPACE_ID = 3;
 
-	@BeforeClass
+	@BeforeAll
 	public static void initialize() {
 		Validator.initialize();
 	}
@@ -48,9 +48,9 @@ public class EmptySpaceSelectionTest {
 					SPACE_ID, request(), Mockito.mock(HttpServletResponse.class));
 
 			JsonObject response = JsonParser.parseString(json).getAsJsonObject();
-			assertFalse("copying nothing must not be reported as success: " + response,
-					response.get("success").getAsBoolean());
-			assertTrue(response.toString(), response.get("message").getAsString().contains("No spaces were selected"));
+			assertFalse(response.get("success").getAsBoolean(),
+					"copying nothing must not be reported as success: " + response);
+			assertTrue(response.get("message").getAsString().contains("No spaces were selected"), response.toString());
 		}
 	}
 
@@ -79,7 +79,7 @@ public class EmptySpaceSelectionTest {
 					SPACE_ID, request, Mockito.mock(HttpServletResponse.class));
 
 			JsonObject response = JsonParser.parseString(json).getAsJsonObject();
-			assertFalse(response.toString(), response.get("success").getAsBoolean());
+			assertFalse(response.get("success").getAsBoolean(), response.toString());
 		}
 	}
 }

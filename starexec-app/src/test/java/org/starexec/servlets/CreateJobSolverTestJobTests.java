@@ -1,6 +1,6 @@
 package org.starexec.servlets;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
@@ -20,9 +20,9 @@ import org.starexec.jobs.JobManager;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * The job created to test a newly uploaded solver takes its processors from the settings profile
@@ -51,8 +51,8 @@ public class CreateJobSolverTestJobTests {
 	public void aProfileWithOnlyAPostProcessorTestsWithThatPostProcessor() throws Exception {
 		StageAttributes stage = buildTestJobStage(null, POST_PROCESSOR_ID);
 
-		assertNull("no pre-processor was configured", stage.getPreProcessor());
-		assertNotNull("the configured post-processor is used", stage.getPostProcessor());
+		assertNull(stage.getPreProcessor(), "no pre-processor was configured");
+		assertNotNull(stage.getPostProcessor(), "the configured post-processor is used");
 		assertEquals(POST_PROCESSOR_ID, stage.getPostProcessor().getId());
 	}
 
@@ -61,8 +61,8 @@ public class CreateJobSolverTestJobTests {
 		StageAttributes stage = buildTestJobStage(PRE_PROCESSOR_ID, POST_PROCESSOR_ID);
 
 		assertEquals(PRE_PROCESSOR_ID, stage.getPreProcessor().getId());
-		assertEquals("the post-processor is not the pre-processor run twice",
-				POST_PROCESSOR_ID, stage.getPostProcessor().getId());
+		assertEquals(POST_PROCESSOR_ID,
+				stage.getPostProcessor().getId(), "the post-processor is not the pre-processor run twice");
 	}
 
 	/** The control: a pre-processor alone was never affected. */
@@ -122,9 +122,9 @@ public class CreateJobSolverTestJobTests {
 			CreateJob.buildSolverTestJob(SOLVER_ID, SPACE_ID, USER_ID, SETTINGS_ID);
 
 			List<Job> jobsAdded = added.getAllValues();
-			assertEquals("exactly one test job is added", 1, jobsAdded.size());
+			assertEquals(1, jobsAdded.size(), "exactly one test job is added");
 			StageAttributes stage = jobsAdded.get(0).getStageAttributesByStageNumber(1);
-			assertNotNull("the test job has a stage 1", stage);
+			assertNotNull(stage, "the test job has a stage 1");
 			return stage;
 		}
 	}

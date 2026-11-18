@@ -1,6 +1,6 @@
 package org.starexec.test.unit.web;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -13,8 +13,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
  * Documentation links in the web pages and help files point at targets that still exist (#103).
@@ -59,7 +59,7 @@ public class DocumentationLinksTest {
 				}
 			}
 		}
-		assertEquals("links to retired hosts", List.of(), found);
+		assertEquals(List.of(), found, "links to retired hosts");
 	}
 
 	@Test
@@ -76,8 +76,8 @@ public class DocumentationLinksTest {
 				}
 			}
 		}
-		assertFalse("the help files link sections of the bundled User Guide", links.isEmpty());
-		assertEquals("pages beyond the guide's " + USER_GUIDE_PAGES, List.of(), outOfRange);
+		assertFalse(links.isEmpty(), "the help files link sections of the bundled User Guide");
+		assertEquals(List.of(), outOfRange, "pages beyond the guide's " + USER_GUIDE_PAGES);
 	}
 
 	private static List<Path> textFiles() throws IOException {

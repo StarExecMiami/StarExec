@@ -1,8 +1,7 @@
 package org.starexec.servlets;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
@@ -16,10 +15,13 @@ import java.io.File;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.awt.image.BufferedImage;
+import javax.imageio.ImageIO;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * Which bytes {@link GetPicture} serves when an entity has no picture of its own.
@@ -33,36 +35,39 @@ public class GetPictureDefaultsTest {
 
 	private static final String BUNDLED_USER_DEFAULT = "static/default-pics/default-pics/users/Pic0.jpg";
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	/** The Kubernetes layout: a data volume with no defaults on it. */
 	@Test
 	public void servesTheBundledDefaultWhenTheDataVolumeHasNone() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 
 		Served served = get(pictures, "uorg", "5");
 
-		assertEquals("no error status", 0, served.errorStatus);
-		assertArrayEquals("the bundled default picture", bundled(BUNDLED_USER_DEFAULT), served.body);
-		assertTrue("and not an empty body", served.body.length > 0);
+		assertEquals(0, served.errorStatus, "no error status");
+		assertArrayEquals(bundled(BUNDLED_USER_DEFAULT), served.body, "the bundled default picture");
+		assertTrue(served.body.length > 0, "and not an empty body");
+		assertEquals("image/jpeg", served.contentType);
+		assertEquals("image/jpeg", served.contentTypeAtFirstByte);
 	}
 
 	/** The same for benchmarks, the third kind of picture with a bundled default. */
 	@Test
 	public void servesTheBundledBenchmarkDefaultWhenTheDataVolumeHasNone() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 
 		Served served = get(pictures, "bthn", "3");
 
 		assertEquals(0, served.errorStatus);
 		assertArrayEquals(bundled("static/default-pics/default-pics/benchmarks/Pic0.jpg"), served.body);
+		assertEquals("image/jpeg", served.contentType);
 	}
 
 	/** The Local and Podman layout: the data volume has the defaults, and they still win. */
 	@Test
 	public void aDefaultOnTheDataVolumeIsStillServedFirst() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 		byte[] onVolume = "default on the volume".getBytes();
 		write(pictures.resolve("users/Pic0.jpg"), onVolume);
 
@@ -75,7 +80,7 @@ public class GetPictureDefaultsTest {
 	/** An entity's own picture is served whatever the defaults. */
 	@Test
 	public void anUploadedPictureIsServed() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 		byte[] uploaded = "uploaded picture".getBytes();
 		write(pictures.resolve("solvers/Pic7_org.jpg"), uploaded);
 
@@ -92,7 +97,7 @@ public class GetPictureDefaultsTest {
 	 */
 	@Test
 	public void aNonCanonicalIdNamesTheSamePicture() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 		byte[] uploaded = "uploaded picture".getBytes();
 		write(pictures.resolve("solvers/Pic7_org.jpg"), uploaded);
 
@@ -105,12 +110,51 @@ public class GetPictureDefaultsTest {
 	/** Result charts have no default: a missing one is an error, not an empty success. */
 	@Test
 	public void aMissingPictureWithNoDefaultIsNotFound() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 
 		Served served = get(pictures, "corg", "9");
 
 		assertEquals(HttpServletResponse.SC_NOT_FOUND, served.errorStatus);
 		assertEquals(0, served.body.length);
+	}
+
+	@Test
+	public void pngOriginalUsesItsContentTypeDespiteTheJpgStorageName() throws Exception {
+		Path pictures = newFolder(folder, "pictures").toPath();
+		ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+		assertTrue(ImageIO.write(new BufferedImage(2, 3, BufferedImage.TYPE_INT_RGB), "png", encoded));
+		byte[] png = encoded.toByteArray();
+		write(pictures.resolve("users/Pic7_org.jpg"), png);
+
+		Served served = get(pictures, "uorg", "7");
+
+		assertEquals("image/png", served.contentType);
+		assertEquals("image/png", served.contentTypeAtFirstByte);
+		assertArrayEquals(png, served.body, "type detection must not consume image bytes");
+	}
+
+	@Test
+	public void jpegStoredOnDiskHasAnImageMediaType() throws Exception {
+		Path pictures = newFolder(folder, "pictures").toPath();
+		byte[] jpeg = bundled(BUNDLED_USER_DEFAULT);
+		write(pictures.resolve("users/Pic7_thn.jpg"), jpeg);
+
+		Served served = get(pictures, "uthn", "7");
+
+		assertEquals("image/jpeg", served.contentType);
+		assertArrayEquals(jpeg, served.body);
+	}
+
+	@Test
+	public void nonImageBytesAreNotServedAsActiveContent() throws Exception {
+		Path pictures = newFolder(folder, "pictures").toPath();
+		byte[] html = "<html><body>not an image</body></html>".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		write(pictures.resolve("users/Pic7_org.jpg"), html);
+
+		Served served = get(pictures, "uorg", "7");
+
+		assertEquals("application/octet-stream", served.contentType);
+		assertArrayEquals(html, served.body);
 	}
 
 	// ----------------------------------------------------------------- harness
@@ -128,6 +172,9 @@ public class GetPictureDefaultsTest {
 		Mockito.when(response.getOutputStream()).thenReturn(new ServletOutputStream() {
 			@Override
 			public void write(int b) {
+				if (body.size() == 0) {
+					served.contentTypeAtFirstByte = served.contentType;
+				}
 				body.write(b);
 			}
 
@@ -140,6 +187,10 @@ public class GetPictureDefaultsTest {
 			public void setWriteListener(WriteListener listener) {
 			}
 		});
+		Mockito.doAnswer(call -> {
+			served.contentType = call.getArgument(0);
+			return null;
+		}).when(response).setContentType(Mockito.anyString());
 		Mockito.doAnswer(call -> {
 			served.errorStatus = call.getArgument(0);
 			return null;
@@ -159,7 +210,7 @@ public class GetPictureDefaultsTest {
 
 	private static byte[] bundled(String resource) throws Exception {
 		try (InputStream in = GetPicture.class.getClassLoader().getResourceAsStream(resource)) {
-			assertTrue("the default must be on the classpath: " + resource, in != null);
+			assertTrue(in != null, "the default must be on the classpath: " + resource);
 			return in.readAllBytes();
 		}
 	}
@@ -172,5 +223,7 @@ public class GetPictureDefaultsTest {
 	private static final class Served {
 		int errorStatus;
 		byte[] body;
+		String contentType;
+		String contentTypeAtFirstByte;
 	}
 }

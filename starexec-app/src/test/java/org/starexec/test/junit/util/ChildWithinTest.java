@@ -1,13 +1,13 @@
 package org.starexec.test.junit.util;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.util.Util;
 
 import java.io.File;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Util.childWithin is where a user-chosen name becomes a path component, for solver and processor
@@ -25,8 +25,8 @@ public class ChildWithinTest {
 	@Test
 	public void aNameThatIsNotOneDirectChildComponentIsRefused() {
 		for (String name : List.of("", ".", "..", "../6", "a/..", "a/b", "/etc", "/solvers/5/x", "x/", "./x")) {
-			assertThrows("name [" + name + "] must be refused", IllegalArgumentException.class,
-					() -> Util.childWithin(PARENT, name));
+			assertThrows(IllegalArgumentException.class, () -> Util.childWithin(PARENT, name),
+					"name [" + name + "] must be refused");
 		}
 	}
 

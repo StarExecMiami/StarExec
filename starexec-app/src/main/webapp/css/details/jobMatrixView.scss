@@ -576,19 +576,14 @@ td.jobMatrixCell {
   }
 }
 
-// External link indicator via CSS (replaces <img>)
-.extLink {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  margin-left: s.$spacing-2xs;
-  vertical-align: middle;
+// Dim the shared link icon until hover (icon itself lives in global/_common).
+.ext-link-icon {
   opacity: 0.5;
 
   @include m.transition-safe(opacity 0.15s ease);
 }
 
-a:hover .extLink {
+a:hover .ext-link-icon {
   opacity: 0.8;
 }
 
@@ -603,22 +598,6 @@ a:hover .extLink {
 // Override generic DataTables body padding for this table
 #jobMatrix.dataTable tbody td {
   padding: s.$spacing-xs s.$spacing-sm;
-}
-
-// =============================================================================
-// WRAPPER & LAYOUT OVERRIDES
-// =============================================================================
-
-#wrapper {
-  width: 100%;
-}
-
-// =============================================================================
-// SCREEN READER UTILITY
-// =============================================================================
-
-.sr-only {
-  @include m.sr-only;
 }
 
 // =============================================================================

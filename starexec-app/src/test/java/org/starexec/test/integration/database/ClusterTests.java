@@ -1,6 +1,6 @@
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.Cluster;
 import org.starexec.data.database.Queues;
@@ -30,43 +30,43 @@ public class ClusterTests extends TestSequence {
 	
 	@StarexecTest
 	private void getIdByNameTest() {
-		Assert.assertEquals(n.getId(),Cluster.getNodeIdByName(n.getName()));
+		Assertions.assertEquals(n.getId(),Cluster.getNodeIdByName(n.getName()));
 	}
 	
 	@StarexecTest
 	private void getNameByIdTest() {
-		Assert.assertEquals(n.getName(), Cluster.getNodeNameById(n.getId()));
+		Assertions.assertEquals(n.getName(), Cluster.getNodeNameById(n.getId()));
 	}
 	
 	@StarexecTest
 	private void getAllNodesTest() {
 		List<WorkerNode> nodes=Cluster.getAllNodes();
-		Assert.assertNotNull(nodes);
+		Assertions.assertNotNull(nodes);
 		List<Integer> nodeIds = new ArrayList<>();
 		for (WorkerNode node : nodes){
 			nodeIds.add(node.getId());
 		}
-		Assert.assertTrue(nodeIds.contains(n.getId()));
+		Assertions.assertTrue(nodeIds.contains(n.getId()));
 		//should not contain an inactive node
-		Assert.assertFalse(nodeIds.contains(fakeNode.getId()));
+		Assertions.assertFalse(nodeIds.contains(fakeNode.getId()));
 
 	}
 	
 	@StarexecTest
 	private void getQueueForNode() {
-		Assert.assertEquals(allQueue.getId(),Cluster.getQueueForNode(n.getId()).getId());
+		Assertions.assertEquals(allQueue.getId(),Cluster.getQueueForNode(n.getId()).getId());
 	}
 	
 	@StarexecTest
 	private void getQueueForNodeNoQueueTest() {
-		Assert.assertNull(Cluster.getQueueForNode(fakeNode.getId()));
+		Assertions.assertNull(Cluster.getQueueForNode(fakeNode.getId()));
 
 	}
 	
 	@StarexecTest
 	private void getNodesForQueue() {
 		List<WorkerNode> nodes = Cluster.getNodesForQueue(allQueue.getId());
-		Assert.assertNotNull(nodes);
+		Assertions.assertNotNull(nodes);
 		boolean containsNode=false;
 		
 		for (WorkerNode node : nodes) {
@@ -74,41 +74,41 @@ public class ClusterTests extends TestSequence {
 				containsNode=true;
 			}
 		}
-		Assert.assertTrue(containsNode);
+		Assertions.assertTrue(containsNode);
 	}
 	
 	@StarexecTest
 	private void setAllNodesStatusTest() {
-		Assert.assertTrue(Cluster.setNodeStatus(R.NODE_STATUS_INACTIVE));
+		Assertions.assertTrue(Cluster.setNodeStatus(R.NODE_STATUS_INACTIVE));
 		for (WorkerNode n : Cluster.getAllNodes()) {
-			Assert.assertEquals(R.NODE_STATUS_INACTIVE, n.getStatus());
+			Assertions.assertEquals(R.NODE_STATUS_INACTIVE, n.getStatus());
 		}
-		Assert.assertTrue(Cluster.setNodeStatus(R.NODE_STATUS_ACTIVE));
+		Assertions.assertTrue(Cluster.setNodeStatus(R.NODE_STATUS_ACTIVE));
 	}
 	
 	@StarexecTest
 	private void getNodeDetailsTest() {
 		WorkerNode node=Cluster.getNodeDetails(n.getId());
-		Assert.assertNotNull(node);
-		Assert.assertEquals(node.getName(),n.getName());
+		Assertions.assertNotNull(node);
+		Assertions.assertEquals(node.getName(),n.getName());
 	}
 	
 	@StarexecTest
 	private void setNodeStatusTest() {
-		Assert.assertTrue(Cluster.setNodeStatus(fakeNode.getName(), "fakestatus"));
-		Assert.assertEquals("fakestatus", Cluster.getNodeDetails(fakeNode.getId()).getStatus());
-		Assert.assertTrue(Cluster.setNodeStatus(fakeNode.getName(), R.NODE_STATUS_INACTIVE));
+		Assertions.assertTrue(Cluster.setNodeStatus(fakeNode.getName(), "fakestatus"));
+		Assertions.assertEquals("fakestatus", Cluster.getNodeDetails(fakeNode.getId()).getStatus());
+		Assertions.assertTrue(Cluster.setNodeStatus(fakeNode.getName(), R.NODE_STATUS_INACTIVE));
 	}
 	
 	@StarexecTest
 	private void getEmptyQueueJobsTest() {
-		Assert.assertEquals(0, Cluster.getJobsRunningOnQueue(emptyQueue.getId()).size());
+		Assertions.assertEquals(0, Cluster.getJobsRunningOnQueue(emptyQueue.getId()).size());
 	}
 	
 	@StarexecTest
 	private void getNonAttachedNodesTest() {
 		List<WorkerNode> nodes = Cluster.getNonAttachedNodes(emptyQueue.getId());
-		Assert.assertEquals(Cluster.getAllNodes().size(), nodes.size());
+		Assertions.assertEquals(Cluster.getAllNodes().size(), nodes.size());
 	}
 	
 	@StarexecTest
@@ -119,17 +119,17 @@ public class ClusterTests extends TestSequence {
 		for (WorkerNode node : nodes) {
 			found = found || n.getId()==node.getId();
 		}
-		Assert.assertFalse(found);
+		Assertions.assertFalse(found);
 	}
 	
 	@StarexecTest
 	private void getNodeIdByNameTest() {
-		Assert.assertEquals(fakeNode.getId(), Cluster.getNodeIdByName(fakeNode.getName()));
+		Assertions.assertEquals(fakeNode.getId(), Cluster.getNodeIdByName(fakeNode.getName()));
 	}
 	
 	@StarexecTest
 	private void getNodeIdByNameBadNodeTest() {
-		Assert.assertEquals(-1, Cluster.getNodeIdByName(TestUtil.getRandomAlphaString(50)));
+		Assertions.assertEquals(-1, Cluster.getNodeIdByName(TestUtil.getRandomAlphaString(50)));
 	}
 
 	@Override

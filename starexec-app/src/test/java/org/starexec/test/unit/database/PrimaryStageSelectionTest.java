@@ -1,15 +1,15 @@
 package org.starexec.test.unit.database;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Pipelines;
 import org.starexec.data.to.pipelines.PipelineStage;
 
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Which stage of a pipeline is the primary one.
@@ -25,18 +25,18 @@ public class PrimaryStageSelectionTest {
 		List<PipelineStage> stages = stages(4);
 		stages.get(2).setPrimary(true);
 
-		assertSame("the marked stage must be chosen", stages.get(2),
-				Pipelines.selectPrimaryStage(stages));
+		assertSame(stages.get(2), Pipelines.selectPrimaryStage(stages),
+				"the marked stage must be chosen");
 	}
 
 	@Test
 	public void theFirstStageIsTheDefault() {
 		List<PipelineStage> stages = stages(3);
 
-		assertSame("with none marked, the first stage is primary", stages.get(0),
-				Pipelines.selectPrimaryStage(stages));
-		assertTrue("the default must be recorded on the stage, not just returned",
-				stages.get(0).isPrimary());
+		assertSame(stages.get(0), Pipelines.selectPrimaryStage(stages),
+				"with none marked, the first stage is primary");
+		assertTrue(stages.get(0).isPrimary(),
+				"the default must be recorded on the stage, not just returned");
 	}
 
 	/**
@@ -50,7 +50,7 @@ public class PrimaryStageSelectionTest {
 
 		assertTrue(stages.get(0).isPrimary());
 		for (PipelineStage stage : stages.subList(1, stages.size())) {
-			assertTrue("only one stage may be primary", !stage.isPrimary());
+			assertTrue(!stage.isPrimary(), "only one stage may be primary");
 		}
 	}
 

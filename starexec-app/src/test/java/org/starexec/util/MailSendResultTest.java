@@ -3,7 +3,7 @@ package org.starexec.util;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.mail.EmailException;
 import org.apache.commons.mail.SimpleEmail;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 import org.starexec.data.database.ErrorLogs;
@@ -19,9 +19,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -74,7 +74,7 @@ public class MailSendResultTest {
 	public void noRecipientsIsReportedNotSent() {
 		try (MockedConstruction<SimpleEmail> emails = mockConstruction(SimpleEmail.class)) {
 			assertEquals(0, Mail.mail("body", "subject", List.of()));
-			assertTrue("nothing may be built for no recipients", emails.constructed().isEmpty());
+			assertTrue(emails.constructed().isEmpty(), "nothing may be built for no recipients");
 		}
 	}
 

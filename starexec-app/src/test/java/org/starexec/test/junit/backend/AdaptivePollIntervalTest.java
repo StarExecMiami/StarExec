@@ -1,14 +1,19 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.*;
-
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.Before;
-import org.junit.Test;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.AdaptivePollInterval;
 
 /**
@@ -36,7 +41,7 @@ public class AdaptivePollIntervalTest {
 
     private AdaptivePollInterval poller;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         poller = new AdaptivePollInterval(
             TEST_MONITOR_NAME,
@@ -53,24 +58,24 @@ public class AdaptivePollIntervalTest {
 
     @Test
     public void testInitialState() {
-        assertEquals("Initial interval should be base interval",
-            BASE_INTERVAL_MS, poller.getCurrentInterval());
-        assertEquals("Base interval getter should return configured value",
-            BASE_INTERVAL_MS, poller.getBaseInterval());
-        assertEquals("Max interval getter should return configured value",
-            MAX_INTERVAL_MS, poller.getMaxInterval());
-        assertEquals("Initial idle polls should be 0",
-            0, poller.getConsecutiveIdlePolls());
-        assertEquals("Initial total polls should be 0",
-            0, poller.getTotalPolls());
-        assertEquals("Initial total work items should be 0",
-            0, poller.getTotalWorkItems());
-        assertEquals("Initial backoff count should be 0",
-            0, poller.getBackoffCount());
-        assertFalse("Should not be backed off initially",
-            poller.isBackedOff());
-        assertFalse("Should not be at max backoff initially",
-            poller.isAtMaxBackoff());
+        assertEquals(BASE_INTERVAL_MS,
+            poller.getCurrentInterval(), "Initial interval should be base interval");
+        assertEquals(BASE_INTERVAL_MS,
+            poller.getBaseInterval(), "Base interval getter should return configured value");
+        assertEquals(MAX_INTERVAL_MS,
+            poller.getMaxInterval(), "Max interval getter should return configured value");
+        assertEquals(0,
+            poller.getConsecutiveIdlePolls(), "Initial idle polls should be 0");
+        assertEquals(0,
+            poller.getTotalPolls(), "Initial total polls should be 0");
+        assertEquals(0,
+            poller.getTotalWorkItems(), "Initial total work items should be 0");
+        assertEquals(0,
+            poller.getBackoffCount(), "Initial backoff count should be 0");
+        assertFalse(poller.isBackedOff(),
+            "Should not be backed off initially");
+        assertFalse(poller.isAtMaxBackoff(),
+            "Should not be at max backoff initially");
     }
 
     @Test
@@ -78,44 +83,56 @@ public class AdaptivePollIntervalTest {
         // Uses environment config - just verify it doesn't throw
         AdaptivePollInterval defaultPoller = new AdaptivePollInterval("DefaultTest");
         assertNotNull(defaultPoller);
-        assertTrue("Base interval should be positive",
-            defaultPoller.getBaseInterval() > 0);
-        assertTrue("Max interval should be >= base interval",
-            defaultPoller.getMaxInterval() >= defaultPoller.getBaseInterval());
+        assertTrue(defaultPoller.getBaseInterval() > 0,
+            "Base interval should be positive");
+        assertTrue(defaultPoller.getMaxInterval() >= defaultPoller.getBaseInterval(),
+            "Max interval should be >= base interval");
     }
 
     // ==========================================================================
     // Parameter Validation Tests
     // ==========================================================================
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testInvalidBaseInterval_Zero() {
-        new AdaptivePollInterval(TEST_MONITOR_NAME, 0, MAX_INTERVAL_MS, BACKOFF_MULTIPLIER, IDLE_THRESHOLD);
+        assertThrows(IllegalArgumentException.class, () -> {
+            new AdaptivePollInterval(TEST_MONITOR_NAME, 0, MAX_INTERVAL_MS, BACKOFF_MULTIPLIER, IDLE_THRESHOLD);
+        });
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testInvalidBaseInterval_Negative() {
-        new AdaptivePollInterval(TEST_MONITOR_NAME, -100, MAX_INTERVAL_MS, BACKOFF_MULTIPLIER, IDLE_THRESHOLD);
+        assertThrows(IllegalArgumentException.class, () -> {
+            new AdaptivePollInterval(TEST_MONITOR_NAME, -100, MAX_INTERVAL_MS, BACKOFF_MULTIPLIER, IDLE_THRESHOLD);
+        });
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testInvalidMaxInterval_LessThanBase() {
-        new AdaptivePollInterval(TEST_MONITOR_NAME, 1000, 500, BACKOFF_MULTIPLIER, IDLE_THRESHOLD);
+        assertThrows(IllegalArgumentException.class, () -> {
+            new AdaptivePollInterval(TEST_MONITOR_NAME, 1000, 500, BACKOFF_MULTIPLIER, IDLE_THRESHOLD);
+        });
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testInvalidBackoffMultiplier_One() {
-        new AdaptivePollInterval(TEST_MONITOR_NAME, BASE_INTERVAL_MS, MAX_INTERVAL_MS, 1.0, IDLE_THRESHOLD);
+        assertThrows(IllegalArgumentException.class, () -> {
+            new AdaptivePollInterval(TEST_MONITOR_NAME, BASE_INTERVAL_MS, MAX_INTERVAL_MS, 1.0, IDLE_THRESHOLD);
+        });
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testInvalidBackoffMultiplier_LessThanOne() {
-        new AdaptivePollInterval(TEST_MONITOR_NAME, BASE_INTERVAL_MS, MAX_INTERVAL_MS, 0.5, IDLE_THRESHOLD);
+        assertThrows(IllegalArgumentException.class, () -> {
+            new AdaptivePollInterval(TEST_MONITOR_NAME, BASE_INTERVAL_MS, MAX_INTERVAL_MS, 0.5, IDLE_THRESHOLD);
+        });
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testInvalidIdleThreshold_Negative() {
-        new AdaptivePollInterval(TEST_MONITOR_NAME, BASE_INTERVAL_MS, MAX_INTERVAL_MS, BACKOFF_MULTIPLIER, -1);
+        assertThrows(IllegalArgumentException.class, () -> {
+            new AdaptivePollInterval(TEST_MONITOR_NAME, BASE_INTERVAL_MS, MAX_INTERVAL_MS, BACKOFF_MULTIPLIER, -1);
+        });
     }
 
     @Test
@@ -135,11 +152,11 @@ public class AdaptivePollIntervalTest {
         // Record idle polls up to threshold - should not backoff yet
         for (int i = 1; i <= IDLE_THRESHOLD; i++) {
             poller.recordIdle();
-            assertEquals("Idle count should increment", i, poller.getConsecutiveIdlePolls());
-            assertEquals("Interval should remain at base before threshold exceeded",
-                BASE_INTERVAL_MS, poller.getCurrentInterval());
+            assertEquals(i, poller.getConsecutiveIdlePolls(), "Idle count should increment");
+            assertEquals(BASE_INTERVAL_MS,
+                poller.getCurrentInterval(), "Interval should remain at base before threshold exceeded");
         }
-        assertFalse("Should not be backed off at threshold", poller.isBackedOff());
+        assertFalse(poller.isBackedOff(), "Should not be backed off at threshold");
     }
 
     @Test
@@ -150,10 +167,10 @@ public class AdaptivePollIntervalTest {
         }
         
         long expectedInterval = (long)(BASE_INTERVAL_MS * BACKOFF_MULTIPLIER); // 200ms
-        assertEquals("First backoff should double the interval",
-            expectedInterval, poller.getCurrentInterval());
-        assertTrue("Should be backed off", poller.isBackedOff());
-        assertEquals("Backoff count should be 1", 1, poller.getBackoffCount());
+        assertEquals(expectedInterval,
+            poller.getCurrentInterval(), "First backoff should double the interval");
+        assertTrue(poller.isBackedOff(), "Should be backed off");
+        assertEquals(1, poller.getBackoffCount(), "Backoff count should be 1");
     }
 
     @Test
@@ -175,7 +192,7 @@ public class AdaptivePollIntervalTest {
         // Fourth backoff: 800 -> 1000 (capped at max)
         poller.recordIdle();
         assertEquals(MAX_INTERVAL_MS, poller.getCurrentInterval());
-        assertTrue("Should be at max backoff", poller.isAtMaxBackoff());
+        assertTrue(poller.isAtMaxBackoff(), "Should be at max backoff");
     }
 
     @Test
@@ -185,9 +202,9 @@ public class AdaptivePollIntervalTest {
             poller.recordIdle();
         }
         
-        assertEquals("Interval should be capped at max",
-            MAX_INTERVAL_MS, poller.getCurrentInterval());
-        assertTrue("Should be at max backoff", poller.isAtMaxBackoff());
+        assertEquals(MAX_INTERVAL_MS,
+            poller.getCurrentInterval(), "Interval should be capped at max");
+        assertTrue(poller.isAtMaxBackoff(), "Should be at max backoff");
     }
 
     @Test
@@ -204,9 +221,9 @@ public class AdaptivePollIntervalTest {
         }
         
         // Backoff count should not increase when already at max
-        assertEquals("Interval should remain at max", MAX_INTERVAL_MS, poller.getCurrentInterval());
-        assertEquals("Backoff count should not increase at max",
-            backoffCountAtMax, poller.getBackoffCount());
+        assertEquals(MAX_INTERVAL_MS, poller.getCurrentInterval(), "Interval should remain at max");
+        assertEquals(backoffCountAtMax,
+            poller.getBackoffCount(), "Backoff count should not increase at max");
     }
 
     // ==========================================================================
@@ -219,14 +236,14 @@ public class AdaptivePollIntervalTest {
         for (int i = 0; i < 10; i++) {
             poller.recordIdle();
         }
-        assertTrue("Should be backed off", poller.isBackedOff());
+        assertTrue(poller.isBackedOff(), "Should be backed off");
         
         // Record work found
         poller.recordWorkFound(5);
         
-        assertEquals("Interval should reset to base", BASE_INTERVAL_MS, poller.getCurrentInterval());
-        assertEquals("Idle count should reset to 0", 0, poller.getConsecutiveIdlePolls());
-        assertFalse("Should no longer be backed off", poller.isBackedOff());
+        assertEquals(BASE_INTERVAL_MS, poller.getCurrentInterval(), "Interval should reset to base");
+        assertEquals(0, poller.getConsecutiveIdlePolls(), "Idle count should reset to 0");
+        assertFalse(poller.isBackedOff(), "Should no longer be backed off");
     }
 
     @Test
@@ -234,8 +251,8 @@ public class AdaptivePollIntervalTest {
         poller.recordWorkFound(10);
         poller.recordWorkFound(5);
         
-        assertEquals("Total polls should be 2", 2, poller.getTotalPolls());
-        assertEquals("Total work items should be 15", 15, poller.getTotalWorkItems());
+        assertEquals(2, poller.getTotalPolls(), "Total polls should be 2");
+        assertEquals(15, poller.getTotalWorkItems(), "Total work items should be 15");
     }
 
     @Test
@@ -247,8 +264,8 @@ public class AdaptivePollIntervalTest {
         
         poller.resetToBase();
         
-        assertEquals("Interval should be base", BASE_INTERVAL_MS, poller.getCurrentInterval());
-        assertEquals("Idle count should be 0", 0, poller.getConsecutiveIdlePolls());
+        assertEquals(BASE_INTERVAL_MS, poller.getCurrentInterval(), "Interval should be base");
+        assertEquals(0, poller.getConsecutiveIdlePolls(), "Idle count should be 0");
     }
 
     @Test
@@ -256,7 +273,7 @@ public class AdaptivePollIntervalTest {
         // Reset when already at base - should work fine
         long initialInterval = poller.getCurrentInterval();
         poller.resetToBase();
-        assertEquals("Interval should remain at base", initialInterval, poller.getCurrentInterval());
+        assertEquals(initialInterval, poller.getCurrentInterval(), "Interval should remain at base");
     }
 
     // ==========================================================================
@@ -271,23 +288,23 @@ public class AdaptivePollIntervalTest {
         poller.recordIdle();
         poller.recordWorkFound(2);
         
-        assertEquals("Total polls should include all poll types", 5, poller.getTotalPolls());
-        assertEquals("Total work items should sum correctly", 3, poller.getTotalWorkItems());
+        assertEquals(5, poller.getTotalPolls(), "Total polls should include all poll types");
+        assertEquals(3, poller.getTotalWorkItems(), "Total work items should sum correctly");
     }
 
     @Test
     public void testGetStatsFormat() {
         String stats = poller.getStats();
         assertNotNull(stats);
-        assertTrue("Stats should contain monitor name", stats.contains(TEST_MONITOR_NAME));
-        assertTrue("Stats should contain 'current'", stats.contains("current="));
-        assertTrue("Stats should contain 'base'", stats.contains("base="));
-        assertTrue("Stats should contain 'max'", stats.contains("max="));
+        assertTrue(stats.contains(TEST_MONITOR_NAME), "Stats should contain monitor name");
+        assertTrue(stats.contains("current="), "Stats should contain 'current'");
+        assertTrue(stats.contains("base="), "Stats should contain 'base'");
+        assertTrue(stats.contains("max="), "Stats should contain 'max'");
     }
 
     @Test
     public void testToStringMatchesGetStats() {
-        assertEquals("toString should equal getStats", poller.getStats(), poller.toString());
+        assertEquals(poller.getStats(), poller.toString(), "toString should equal getStats");
     }
 
     // ==========================================================================
@@ -304,8 +321,8 @@ public class AdaptivePollIntervalTest {
             noBackoff.recordIdle();
         }
         
-        assertEquals("Interval should remain at base/max",
-            1000, noBackoff.getCurrentInterval());
+        assertEquals(1000,
+            noBackoff.getCurrentInterval(), "Interval should remain at base/max");
     }
 
     @Test
@@ -317,7 +334,7 @@ public class AdaptivePollIntervalTest {
         highMultiplier.recordIdle(); // idle = 1
         highMultiplier.recordIdle(); // idle = 2, backoff: 100 -> 1000
         
-        assertEquals("High multiplier should jump significantly", 1000, highMultiplier.getCurrentInterval());
+        assertEquals(1000, highMultiplier.getCurrentInterval(), "High multiplier should jump significantly");
     }
 
     @Test
@@ -329,8 +346,8 @@ public class AdaptivePollIntervalTest {
         
         poller.recordWorkFound(0);
         
-        assertEquals("Interval should reset even with 0 work items",
-            BASE_INTERVAL_MS, poller.getCurrentInterval());
+        assertEquals(BASE_INTERVAL_MS,
+            poller.getCurrentInterval(), "Interval should reset even with 0 work items");
     }
 
     // ==========================================================================
@@ -356,13 +373,13 @@ public class AdaptivePollIntervalTest {
             });
         }
         
-        assertTrue("All threads should complete", latch.await(10, TimeUnit.SECONDS));
+        assertTrue(latch.await(10, TimeUnit.SECONDS), "All threads should complete");
         executor.shutdown();
         executor.awaitTermination(5, TimeUnit.SECONDS);
         
         // Total polls should equal all iterations
-        assertEquals("Total polls should be thread-safe",
-            numThreads * iterationsPerThread, poller.getTotalPolls());
+        assertEquals(numThreads * iterationsPerThread,
+            poller.getTotalPolls(), "Total polls should be thread-safe");
     }
 
     @Test
@@ -393,23 +410,23 @@ public class AdaptivePollIntervalTest {
             });
         }
         
-        assertTrue("All threads should complete", latch.await(10, TimeUnit.SECONDS));
+        assertTrue(latch.await(10, TimeUnit.SECONDS), "All threads should complete");
         executor.shutdown();
         executor.awaitTermination(5, TimeUnit.SECONDS);
         
         // Verify no exceptions occurred and state is consistent
-        assertTrue("Interval should be within bounds",
-            poller.getCurrentInterval() >= BASE_INTERVAL_MS &&
-            poller.getCurrentInterval() <= MAX_INTERVAL_MS);
+        assertTrue(poller.getCurrentInterval() >= BASE_INTERVAL_MS &&
+            poller.getCurrentInterval() <= MAX_INTERVAL_MS,
+            "Interval should be within bounds");
         
         // Threads 0, 3 do recordIdle (2 threads * 25 = 50 idle polls that count)
         // Threads 1, 4 do recordWorkFound (2 threads * 25 = 50 work polls)
         // Threads 2, 5 do resetToBase (doesn't affect poll count)
         // Total = 50 + 50 = 100 polls
-        assertEquals("Total polls should match expected",
-            100, poller.getTotalPolls());
-        assertEquals("Total work items should match expected",
-            totalExpectedWork.get(), poller.getTotalWorkItems());
+        assertEquals(100,
+            poller.getTotalPolls(), "Total polls should match expected");
+        assertEquals(totalExpectedWork.get(),
+            poller.getTotalWorkItems(), "Total work items should match expected");
     }
 
     @Test
@@ -435,14 +452,14 @@ public class AdaptivePollIntervalTest {
             });
         }
         
-        assertTrue("All threads should complete", latch.await(10, TimeUnit.SECONDS));
+        assertTrue(latch.await(10, TimeUnit.SECONDS), "All threads should complete");
         executor.shutdown();
         executor.awaitTermination(5, TimeUnit.SECONDS);
         
         // State should be consistent - interval within bounds
-        assertTrue("Interval should be within bounds",
-            poller.getCurrentInterval() >= BASE_INTERVAL_MS &&
-            poller.getCurrentInterval() <= MAX_INTERVAL_MS);
+        assertTrue(poller.getCurrentInterval() >= BASE_INTERVAL_MS &&
+            poller.getCurrentInterval() <= MAX_INTERVAL_MS,
+            "Interval should be within bounds");
     }
 
     // ==========================================================================
@@ -457,29 +474,29 @@ public class AdaptivePollIntervalTest {
         for (int i = 0; i < 5; i++) {
             poller.recordWorkFound(3);
         }
-        assertEquals("Should stay at base during work", BASE_INTERVAL_MS, poller.getCurrentInterval());
-        assertEquals("Should have processed 15 work items", 15, poller.getTotalWorkItems());
+        assertEquals(BASE_INTERVAL_MS, poller.getCurrentInterval(), "Should stay at base during work");
+        assertEquals(15, poller.getTotalWorkItems(), "Should have processed 15 work items");
         
         // Work dries up, go idle
         for (int i = 0; i <= IDLE_THRESHOLD; i++) {
             poller.recordIdle();
         }
-        assertTrue("Should back off after idle threshold", poller.isBackedOff());
+        assertTrue(poller.isBackedOff(), "Should back off after idle threshold");
         
         // More idle time
         poller.recordIdle();
         poller.recordIdle();
         long backedOffInterval = poller.getCurrentInterval();
-        assertTrue("Should be significantly backed off", backedOffInterval > BASE_INTERVAL_MS);
+        assertTrue(backedOffInterval > BASE_INTERVAL_MS, "Should be significantly backed off");
         
         // New work arrives - external trigger
         poller.resetToBase();
-        assertEquals("Should reset to base for new work", BASE_INTERVAL_MS, poller.getCurrentInterval());
+        assertEquals(BASE_INTERVAL_MS, poller.getCurrentInterval(), "Should reset to base for new work");
         
         // Process the new work
         poller.recordWorkFound(10);
-        assertEquals("Should stay at base", BASE_INTERVAL_MS, poller.getCurrentInterval());
-        assertEquals("Total work should be 25", 25, poller.getTotalWorkItems());
+        assertEquals(BASE_INTERVAL_MS, poller.getCurrentInterval(), "Should stay at base");
+        assertEquals(25, poller.getTotalWorkItems(), "Total work should be 25");
     }
 
     @Test
@@ -490,13 +507,13 @@ public class AdaptivePollIntervalTest {
             for (int i = 0; i < 15; i++) {
                 poller.recordIdle();
             }
-            assertTrue("Should be at max backoff in cycle " + cycle, poller.isAtMaxBackoff());
+            assertTrue(poller.isAtMaxBackoff(), "Should be at max backoff in cycle " + cycle);
             
             // Recover
             poller.recordWorkFound(1);
-            assertEquals("Should recover to base in cycle " + cycle,
-                BASE_INTERVAL_MS, poller.getCurrentInterval());
-            assertFalse("Should not be backed off after recovery", poller.isBackedOff());
+            assertEquals(BASE_INTERVAL_MS,
+                poller.getCurrentInterval(), "Should recover to base in cycle " + cycle);
+            assertFalse(poller.isBackedOff(), "Should not be backed off after recovery");
         }
     }
 }

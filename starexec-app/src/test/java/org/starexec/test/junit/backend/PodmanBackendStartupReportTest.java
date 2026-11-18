@@ -1,9 +1,9 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -22,10 +22,12 @@ import com.github.dockerjava.core.DockerClientImpl;
 import java.net.ConnectException;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.mockito.MockedStatic;
 import org.slf4j.LoggerFactory;
 import org.starexec.backend.PodmanBackend;
@@ -48,7 +50,7 @@ public class PodmanBackendStartupReportTest {
     private Logger logger;
     private ListAppender<ILoggingEvent> appender;
 
-    @Before
+    @BeforeEach
     public void captureLog() {
         logger = (Logger) LoggerFactory.getLogger(PodmanBackend.class);
         appender = new ListAppender<>();
@@ -56,13 +58,14 @@ public class PodmanBackendStartupReportTest {
         logger.addAppender(appender);
     }
 
-    @After
+    @AfterEach
     public void releaseLog() {
         logger.detachAppender(appender);
         appender.stop();
     }
 
-    @Test(timeout = 30_000)
+    @Test
+    @Timeout(value = 30_000, unit = TimeUnit.MILLISECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     public void aFailureAfterTheEngineAnsweredIsNotReportedAsAConnectionFailure() {
         DockerClient engine = engineAnswering("5.2.1");
         InspectImageCmd inspect = mock(InspectImageCmd.class);
@@ -72,22 +75,23 @@ public class PodmanBackendStartupReportTest {
         IllegalStateException failure = initializeExpectingFailure(engine);
 
         assertFalse(
-            "the engine answered, so the failure is not a connection failure: " + failure.getMessage(),
-            failure.getMessage().contains("Could not connect")
+            failure.getMessage().contains("Could not connect"),
+            "the engine answered, so the failure is not a connection failure: " + failure.getMessage()
         );
         assertTrue(
-            "the message must name the step's own error: " + failure.getMessage(),
-            failure.getMessage().contains("image store is corrupt")
+            failure.getMessage().contains("image store is corrupt"),
+            "the message must name the step's own error: " + failure.getMessage()
         );
         assertTrue(
-            "the message must say that the backend did not start: " + failure.getMessage(),
-            failure.getMessage().contains("Podman backend not started")
+            failure.getMessage().contains("Podman backend not started"),
+            "the message must say that the backend did not start: " + failure.getMessage()
         );
-        assertFalse("start-up failed, so it must not be logged as a success", logged("initialized successfully"));
-        assertTrue("the engine connection itself is still logged, with its version", logged("5.2.1"));
+        assertFalse(logged("initialized successfully"), "start-up failed, so it must not be logged as a success");
+        assertTrue(logged("5.2.1"), "the engine connection itself is still logged, with its version");
     }
 
-    @Test(timeout = 30_000)
+    @Test
+    @Timeout(value = 30_000, unit = TimeUnit.MILLISECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     public void anEngineThatDoesNotAnswerIsStillReportedAsAConnectionFailure() {
         DockerClient engine = mock(DockerClient.class);
         VersionCmd version = mock(VersionCmd.class);
@@ -97,13 +101,14 @@ public class PodmanBackendStartupReportTest {
         IllegalStateException failure = initializeExpectingFailure(engine);
 
         assertTrue(
-            "an unreachable engine keeps the socket advice: " + failure.getMessage(),
-            failure.getMessage().contains("Could not connect to the container engine at")
+            failure.getMessage().contains("Could not connect to the container engine at"),
+            "an unreachable engine keeps the socket advice: " + failure.getMessage()
         );
-        assertFalse("start-up failed, so it must not be logged as a success", logged("initialized successfully"));
+        assertFalse(logged("initialized successfully"), "start-up failed, so it must not be logged as a success");
     }
 
-    @Test(timeout = 60_000)
+    @Test
+    @Timeout(value = 60_000, unit = TimeUnit.MILLISECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     public void theSuccessLineIsLoggedOnlyByABackendThatTakesWork() {
         DockerClient engine = engineAnswering("5.2.1");
         // A mocked inspect returns normally, so the job image counts as present.
@@ -120,21 +125,21 @@ public class PodmanBackendStartupReportTest {
                 backend.initialize("unused");
             }
 
-            assertTrue("a backend that finished start-up takes work", backend.isQueueDispatchable("container.q"));
-            assertEquals("the success line is logged exactly once", 1, probe.readiness.size());
+            assertTrue(backend.isQueueDispatchable("container.q"), "a backend that finished start-up takes work");
+            assertEquals(1, probe.readiness.size(), "the success line is logged exactly once");
             assertTrue(
-                "when the success line is logged, the backend must already take work",
-                probe.readiness.get(0)
+                probe.readiness.get(0),
+                "when the success line is logged, the backend must already take work"
             );
             List<String> messages = messages();
             int monitorStarted = indexOf(messages, "ContainerJobMonitor started");
             int succeeded = indexOf(messages, "PodmanBackend initialized successfully. Engine version: 5.2.1");
-            assertTrue("the job monitor start is logged", monitorStarted >= 0);
-            assertTrue("success is logged after the job monitor started", succeeded > monitorStarted);
+            assertTrue(monitorStarted >= 0, "the job monitor start is logged");
+            assertTrue(succeeded > monitorStarted, "success is logged after the job monitor started");
             assertTrue(
-                "the connection is logged as a connection, before the success line",
                 indexOf(messages, "Connected to the container engine at") < succeeded &&
-                    indexOf(messages, "Connected to the container engine at") >= 0
+                    indexOf(messages, "Connected to the container engine at") >= 0,
+                "the connection is logged as a connection, before the success line"
             );
         } finally {
             logger.detachAppender(probe);

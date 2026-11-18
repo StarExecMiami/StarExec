@@ -1,8 +1,8 @@
 package org.starexec.jobs;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.times;
@@ -15,9 +15,9 @@ import ch.qos.logback.core.read.ListAppender;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.slf4j.LoggerFactory;
 import org.starexec.backend.Backend;
@@ -53,7 +53,7 @@ public class QueueDispatchLogTest {
     private Logger logger;
     private ListAppender<ILoggingEvent> appender;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         originalBackend = R.BACKEND;
         backend = mock(Backend.class);
@@ -64,7 +64,7 @@ public class QueueDispatchLogTest {
         logger.addAppender(appender);
     }
 
-    @After
+    @AfterEach
     public void tearDown() {
         logger.detachAppender(appender);
         appender.stop();
@@ -124,7 +124,7 @@ public class QueueDispatchLogTest {
             .filter(e -> e.getLevel() == level && e.getFormattedMessage().contains(text))
             .map(ILoggingEvent::getFormattedMessage)
             .collect(Collectors.toList());
-        assertEquals(found.toString(), 1, found.size());
+        assertEquals(1, found.size(), found.toString());
         return found.get(0);
     }
 
@@ -139,9 +139,9 @@ public class QueueDispatchLogTest {
         when(backend.isQueueDispatchable(q.getName())).thenReturn(false);
         dispatch(q, Collections.emptyList(), 24);
         String line = message(Level.WARN, NO_NODES);
-        assertTrue(line, line.contains(
+        assertTrue(line.contains(
             "Queue all.q has no nodes available (24 pair(s) waiting to be submitted, 0 enqueued);"
-                + " the backend confirms it cannot accept work."));
+                + " the backend confirms it cannot accept work."), line);
     }
 
     /** The same for the node table mismatch, which the line reports as an ERROR. */
@@ -151,9 +151,9 @@ public class QueueDispatchLogTest {
         when(backend.isQueueDispatchable(q.getName())).thenReturn(true);
         dispatch(q, Collections.emptyList(), 1);
         String line = message(Level.ERROR, NO_NODES);
-        assertTrue(line, line.contains(
+        assertTrue(line.contains(
             "Queue container.q has no nodes associated with it (1 pair(s) waiting to be submitted,"
-                + " 0 enqueued), yet the backend reports it can accept work."));
+                + " 0 enqueued), yet the backend reports it can accept work."), line);
     }
 
     /**
@@ -166,7 +166,7 @@ public class QueueDispatchLogTest {
         when(backend.isQueueDispatchable(q.getName())).thenReturn(false);
         noNodes(q, 3, 0, 5_000_000L);
         String line = message(Level.WARN, NO_NODES);
-        assertTrue(line, line.contains("(0 pair(s) waiting to be submitted, 3 enqueued)"));
+        assertTrue(line.contains("(0 pair(s) waiting to be submitted, 3 enqueued)"), line);
     }
 
     /** A count that failed says so; the line does not print the -1 it is given. */
@@ -176,8 +176,8 @@ public class QueueDispatchLogTest {
         when(backend.isQueueDispatchable(q.getName())).thenReturn(false);
         noNodes(q, 0, -1, 5_000_000L);
         String line = message(Level.WARN, NO_NODES);
-        assertTrue(line, line.contains(
-            "(an unknown number of pairs waiting to be submitted, 0 enqueued)"));
+        assertTrue(line.contains(
+            "(an unknown number of pairs waiting to be submitted, 0 enqueued)"), line);
     }
 
     /**
@@ -207,8 +207,8 @@ public class QueueDispatchLogTest {
         for (int pass = 0; pass < PASSES; pass++) {
             JobManager.submitJobs(Collections.emptyList(), q, 0, 1);
         }
-        assertEquals("one WARN, so one error_logs row, for " + PASSES + " passes",
-            1, logged(Level.WARN, DEFERRED));
+        assertEquals(1,
+            logged(Level.WARN, DEFERRED), "one WARN, so one error_logs row, for " + PASSES + " passes");
     }
 
     @Test
@@ -221,7 +221,7 @@ public class QueueDispatchLogTest {
             JobManager.submitJobs(Collections.emptyList(), first, 0, 1);
             JobManager.submitJobs(Collections.emptyList(), second, 0, 1);
         }
-        assertEquals("one WARN per queue", 2, logged(Level.WARN, DEFERRED));
+        assertEquals(2, logged(Level.WARN, DEFERRED), "one WARN per queue");
     }
 
     @Test
@@ -231,7 +231,7 @@ public class QueueDispatchLogTest {
         for (int pass = 0; pass < PASSES; pass++) {
             dispatch(q, Collections.emptyList());
         }
-        assertEquals("one WARN for " + PASSES + " passes", 1, logged(Level.WARN, NO_NODES));
+        assertEquals(1, logged(Level.WARN, NO_NODES), "one WARN for " + PASSES + " passes");
     }
 
     /** The backend says it can run the queue's pairs, but StarExec counts no node for it. */
@@ -242,7 +242,7 @@ public class QueueDispatchLogTest {
         for (int pass = 0; pass < PASSES; pass++) {
             dispatch(q, Collections.emptyList());
         }
-        assertEquals("one ERROR for " + PASSES + " passes", 1, logged(Level.ERROR, NO_NODES));
+        assertEquals(1, logged(Level.ERROR, NO_NODES), "one ERROR for " + PASSES + " passes");
     }
 
     @Test
@@ -254,7 +254,7 @@ public class QueueDispatchLogTest {
             dispatch(q, Collections.singletonList(new WorkerNode("container-worker-1")));
         }
         assertEquals(1, logged(Level.WARN, NO_NODES));
-        assertEquals("the end of the condition, once", 1, logged(Level.INFO, "has nodes again"));
+        assertEquals(1, logged(Level.INFO, "has nodes again"), "the end of the condition, once");
     }
 
     /** A different cause is new information, so it is reported even though the queue still has no nodes. */
@@ -287,9 +287,9 @@ public class QueueDispatchLogTest {
         assertTrue(JobManager.queueAcceptsWork(q, t0 + 3 * 60_000L));
         assertTrue(JobManager.queueAcceptsWork(q, t0 + 4 * 60_000L));
         assertFalse(JobManager.queueAcceptsWork(q, t0 + 5 * 60_000L));
-        assertEquals("each refusal that starts", 2, logged(Level.WARN, DEFERRED));
-        assertEquals("the end, once, with when the refusal was first seen", 1,
-            logged(Level.INFO, "accepts work again; it was first seen refusing work 3 minute(s) ago"));
+        assertEquals(2, logged(Level.WARN, DEFERRED), "each refusal that starts");
+        assertEquals(1, logged(Level.INFO, "accepts work again; it was first seen refusing work 3 minute(s) ago"),
+            "the end, once, with when the refusal was first seen");
     }
 
     @Test
@@ -302,8 +302,8 @@ public class QueueDispatchLogTest {
         JobManager.queueAcceptsWork(q, t0 + QueueConditions.REPEAT_MILLIS);
         assertEquals(2, logged(Level.WARN, DEFERRED));
         assertEquals(1, logged(Level.WARN, DEFERRED + " (first seen 360 minutes ago)"));
-        assertEquals("each report says when the next one comes",
-            2, logged(Level.WARN, "Reported again every 6 hours while it lasts, and at INFO when it ends."));
+        assertEquals(2,
+            logged(Level.WARN, "Reported again every 6 hours while it lasts, and at INFO when it ends."), "each report says when the next one comes");
     }
 
     @Test

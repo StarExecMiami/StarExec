@@ -52,10 +52,7 @@ $(document).ready(function() {
 			"valid_children": ["space"],
 			"types": {
 				"space": {
-					"valid_children": ["space"],
-					"icon": {
-						"image": starexecRoot + "images/jstree/db.png"
-					}
+					"valid_children": ["space"]
 				}
 			}
 		},
@@ -122,7 +119,6 @@ function initUI(userId, spaceId) {
 		$("#dialog-confirm-update").dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					$('#dialog-confirm-update').dialog('close');
@@ -166,7 +162,6 @@ function initUI(userId, spaceId) {
 		$("#dialog-confirm-update").dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					$('#dialog-confirm-update').dialog('close');

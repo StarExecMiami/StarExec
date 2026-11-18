@@ -1,6 +1,6 @@
 package org.starexec.test.junit.data.security;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.Benchmarks;
@@ -11,8 +11,8 @@ import org.starexec.data.security.PictureSecurity;
 import org.starexec.data.security.SolverSecurity;
 import org.starexec.data.to.Benchmark;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The one rule upload and delete both use for whose picture a caller may change. It replaces
@@ -80,7 +80,7 @@ public class PictureSecurityTest {
 			security.when(() -> BenchmarkSecurity.userOwnsBenchOrIsAdmin(owned, CALLER)).thenReturn(true);
 
 			assertTrue(PictureSecurity.canChangePicture("benchmark", 5, CALLER));
-			assertFalse("a missing benchmark", PictureSecurity.canChangePicture("benchmark", 6, CALLER));
+			assertFalse(PictureSecurity.canChangePicture("benchmark", 6, CALLER), "a missing benchmark");
 		}
 	}
 

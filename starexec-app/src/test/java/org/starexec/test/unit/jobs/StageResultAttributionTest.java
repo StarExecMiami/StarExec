@@ -1,11 +1,9 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Assume;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.ContainerJobMonitor;
@@ -40,9 +38,10 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * Which stage a multi-stage pair's post-processor attributes (#179) and runsolver measurements
@@ -73,7 +72,6 @@ import static org.junit.Assert.assertTrue;
  * <p>Every test runs once per backend. Local polls while a pair runs, so the mid-run tests are
  * Local's alone; Podman and Kubernetes ingest once, after the job has exited.
  */
-@RunWith(Parameterized.class)
 public class StageResultAttributionTest {
 
 	private static final Path SGE = Path.of("src/main/java/org/starexec/config/sge");
@@ -87,22 +85,21 @@ public class StageResultAttributionTest {
 
 	enum Backend { LOCAL, CONTAINER, KUBERNETES }
 
-	@Parameterized.Parameters(name = "{0}")
 	public static Object[] backends() {
 		return Backend.values();
 	}
-
-	@Parameterized.Parameter
 	public Backend backend;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	// ------------------------------------------------------------------ placement (W1, W2)
 
 	/** The finding itself: each stage's own set, on its own stage, written once. */
-	@Test
-	public void eachStageKeepsItsOwnAttributes() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void eachStageKeepsItsOwnAttributes(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -116,8 +113,10 @@ public class StageResultAttributionTest {
 	 * Stage numbers are identities, not positions. No-op pipeline stages own no row, so a pair
 	 * can have stages 1 and 3; a writer keyed on the loop index would file stage 3 as stage 2.
 	 */
-	@Test
-	public void nonContiguousStagesKeepTheirOwnNumbers() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void nonContiguousStagesKeepTheirOwnNumbers(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 3);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -131,8 +130,10 @@ public class StageResultAttributionTest {
 	 * A final stage with no post-processor leaves the previous stage's attributes.txt behind.
 	 * Recording that file against the terminal stage is exactly what Kubernetes used to do.
 	 */
-	@Test
-	public void aStageWithoutAPostProcessorGetsNoAttributes() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aStageWithoutAPostProcessorGetsNoAttributes(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -143,8 +144,10 @@ public class StageResultAttributionTest {
 	}
 
 	/** A post-processor that prints nothing gives its stage no attributes, and is not an error. */
-	@Test
-	public void emptyPostProcessorOutputGivesItsStageNoAttributes() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void emptyPostProcessorOutputGivesItsStageNoAttributes(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -152,7 +155,7 @@ public class StageResultAttributionTest {
 		pair.run(0);
 
 		Ingested result = ingest(pair, 1, 2);
-		assertTrue("an empty result is not a failure: " + result.failure, result.failure == null);
+		assertTrue(result.failure == null, "an empty result is not a failure: " + result.failure);
 		assertRecorded(result, Map.of(1, THEOREM));
 	}
 
@@ -162,8 +165,10 @@ public class StageResultAttributionTest {
 	 * With the protocol declared, attributes.txt is never read -- not even when it disagrees with
 	 * every per-stage file. Bogus must not reach the database on any backend.
 	 */
-	@Test
-	public void theLegacyFileIsNeverReadUnderTheProtocol() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void theLegacyFileIsNeverReadUnderTheProtocol(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -177,8 +182,10 @@ public class StageResultAttributionTest {
 	}
 
 	/** Declared, but no stage published anything: nothing is recorded, not the legacy file. */
-	@Test
-	public void theMarkerWithNoFilesRecordsNothing() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void theMarkerWithNoFilesRecordsNothing(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -193,21 +200,25 @@ public class StageResultAttributionTest {
 	// ------------------------------------------------------------- single stage (W7)
 
 	/** Single-stage pairs record exactly what they always did, with the protocol ... */
-	@Test
-	public void aSingleStagePairIsUnchangedWithTheProtocol() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aSingleStagePairIsUnchangedWithTheProtocol(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
 		pair.run(0);
 
-		assertTrue("the helper declares the protocol",
-				Files.isDirectory(pair.out.resolve("stage-attributes")));
+		assertTrue(Files.isDirectory(pair.out.resolve("stage-attributes")),
+				"the helper declares the protocol");
 		assertRecorded(ingest(pair, 1), Map.of(1, THEOREM));
 	}
 
 	/** ... and from a helper that predates it, whose only output is attributes.txt. */
-	@Test
-	public void aSingleStagePairIsUnchangedFromAnOlderHelper() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aSingleStagePairIsUnchangedFromAnOlderHelper(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -221,8 +232,10 @@ public class StageResultAttributionTest {
 	 * An older helper's multi-stage attributes.txt names no stage, and neither stage 1 nor the
 	 * terminal stage is a safe guess, so it is not recorded at all.
 	 */
-	@Test
-	public void aMultiStagePairFromAnOlderHelperRecordsNothing() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aMultiStagePairFromAnOlderHelperRecordsNothing(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -236,8 +249,10 @@ public class StageResultAttributionTest {
 	// ------------------------------------------------------------------ gate (W5)
 
 	/** A stage whose snapshot is missing has not been shown to finish, so it is not consumed. */
-	@Test
-	public void aStageWithoutASnapshotIsNotConsumed() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aStageWithoutASnapshotIsNotConsumed(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -249,9 +264,11 @@ public class StageResultAttributionTest {
 	}
 
 	/** Local polls mid-stage-1: stage 1's snapshot still says RUNNING, so nothing is consumed. */
-	@Test
-	public void aLocalPollDuringStageOneRecordsNothing() throws Exception {
-		Assume.assumeTrue(backend == Backend.LOCAL);
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aLocalPollDuringStageOneRecordsNothing(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
+		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM);
@@ -259,7 +276,7 @@ public class StageResultAttributionTest {
 
 		Ingested poll = ingestLocal(pair, false, 1, 2);
 		assertIngested(poll);
-		assertFalse("the pair is still running", poll.terminal);
+		assertFalse(poll.terminal, "the pair is still running");
 		assertRecorded(poll, Map.of());
 	}
 
@@ -268,9 +285,11 @@ public class StageResultAttributionTest {
 	 * status.json still names stage 1 as running, so nothing is consumed yet -- and once the pair
 	 * completes, both stages are recorded from their own files.
 	 */
-	@Test
-	public void aLocalPollDuringStageTwoRecordsNothingUntilThePairCompletes() throws Exception {
-		Assume.assumeTrue(backend == Backend.LOCAL);
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aLocalPollDuringStageTwoRecordsNothingUntilThePairCompletes(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
+		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -281,7 +300,7 @@ public class StageResultAttributionTest {
 		try {
 			Ingested midStage = local.poll(1, 2);
 			assertIngested(midStage);
-			assertFalse("the pair is still running", midStage.terminal);
+			assertFalse(midStage.terminal, "the pair is still running");
 			assertRecorded(midStage, Map.of());
 
 			pair.append("sendStageStatus \"$STATUS_COMPLETE\" 2\n");
@@ -289,7 +308,7 @@ public class StageResultAttributionTest {
 			pair.run(0);
 			Ingested done = local.poll(1, 2);
 			assertIngested(done);
-			assertTrue("the pair is complete", done.terminal);
+			assertTrue(done.terminal, "the pair is complete");
 			assertRecorded(done, Map.of(1, THEOREM, 2, UNKNOWN));
 		} finally {
 			local.close();
@@ -301,9 +320,11 @@ public class StageResultAttributionTest {
 	 * attributes, has started over: the files this poll already read belong to the attempt the
 	 * rerun replaced, so none of them may be written against the pair.
 	 */
-	@Test
-	public void aLocalPollSupersededAfterTheStatusWriteRecordsNoAttributes() throws Exception {
-		Assume.assumeTrue(backend == Backend.LOCAL);
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aLocalPollSupersededAfterTheStatusWriteRecordsNoAttributes(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
+		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -317,7 +338,7 @@ public class StageResultAttributionTest {
 				local.monitor.registerJob(pair.out.toString(), PAIR);
 				rerunLanded[0] = true;
 			}, 1, 2);
-			assertTrue("the rerun must land at the status write", rerunLanded[0]);
+			assertTrue(rerunLanded[0], "the rerun must land at the status write");
 			assertRecorded(result, Map.of());
 		} finally {
 			local.close();
@@ -331,8 +352,10 @@ public class StageResultAttributionTest {
 	 * pair's attributes.txt always was recorded whatever the pair's status. Here runsolver's
 	 * watch file is missing: copyOutput runs, then markRunscriptError (jobscript:537-540).
 	 */
-	@Test
-	public void aStageThatErrorsAfterPostProcessingKeepsItsAttributes() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aStageThatErrorsAfterPostProcessingKeepsItsAttributes(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -347,8 +370,10 @@ public class StageResultAttributionTest {
 	 * The exitJobscript catch-all reports on the pair-level channel, stage 0, and writes no
 	 * snapshot. No stage is named, so nothing may be recorded for any of them (#145's shape).
 	 */
-	@Test
-	public void aPairLevelFailureRecordsNothing() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aPairLevelFailureRecordsNothing(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -359,9 +384,9 @@ public class StageResultAttributionTest {
 		// Local and Podman refuse the stage-0 result outright; Kubernetes reports it handled.
 		// Either way no attribute may be written.
 		Ingested result = ingest(pair, 1, 2);
-		assertTrue("a refusal, if any, is the invalid-stage one: " + result.failure,
-				result.failure == null
-						|| result.failure instanceof StageStatusSnapshots.InvalidSnapshotException);
+		assertTrue(result.failure == null
+						|| result.failure instanceof StageStatusSnapshots.InvalidSnapshotException,
+				"a refusal, if any, is the invalid-stage one: " + result.failure);
 		assertWritten(result, Map.of());
 	}
 
@@ -369,16 +394,18 @@ public class StageResultAttributionTest {
 	 * A post-processor that fails part-way leaves partial output in the sandbox, and none of it
 	 * may be published: its stage gets nothing, and stage 1 keeps its own set.
 	 */
-	@Test
-	public void aFailedPostProcessorPublishesNothingForItsStage() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aFailedPostProcessorPublishesNothingForItsStage(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
 		pair.failingStage(2, "starexec-result=Partial\n");
 		pair.run(1);
 
-		assertFalse("the partial output must not be published",
-				Files.exists(pair.out.resolve("stage-attributes").resolve("2.txt")));
+		assertFalse(Files.exists(pair.out.resolve("stage-attributes").resolve("2.txt")),
+				"the partial output must not be published");
 		Ingested result = ingest(pair, 1, 2);
 		assertNoValue(result, "Partial");
 		assertRecorded(result, Map.of(1, THEOREM));
@@ -389,8 +416,10 @@ public class StageResultAttributionTest {
 	 * and Kubernetes clear the directory before the attempt starts, as they clear stage-status;
 	 * the gate alone already keeps stage 2 out, because the new attempt never reached it.
 	 */
-	@Test
-	public void aRerunThatDiesInStageOneIgnoresThePreviousAttempt() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aRerunThatDiesInStageOneIgnoresThePreviousAttempt(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -415,8 +444,10 @@ public class StageResultAttributionTest {
 	 * 2.txt must be gone rather than filed against the stage that failed. The helper clears it
 	 * when the pair starts.
 	 */
-	@Test
-	public void aRerunWithoutCleanupGetsNothingFromThePreviousAttempt() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aRerunWithoutCleanupGetsNothingFromThePreviousAttempt(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -430,8 +461,8 @@ public class StageResultAttributionTest {
 		rerun.failingStage(2, "starexec-result=Partial\n");
 		rerun.run(1);
 
-		assertTrue("the directory stays: it is the marker",
-				Files.isDirectory(pair.out.resolve("stage-attributes")));
+		assertTrue(Files.isDirectory(pair.out.resolve("stage-attributes")),
+				"the directory stays: it is the marker");
 		Ingested result = ingest(rerun, 1, 2);
 		assertNoValue(result, "Unknown");
 		assertRecorded(result, Map.of(1, SATISFIABLE));
@@ -441,8 +472,10 @@ public class StageResultAttributionTest {
 	 * Fail closed: a previous attempt's file the helper cannot remove stops the pair before any
 	 * stage runs, reported at the pair level so no stage's surviving file is read.
 	 */
-	@Test
-	public void aPreviousAttemptThatCannotBeClearedFailsThePairBeforeAnyStage() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aPreviousAttemptThatCannotBeClearedFailsThePairBeforeAnyStage(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -459,30 +492,32 @@ public class StageResultAttributionTest {
 			rerun.stage(2, SATISFIABLE).complete(2);
 			rerun.run(0);
 
-			assertEquals("no stage may have run", THEOREM,
-					Files.readString(marker.resolve("1.txt")));
+			assertEquals(THEOREM, Files.readString(marker.resolve("1.txt")),
+					"no stage may have run");
 			String status = Files.readString(pair.out.resolve("status.json"));
-			assertTrue("a pair-level runscript error: " + status,
-					status.contains("\"status\":11,") && status.contains("\"stageNumber\":0,"));
+			assertTrue(status.contains("\"status\":11,") && status.contains("\"stageNumber\":0,"),
+					"a pair-level runscript error: " + status);
 			result = ingest(rerun, 1, 2);
 		} finally {
 			Files.setPosixFilePermissions(marker, PosixFilePermissions.fromString("rwxr-xr-x"));
 		}
-		assertTrue("a refusal, if any, is the invalid-stage one: " + result.failure,
-				result.failure == null
-						|| result.failure instanceof StageStatusSnapshots.InvalidSnapshotException);
+		assertTrue(result.failure == null
+						|| result.failure instanceof StageStatusSnapshots.InvalidSnapshotException,
+				"a refusal, if any, is the invalid-stage one: " + result.failure);
 		assertWritten(result, Map.of());
 	}
 
 	/** Clearing never follows a link planted where the marker belongs. */
-	@Test
-	public void aLinkedMarkerIsReplacedRatherThanClearedThrough() throws Exception {
-		Assume.assumeTrue(backend == Backend.LOCAL); // a property of the helper alone
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aLinkedMarkerIsReplacedRatherThanClearedThrough(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
+		Assumptions.assumeTrue(backend == Backend.LOCAL); // a property of the helper alone
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.run(0);
 
-		Path outside = folder.newFolder("outside").toPath();
+		Path outside = newFolder(folder, "outside").toPath();
 		Files.writeString(outside.resolve("2.txt"), "keep\n");
 		Path marker = pair.out.resolve("stage-attributes");
 		deleteTree(marker);
@@ -492,14 +527,16 @@ public class StageResultAttributionTest {
 		rerun.start();
 		rerun.run(0);
 
-		assertTrue("a file outside the output was deleted", Files.exists(outside.resolve("2.txt")));
+		assertTrue(Files.exists(outside.resolve("2.txt")), "a file outside the output was deleted");
 		assertTrue(Files.isDirectory(marker, java.nio.file.LinkOption.NOFOLLOW_LINKS));
 	}
 
 	/** Rollback: an older monitor reads attributes.txt, which the new helper still publishes. */
-	@Test
-	public void theLegacyFileIsStillPublishedForAnOlderMonitor() throws Exception {
-		Assume.assumeTrue(backend == Backend.LOCAL); // a property of the helper alone
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void theLegacyFileIsStillPublishedForAnOlderMonitor(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
+		Assumptions.assumeTrue(backend == Backend.LOCAL); // a property of the helper alone
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -515,8 +552,10 @@ public class StageResultAttributionTest {
 	 * Each stage's cpu, wallclock, memory and disk are recorded against that stage, exactly. The
 	 * qualification finding: only the final stage's measurements survived (#180).
 	 */
-	@Test
-	public void everyStageKeepsItsOwnMeasurements() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void everyStageKeepsItsOwnMeasurements(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -526,8 +565,10 @@ public class StageResultAttributionTest {
 		assertMeasured(ingest(pair, 1, 2), Map.of(1, measured(0, 1), 2, measured(0, 2)));
 	}
 
-	@Test
-	public void nonContiguousStagesKeepTheirOwnMeasurements() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void nonContiguousStagesKeepTheirOwnMeasurements(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 3);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -542,9 +583,11 @@ public class StageResultAttributionTest {
 	 * markRunscriptError (jobscript:530-534), so it publishes no measurements -- and stats.json
 	 * still holds stage 1's. Stage 2 must get nothing rather than stage 1's numbers.
 	 */
-	@Test
-	public void aStageThatNeverReachedCopyOutputIsNotGivenThePreviousStagesMeasurements()
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aStageThatNeverReachedCopyOutputIsNotGivenThePreviousStagesMeasurements(Backend backend)
 			throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -558,8 +601,10 @@ public class StageResultAttributionTest {
 	 * Zero is a measurement. runsolver samples virtual memory only after 0.1 s, so a short stage
 	 * reports MAXVM=0, and it is recorded as exactly that.
 	 */
-	@Test
-	public void aZeroMeasurementIsRecordedExactly() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aZeroMeasurementIsRecordedExactly(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.varFile(1, "WCTIME=0.05\nCPUTIME=0.04\nUSERTIME=0.03\nSYSTEMTIME=0\nMAXVM=0\n"
 				+ "TIMEOUT=false\nMEMOUT=false\n");
@@ -580,8 +625,10 @@ public class StageResultAttributionTest {
 	 * runsolver's clock had WCTIME=9.90467e-05, and none of its measurements were recorded. All
 	 * four times are in that form here.
 	 */
-	@Test
-	public void aTimeInExponentFormBelowATenThousandthIsRecordedExactly() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aTimeInExponentFormBelowATenThousandthIsRecordedExactly(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.varFile(1, "WCTIME=9.90467e-05\nCPUTIME=8.32e-05\nUSERTIME=4.1e-05\n"
 				+ "SYSTEMTIME=4.22e-05\nMAXVM=0\nTIMEOUT=false\nMEMOUT=false\n");
@@ -596,8 +643,10 @@ public class StageResultAttributionTest {
 	}
 
 	/** From 1e6 s the same format is exponent form again, with a positive exponent. */
-	@Test
-	public void aTimeInExponentFormFromAMillionSecondsIsRecordedExactly() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aTimeInExponentFormFromAMillionSecondsIsRecordedExactly(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.varFile(1, "WCTIME=39825.3\nCPUTIME=1.23457e+06\nUSERTIME=1.23e+06\n"
 				+ "SYSTEMTIME=4567.89\nMAXVM=8240\nTIMEOUT=false\nMEMOUT=false\n");
@@ -616,8 +665,10 @@ public class StageResultAttributionTest {
 	 * saved output against stage 1, stage 2's against stage 2. Before, only the final stage's
 	 * output was charged at all.
 	 */
-	@Test
-	public void everyStageIsChargedItsOwnDisk() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void everyStageIsChargedItsOwnDisk(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -625,17 +676,19 @@ public class StageResultAttributionTest {
 		pair.run(0);
 
 		assertIngested(ingest(pair, 1, 2));
-		assertEquals("each stage's recorded disk", Map.of(1, 100L, 2, 200L), ledger.stageDisk);
-		assertEquals("the user's charge is the sum of the stages'", 300L, ledger.charged);
+		assertEquals(Map.of(1, 100L, 2, 200L), ledger.stageDisk, "each stage's recorded disk");
+		assertEquals(300L, ledger.charged, "the user's charge is the sum of the stages'");
 	}
 
 	/**
 	 * Local polls a finished stage again and again. Each poll records the same measurements, and
 	 * the user is still charged each stage's disk once.
 	 */
-	@Test
-	public void repeatedLocalPollsChargeEachStageOnce() throws Exception {
-		Assume.assumeTrue(backend == Backend.LOCAL);
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void repeatedLocalPollsChargeEachStageOnce(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
+		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -650,17 +703,19 @@ public class StageResultAttributionTest {
 			local.close();
 		}
 		assertEquals(Map.of(1, 100L, 2, 200L), ledger.stageDisk);
-		assertEquals("a second poll must not charge again", 300L, ledger.charged);
+		assertEquals(300L, ledger.charged, "a second poll must not charge again");
 	}
 
 	/**
 	 * Local polls mid-stage-2, after stage 2's copyOutput published but before the stage
 	 * finished: nothing is recorded yet, not stage 2's numbers under whatever stats.json names.
 	 */
-	@Test
-	public void aLocalPollDuringStageTwoRecordsNoMeasurementsUntilThePairCompletes()
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aLocalPollDuringStageTwoRecordsNoMeasurementsUntilThePairCompletes(Backend backend)
 			throws Exception {
-		Assume.assumeTrue(backend == Backend.LOCAL);
+		initStageResultAttributionTest(backend);
+		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -670,7 +725,7 @@ public class StageResultAttributionTest {
 		Local local = new Local(pair);
 		try {
 			Ingested midStage = local.poll(1, 2);
-			assertFalse("the pair is still running", midStage.terminal);
+			assertFalse(midStage.terminal, "the pair is still running");
 			assertMeasured(midStage, Map.of());
 
 			pair.append("sendStageStatus \"$STATUS_COMPLETE\" 2\n");
@@ -683,9 +738,11 @@ public class StageResultAttributionTest {
 	}
 
 	/** As for attributes: a rerun registered at the status write has started over. */
-	@Test
-	public void aLocalPollSupersededAfterTheStatusWriteRecordsNoMeasurements() throws Exception {
-		Assume.assumeTrue(backend == Backend.LOCAL);
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aLocalPollSupersededAfterTheStatusWriteRecordsNoMeasurements(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
+		Assumptions.assumeTrue(backend == Backend.LOCAL);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -699,7 +756,7 @@ public class StageResultAttributionTest {
 				local.monitor.registerJob(pair.out.toString(), PAIR);
 				rerunLanded[0] = true;
 			}, 1, 2);
-			assertTrue("the rerun must land at the status write", rerunLanded[0]);
+			assertTrue(rerunLanded[0], "the rerun must land at the status write");
 			assertMeasured(result, Map.of());
 		} finally {
 			local.close();
@@ -711,8 +768,10 @@ public class StageResultAttributionTest {
 	 * never reaches copyOutput: stage 2 gets neither the previous attempt's stage-2 file nor this
 	 * attempt's stage 1.
 	 */
-	@Test
-	public void aRerunWithoutCleanupGetsNoMeasurementsFromThePreviousAttempt() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aRerunWithoutCleanupGetsNoMeasurementsFromThePreviousAttempt(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -730,9 +789,11 @@ public class StageResultAttributionTest {
 	}
 
 	/** Fail closed, as for attributes: a stale stats file that survives stops the pair. */
-	@Test
-	public void aPreviousAttemptsStatsThatCannotBeClearedFailThePairBeforeAnyStage()
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aPreviousAttemptsStatsThatCannotBeClearedFailThePairBeforeAnyStage(Backend backend)
 			throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -749,26 +810,28 @@ public class StageResultAttributionTest {
 			rerun.stage(1, SATISFIABLE).complete(1);
 			rerun.run(0);
 
-			assertEquals("no stage may have run", before, Files.readString(marker.resolve("1.json")));
+			assertEquals(before, Files.readString(marker.resolve("1.json")), "no stage may have run");
 			String status = Files.readString(pair.out.resolve("status.json"));
-			assertTrue("a pair-level runscript error: " + status,
-					status.contains("\"status\":11,") && status.contains("\"stageNumber\":0,"));
+			assertTrue(status.contains("\"status\":11,") && status.contains("\"stageNumber\":0,"),
+					"a pair-level runscript error: " + status);
 			result = ingest(rerun, 1, 2);
 		} finally {
 			Files.setPosixFilePermissions(marker, PosixFilePermissions.fromString("rwxr-xr-x"));
 		}
-		assertTrue("a refusal, if any, is the invalid-stage one: " + result.failure,
-				result.failure == null
-						|| result.failure instanceof StageStatusSnapshots.InvalidSnapshotException);
-		assertEquals("no measurement may be written", List.of(), result.measured);
+		assertTrue(result.failure == null
+						|| result.failure instanceof StageStatusSnapshots.InvalidSnapshotException,
+				"a refusal, if any, is the invalid-stage one: " + result.failure);
+		assertEquals(List.of(), result.measured, "no measurement may be written");
 	}
 
 	/**
 	 * A stage whose measurements cannot be published fails at that stage: with the marker present
 	 * nothing else is read, so carrying on would lose them silently.
 	 */
-	@Test
-	public void aStageWhoseMeasurementsCannotBePublishedFails() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void aStageWhoseMeasurementsCannotBePublishedFails(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.append("chmod a-w \"$STAREXEC_OUTPUT_DIR/stage-stats\"\n");
@@ -779,10 +842,10 @@ public class StageResultAttributionTest {
 		try {
 			pair.run(1);
 			String status = Files.readString(pair.out.resolve("status.json"));
-			assertTrue("a general error at stage 1: " + status,
-					status.contains("\"status\":18,") && status.contains("\"stageNumber\":1,"));
-			assertTrue("the legacy file is still written first",
-					Files.exists(pair.out.resolve("stats.json")));
+			assertTrue(status.contains("\"status\":18,") && status.contains("\"stageNumber\":1,"),
+					"a general error at stage 1: " + status);
+			assertTrue(Files.exists(pair.out.resolve("stats.json")),
+					"the legacy file is still written first");
 			result = ingest(pair, 1, 2);
 		} finally {
 			Files.setPosixFilePermissions(marker, PosixFilePermissions.fromString("rwxr-xr-x"));
@@ -791,9 +854,11 @@ public class StageResultAttributionTest {
 	}
 
 	/** The helper declares the protocol when the pair starts, before any stage publishes. */
-	@Test
-	public void theMeasurementsMarkerIsCreatedWhenThePairStarts() throws Exception {
-		Assume.assumeTrue(backend == Backend.LOCAL); // a property of the helper alone
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void theMeasurementsMarkerIsCreatedWhenThePairStarts(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
+		Assumptions.assumeTrue(backend == Backend.LOCAL); // a property of the helper alone
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.run(0);
@@ -811,8 +876,10 @@ public class StageResultAttributionTest {
 	 * Without the marker, stats.json is recorded under the stage it names -- here the final one,
 	 * which is the only one it still holds.
 	 */
-	@Test
-	public void anOlderHelpersStatsAreRecordedUnderTheStageTheyName() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void anOlderHelpersStatsAreRecordedUnderTheStageTheyName(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -824,8 +891,10 @@ public class StageResultAttributionTest {
 	}
 
 	/** ... not under the terminal stage when stats.json still holds the stage before it. */
-	@Test
-	public void anOlderHelpersStatsFromAnEarlierStageStayWithThatStage() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void anOlderHelpersStatsFromAnEarlierStageStayWithThatStage(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -837,8 +906,10 @@ public class StageResultAttributionTest {
 	}
 
 	/** A stats.json that does not say which stage it is from is not given one (C1). */
-	@Test
-	public void anOlderHelpersStatsWithoutAStageNumberRecordNothing() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void anOlderHelpersStatsWithoutAStageNumberRecordNothing(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -851,8 +922,10 @@ public class StageResultAttributionTest {
 	}
 
 	/** ... nor one that does not say which pair it is from. */
-	@Test
-	public void anOlderHelpersStatsWithoutAPairIdRecordNothing() throws Exception {
+	@MethodSource("backends")
+	@ParameterizedTest(name = "{0}")
+	public void anOlderHelpersStatsWithoutAPairIdRecordNothing(Backend backend) throws Exception {
+		initStageResultAttributionTest(backend);
 		Pair pair = new Pair(1, 2);
 		pair.start();
 		pair.stage(1, THEOREM).complete(1);
@@ -878,14 +951,14 @@ public class StageResultAttributionTest {
 		}
 		Map<Integer, Map<String, String>> got = new TreeMap<>();
 		for (Write w : result.writes) {
-			assertFalse("stage " + w.stage + " was written more than once: " + result.writes,
-					got.containsKey(w.stage));
-			assertFalse("stage " + w.stage + " was written with no attributes: " + result.writes,
-					w.attributes.isEmpty());
+			assertFalse(got.containsKey(w.stage),
+					"stage " + w.stage + " was written more than once: " + result.writes);
+			assertFalse(w.attributes.isEmpty(),
+					"stage " + w.stage + " was written with no attributes: " + result.writes);
 			got.put(w.stage, w.attributes);
 		}
-		assertEquals("attributes by stage (ingestion outcome: "
-				+ (result.failure == null ? "ok" : result.failure) + ")", want, got);
+		assertEquals(want, got, "attributes by stage (ingestion outcome: "
+				+ (result.failure == null ? "ok" : result.failure) + ")");
 	}
 
 	/**
@@ -896,11 +969,11 @@ public class StageResultAttributionTest {
 		assertIngested(result);
 		Map<Integer, List<Object>> got = new TreeMap<>();
 		for (Measured m : result.measured) {
-			assertFalse("stage " + m.stage + " was measured more than once: " + result.measured,
-					got.containsKey(m.stage));
+			assertFalse(got.containsKey(m.stage),
+					"stage " + m.stage + " was measured more than once: " + result.measured);
 			got.put(m.stage, m.values);
 		}
-		assertEquals("measurements by stage", new TreeMap<>(expected), got);
+		assertEquals(new TreeMap<>(expected), got, "measurements by stage");
 	}
 
 	/** What the harness's default var file, watch file and stdout give a stage. */
@@ -919,8 +992,8 @@ public class StageResultAttributionTest {
 
 	private static void assertNoValue(Ingested result, String value) {
 		for (Write w : result.writes) {
-			assertFalse("'" + value + "' reached the database: " + w,
-					w.attributes.containsValue(value) || w.attributes.containsKey(value));
+			assertFalse(w.attributes.containsValue(value) || w.attributes.containsKey(value),
+					"'" + value + "' reached the database: " + w);
 		}
 	}
 
@@ -1062,7 +1135,7 @@ public class StageResultAttributionTest {
 		try {
 			Ingested result = local.poll(stages);
 			if (expectTerminal && result.failure == null) {
-				assertTrue("the finished pair must be ingested as terminal", result.terminal);
+				assertTrue(result.terminal, "the finished pair must be ingested as terminal");
 			}
 			return result;
 		} finally {
@@ -1177,16 +1250,16 @@ public class StageResultAttributionTest {
 				Method m = LocalBackend.class.getDeclaredMethod(
 						"cleanupPreviousRunArtifacts", File.class);
 				m.setAccessible(true);
-				assertTrue("cleanup must succeed",
-						(boolean) m.invoke(new LocalBackend(), out.toFile()));
+				assertTrue((boolean) m.invoke(new LocalBackend(), out.toFile()),
+						"cleanup must succeed");
 				break;
 			}
 			case KUBERNETES: {
 				Method m = KubernetesNativeBackend.class.getDeclaredMethod(
 						"clearStaleAttemptArtifacts", Path.class, int.class);
 				m.setAccessible(true);
-				assertTrue("cleanup must succeed",
-						(boolean) m.invoke(new KubernetesNativeBackend(), out, PAIR));
+				assertTrue((boolean) m.invoke(new KubernetesNativeBackend(), out, PAIR),
+						"cleanup must succeed");
 				break;
 			}
 			default:
@@ -1194,8 +1267,8 @@ public class StageResultAttributionTest {
 				// stage-status. The helper clears this directory's files when the pair starts.
 				return;
 		}
-		assertFalse("the per-stage attributes must be cleared before the attempt",
-				Files.exists(out.resolve("stage-attributes")));
+		assertFalse(Files.exists(out.resolve("stage-attributes")),
+				"the per-stage attributes must be cleared before the attempt");
 	}
 
 	// ------------------------------------------------------------------------ producer
@@ -1210,7 +1283,7 @@ public class StageResultAttributionTest {
 		private int generation;
 
 		Pair(int... stageNumbers) throws Exception {
-			this(folder.newFolder("pair-" + System.nanoTime()).toPath(), stageNumbers);
+			this(newFolder(folder, "pair-" + System.nanoTime()).toPath(), stageNumbers);
 		}
 
 		private Pair(Path dir, int... stageNumbers) throws Exception {
@@ -1378,10 +1451,10 @@ public class StageResultAttributionTest {
 			File script = dir.resolve("generated-" + generation + ".sh").toFile();
 			Files.writeString(script.toPath(), body.toString());
 			Result parse = exec(Bash.PATH, "-n", script.getAbsolutePath());
-			assertEquals("generated script must parse:\n" + parse.out, 0, parse.exit);
+			assertEquals(0, parse.exit, "generated script must parse:\n" + parse.out);
 			resetOutput();
 			Result result = exec(Bash.PATH, script.getAbsolutePath());
-			assertEquals("the helper exit status:\n" + result.out, expectedExit, result.exit);
+			assertEquals(expectedExit, result.exit, "the helper exit status:\n" + result.out);
 		}
 
 		/** A replay starts from the output this attempt found, not from its own earlier run. */
@@ -1412,7 +1485,7 @@ public class StageResultAttributionTest {
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "command must not hang");
 		return new Result(p.exitValue(), output);
 	}
 
@@ -1424,5 +1497,9 @@ public class StageResultAttributionTest {
 			this.exit = exit;
 			this.out = out;
 		}
+	}
+
+	public void initStageResultAttributionTest(Backend backend) {
+		this.backend = backend;
 	}
 }

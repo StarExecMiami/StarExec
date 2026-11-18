@@ -1,8 +1,7 @@
 package org.starexec.test.unit.jobs;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -13,8 +12,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * Which stage a failed pair names, driven through the shipped {@code functions.bash} (#145).
@@ -39,8 +39,8 @@ public class StageFailureAttributionTest {
 	private static final int EXCEED_CPU = 15;
 	private static final int EXCEED_MEM = 17;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	// ------------------------------------------------------------ what a failure names
 
@@ -54,8 +54,8 @@ public class StageFailureAttributionTest {
 
 		probe.runToExit("CURRENT_STAGE_NUMBER=3\n" + "exit 1\n");
 
-		assertEquals("the stage that was running", 3, probe.stage());
-		assertEquals("a runscript error, as its siblings on this path report", ERROR_RUNSCRIPT, probe.status());
+		assertEquals(3, probe.stage(), "the stage that was running");
+		assertEquals(ERROR_RUNSCRIPT, probe.status(), "a runscript error, as its siblings on this path report");
 	}
 
 	/** A failure before any stage runs keeps the pair-level channel. */
@@ -65,7 +65,7 @@ public class StageFailureAttributionTest {
 
 		probe.runToExit("exit 1\n");
 
-		assertEquals("no stage was running", 0, probe.stage());
+		assertEquals(0, probe.stage(), "no stage was running");
 		assertEquals(ERROR_RUNSCRIPT, probe.status());
 	}
 
@@ -76,7 +76,7 @@ public class StageFailureAttributionTest {
 
 		probe.runToExit("CURRENT_STAGE_NUMBER=3\n" + "CURRENT_STAGE_NUMBER=\n" + "exit 1\n");
 
-		assertEquals("the finished stage must not be named", 0, probe.stage());
+		assertEquals(0, probe.stage(), "the finished stage must not be named");
 	}
 
 	/** A stage number is a number, not a digit: a two-digit stage must arrive intact. */
@@ -148,7 +148,7 @@ public class StageFailureAttributionTest {
 	public void aWallclockBreachSurvivesAFailingCleanup() throws Exception {
 		Probe probe = new Probe(folder);
 		probe.runToExit("CURRENT_STAGE_NUMBER=1\n" + "sendWallclockExceededStatus\n" + "false\n");
-		assertEquals("the breach, not the cleanup failure after it", EXCEED_RUNTIME, probe.status());
+		assertEquals(EXCEED_RUNTIME, probe.status(), "the breach, not the cleanup failure after it");
 		assertEquals(1, probe.stage());
 	}
 
@@ -179,12 +179,12 @@ public class StageFailureAttributionTest {
 				cleanup = i;
 			}
 		}
-		assertTrue("the loop must send the final completion", complete >= 0);
-		assertTrue("the loop must copy a build job's solver back", copyBack >= 0);
-		assertTrue("the loop must claim the last stage's completion", claim >= 0);
-		assertTrue("claimed after the completion is sent", complete < claim);
-		assertTrue("and after a build job's solver is back", copyBack < claim);
-		assertTrue("and before the cleanup that follows it", claim < cleanup);
+		assertTrue(complete >= 0, "the loop must send the final completion");
+		assertTrue(copyBack >= 0, "the loop must copy a build job's solver back");
+		assertTrue(claim >= 0, "the loop must claim the last stage's completion");
+		assertTrue(complete < claim, "claimed after the completion is sent");
+		assertTrue(copyBack < claim, "and after a build job's solver is back");
+		assertTrue(claim < cleanup, "and before the cleanup that follows it");
 		String guard = "";
 		for (int i = claim - 1; i >= 0; i--) {
 			String line = loop.get(i).strip();
@@ -193,7 +193,7 @@ public class StageFailureAttributionTest {
 				break;
 			}
 		}
-		assertEquals("claimed for the last stage only", "if ((STAGE_INDEX == NUM_STAGES - 1)); then", guard);
+		assertEquals("if ((STAGE_INDEX == NUM_STAGES - 1)); then", guard, "claimed for the last stage only");
 	}
 
 	// ------------------------------------------------------------------ the jobscript
@@ -208,11 +208,11 @@ public class StageFailureAttributionTest {
 		List<String> loop = stageLoop();
 
 		int assignment = indexOfLineStartingWith(loop, "CURRENT_STAGE_NUMBER=${STAGE_NUMBERS[STAGE_INDEX]}");
-		assertTrue("the loop must assign CURRENT_STAGE_NUMBER", assignment >= 0);
+		assertTrue(assignment >= 0, "the loop must assign CURRENT_STAGE_NUMBER");
 		for (String setup : new String[] {"checkCache", "copyDependencies", "verifyWorkspace", "sandboxWorkspace"}) {
 			int call = indexOfLineStartingWith(loop, setup);
-			assertTrue("the loop must call " + setup, call >= 0);
-			assertTrue(setup + " runs before the stage number is assigned", assignment < call);
+			assertTrue(call >= 0, "the loop must call " + setup);
+			assertTrue(assignment < call, setup + " runs before the stage number is assigned");
 		}
 	}
 
@@ -228,9 +228,9 @@ public class StageFailureAttributionTest {
 				lastClear = i;
 			}
 		}
-		assertTrue("the loop must clear CURRENT_STAGE_NUMBER before it ends", lastClear > cleared);
-		assertTrue("nothing after the clearing may use the stage number",
-				loop.subList(lastClear + 1, loop.size()).stream().noneMatch(l -> l.contains("CURRENT_STAGE_NUMBER")));
+		assertTrue(lastClear > cleared, "the loop must clear CURRENT_STAGE_NUMBER before it ends");
+		assertTrue(loop.subList(lastClear + 1, loop.size()).stream().noneMatch(l -> l.contains("CURRENT_STAGE_NUMBER")),
+				"nothing after the clearing may use the stage number");
 	}
 
 	/**
@@ -248,9 +248,9 @@ public class StageFailureAttributionTest {
 				"Runsolver watchfile could not be found.*?\\n\\s*exit 0", Pattern.DOTALL)
 				.matcher(jobscript);
 
-		assertTrue("the missing-watchfile branch must exist", branch.find());
-		assertTrue("it must save output without statistics, as the missing-varfile branch does:\n"
-				+ branch.group(), branch.group().contains("copyOutputNoStats"));
+		assertTrue(branch.find(), "the missing-watchfile branch must exist");
+		assertTrue(branch.group().contains("copyOutputNoStats"), "it must save output without statistics, as the missing-varfile branch does:\n"
+				+ branch.group());
 	}
 
 	// ----------------------------------------------------------------------- helpers
@@ -265,7 +265,7 @@ public class StageFailureAttributionTest {
 				break;
 			}
 		}
-		assertTrue("the stage loop must exist", start >= 0);
+		assertTrue(start >= 0, "the stage loop must exist");
 		int end = -1;
 		for (int i = start; i < lines.size(); i++) {
 			if (lines.get(i).equals("done")) {
@@ -273,7 +273,7 @@ public class StageFailureAttributionTest {
 				break;
 			}
 		}
-		assertTrue("the stage loop must end", end > start);
+		assertTrue(end > start, "the stage loop must end");
 		return lines.subList(start + 1, end);
 	}
 
@@ -295,8 +295,8 @@ public class StageFailureAttributionTest {
 		private final Path sge;
 		private String lastOutput = "";
 
-		Probe(TemporaryFolder folder) throws Exception {
-			this.root = folder.newFolder("stage-" + System.nanoTime()).toPath();
+		Probe(File folder) throws Exception {
+			this.root = newFolder(folder, "stage-" + System.nanoTime()).toPath();
 			this.sge = root.resolve("sge");
 			Files.createDirectories(sge);
 			Files.createDirectories(root.resolve("work"));
@@ -337,7 +337,7 @@ public class StageFailureAttributionTest {
 					+ body;
 			File file = new File(root.toFile(), "run-" + System.nanoTime() + ".sh");
 			Files.writeString(file.toPath(), script);
-			assertEquals("generated script must parse", 0, exec(Bash.PATH, "-n", file.getAbsolutePath()).exit);
+			assertEquals(0, exec(Bash.PATH, "-n", file.getAbsolutePath()).exit, "generated script must parse");
 			lastOutput = exec(Bash.PATH, file.getAbsolutePath()).out;
 		}
 
@@ -351,9 +351,9 @@ public class StageFailureAttributionTest {
 
 		private int field(String name) throws Exception {
 			Path status = root.resolve("out").resolve(String.valueOf(PAIR_ID)).resolve("status.json");
-			assertTrue("the pair must report a status:\n" + lastOutput, Files.exists(status));
+			assertTrue(Files.exists(status), "the pair must report a status:\n" + lastOutput);
 			Matcher m = Pattern.compile("\"" + name + "\"\\s*:\\s*(-?\\d+)").matcher(Files.readString(status));
-			assertTrue(name + " must be recorded:\n" + Files.readString(status), m.find());
+			assertTrue(m.find(), name + " must be recorded:\n" + Files.readString(status));
 			return Integer.parseInt(m.group(1));
 		}
 	}
@@ -363,7 +363,7 @@ public class StageFailureAttributionTest {
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		assertTrue(p.waitFor(60, TimeUnit.SECONDS), "command must not hang");
 		return new Result(p.exitValue(), out);
 	}
 

@@ -1,12 +1,16 @@
 package org.starexec.test.junit.database;
 
-import org.junit.*;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.test.util.DatabaseTestSupport;
 import java.sql.*;
 import java.util.UUID;
 import java.util.concurrent.*;
-import static org.junit.Assert.*;
+
+import static org.junit.jupiter.api.Assertions.*;
 
 public class UserDiskReconciliationSqlTest extends Common {
     private static Connection connection() throws SQLException {
@@ -21,7 +25,7 @@ public class UserDiskReconciliationSqlTest extends Common {
     private int userId;
     private int jobId;
 
-    @BeforeClass public static void database() {
+    @BeforeAll public static void database() {
         DatabaseTestSupport.assumeDatabaseAvailable("UserDiskReconciliationSqlTest");
         Common.initialize();
     }
@@ -35,14 +39,14 @@ public class UserDiskReconciliationSqlTest extends Common {
     private static void exec(Connection c, String sql) throws SQLException {
         try (Statement s = c.createStatement()) { s.execute(sql); }
     }
-    @Before public void fixture() throws Exception {
+    @BeforeEach public void fixture() throws Exception {
         try (Connection c = connection()) {
             userId = (int) value(c, "INSERT INTO starexec.users(email,first_name,last_name,institution,created,password,disk_quota,job_pair_quota,disk_size) VALUES ('quota-"
                     + UUID.randomUUID() + "@example.invalid','Test','Quota','test',now(),'x',10000,100,100) RETURNING id");
             jobId = (int) value(c, "INSERT INTO starexec.jobs(user_id,name,total_pairs,disk_size) VALUES (" + userId + ",'quota-test',0,100) RETURNING id");
         }
     }
-    @After public void cleanup() throws Exception {
+    @AfterEach public void cleanup() throws Exception {
         try (Connection c = connection()) {
             exec(c, "DELETE FROM starexec.benchmarks WHERE user_id=" + userId);
             exec(c, "DELETE FROM starexec.solvers WHERE user_id=" + userId);

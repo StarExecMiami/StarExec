@@ -1,10 +1,9 @@
 package org.starexec.test.junit.jobs;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
@@ -26,14 +25,15 @@ import org.starexec.data.to.pipelines.JoblineStage;
 import org.starexec.data.to.pipelines.StageAttributes;
 import org.starexec.jobs.JobManager;
 
+import java.io.File;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * What {@code JobManager.submitJobs} does with a pair whose job was killed, deleted or paused
@@ -60,22 +60,22 @@ public class StaleSubmissionTest {
 	/** The execution the backend creates for this submission. */
 	private static final int NEW_EXEC_ID = 1043;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	private Backend originalBackend;
 	private Object originalTemplate;
 	private final List<Object[]> settled = new ArrayList<>();
 	private final List<String> statusWrites = new ArrayList<>();
 
-	@Before
+	@BeforeEach
 	public void saveGlobals() throws Exception {
 		originalBackend = R.BACKEND;
 		originalTemplate = templateField().get(null);
 		templateField().set(null, "#!/bin/bash\n# queue $$QUEUE$$\n");
 	}
 
-	@After
+	@AfterEach
 	public void restoreGlobals() throws Exception {
 		R.BACKEND = originalBackend;
 		templateField().set(null, originalTemplate);
@@ -120,11 +120,11 @@ public class StaleSubmissionTest {
 	}
 
 	private void assertSettled(boolean stopConfirmed) {
-		assertEquals("the stale pair is settled exactly once", 1, settled.size());
-		assertArrayEquals("settled against the identity it was claimed with, with the new execution",
-				new Object[] { PAIR_ID, EXEC_ID_AT_CLAIM, NEW_EXEC_ID, stopConfirmed }, settled.get(0));
-		assertTrue("a stale submission is not a submission failure: no status may be written, was " + statusWrites,
-				statusWrites.isEmpty());
+		assertEquals(1, settled.size(), "the stale pair is settled exactly once");
+		assertArrayEquals(new Object[] { PAIR_ID, EXEC_ID_AT_CLAIM, NEW_EXEC_ID, stopConfirmed },
+				settled.get(0), "settled against the identity it was claimed with, with the new execution");
+		assertTrue(statusWrites.isEmpty(),
+				"a stale submission is not a submission failure: no status may be written, was " + statusWrites);
 	}
 
 	// ----------------------------------------------------------------- driver
@@ -168,7 +168,7 @@ public class StaleSubmissionTest {
 		q.setCpuTimeout(60);
 		q.setWallTimeout(60);
 
-		String root = folder.getRoot().getAbsolutePath();
+		String root = folder.getAbsolutePath();
 		String logPath = root + "/logs/pair.log";
 		String stdoutPath = root + "/out/pair/stdout.txt";
 

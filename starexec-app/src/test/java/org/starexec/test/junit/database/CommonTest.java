@@ -1,7 +1,7 @@
 package org.starexec.test.junit.database;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.test.util.DatabaseTestSupport;
 
@@ -9,11 +9,11 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 public class CommonTest extends Common {
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("CommonTest");
 		Common.initialize();
@@ -32,7 +32,7 @@ public class CommonTest extends Common {
 			Common.executeAndDrain(ps);
 
 			// If we get here without exceptions, the method worked
-			assertTrue("executeAndDrain should complete without throwing exceptions", true);
+			assertTrue(true, "executeAndDrain should complete without throwing exceptions");
 		}
 	}
 
@@ -52,7 +52,7 @@ public class CommonTest extends Common {
 					"INSERT INTO test_execute_drain VALUES (1)")) {
 				// This should execute and drain (though INSERT returns no ResultSet)
 				Common.executeAndDrain(insertPs);
-				assertTrue("executeAndDrain should handle INSERT statements", true);
+				assertTrue(true, "executeAndDrain should handle INSERT statements");
 			}
 
 			// Clean up
@@ -75,7 +75,7 @@ public class CommonTest extends Common {
 				fail("Expected SQLException for invalid table name");
 			} catch (SQLException e) {
 				// Expected - invalid table should cause an exception
-				assertTrue("Should throw SQLException for invalid SQL", true);
+				assertTrue(true, "Should throw SQLException for invalid SQL");
 			}
 		}
 	}

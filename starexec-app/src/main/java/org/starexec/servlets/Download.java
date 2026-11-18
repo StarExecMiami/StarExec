@@ -25,10 +25,14 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.*;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermissions;
 
 
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
+import org.apache.commons.io.FileUtils;
 
 /**
  * Handles requests to download files from starexec
@@ -155,6 +159,21 @@ public class Download extends HttpServlet {
 	}
 
 	/**
+	 * Creates the directory one export is built in; the caller deletes it once the archive is sent. It is a new
+	 * directory with a random name in the JVM's temp directory (Tomcat's CATALINA_TMPDIR), which only the server's
+	 * own user may enter (POSIX rwx------), so nothing else can list, read or replace the file while it exists.
+	 * Not R.STAREXEC_ROOT, which holds the web application's own files, nor the working directory, where a file
+	 * named after a job or space is shared by every one of that name. Not the sandbox directory either: the users
+	 * that run solvers share its group, and it is group-writable.
+	 */
+	static File newExportDirectory() throws IOException {
+		FileAttribute<?>[] ownerOnly = FileSystems.getDefault().supportedFileAttributeViews().contains("posix")
+				? new FileAttribute<?>[] {PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))}
+				: new FileAttribute<?>[0];
+		return Files.createTempDirectory("starexec-export-", ownerOnly).toFile();
+	}
+
+	/**
 	 * Processes a job xml file to be downloaded.
 	 *
 	 * @param job the job to be downloaded
@@ -169,17 +188,23 @@ public class Download extends HttpServlet {
 		List<File> files = new ArrayList<>();
 		log.debug("Permission to download XML granted");
 
-		JobToXMLer handler = new JobToXMLer();
-		File file = handler.generateXMLfile(job, userId);
+		// Built in a private temporary directory and removed once sent; see newExportDirectory.
+		File exportDir = newExportDirectory();
+		try {
+			JobToXMLer handler = new JobToXMLer();
+			File file = handler.generateXMLfile(exportDir, job, userId);
 
-		files.add(file);
+			files.add(file);
 
-		String baseFileName = "Job" + job.getId() + "_XML";
+			String baseFileName = "Job" + job.getId() + "_XML";
 
-		File schema = new File(R.STAREXEC_ROOT + File.separator + R.JOB_SCHEMA_LOCATION);
-		files.add(schema);
+			File schema = new File(R.STAREXEC_ROOT + File.separator + R.JOB_SCHEMA_LOCATION);
+			files.add(schema);
 
-		ArchiveUtil.createAndOutputZip(files, response.getOutputStream(), baseFileName);
+			ArchiveUtil.createAndOutputZip(files, response.getOutputStream(), baseFileName);
+		} finally {
+			FileUtils.deleteQuietly(exportDir);
+		}
 
 		return true;
 	}
@@ -202,18 +227,24 @@ public class Download extends HttpServlet {
 		// If we can see this Space
 		List<File> files = new ArrayList<>();
 		log.debug("Permission to download XML granted, includeAttributes = " + includeAttributes);
-		BatchUtil butil = new BatchUtil();
-		File file = butil.generateXMLfile(Spaces.getDetails(space.getId(), userId), userId, includeAttributes, updates,
-		                                  upid
-		);
+		// Built in a private temporary directory and removed once sent; see newExportDirectory.
+		File exportDir = newExportDirectory();
+		try {
+			BatchUtil butil = new BatchUtil();
+			// One read of the space names both the XML file and the archive's folder, so the two always agree.
+			Space details = Spaces.getDetails(space.getId(), userId);
+			File file = butil.generateXMLfile(exportDir, details, userId, includeAttributes, updates, upid);
 
-		files.add(file);
-		String baseFileName = space.getName() + "_XML";
+			files.add(file);
+			String baseFileName = details.getName() + "_XML";
 
-		File schema = new File(R.STAREXEC_ROOT + "/" + R.SPACE_XML_SCHEMA_RELATIVE_LOC);
-		files.add(schema);
+			File schema = new File(R.STAREXEC_ROOT + "/" + R.SPACE_XML_SCHEMA_RELATIVE_LOC);
+			files.add(schema);
 
-		ArchiveUtil.createAndOutputZip(files, response.getOutputStream(), baseFileName);
+			ArchiveUtil.createAndOutputZip(files, response.getOutputStream(), baseFileName);
+		} finally {
+			FileUtils.deleteQuietly(exportDir);
+		}
 
 		return true;
 	}
@@ -347,8 +378,14 @@ public class Download extends HttpServlet {
 		}
 		Jobs.loadPropertiesIntoPairs(job.getJobPairs(), props);
 		log.debug("about to create a job CSV with " + job.getJobPairs().size() + " pairs");
-		String jobFile = CreateJobCSV(job, returnIds, onlyCompleted);
-		ArchiveUtil.createAndOutputZip(new File(jobFile), response.getOutputStream(), "Job" + jobId, false);
+		// Built in a private temporary directory and removed once sent; see newExportDirectory.
+		File exportDir = newExportDirectory();
+		try {
+			String jobFile = CreateJobCSV(exportDir, job, returnIds, onlyCompleted);
+			ArchiveUtil.createAndOutputZip(new File(jobFile), response.getOutputStream(), "Job" + jobId, false);
+		} finally {
+			FileUtils.deleteQuietly(exportDir);
+		}
 
 		return true;
 	}
@@ -356,15 +393,17 @@ public class Download extends HttpServlet {
 	/**
 	 * Create the csv file for a specific job
 	 *
+	 * @param directory the directory to write the file into (see newExportDirectory)
 	 * @param job the job needed to be processed
 	 * @return the file name of the created csv file
 	 * @throws IOException
 	 * @author Ruoyu Zhang
 	 */
-	private static String CreateJobCSV(Job job, Boolean returnIds, Boolean getOnlyCompleted) throws IOException {
+	private static String CreateJobCSV(File directory, Job job, Boolean returnIds, Boolean getOnlyCompleted)
+			throws IOException {
 		log.debug("CreateJobCSV called with returnIds set to " + returnIds);
 		StringBuilder sb = new StringBuilder();
-		sb.append(R.STAREXEC_ROOT).append(R.DOWNLOAD_FILE_DIR);
+		sb.append(directory.getPath());
 		sb.append(File.separator);
 		int maxStageNumbers = 0;
 		for (JobPair jp : job) {

@@ -6,9 +6,9 @@ import io.fabric8.kubernetes.client.Config;
 import io.fabric8.kubernetes.client.ConfigBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientBuilder;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.KubernetesNativeBackend;
 
 import java.io.IOException;
@@ -21,8 +21,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The node changes the queue operations make, through a real fabric8 client against an HTTP
@@ -74,7 +74,7 @@ public class KubernetesNodePatchTest {
             + String.join(",", nodes) + "]}";
     }
 
-    @Before
+    @BeforeEach
     public void startApiServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
@@ -110,7 +110,7 @@ public class KubernetesNodePatchTest {
         client = new KubernetesClientBuilder().withConfig(config).build();
     }
 
-    @After
+    @AfterEach
     public void stopApiServer() {
         if (client != null) {
             client.close();
@@ -149,9 +149,9 @@ public class KubernetesNodePatchTest {
 
     private static void assertMergePatch(Request request, String nodeName, String expectedJson) {
         assertEquals("/api/v1/nodes/" + nodeName, request.path);
-        assertTrue("expected a JSON merge patch, got " + request.contentType,
-            request.contentType != null
-                && request.contentType.startsWith("application/merge-patch+json"));
+        assertTrue(request.contentType != null
+                && request.contentType.startsWith("application/merge-patch+json"),
+            "expected a JSON merge patch, got " + request.contentType);
         assertEquals(JsonParser.parseString(expectedJson), JsonParser.parseString(request.body));
     }
 

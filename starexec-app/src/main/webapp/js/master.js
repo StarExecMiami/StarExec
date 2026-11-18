@@ -198,7 +198,7 @@ $(document).ready(function () {
         var $this = $(this);
         var $legend = $this.children("legend:first");
 
-        $legend.siblings().wrapAll('<div class="expdContainer" />');
+        $legend.siblings().wrapAll('<div class="expdContainer"></div>');
         $legend.css("cursor", "pointer");
         $legend.data("open", isOpen);
 
@@ -225,12 +225,22 @@ $(document).ready(function () {
     checkForHelpFile();
   }
 
-  $(".hiddenDialog").hide();
+  // A dialog sized to its content (height "auto", jQuery UI's default) grows
+  // up to 90% of the window, as getResponsiveDialogConfig in details/job.js
+  // does; past that its content scrolls and the buttons stay in view. A
+  // dialog with a fixed height, or with its own maxHeight, is left as it is.
+  $.widget("ui.dialog", $.ui.dialog, {
+    _create: function () {
+      if (this.options.height === "auto" && this.options.maxHeight === null) {
+        this.options.maxHeight = Math.max(260, Math.floor($(window).height() * 0.9));
+      }
+      this._super();
+    },
+  });
 
   var defaultDialogConfig = {
     modal: true,
     width: 380,
-    height: 165,
     appendTo: "body",
     autoOpen: true,
   };
@@ -337,6 +347,23 @@ jQuery(function ($) {
       .parents("fieldset")
       .find(".list-count") // Find the label
       .text(info.recordsTotal); // Set the current count
+  });
+
+  /**
+   * Wide tables scroll inside their own box (.table-wrapper) instead of
+   * stretching their container. Skip tables that DataTables already scrolls
+   * (scrollX/scrollY) and tables a page has wrapped itself.
+   */
+  $(document).on("preInit.dt", function (e, settings) {
+    var table = $(settings.nTable);
+    if (
+      settings.oScroll.sX ||
+      settings.oScroll.sY ||
+      table.closest(".table-wrapper").length
+    ) {
+      return;
+    }
+    table.wrap('<div class="table-wrapper table-wrapper--flush"></div>');
   });
 
   /**
@@ -466,8 +493,7 @@ function showMessageLegacy(type, message, duration) {
   var messageSpan = $("<div></div>").html(message);
 
   // Create a new DOM element to insert to display the message, and inject its classes and message
-  var tmp =
-    "<div><img src='" + starexecRoot + "images/icons/exclaim.png' /></div>";
+  var tmp = "<div><span class='message__icon' aria-hidden='true'></span></div>";
   log(starexecRoot);
   var msg = $(tmp).attr("class", type + " message");
   $(msg).append(messageSpan);

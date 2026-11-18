@@ -1,9 +1,9 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -29,9 +29,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.slf4j.LoggerFactory;
 import org.starexec.backend.KubernetesNativeBackend;
@@ -67,7 +67,7 @@ public class KubernetesDispatchHoldLogTest {
     private Logger logger;
     private ListAppender<ILoggingEvent> appender;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         logger = (Logger) LoggerFactory.getLogger(KubernetesNativeBackend.class);
         appender = new ListAppender<>();
@@ -75,7 +75,7 @@ public class KubernetesDispatchHoldLogTest {
         logger.addAppender(appender);
     }
 
-    @After
+    @AfterEach
     public void tearDown() {
         logger.detachAppender(appender);
         appender.stop();
@@ -92,14 +92,14 @@ public class KubernetesDispatchHoldLogTest {
             appender.list.clear();
             KubernetesNativeBackend backend = hold.setup.build();
             for (int i = 0; i < PASSES; i++) {
-                assertFalse(hold.name + ": the queue is held, as before", backend.isQueueDispatchable(Q));
+                assertFalse(backend.isQueueDispatchable(Q), hold.name + ": the queue is held, as before");
             }
 
             List<ILoggingEvent> lines = lines(hold.level, hold.text);
-            assertEquals(hold.name + ": logged once, when the hold starts", 1, lines.size());
+            assertEquals(1, lines.size(), hold.name + ": logged once, when the hold starts");
             String line = lines.get(0).getFormattedMessage();
-            assertTrue(hold.name + ": says when it is reported again: " + line, line.contains(REPEATED));
-            assertFalse(hold.name + ": no age when it starts: " + line, line.contains("first seen"));
+            assertTrue(line.contains(REPEATED), hold.name + ": says when it is reported again: " + line);
+            assertFalse(line.contains("first seen"), hold.name + ": no age when it starts: " + line);
         }
     }
 
@@ -111,15 +111,15 @@ public class KubernetesDispatchHoldLogTest {
             assertFalse(backend.isQueueDispatchable(Q));
             advance(backend, SIX_HOURS - 1);
             assertFalse(backend.isQueueDispatchable(Q));
-            assertEquals(hold.name + ": not again before six hours", 1, lines(hold.level, hold.text).size());
+            assertEquals(1, lines(hold.level, hold.text).size(), hold.name + ": not again before six hours");
 
             advance(backend, 1);
             assertFalse(backend.isQueueDispatchable(Q));
             List<ILoggingEvent> lines = lines(hold.level, hold.text);
-            assertEquals(hold.name + ": again at six hours", 2, lines.size());
+            assertEquals(2, lines.size(), hold.name + ": again at six hours");
             String again = lines.get(1).getFormattedMessage();
-            assertTrue(hold.name + ": with its age: " + again, again.contains("(first seen 360 minutes ago)"));
-            assertTrue(hold.name + ": and when it is reported again: " + again, again.contains(REPEATED));
+            assertTrue(again.contains("(first seen 360 minutes ago)"), hold.name + ": with its age: " + again);
+            assertTrue(again.contains(REPEATED), hold.name + ": and when it is reported again: " + again);
         }
     }
 
@@ -132,8 +132,8 @@ public class KubernetesDispatchHoldLogTest {
         }
 
         assertEquals(1, lines(Level.WARN, "Deferring dispatch for queue 'a.q'").size());
-        assertEquals("one queue's hold does not silence another's", 1,
-            lines(Level.WARN, "Deferring dispatch for queue 'b.q'").size());
+        assertEquals(1, lines(Level.WARN, "Deferring dispatch for queue 'b.q'").size(),
+            "one queue's hold does not silence another's");
     }
 
     /**
@@ -145,14 +145,14 @@ public class KubernetesDispatchHoldLogTest {
     public void aQueueNamedByNullOrBlanksIsHeldAsTheDefaultQueue() throws Exception {
         KubernetesNativeBackend backend = degraded(backend(set(DEFAULT), set(DEFAULT), "1", 32_000L));
         for (String name : new String[]{null, "", "   ", DEFAULT, " " + DEFAULT + " "}) {
-            assertFalse("held: '" + name + "'", backend.isQueueDispatchable(name));
+            assertFalse(backend.isQueueDispatchable(name), "held: '" + name + "'");
         }
 
         List<ILoggingEvent> held = lines(Level.WARN, "admission is degraded");
-        assertEquals("one hold for every name of the default queue: " + messages(), 1, held.size());
+        assertEquals(1, held.size(), "one hold for every name of the default queue: " + messages());
         String line = held.get(0).getFormattedMessage();
-        assertTrue("under the default queue's name: " + line,
-            line.contains("Deferring dispatch for queue '" + DEFAULT + "'"));
+        assertTrue(line.contains("Deferring dispatch for queue '" + DEFAULT + "'"),
+            "under the default queue's name: " + line);
     }
 
     /** ... and its end is logged once, under that name, whichever of them asks first. */
@@ -160,22 +160,22 @@ public class KubernetesDispatchHoldLogTest {
     public void theDefaultQueuesHoldEndsOnceWhicheverNameAsks() throws Exception {
         KubernetesNativeBackend backend = backend(set(DEFAULT), set(), "1", 32_000L);
         for (String name : new String[]{null, "   ", DEFAULT}) {
-            assertFalse("held: '" + name + "'", backend.isQueueDispatchable(name));
+            assertFalse(backend.isQueueDispatchable(name), "held: '" + name + "'");
         }
-        assertEquals("one hold: " + messages(), 1, lines(Level.WARN, "none are schedulable right now").size());
+        assertEquals(1, lines(Level.WARN, "none are schedulable right now").size(), "one hold: " + messages());
         advance(backend, TimeUnit.MINUTES.toMillis(5));
         // The node is uncordoned.
         view(backend, set(DEFAULT), set(DEFAULT), 32_000L);
         assertTrue(backend.isQueueDispatchable(""));
-        assertEquals("ended by the first name that asks: " + messages(), 1, lines(Level.INFO, ENDED).size());
+        assertEquals(1, lines(Level.INFO, ENDED).size(), "ended by the first name that asks: " + messages());
         for (String name : new String[]{DEFAULT, null}) {
-            assertTrue("dispatches again: '" + name + "'", backend.isQueueDispatchable(name));
+            assertTrue(backend.isQueueDispatchable(name), "dispatches again: '" + name + "'");
         }
 
         List<ILoggingEvent> ended = lines(Level.INFO, ENDED);
-        assertEquals("and only once: " + messages(), 1, ended.size());
+        assertEquals(1, ended.size(), "and only once: " + messages());
         String line = ended.get(0).getFormattedMessage();
-        assertTrue("under the default queue's name: " + line, line.contains(ENDED + " '" + DEFAULT + "'"));
+        assertTrue(line.contains(ENDED + " '" + DEFAULT + "'"), "under the default queue's name: " + line);
     }
 
     @Test
@@ -186,14 +186,14 @@ public class KubernetesDispatchHoldLogTest {
         // The node is uncordoned.
         view(backend, set(Q), set(Q), 32_000L);
         for (int i = 0; i < PASSES; i++) {
-            assertTrue("dispatches again, as before", backend.isQueueDispatchable(Q));
+            assertTrue(backend.isQueueDispatchable(Q), "dispatches again, as before");
         }
 
         List<ILoggingEvent> ended = lines(Level.INFO, ENDED + " '" + Q + "'");
         assertEquals(1, ended.size());
         String line = ended.get(0).getFormattedMessage();
-        assertTrue("names the hold: " + line, line.contains("(no node is schedulable)"));
-        assertTrue("and when it was first seen: " + line, line.contains("5 minute(s) ago"));
+        assertTrue(line.contains("(no node is schedulable)"), "names the hold: " + line);
+        assertTrue(line.contains("5 minute(s) ago"), "and when it was first seen: " + line);
     }
 
     @Test
@@ -207,9 +207,9 @@ public class KubernetesDispatchHoldLogTest {
         }
 
         assertEquals(1, lines(Level.WARN, "none are schedulable right now").size());
-        assertEquals("a new reason is new information: logged at once, and once", 1,
-            lines(Level.ERROR, "Impossible CPU configuration").size());
-        assertEquals("the queue is still held", 0, lines(Level.INFO, ENDED).size());
+        assertEquals(1, lines(Level.ERROR, "Impossible CPU configuration").size(),
+            "a new reason is new information: logged at once, and once");
+        assertEquals(0, lines(Level.INFO, ENDED).size(), "the queue is still held");
     }
 
     @Test
@@ -219,7 +219,7 @@ public class KubernetesDispatchHoldLogTest {
         // The queue label is gone from every node.
         view(backend, set(), set(), 32_000L);
 
-        assertTrue("left to be refused at submission, as before", backend.isQueueDispatchable(Q));
+        assertTrue(backend.isQueueDispatchable(Q), "left to be refused at submission, as before");
         assertEquals(1, lines(Level.INFO, ENDED + " '" + Q + "'").size());
     }
 
@@ -239,8 +239,8 @@ public class KubernetesDispatchHoldLogTest {
             assertTrue(backend.isQueueDispatchable("big.q"));
         }
 
-        assertEquals("big.q was never held, so nothing about it ends: " + messages(), 0,
-            lines(Level.INFO, "'big.q'").size());
+        assertEquals(0, lines(Level.INFO, "'big.q'").size(),
+            "big.q was never held, so nothing about it ends: " + messages());
         assertEquals(1, lines(Level.ERROR, "queue 'small.q'").size());
     }
 
@@ -253,8 +253,8 @@ public class KubernetesDispatchHoldLogTest {
         assertFalse(backend.isQueueDispatchable(Q));
         advance(backend, TimeUnit.SECONDS.toMillis(20));
         assertFalse(backend.isQueueDispatchable(Q));
-        assertEquals("the start and the repeat, not the pass after the repeat", 2,
-            lines(Level.WARN, "none are schedulable right now").size());
+        assertEquals(2, lines(Level.WARN, "none are schedulable right now").size(),
+            "the start and the repeat, not the pass after the repeat");
 
         advance(backend, TimeUnit.MINUTES.toMillis(5));
         view(backend, set(Q), set(Q), 32_000L);
@@ -262,8 +262,8 @@ public class KubernetesDispatchHoldLogTest {
         List<ILoggingEvent> ended = lines(Level.INFO, ENDED + " '" + Q + "'");
         assertEquals(1, ended.size());
         String line = ended.get(0).getFormattedMessage();
-        assertTrue("6 h 5 min 20 s after the start, not 5 min after the repeat: " + line,
-            line.contains("first seen 365 minute(s) ago"));
+        assertTrue(line.contains("first seen 365 minute(s) ago"),
+            "6 h 5 min 20 s after the start, not 5 min after the repeat: " + line);
     }
 
     @Test
@@ -280,8 +280,8 @@ public class KubernetesDispatchHoldLogTest {
         List<ILoggingEvent> impossible = lines(Level.ERROR, "Impossible CPU configuration");
         assertEquals(2, impossible.size());
         String again = impossible.get(1).getFormattedMessage();
-        assertTrue("six hours since this reason began, not seven since the hold did: " + again,
-            again.contains("(first seen 360 minutes ago)"));
+        assertTrue(again.contains("(first seen 360 minutes ago)"),
+            "six hours since this reason began, not seven since the hold did: " + again);
     }
 
     /** The two CPU reasons are different holds: the request may fit once the capacity is known. */
@@ -294,8 +294,8 @@ public class KubernetesDispatchHoldLogTest {
         assertFalse(backend.isQueueDispatchable(Q));
 
         assertEquals(1, lines(Level.WARN, "Cannot establish CPU capacity").size());
-        assertEquals("a different reason, so logged at once", 1,
-            lines(Level.ERROR, "Impossible CPU configuration").size());
+        assertEquals(1, lines(Level.ERROR, "Impossible CPU configuration").size(),
+            "a different reason, so logged at once");
     }
 
     @Test
@@ -310,7 +310,7 @@ public class KubernetesDispatchHoldLogTest {
         List<ILoggingEvent> ended = lines(Level.INFO, ENDED + " '" + Q + "'");
         assertEquals(1, ended.size());
         String line = ended.get(0).getFormattedMessage();
-        assertTrue("never a negative age: " + line, line.contains("first seen 0 minute(s) ago"));
+        assertTrue(line.contains("first seen 0 minute(s) ago"), "never a negative age: " + line);
     }
 
     @Test
@@ -322,8 +322,8 @@ public class KubernetesDispatchHoldLogTest {
             assertTrue(backend.isQueueDispatchable(Q));
         }
 
-        assertEquals("nothing at INFO or above: " + messages(), 0,
-            appender.list.stream().filter(e -> e.getLevel().isGreaterOrEqual(Level.INFO)).count());
+        assertEquals(0, appender.list.stream().filter(e -> e.getLevel().isGreaterOrEqual(Level.INFO)).count(),
+            "nothing at INFO or above: " + messages());
     }
 
     // ---------------------------------------------------------------------
@@ -335,12 +335,12 @@ public class KubernetesDispatchHoldLogTest {
         KubernetesNativeBackend backend = listing(backend(set(Q), set(Q), "1", 32_000L),
             new RuntimeException("API server unreachable"), null);
         for (int i = 0; i < PASSES; i++) {
-            assertTrue("the previous view is reused, as before", backend.isQueueDispatchable(Q));
+            assertTrue(backend.isQueueDispatchable(Q), "the previous view is reused, as before");
         }
 
         List<ILoggingEvent> failed = lines(Level.WARN, REFRESH_FAILED);
         assertEquals(1, failed.size());
-        assertNotNull("with the failure itself", failed.get(0).getThrowableProxy());
+        assertNotNull(failed.get(0).getThrowableProxy(), "with the failure itself");
         assertEquals("API server unreachable", failed.get(0).getThrowableProxy().getMessage());
         assertTrue(failed.get(0).getFormattedMessage().contains(REPEATED));
     }
@@ -353,14 +353,14 @@ public class KubernetesDispatchHoldLogTest {
         // A failed listing leaves the view stale, so every call lists again.
         now.addAndGet(SIX_HOURS - 1);
         assertTrue(backend.isQueueDispatchable(Q));
-        assertEquals("not again before six hours", 1, lines(Level.WARN, REFRESH_FAILED).size());
+        assertEquals(1, lines(Level.WARN, REFRESH_FAILED).size(), "not again before six hours");
 
         now.addAndGet(1);
         assertTrue(backend.isQueueDispatchable(Q));
         List<ILoggingEvent> failed = lines(Level.WARN, REFRESH_FAILED);
         assertEquals(2, failed.size());
         String again = failed.get(1).getFormattedMessage();
-        assertTrue("with its age: " + again, again.contains("(first seen 360 minutes ago)"));
+        assertTrue(again.contains("(first seen 360 minutes ago)"), "with its age: " + again);
     }
 
     @Test
@@ -376,7 +376,7 @@ public class KubernetesDispatchHoldLogTest {
 
         List<ILoggingEvent> back = lines(Level.INFO, "Refreshed the Kubernetes queue view again");
         assertEquals(1, back.size());
-        assertTrue(back.get(0).getFormattedMessage(), back.get(0).getFormattedMessage().contains("2 minute(s) ago"));
+        assertTrue(back.get(0).getFormattedMessage().contains("2 minute(s) ago"), back.get(0).getFormattedMessage());
         assertEquals(1, lines(Level.WARN, REFRESH_FAILED).size());
     }
 
@@ -395,12 +395,12 @@ public class KubernetesDispatchHoldLogTest {
         now.addAndGet(TimeUnit.MINUTES.toMillis(2));
         assertTrue(backend.isQueueDispatchable(Q));
 
-        assertEquals("the failure and its repeat", 2, lines(Level.WARN, REFRESH_FAILED).size());
+        assertEquals(2, lines(Level.WARN, REFRESH_FAILED).size(), "the failure and its repeat");
         List<ILoggingEvent> back = lines(Level.INFO, "Refreshed the Kubernetes queue view again");
         assertEquals(1, back.size());
         String line = back.get(0).getFormattedMessage();
-        assertTrue("362 minutes after the first failure, not 2 after the repeat: " + line,
-            line.contains("first seen failing 362 minute(s) ago"));
+        assertTrue(line.contains("first seen failing 362 minute(s) ago"),
+            "362 minutes after the first failure, not 2 after the repeat: " + line);
     }
 
     /** The view's age is read on the backend's clock, the one its holds are timed with. */
@@ -413,7 +413,7 @@ public class KubernetesDispatchHoldLogTest {
             .thenReturn(new NodeListBuilder().withItems(node("n021", Q, "32", true)).build());
         now.addAndGet(TimeUnit.SECONDS.toMillis(10));
 
-        assertFalse("the view was listed again, and shows the node cordoned", backend.isQueueDispatchable(Q));
+        assertFalse(backend.isQueueDispatchable(Q), "the view was listed again, and shows the node cordoned");
         assertEquals(1, lines(Level.WARN, "none are schedulable right now").size());
     }
 

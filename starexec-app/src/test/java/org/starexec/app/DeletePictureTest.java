@@ -1,9 +1,8 @@
 package org.starexec.app;
 
 import com.google.gson.Gson;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
@@ -19,12 +18,15 @@ import org.starexec.data.to.User;
 import org.starexec.util.SessionUtil;
 
 import javax.servlet.http.HttpServletRequest;
+
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.starexec.test.TemporaryFolders.newFolder;
 
 /**
  * {@code POST /services/delete/picture/{type}/{id}}: a picture can be removed by whoever may
@@ -34,8 +36,8 @@ public class DeletePictureTest {
 
 	private static final int CALLER = 7;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	private final Gson gson = new Gson();
 
@@ -45,11 +47,11 @@ public class DeletePictureTest {
 
 		ValidatorStatusCode status = delete(pictures, "user", CALLER, true, true);
 
-		assertTrue(status.getMessage(), status.isSuccess());
+		assertTrue(status.isSuccess(), status.getMessage());
 		assertFalse(Files.exists(pictures.resolve("users/Pic7_org.jpg")));
 		assertFalse(Files.exists(pictures.resolve("users/Pic7_thn.jpg")));
-		assertTrue("another user's picture stays", Files.exists(pictures.resolve("users/Pic8_org.jpg")));
-		assertTrue("the default image stays", Files.exists(pictures.resolve("users/Pic0.jpg")));
+		assertTrue(Files.exists(pictures.resolve("users/Pic8_org.jpg")), "another user's picture stays");
+		assertTrue(Files.exists(pictures.resolve("users/Pic0.jpg")), "the default image stays");
 	}
 
 	@Test
@@ -98,7 +100,7 @@ public class DeletePictureTest {
 
 		ValidatorStatusCode status = delete(pictures, "solver", 3, true, true);
 
-		assertTrue(status.getMessage(), status.isSuccess());
+		assertTrue(status.isSuccess(), status.getMessage());
 		assertFalse(Files.exists(pictures.resolve("solvers/Pic3_org.jpg")));
 	}
 
@@ -115,11 +117,11 @@ public class DeletePictureTest {
 
 	@Test
 	public void removingAPictureThatDoesNotExistSucceeds() throws Exception {
-		Path pictures = folder.newFolder("empty").toPath();
+		Path pictures = newFolder(folder, "empty").toPath();
 
 		ValidatorStatusCode status = delete(pictures, "user", CALLER, true, true);
 
-		assertTrue(status.getMessage(), status.isSuccess());
+		assertTrue(status.isSuccess(), status.getMessage());
 	}
 
 	/**
@@ -152,8 +154,8 @@ public class DeletePictureTest {
 		ValidatorStatusCode status = delete(pictures, "user", CALLER, true, true);
 
 		assertFalse(status.isSuccess());
-		assertTrue("must say it was partial: " + status.getMessage(), status.getMessage().contains("partly"));
-		assertFalse("what could be removed is gone", Files.exists(pictures.resolve("users/Pic7_org.jpg")));
+		assertTrue(status.getMessage().contains("partly"), "must say it was partial: " + status.getMessage());
+		assertFalse(Files.exists(pictures.resolve("users/Pic7_org.jpg")), "what could be removed is gone");
 	}
 
 	@Test
@@ -165,8 +167,8 @@ public class DeletePictureTest {
 		ValidatorStatusCode status = delete(pictures, "user", CALLER, true, true);
 
 		assertFalse(status.isSuccess());
-		assertEquals("nothing was removed, so it must not claim a partial removal",
-				"The picture could not be removed", status.getMessage());
+		assertEquals("The picture could not be removed",
+				status.getMessage(), "nothing was removed, so it must not claim a partial removal");
 	}
 
 	@Test
@@ -195,7 +197,7 @@ public class DeletePictureTest {
 		ValidatorStatusCode status = deleteUnderTheRealRule(pictures, "user", 8);
 
 		assertFalse(status.isSuccess());
-		assertTrue("the other user's picture stays", Files.exists(pictures.resolve("users/Pic8_org.jpg")));
+		assertTrue(Files.exists(pictures.resolve("users/Pic8_org.jpg")), "the other user's picture stays");
 	}
 
 	@Test
@@ -204,7 +206,7 @@ public class DeletePictureTest {
 
 		ValidatorStatusCode status = deleteUnderTheRealRule(pictures, "user", CALLER);
 
-		assertTrue(status.getMessage(), status.isSuccess());
+		assertTrue(status.isSuccess(), status.getMessage());
 		assertFalse(Files.exists(pictures.resolve("users/Pic7_org.jpg")));
 	}
 
@@ -222,7 +224,7 @@ public class DeletePictureTest {
 
 	/** Pictures for users 7 and 8, and the default. */
 	private Path pictureDir() throws Exception {
-		Path pictures = folder.newFolder("pictures").toPath();
+		Path pictures = newFolder(folder, "pictures").toPath();
 		Files.createDirectories(pictures.resolve("users"));
 		for (String name : new String[] { "Pic7_org.jpg", "Pic7_thn.jpg", "Pic8_org.jpg", "Pic8_thn.jpg", "Pic0.jpg" }) {
 			Files.write(pictures.resolve("users").resolve(name), name.getBytes());

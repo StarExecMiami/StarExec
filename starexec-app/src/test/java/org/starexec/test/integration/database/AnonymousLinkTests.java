@@ -1,7 +1,7 @@
 
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.constants.R;
 import org.starexec.data.database.AnonymousLinks;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
@@ -58,11 +58,11 @@ public class AnonymousLinkTests extends TestSequence {
 			Set<String> newUuidsSet = new HashSet<>( newUuids );
 
 			// Assert that there are no duplicate entries in newUuids
-			Assert.assertEquals( "Duplicate entries in newUuids.", newUuidsSet.size(), newUuids.size() );
+			Assertions.assertEquals( newUuidsSet.size(), newUuids.size(), "Duplicate entries in newUuids." );
 
 		} catch ( SQLException e ) {
 			log.error( methodName, "An SQLException was thrown during the test", e);
-			Assert.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
+			Assertions.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
 		}
 	}
 
@@ -76,12 +76,12 @@ public class AnonymousLinkTests extends TestSequence {
 					String uuid = AnonymousLinks.addAnonymousLink( R.BENCHMARK, bench.getId(), primitivesToAnonymize );
 					Optional<String> getUuid= AnonymousLinks.getAnonymousLinkCode( R.BENCHMARK, bench.getId(), primitivesToAnonymize );
 
-					Assert.assertTrue( getUuid.isPresent() );
+					Assertions.assertTrue( getUuid.isPresent() );
 
-					Assert.assertEquals( 
-							getAnonymousLinkCodeTestMessage(uuid, getUuid.get(), primitivesToAnonymize ),
+					Assertions.assertEquals( 
 							uuid,
-							getUuid.get());
+							getUuid.get(),
+							getAnonymousLinkCodeTestMessage(uuid, getUuid.get(), primitivesToAnonymize ));
 
 					newUuids.add( uuid );
 				}
@@ -91,12 +91,12 @@ public class AnonymousLinkTests extends TestSequence {
 				String uuid = AnonymousLinks.addAnonymousLink( R.SOLVER, solver.getId(), primitivesToAnonymize );
 				Optional<String> getUuid= AnonymousLinks.getAnonymousLinkCode( R.SOLVER, solver.getId(), primitivesToAnonymize );
 
-				Assert.assertTrue( getUuid.isPresent() );
+				Assertions.assertTrue( getUuid.isPresent() );
 
-				Assert.assertEquals( 
-						getAnonymousLinkCodeTestMessage(uuid, getUuid.get(), primitivesToAnonymize ),
+				Assertions.assertEquals( 
 						uuid,
-						getUuid.get());
+						getUuid.get(),
+						getAnonymousLinkCodeTestMessage(uuid, getUuid.get(), primitivesToAnonymize ));
 
 				newUuids.add( uuid );
 			}
@@ -105,12 +105,12 @@ public class AnonymousLinkTests extends TestSequence {
 				String uuid = AnonymousLinks.addAnonymousLink( R.JOB, job.getId(), primitivesToAnonymize );
 
 				Optional<String> getUuid = AnonymousLinks.getAnonymousLinkCode( R.JOB, job.getId(), primitivesToAnonymize );
-				Assert.assertTrue( getUuid.isPresent() );
+				Assertions.assertTrue( getUuid.isPresent() );
 
-				Assert.assertEquals( 
-						getAnonymousLinkCodeTestMessage(uuid, getUuid.get(), primitivesToAnonymize ),
+				Assertions.assertEquals( 
 						uuid,
-						getUuid.get());
+						getUuid.get(),
+						getAnonymousLinkCodeTestMessage(uuid, getUuid.get(), primitivesToAnonymize ));
 
 				newUuids.add( uuid );
 			}
@@ -119,7 +119,7 @@ public class AnonymousLinkTests extends TestSequence {
 			AnonymousLinks.delete( newUuids );
 		} catch ( SQLException e ) {
 			log.error( methodName, "An SQLException was thrown during the test", e);
-			Assert.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
+			Assertions.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
 		}
 	}
 
@@ -173,15 +173,15 @@ public class AnonymousLinkTests extends TestSequence {
 					primitiveIdFromDb = AnonymousLinks.getIdOfBenchmarkAssociatedWithLink(uuid);
 					break;
 				default:
-					Assert.fail("Invalid primitive name given: " + primitiveName);
+					Assertions.fail("Invalid primitive name given: " + primitiveName);
 					break;
 				}
 
-				Assert.assertTrue( primitiveIdFromDb.isPresent() );
-				Assert.assertEquals( 
-					"The id retrieved from the database was not the same as the one given to the database for "
-							+ AnonymousLinks.getPrimitivesToAnonymizeName( primitivesToAnonymize),
-					(int)primitiveIdFromDb.get(), primitiveId
+				Assertions.assertTrue( primitiveIdFromDb.isPresent() );
+				Assertions.assertEquals( 
+					(int)primitiveIdFromDb.get(),
+					primitiveId, "The id retrieved from the database was not the same as the one given to the database for "
+							+ AnonymousLinks.getPrimitivesToAnonymizeName( primitivesToAnonymize)
 				);
 
 				newUuids.add( uuid );
@@ -192,7 +192,7 @@ public class AnonymousLinkTests extends TestSequence {
 
 		} catch ( SQLException e ) {
 			log.error( methodName, "An SQLException was thrown during the test", e);
-			Assert.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
+			Assertions.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
 		}
 	}
 
@@ -236,15 +236,15 @@ public class AnonymousLinkTests extends TestSequence {
 					primitivesToAnonymizeFromDb = AnonymousLinks.getPrimitivesToAnonymizeForBenchmark(uuid);
 					break;
 				default:
-					Assert.fail("Invalid primitive name given: " + primitiveName);
+					Assertions.fail("Invalid primitive name given: " + primitiveName);
 					break;
 				}
 
-				Assert.assertTrue( primitivesToAnonymizeFromDb.isPresent() );
-				Assert.assertEquals( 
-						"The PrimitivesToAnonymize retrieved from the database was not the same as the one given to the database.", 
-						primitivesToAnonymize,
-						primitivesToAnonymizeFromDb.get());
+				Assertions.assertTrue( primitivesToAnonymizeFromDb.isPresent() );
+				Assertions.assertEquals( 
+						primitivesToAnonymize, 
+						primitivesToAnonymizeFromDb.get(),
+						"The PrimitivesToAnonymize retrieved from the database was not the same as the one given to the database.");
 
 				newUuids.add( uuid );
 			}
@@ -254,7 +254,7 @@ public class AnonymousLinkTests extends TestSequence {
 
 		} catch ( SQLException e ) {
 			log.error( methodName, "An SQLException was thrown during the test", e);
-			Assert.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
+			Assertions.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
 		}
 	}
 
@@ -282,11 +282,11 @@ public class AnonymousLinkTests extends TestSequence {
 			String uuid = AnonymousLinks.addAnonymousLink( "job", job.getId(), PrimitivesToAnonymize.ALL );
 			AnonymousLinks.addAnonymousNamesForJob( job.getId() );
 			AnonymousLinks.delete( uuid );
-			Assert.assertFalse( AnonymousLinks.hasJobBeenAnonymized( job.getId() ) );
-			Assert.assertFalse( AnonymousLinks.getIdOfJobAssociatedWithLink( uuid ).isPresent() );
+			Assertions.assertFalse( AnonymousLinks.hasJobBeenAnonymized( job.getId() ) );
+			Assertions.assertFalse( AnonymousLinks.getIdOfJobAssociatedWithLink( uuid ).isPresent() );
 		} catch ( SQLException e ) {
 			log.error( methodName, "An SQLException was thrown during the test", e);
-			Assert.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
+			Assertions.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
 		}
 	}
 
@@ -310,9 +310,9 @@ public class AnonymousLinkTests extends TestSequence {
 			for ( String uuid : newUuids ) {
 				// Now calls to the DB should return empty Optionals
 				Optional<Integer> potentialId = AnonymousLinks.getIdOfBenchmarkAssociatedWithLink( uuid );
-				Assert.assertFalse( potentialId.isPresent() );
+				Assertions.assertFalse( potentialId.isPresent() );
 				Optional<PrimitivesToAnonymize> potentialPta = AnonymousLinks.getPrimitivesToAnonymizeForBenchmark( uuid );
-				Assert.assertFalse( potentialPta.isPresent() );
+				Assertions.assertFalse( potentialPta.isPresent() );
 			}
 
 
@@ -330,9 +330,9 @@ public class AnonymousLinkTests extends TestSequence {
 			for ( String uuid : newUuids ) {
 				// Now calls to the DB should return empty Optionals
 				Optional<Integer> potentialId = AnonymousLinks.getIdOfSolverAssociatedWithLink( uuid );
-				Assert.assertFalse( potentialId.isPresent() );
+				Assertions.assertFalse( potentialId.isPresent() );
 				Optional<PrimitivesToAnonymize> potentialPta = AnonymousLinks.getPrimitivesToAnonymizeForSolver( uuid );
-				Assert.assertFalse( potentialPta.isPresent() );
+				Assertions.assertFalse( potentialPta.isPresent() );
 			}
 
 			newUuids = new ArrayList<>();
@@ -347,14 +347,14 @@ public class AnonymousLinkTests extends TestSequence {
 			for ( String uuid : newUuids ) {
 				// Now calls to the DB should return empty Optionals
 				Optional<Integer> potentialId = AnonymousLinks.getIdOfJobAssociatedWithLink( uuid );
-				Assert.assertFalse( potentialId.isPresent() );
+				Assertions.assertFalse( potentialId.isPresent() );
 				Optional<PrimitivesToAnonymize> potentialPta = AnonymousLinks.getPrimitivesToAnonymizeForJob( uuid );
-				Assert.assertFalse( potentialPta.isPresent() );
+				Assertions.assertFalse( potentialPta.isPresent() );
 			}
 
 		} catch ( SQLException e ) {
 			log.error( methodName, "An SQLException was thrown during the test", e);
-			Assert.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
+			Assertions.fail( "An SQLException was thrown during the test: " + Util.getStackTrace(e) );
 		}
 		
 	}	

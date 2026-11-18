@@ -1,9 +1,9 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.data.database.Common;
 import org.starexec.test.util.DatabaseTestSupport;
 import org.starexec.util.PasswordHasher;
@@ -19,9 +19,9 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Users migrated from the legacy deployment can log in after the wrapping script runs.
@@ -48,20 +48,20 @@ public class LegacyPasswordWrappingSqlTest extends Common {
 	private int bcryptUser;
 	private String bcryptHash;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("LegacyPasswordWrappingSqlTest");
 		Common.initialize();
 	}
 
-	@Before
+	@BeforeEach
 	public void seed() throws SQLException {
 		legacyUser = insertUser("legacy", LEGACY_HEX);
 		bcryptHash = PasswordHasher.hash("modern-password");
 		bcryptUser = insertUser("bcrypt", bcryptHash);
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		try (Connection con = Common.getConnection();
 		     PreparedStatement ps = con.prepareStatement("DELETE FROM starexec.users WHERE id = ?")) {
@@ -77,11 +77,11 @@ public class LegacyPasswordWrappingSqlTest extends Common {
 		runScript();
 
 		String stored = password(legacyUser);
-		assertTrue("wrapped and marked: " + stored, stored.startsWith(PasswordHasher.LEGACY_SHA512_PREFIX + "$2a$12$"));
-		assertTrue("fits users.password VARCHAR(128)", stored.length() <= 128);
+		assertTrue(stored.startsWith(PasswordHasher.LEGACY_SHA512_PREFIX + "$2a$12$"), "wrapped and marked: " + stored);
+		assertTrue(stored.length() <= 128, "fits users.password VARCHAR(128)");
 		assertTrue(PasswordHasher.verify("Correct-Horse-9", stored));
 		assertFalse(PasswordHasher.verify("Correct-Horse-8", stored));
-		assertFalse("the old digest is not a working password", PasswordHasher.verify(LEGACY_HEX, stored));
+		assertFalse(PasswordHasher.verify(LEGACY_HEX, stored), "the old digest is not a working password");
 	}
 
 	@Test
@@ -99,7 +99,7 @@ public class LegacyPasswordWrappingSqlTest extends Common {
 
 		runScript();
 
-		assertEquals("a wrapped value is never wrapped again", first, password(legacyUser));
+		assertEquals(first, password(legacyUser), "a wrapped value is never wrapped again");
 	}
 
 	private static void runScript() throws Exception {

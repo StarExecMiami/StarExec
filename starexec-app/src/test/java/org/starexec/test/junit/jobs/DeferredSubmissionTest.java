@@ -1,10 +1,9 @@
 package org.starexec.test.junit.jobs;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
@@ -27,13 +26,14 @@ import org.starexec.data.to.pipelines.JoblineStage;
 import org.starexec.data.to.pipelines.StageAttributes;
 import org.starexec.jobs.JobManager;
 
+import java.io.File;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * What {@code JobManager.submitJobs} does with a pair whose submission the backend deferred.
@@ -57,8 +57,8 @@ public class DeferredSubmissionTest {
 	/** Exec id the first pair carries from an earlier attempt, as a rerun pair does. */
 	private static final int STALE_EXEC_ID = 41;
 
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
+	@TempDir
+	public File folder;
 
 	private Backend originalBackend;
 	private Object originalTemplate;
@@ -66,14 +66,14 @@ public class DeferredSubmissionTest {
 	private final List<String> statusWrites = new ArrayList<>();
 	private final List<Object> claimed = new ArrayList<>();
 
-	@Before
+	@BeforeEach
 	public void saveGlobals() throws Exception {
 		originalBackend = R.BACKEND;
 		originalTemplate = templateField().get(null);
 		templateField().set(null, "#!/bin/bash\n# queue $$QUEUE$$\n");
 	}
 
-	@After
+	@AfterEach
 	public void restoreGlobals() throws Exception {
 		R.BACKEND = originalBackend;
 		templateField().set(null, originalTemplate);
@@ -104,9 +104,9 @@ public class DeferredSubmissionTest {
 
 		Mockito.verify(backend, Mockito.never()).submitScript(Mockito.anyInt(), Mockito.anyString(), Mockito.any(),
 				Mockito.anyString(), Mockito.anyString());
-		assertTrue("no pair may be claimed, was " + claimed, claimed.isEmpty());
-		assertTrue("no status may be written, was " + statusWrites, statusWrites.isEmpty());
-		assertTrue("nothing was claimed, so nothing goes back", returnedToPending.isEmpty());
+		assertTrue(claimed.isEmpty(), "no pair may be claimed, was " + claimed);
+		assertTrue(statusWrites.isEmpty(), "no status may be written, was " + statusWrites);
+		assertTrue(returnedToPending.isEmpty(), "nothing was claimed, so nothing goes back");
 	}
 
 	private void assertDeferredPairReturned(String deferral) throws Exception {
@@ -119,11 +119,11 @@ public class DeferredSubmissionTest {
 
 		Mockito.verify(backend, Mockito.times(1)).submitScript(Mockito.anyInt(), Mockito.anyString(), Mockito.any(),
 				Mockito.anyString(), Mockito.anyString());
-		assertEquals("the deferred pair, and only it, goes back to PENDING_SUBMIT", 1, returnedToPending.size());
+		assertEquals(1, returnedToPending.size(), "the deferred pair, and only it, goes back to PENDING_SUBMIT");
 		assertEquals(101, returnedToPending.get(0)[0]);
-		assertEquals("fenced on the execution id it carried when claimed", STALE_EXEC_ID, returnedToPending.get(0)[1]);
-		assertTrue("a deferral is not a failure: no status may be written, was " + statusWrites,
-				statusWrites.isEmpty());
+		assertEquals(STALE_EXEC_ID, returnedToPending.get(0)[1], "fenced on the execution id it carried when claimed");
+		assertTrue(statusWrites.isEmpty(),
+				"a deferral is not a failure: no status may be written, was " + statusWrites);
 	}
 
 	/** One {@code submitJobs} pass over a job with pending pairs 101 to 103, on queue all.q. */
@@ -160,7 +160,7 @@ public class DeferredSubmissionTest {
 		q.setCpuTimeout(60);
 		q.setWallTimeout(60);
 
-		String root = folder.getRoot().getAbsolutePath();
+		String root = folder.getAbsolutePath();
 		String logPath = root + "/logs/pair.log";
 		String stdoutPath = root + "/out/pair/stdout.txt";
 

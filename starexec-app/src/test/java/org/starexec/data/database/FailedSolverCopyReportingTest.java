@@ -1,6 +1,6 @@
 package org.starexec.data.database;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.starexec.data.to.Solver;
 
@@ -9,8 +9,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A solver copy that fails must be reported, not passed on as if it were a solver id.
@@ -31,7 +31,7 @@ public class FailedSolverCopyReportingTest {
 		List<Integer> ids = Solvers.copySolvers(List.of(refused), 5, 1);
 
 		assertEquals(1, ids.size());
-		assertTrue("a failed copy must be reported as a non-positive id: " + ids, ids.get(0) <= 0);
+		assertTrue(ids.get(0) <= 0, "a failed copy must be reported as a non-positive id: " + ids);
 	}
 
 	/**

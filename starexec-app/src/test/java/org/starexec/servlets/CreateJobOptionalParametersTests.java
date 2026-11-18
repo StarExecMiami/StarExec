@@ -1,7 +1,7 @@
 package org.starexec.servlets;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.app.RESTHelpers;
@@ -81,7 +81,7 @@ public class CreateJobOptionalParametersTests {
 	private static final String DEFAULT_DESCRIPTION = new Job().getDescription();
 
 	/** The request validator's patterns are compiled at application start, not statically. */
-	@BeforeClass
+	@BeforeAll
 	public static void initializeValidator() {
 		Validator.initialize();
 	}
