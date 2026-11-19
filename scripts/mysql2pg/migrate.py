@@ -190,7 +190,12 @@ def connect_mysql(source_tz: str):
     )
     with conn.cursor() as cur:
         cur.execute("SET SESSION time_zone = %s", (source_tz,))
-        cur.execute("SET SESSION TRANSACTION READ ONLY")
+        try:
+            cur.execute("SET SESSION TRANSACTION READ ONLY")
+        except pymysql.err.OperationalError as exc:
+            # MariaDB 5.5 does not support SET SESSION TRANSACTION READ ONLY (errno 1193).
+            if not exc.args or exc.args[0] != 1193:
+                raise
     return conn
 
 
@@ -284,6 +289,52 @@ def sync_sequences(pg_conn, schema: str, tables: Sequence[str]) -> int:
     return updated
 
 
+def split_resume_tables(
+    planned_tables: Sequence[Dict[str, Any]],
+    resume_from: Optional[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Split planned_tables into (already_loaded, remaining_to_load)."""
+    if not resume_from:
+        return [], list(planned_tables)
+    for idx, spec in enumerate(planned_tables):
+        if spec["name"] == resume_from:
+            return list(planned_tables[:idx]), list(planned_tables[idx:])
+    raise ValueError(f"Resume table {resume_from!r} is not in the planned table list")
+
+
+def collect_deferred_backfills(
+    my_conn,
+    mysql_db: str,
+    pg_conn,
+    schema: str,
+    table: str,
+    deferred_fk_cols: Set[str],
+) -> Optional[Tuple[str, List[str], List[Tuple[Tuple[Any, ...], Dict[str, Any]]]]]:
+    """Fetch PK -> deferred FK mappings from MariaDB for an already-loaded table."""
+    if not deferred_fk_cols:
+        return None
+    pk_cols = fetch_pg_primary_key(pg_conn, schema, table)
+    cols = pk_cols + sorted(deferred_fk_cols)
+    select_list = ", ".join(_quote_mysql_ident(c) for c in cols)
+    rows_to_update: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+    with my_conn.cursor() as cur:
+        cur.execute(
+            f"SELECT {select_list} FROM {_quote_mysql_ident(mysql_db)}.{_quote_mysql_ident(table)}"
+        )
+        for row in cur:
+            pk_tuple = tuple(row[: len(pk_cols)])
+            fk_map = {
+                col: val
+                for col, val in zip(cols[len(pk_cols) :], row[len(pk_cols) :])
+                if val is not None
+            }
+            if fk_map:
+                rows_to_update.append((pk_tuple, fk_map))
+    if not rows_to_update:
+        return None
+    return (table, pk_cols, rows_to_update)
+
+
 def clear_target_tables(pg_conn, schema: str, planned_tables: Sequence[Dict[str, Any]]) -> None:
     """Clear target tables via DELETE in reverse FK order.
 
@@ -305,15 +356,22 @@ def run_migration(
     dry_run: bool = False,
     skip_post_sql: bool = False,
     clear_seed: bool = False,
+    resume_from: Optional[str] = None,
 ) -> None:
+    if clear_seed and resume_from:
+        raise ValueError("--clear-seed and --resume-from cannot be used together")
+
     schema = manifest["schema"]
     source_tz = manifest.get("source_timezone", "+00:00")
     mysql_db = os.environ.get("MYSQL_DB", "starexec")
+    already_loaded, tables_to_load = split_resume_tables(planned_tables, resume_from)
 
     if dry_run:
         print(f"[DRY-RUN] Target schema: {schema} | Source TZ: {source_tz}")
-        print(f"[DRY-RUN] Planned tables ({len(planned_tables)}):")
-        for spec in planned_tables:
+        if resume_from:
+            print(f"[DRY-RUN] Resuming from table: {resume_from} (skipping {len(already_loaded)} pre-loaded tables)")
+        print(f"[DRY-RUN] Planned tables ({len(tables_to_load)}):")
+        for spec in tables_to_load:
             extras = []
             if spec.get("deferred_fk_columns"):
                 extras.append(f"deferred_fk={spec['deferred_fk_columns']}")
@@ -321,6 +379,8 @@ def run_migration(
                 extras.append(f"zero_dates={spec['zero_date_columns']}")
             if spec.get("overrides"):
                 extras.append(f"overrides={spec['overrides']}")
+            if spec.get("dedupe_on"):
+                extras.append(f"dedupe_on={spec['dedupe_on']}")
             suffix = f" ({', '.join(extras)})" if extras else ""
             print(f"  [tier {spec['tier']}] {spec['name']}{suffix}")
         if not skip_post_sql:
@@ -337,7 +397,18 @@ def run_migration(
         if clear_seed:
             clear_target_tables(pg_conn, schema, planned_tables)
 
-        for spec in planned_tables:
+        for pre_spec in already_loaded:
+            pre_table = pre_spec["name"]
+            loaded_names.append(pre_table)
+            deferred_cols = set(pre_spec.get("deferred_fk_columns", []))
+            backfill = collect_deferred_backfills(
+                my_conn, mysql_db, pg_conn, schema, pre_table, deferred_cols
+            )
+            if backfill is not None:
+                deferred_backfills.append(backfill)
+            print(f"[resume] skipping pre-loaded table {pre_table}")
+
+        for spec in tables_to_load:
             table = spec["name"]
             my_cols = fetch_mysql_columns(my_conn, mysql_db, table)
             pg_types = fetch_pg_column_types(pg_conn, schema, table)
@@ -348,6 +419,13 @@ def run_migration(
             zero_date_cols = set(spec.get("zero_date_columns", []))
             overrides = dict(spec.get("overrides", {}))
             deferred_fk_cols = set(spec.get("deferred_fk_columns", []))
+            dedupe_cols = list(spec.get("dedupe_on", []))
+            for dc in dedupe_cols:
+                if dc not in shared_cols:
+                    raise RuntimeError(f"{table}: dedupe_on column {dc!r} not in shared columns")
+            dedupe_indices = [shared_cols.index(dc) for dc in dedupe_cols]
+            seen_keys: Optional[Set[Tuple[Any, ...]]] = set() if dedupe_indices else None
+
             pk_cols = fetch_pg_primary_key(pg_conn, schema, table) if deferred_fk_cols else []
             pk_indices = [shared_cols.index(c) for c in pk_cols]
             table_backfills: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
@@ -367,13 +445,22 @@ def run_migration(
             )
 
             total_rows = 0
+            skipped_dupes = 0
             with my_conn.cursor() as my_cur, pg_conn.cursor() as pg_cur:
+                if resume_from and table == resume_from:
+                    pg_cur.execute(f"DELETE FROM {_quote_ident(schema)}.{_quote_ident(table)}")
                 my_cur.execute(
                     f"SELECT {select_list} FROM {_quote_mysql_ident(mysql_db)}.{_quote_mysql_ident(table)}"
                 )
                 buf = io.StringIO()
                 batch_rows = 0
                 for raw_row in my_cur:
+                    if seen_keys is not None:
+                        key = tuple(raw_row[idx] for idx in dedupe_indices)
+                        if key in seen_keys:
+                            skipped_dupes += 1
+                            continue
+                        seen_keys.add(key)
                     vals, deferred_vals = transform_row(
                         raw_row, shared_cols, pg_types, zero_date_cols, overrides, deferred_fk_cols
                     )
@@ -395,7 +482,8 @@ def run_migration(
             loaded_names.append(table)
             if table_backfills:
                 deferred_backfills.append((table, pk_cols, table_backfills))
-            print(f"[tier {spec['tier']}] {table}: copied {total_rows} rows")
+            dupe_note = f" (skipped {skipped_dupes} duplicate row(s))" if skipped_dupes else ""
+            print(f"[tier {spec['tier']}] {table}: copied {total_rows} rows{dupe_note}")
 
         # Backfill deferred mutual-FK columns once all tables are present
         for table, pk_cols, rows_to_update in deferred_backfills:
@@ -441,6 +529,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Clear planned target tables via reverse-order DELETE before COPY (for fresh Flyway V0002 seed rows)",
     )
+    parser.add_argument(
+        "--resume-from",
+        help="Skip already-loaded tables before TABLE (retains deferred FK backfill, sequence sync, and post-SQL)",
+    )
     return parser.parse_args(argv)
 
 
@@ -460,6 +552,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         dry_run=args.dry_run,
         skip_post_sql=args.skip_post_sql,
         clear_seed=args.clear_seed,
+        resume_from=args.resume_from,
     )
     return 0
 

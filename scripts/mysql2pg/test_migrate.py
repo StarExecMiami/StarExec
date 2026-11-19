@@ -85,6 +85,25 @@ class MigrateUnitTest(unittest.TestCase):
         self.assertIn("[tier 0] system_flags", output)
         self.assertIn("sql/wrap-legacy-password-hashes.sql", output)
 
+    def test_split_resume_tables_and_dry_run_resume_from(self):
+        planned = migrate.plan_tables(self.manifest)
+        pre, rem = migrate.split_resume_tables(planned, "bench_dependency")
+        self.assertEqual(rem[0]["name"], "bench_dependency")
+        self.assertEqual(pre[-1]["name"], "bench_attributes")
+        self.assertIn("default_settings", [t["name"] for t in pre])
+        with self.assertRaises(ValueError):
+            migrate.split_resume_tables(planned, "nonexistent_table")
+        with self.assertRaises(ValueError):
+            migrate.run_migration(self.manifest, planned, clear_seed=True, resume_from="bench_dependency", dry_run=True)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = migrate.main(["--dry-run", "--resume-from", "bench_dependency"])
+        self.assertEqual(rc, 0)
+        output = buf.getvalue()
+        self.assertIn("Resuming from table: bench_dependency", output)
+        self.assertIn("dedupe_on=['primary_bench_id', 'secondary_bench_id']", output)
+
 
 if __name__ == "__main__":
     unittest.main()

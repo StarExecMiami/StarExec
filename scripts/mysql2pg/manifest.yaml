@@ -66,6 +66,10 @@ tiers:
       - name: bench_assoc
       - name: bench_attributes
       - name: bench_dependency
+        # Legacy MariaDB lacks unique_dependency_pair; keep first occurrence per pair.
+        dedupe_on:
+          - primary_bench_id
+          - secondary_bench_id
       - name: default_bench_assoc
       - name: benchmark_uploads
         optional: true

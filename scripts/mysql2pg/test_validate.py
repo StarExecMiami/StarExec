@@ -37,6 +37,17 @@ class ValidateUnitTest(unittest.TestCase):
         errs = validate.evaluate_sequence_bounds(bad_states)
         self.assertEqual(len(errs), 2)
 
+    def test_mysql_count_sql_handles_dedupe_columns(self):
+        plain = validate.mysql_count_sql("starexec", "benchmarks")
+        self.assertEqual(plain, "SELECT COUNT(*) FROM `starexec`.`benchmarks`")
+        deduped = validate.mysql_count_sql(
+            "starexec", "bench_dependency", ["primary_bench_id", "secondary_bench_id"]
+        )
+        self.assertEqual(
+            deduped,
+            "SELECT COUNT(*) FROM (SELECT DISTINCT `primary_bench_id`, `secondary_bench_id` FROM `starexec`.`bench_dependency`) AS _dedup",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

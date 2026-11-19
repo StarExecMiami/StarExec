@@ -18,6 +18,9 @@ from pathlib import Path
 import sys
 from typing import Dict, List, Optional, Sequence, Tuple
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from scripts.mysql2pg import migrate
 
 
@@ -51,13 +54,28 @@ def evaluate_sequence_bounds(
     return errors
 
 
-def fetch_mysql_counts(my_conn, db_name: str, tables: Sequence[str]) -> Dict[str, int]:
+def mysql_count_sql(
+    db_name: str, table: str, dedupe_cols: Optional[Sequence[str]] = None
+) -> str:
+    """Return SQL to count expected migrated rows for one source table."""
+    fq_table = f"{migrate._quote_mysql_ident(db_name)}.{migrate._quote_mysql_ident(table)}"
+    if dedupe_cols:
+        cols = ", ".join(migrate._quote_mysql_ident(c) for c in dedupe_cols)
+        return f"SELECT COUNT(*) FROM (SELECT DISTINCT {cols} FROM {fq_table}) AS _dedup"
+    return f"SELECT COUNT(*) FROM {fq_table}"
+
+
+def fetch_mysql_counts(
+    my_conn,
+    db_name: str,
+    tables: Sequence[str],
+    dedupe_by_table: Optional[Dict[str, Sequence[str]]] = None,
+) -> Dict[str, int]:
     counts: Dict[str, int] = {}
+    dedupe_map = dedupe_by_table or {}
     with my_conn.cursor() as cur:
         for table in tables:
-            cur.execute(
-                f"SELECT COUNT(*) FROM {migrate._quote_mysql_ident(db_name)}.{migrate._quote_mysql_ident(table)}"
-            )
+            cur.execute(mysql_count_sql(db_name, table, dedupe_map.get(table)))
             rows = cur.fetchall()
             counts[table] = int(rows[0][0])
     return counts
@@ -154,8 +172,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         pg_counts = fetch_pg_counts(pg_conn, schema, table_names)
         if not args.skip_source_check:
             my_conn = migrate.connect_mysql(manifest.get("source_timezone", "+00:00"))
+            dedupe_by_table = {
+                t["name"]: t["dedupe_on"] for t in planned if t.get("dedupe_on")
+            }
             my_counts = fetch_mysql_counts(
-                my_conn, os.environ.get("MYSQL_DB", "starexec"), table_names
+                my_conn,
+                os.environ.get("MYSQL_DB", "starexec"),
+                table_names,
+                dedupe_by_table=dedupe_by_table,
             )
             errors.extend(evaluate_count_parity(my_counts, pg_counts))
 
