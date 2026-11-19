@@ -178,6 +178,17 @@ public class StageStatsFilesTest {
 		assertTrue(select(out, Set.of(), 1, Set.of(1)).isEmpty());
 	}
 
+	@Test
+	public void aLinkedStageDirectoryCannotSupplyMeasurements() throws Exception {
+		Path out = output();
+		Path outside = newFolder(folder).toPath();
+		Files.writeString(outside.resolve("1.json"), stats(1));
+		Files.createSymbolicLink(out.resolve("stage-stats"), outside);
+
+		assertTrue(select(out, Set.of(), 1, Set.of(1)).isEmpty(),
+				"A stage directory link must not import another directory's measurements");
+	}
+
 	/** The marker alone decides: the legacy stats.json beside it is never used. */
 	@Test
 	public void theLegacyFileIsNeverReadUnderTheProtocol() throws Exception {

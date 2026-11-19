@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.slf4j.LoggerFactory;
-import org.starexec.data.database.Benchmarks;
+import org.starexec.constants.R;
 import org.starexec.data.database.ErrorLogs;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.to.FinishedSolverBuild;
@@ -18,6 +18,7 @@ import org.starexec.data.to.SolverBuildStatus.SolverBuildStatusCode;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.jobs.SolverBuildRecorder.Outcome;
 import org.starexec.logger.StarLevel;
+import org.starexec.util.Util;
 
 import java.io.File;
 import java.io.IOException;
@@ -32,7 +33,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mockStatic;
@@ -173,7 +173,7 @@ public class SolverBuildRecorderTest {
 			SolverBuildRecorder.recordFinishedBuilds();
 
 			db.solvers.verify(() -> Solvers.recordBuildOutcome(any(), any()), never());
-			db.benchmarks.verify(() -> Benchmarks.delete(anyInt()), never());
+			db.files.verify(() -> Util.safeDeleteFileAndEmptyParents(anyString(), anyString()), never());
 			assertEquals(1, logged(Level.ERROR, "could not read the finished build jobs"));
 		}
 	}
@@ -191,8 +191,8 @@ public class SolverBuildRecorderTest {
 			SolverBuildRecorder.recordFinishedBuilds();
 
 			db.solvers.verify(() -> Solvers.recordBuildOutcome(next, next.getBuiltPath()));
-			db.benchmarks.verify(() -> Benchmarks.delete(next.getBenchmarkId()));
-			db.benchmarks.verify(() -> Benchmarks.delete(failing.getBenchmarkId()), never());
+			db.files.verify(() -> Util.safeDeleteFileAndEmptyParents(helperPath(next), R.getBenchmarkPath()));
+			db.files.verify(() -> Util.safeDeleteFileAndEmptyParents(helperPath(failing), R.getBenchmarkPath()), never());
 		}
 	}
 
@@ -208,11 +208,11 @@ public class SolverBuildRecorderTest {
 
 			SolverBuildRecorder.recordFinishedBuilds();
 			SolverBuildRecorder.recordFinishedBuilds();
-			db.benchmarks.verify(() -> Benchmarks.delete(anyInt()), never());
+			db.files.verify(() -> Util.safeDeleteFileAndEmptyParents(anyString(), anyString()), never());
 			SolverBuildRecorder.recordFinishedBuilds();
 
 			db.solvers.verify(() -> Solvers.recordBuildOutcome(eq(build), any()), times(3));
-			db.benchmarks.verify(() -> Benchmarks.delete(build.getBenchmarkId()));
+			db.files.verify(() -> Util.safeDeleteFileAndEmptyParents(helperPath(build), R.getBenchmarkPath()));
 			assertEquals(1, logged(Level.ERROR, "could not apply " + build), "reported once, not every pass");
 			assertEquals(1, logged(Level.INFO, "recorded " + build + ": built"));
 		}
@@ -224,7 +224,7 @@ public class SolverBuildRecorderTest {
 		try (Database db = new Database()) {
 			db.solvers.when(Solvers::getFinishedBuildsToRecord).thenReturn(List.of(build));
 			db.solvers.when(() -> Solvers.recordBuildOutcome(eq(build), any())).thenReturn(true);
-			db.benchmarks.when(() -> Benchmarks.delete(build.getBenchmarkId())).thenReturn(false);
+			db.files.when(() -> Util.safeDeleteFileAndEmptyParents(helperPath(build), R.getBenchmarkPath())).thenReturn(false);
 
 			SolverBuildRecorder.recordFinishedBuilds();
 
@@ -243,28 +243,76 @@ public class SolverBuildRecorderTest {
 
 			SolverBuildRecorder.recordFinishedBuilds();
 
-			db.benchmarks.verify(() -> Benchmarks.delete(anyInt()), never());
+			db.files.verify(() -> Util.safeDeleteFileAndEmptyParents(anyString(), anyString()), never());
+			db.solvers.verify(() -> Solvers.claimLegacyBuildRetirement(any()), never());
 			assertEquals(1, logged(Level.INFO, "changed while " + build + " was read"));
+		}
+	}
+
+	@Test
+	public void aRefusedRetirementClaimCannotRemoveAnyFile() throws Exception {
+		FinishedSolverBuild build = waitingBuild();
+		try (Database db = new Database()) {
+			db.solvers.when(Solvers::getFinishedBuildsToRecord).thenReturn(List.of(build));
+			db.solvers.when(() -> Solvers.recordBuildOutcome(eq(build), any())).thenReturn(true);
+			db.solvers.when(() -> Solvers.claimLegacyBuildRetirement(build)).thenReturn(Optional.empty());
+			SolverBuildRecorder.recordFinishedBuilds();
+			db.files.verify(() -> Util.safeDeleteFileAndEmptyParents(anyString(), anyString()), never());
+		}
+	}
+
+	@Test
+	public void aRetirementDatabaseFailureIsRetriedWithoutEarlyFileDeletion() throws Exception {
+		FinishedSolverBuild build = waitingBuild();
+		try (Database db = new Database()) {
+			db.solvers.when(Solvers::getFinishedBuildsToRecord).thenReturn(List.of(build));
+			db.solvers.when(() -> Solvers.recordBuildOutcome(eq(build), any())).thenReturn(true);
+			db.solvers.when(() -> Solvers.claimLegacyBuildRetirement(build))
+					.thenThrow(new SQLException("retirement unavailable")).thenReturn(Optional.of(helperPath(build)));
+			SolverBuildRecorder.recordFinishedBuilds();
+			db.files.verify(() -> Util.safeDeleteFileAndEmptyParents(anyString(), anyString()), never());
+			SolverBuildRecorder.recordFinishedBuilds();
+			db.files.verify(() -> Util.safeDeleteFileAndEmptyParents(helperPath(build), R.getBenchmarkPath()));
+			assertEquals(1, logged(Level.ERROR, "could not apply " + build));
+		}
+	}
+
+	@Test
+	public void deletionUsesOnlyThePathReturnedByTheRetirementClaim() throws Exception {
+		FinishedSolverBuild build = waitingBuild();
+		try (Database db = new Database()) {
+			db.solvers.when(Solvers::getFinishedBuildsToRecord).thenReturn(List.of(build));
+			db.solvers.when(() -> Solvers.recordBuildOutcome(eq(build), any())).thenReturn(true);
+			db.solvers.when(() -> Solvers.claimLegacyBuildRetirement(build)).thenReturn(Optional.of("/data/Benchmarks/claimed-helper"));
+			SolverBuildRecorder.recordFinishedBuilds();
+			db.files.verify(() -> Util.safeDeleteFileAndEmptyParents("/data/Benchmarks/claimed-helper", R.getBenchmarkPath()));
+			db.files.verify(() -> Util.safeDeleteFileAndEmptyParents(helperPath(build), R.getBenchmarkPath()), never());
 		}
 	}
 
 	/** The database, as Mockito doubles: the recorder's reads, updates and deletions, and StarLogger's rows. */
 	private static final class Database implements AutoCloseable {
 		final MockedStatic<Solvers> solvers = mockStatic(Solvers.class);
-		final MockedStatic<Benchmarks> benchmarks = mockStatic(Benchmarks.class);
+		final MockedStatic<Util> files = mockStatic(Util.class);
 		final MockedStatic<ErrorLogs> errorLogs = mockStatic(ErrorLogs.class);
 
 		Database() {
 			errorLogs.when(() -> ErrorLogs.add(anyString(), any(StarLevel.class))).thenReturn(Optional.of(1));
-			benchmarks.when(() -> Benchmarks.delete(anyInt())).thenReturn(true);
+			solvers.when(() -> Solvers.claimLegacyBuildRetirement(any())).thenAnswer(invocation ->
+					Optional.of(helperPath(invocation.getArgument(0))));
+			files.when(() -> Util.safeDeleteFileAndEmptyParents(anyString(), anyString())).thenReturn(true);
 		}
 
 		@Override
 		public void close() {
 			errorLogs.close();
-			benchmarks.close();
+			files.close();
 			solvers.close();
 		}
+	}
+
+	private static String helperPath(FinishedSolverBuild build) {
+		return "/data/Benchmarks/helper-" + build.getBenchmarkId();
 	}
 
 	/** A completed build of a solver that waits for it, copied back to its built path. */

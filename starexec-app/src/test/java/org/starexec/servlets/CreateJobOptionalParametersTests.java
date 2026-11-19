@@ -2,9 +2,15 @@ package org.starexec.servlets;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.app.RESTHelpers;
+import org.starexec.constants.R;
+import org.starexec.data.database.Analytics;
+import org.starexec.data.database.Common;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.database.Permissions;
@@ -13,6 +19,7 @@ import org.starexec.data.database.Queues;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
+import org.starexec.data.to.Configuration;
 import org.starexec.data.to.DefaultSettings;
 import org.starexec.data.to.Job;
 import org.starexec.data.to.JobPair;
@@ -80,10 +87,67 @@ public class CreateJobOptionalParametersTests {
 	/** What a job keeps when it is given no description, or an empty one. */
 	private static final String DEFAULT_DESCRIPTION = new Job().getDescription();
 
-	/** The request validator's patterns are compiled at application start, not statically. */
+	/** Initialize validation and analytics without requiring a database. */
 	@BeforeAll
-	public static void initializeValidator() {
+	public static void initializeValidator() throws Exception {
 		Validator.initialize();
+		try (MockedStatic<Common> common = Mockito.mockStatic(Common.class)) {
+			common.when(() -> Common.query(eq("{SELECT * FROM starexec.GetEventId(?)}"),
+					Mockito.any(), Mockito.any())).thenReturn(1);
+			Analytics.values();
+		}
+	}
+
+	@Test
+	public void invalidQuickBenchmarkNamesAreRejectedBeforeWriting() throws Exception {
+		for (String name : new String[]{null, "", "../escape", "nested/name", "..."}) {
+			Map<String, String> params = quickParams();
+			params.put("benchName", name);
+			try (MockedStatic<UploadBenchmark> uploads = Mockito.mockStatic(UploadBenchmark.class)) {
+				createJob(request(params), (response, jobs, manager) -> {
+					verify(response).sendError(400, "The benchmark name is not valid.");
+					uploads.verifyNoInteractions();
+					jobs.verify(() -> Jobs.add(Mockito.any(Job.class), anyInt()), never());
+				});
+			}
+		}
+	}
+
+	@ParameterizedTest
+	@NullSource
+	@ValueSource(ints = {0, -1})
+	public void failedQuickBenchmarkCreationDoesNotCreateAJob(Integer benchmarkId) throws Exception {
+		try (MockedStatic<UploadBenchmark> uploads = Mockito.mockStatic(UploadBenchmark.class)) {
+			uploads.when(() -> UploadBenchmark.addBenchmarkFromText(
+					anyString(), anyString(), anyInt(), anyInt(), anyBoolean())).thenReturn(benchmarkId);
+			createJob(request(quickParams()), (response, jobs, manager) -> {
+				verify(response).sendError(500, "Unable to create the benchmark for this job.");
+				jobs.verify(() -> Jobs.add(Mockito.any(Job.class), anyInt()), never());
+			});
+		}
+	}
+
+	@Test
+	public void validQuickBenchmarkCreatesTheJob() throws Exception {
+		try (MockedStatic<UploadBenchmark> uploads = Mockito.mockStatic(UploadBenchmark.class)) {
+			uploads.when(() -> UploadBenchmark.addBenchmarkFromText(
+					anyString(), anyString(), anyInt(), anyInt(), anyBoolean())).thenReturn(BENCH_ID);
+			createJob(request(quickParams()), (response, jobs, manager) -> {
+				verify(response, never()).sendError(anyInt(), anyString());
+				verify(response).sendRedirect(contains("job.jsp"));
+				jobs.verify(() -> Jobs.add(Mockito.any(Job.class), eq(SPACE_ID)));
+			});
+		}
+	}
+
+	private static Map<String, String> quickParams() {
+		Map<String, String> params = baseParams();
+		params.put("runChoice", "quickJob");
+		params.put("benchName", "benchmark");
+		params.put("benchProcess", "1");
+		params.put(R.BENCHMARK, "synthetic benchmark");
+		params.put(R.SOLVER, String.valueOf(SOLVER_ID));
+		return params;
 	}
 
 	@Test
@@ -375,6 +439,11 @@ public class CreateJobOptionalParametersTests {
 			Solver solver = new Solver();
 			solver.setId(SOLVER_ID);
 			solvers.when(() -> Solvers.getSolverByConfig(CONFIG_ID, false)).thenReturn(solver);
+			Configuration config = new Configuration(CONFIG_ID);
+			config.setName("default");
+			solvers.when(() -> Solvers.getConfigsForSolver(SOLVER_ID))
+					.thenReturn(Collections.singletonList(config));
+			permissions.when(() -> Permissions.canUserSeeSolver(SOLVER_ID, USER_ID)).thenReturn(true);
 
 			// The backend pair builders: one pair each, so the job is not empty.
 			jobManager.when(() -> JobManager.buildJob(

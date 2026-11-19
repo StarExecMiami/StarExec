@@ -61,6 +61,8 @@ public final class PrivateUploadStage implements AutoCloseable {
                 Path.of(EnvironmentConfig.getDataDir()),
                 Path.of(EnvironmentConfig.getJobOutputDirectory()),
                 Path.of(EnvironmentConfig.getJobLogDirectory())));
+            String artifacts = EnvironmentConfig.getBuildArtifactDirectory();
+            if (artifacts != null && !artifacts.isBlank()) excluded.add(Path.of(artifacts));
             return create(Path.of(configured), excluded);
         } catch (InvalidPathException invalid) {
             throw new IOException("Private upload storage configuration is invalid", invalid);

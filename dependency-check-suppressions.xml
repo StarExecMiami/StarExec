@@ -3,36 +3,13 @@
     <suppress>
         <notes><![CDATA[
         CVE-2026-53914 affects Kotlin compiler build-cache metadata. StarExec
-        only includes this runtime library transitively through Fabric8 and
-        does not use Kotlin compilation, Gradle, or a Kotlin build cache.
+        only includes this runtime library transitively, through OkHttp, the
+        HTTP client of the Fabric8 Kubernetes client, and does not use Kotlin
+        compilation, Gradle, or a Kotlin build cache. NVD matches the CVE to
+        every Kotlin artifact before 2.4.20 by CPE, but its reviewed GitHub
+        advisory, GHSA-r937-wjx7-w2jp, lists only kotlin-gradle-plugin.
         ]]></notes>
-        <packageUrl>pkg:maven/org.jetbrains.kotlin/kotlin-stdlib@1.8.21</packageUrl>
-        <cve>CVE-2026-53914</cve>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-        CVE-2026-53914 affects Kotlin compiler build-cache metadata, not the
-        kotlin-stdlib-common runtime classes included by Fabric8 dependencies.
-        ]]></notes>
-        <packageUrl>pkg:maven/org.jetbrains.kotlin/kotlin-stdlib-common@1.9.10</packageUrl>
-        <cve>CVE-2026-53914</cve>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-        CVE-2026-53914 affects Kotlin compiler build-cache metadata. This JDK 7
-        runtime compatibility wrapper is included transitively by OkHttp and
-        does not contain or process Kotlin compiler build-cache metadata.
-        ]]></notes>
-        <packageUrl>pkg:maven/org.jetbrains.kotlin/kotlin-stdlib-jdk7@1.8.21</packageUrl>
-        <cve>CVE-2026-53914</cve>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-        CVE-2026-53914 affects Kotlin compiler build-cache metadata. This JDK 8
-        runtime compatibility wrapper is included transitively by OkHttp and
-        does not contain or process Kotlin compiler build-cache metadata.
-        ]]></notes>
-        <packageUrl>pkg:maven/org.jetbrains.kotlin/kotlin-stdlib-jdk8@1.8.21</packageUrl>
+        <packageUrl>pkg:maven/org.jetbrains.kotlin/kotlin-stdlib@2.1.21</packageUrl>
         <cve>CVE-2026-53914</cve>
     </suppress>
 </suppressions>

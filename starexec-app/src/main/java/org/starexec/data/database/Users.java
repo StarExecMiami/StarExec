@@ -13,6 +13,7 @@ import org.starexec.data.to.Solver;
 import org.starexec.data.to.Benchmark;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.exceptions.StarExecSecurityException;
+import org.starexec.exceptions.UserDeletionBlockedException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.*;
 
@@ -1419,6 +1420,13 @@ public class Users {
 			// job rows in place so the administrator can retry after resolving it.
 			Jobs.killUsersJobs(userToDeleteId);
 
+			// Hold the captured identities through the cascade, after backend callbacks finish.
+			try (PreparedStatement lock = con.prepareStatement(
+					"SELECT starexec.lock_user_solver_storage_for_deletion(?)")) {
+				lock.setInt(1, userToDeleteId);
+				lock.execute();
+			}
+
 			// Gather filesystem targets BEFORE the DB cascade so we can clean
 			// up job directories, solver pictures, and benchmark pictures that
 			// would become unreachable through DB queries after the cascade.
@@ -1430,9 +1438,9 @@ public class Users {
 						"Could not collect all filesystem targets before deleting user " + userToDeleteId);
 			}
 
-			List<Integer> preGatheredJobIds = new ArrayList<>();
+			List<String> preGatheredJobDirectories = new ArrayList<>();
 			for (Job j : userJobs) {
-				preGatheredJobIds.add(j.getId());
+				preGatheredJobDirectories.add(Jobs.getDirectory(j.getId()));
 			}
 			List<Integer> preGatheredSolverIds = new ArrayList<>();
 			for (Solver s : userSolvers) {
@@ -1454,6 +1462,28 @@ public class Users {
 					log.warn("deleteUser: could not gather processor files under space "
 							+ personalSpace.getId() + "; skipping their cleanup", e);
 				}
+			}
+
+			List<String> cleanupPaths = new ArrayList<>(processorFiles);
+			cleanupPaths.add(R.getSolverPath() + "/" + userToDeleteId);
+			cleanupPaths.add(R.getBenchmarkPath() + "/" + userToDeleteId);
+			cleanupPaths.addAll(preGatheredJobDirectories);
+			cleanupPaths.add(R.getPicturePath() + "/users/Pic" + userToDeleteId + "_org.jpg");
+			cleanupPaths.add(R.getPicturePath() + "/users/Pic" + userToDeleteId + "_thn.jpg");
+			for (int id : preGatheredSolverIds) {
+				cleanupPaths.add(R.getPicturePath() + "/solvers/Pic" + id + "_org.jpg");
+				cleanupPaths.add(R.getPicturePath() + "/solvers/Pic" + id + "_thn.jpg");
+			}
+			for (int id : preGatheredBenchmarkIds) {
+				cleanupPaths.add(R.getPicturePath() + "/benchmarks/Pic" + id + "_org.jpg");
+				cleanupPaths.add(R.getPicturePath() + "/benchmarks/Pic" + id + "_thn.jpg");
+			}
+			for (String path : cleanupPaths) verifyUserCleanupAncestors(path);
+			try (PreparedStatement guard = con.prepareStatement(
+					"SELECT starexec.assert_user_solver_storage_deletable(?,?)")) {
+				guard.setInt(1, userToDeleteId);
+				guard.setArray(2, con.createArrayOf("TEXT", cleanupPaths.toArray(new String[0])));
+				guard.execute();
 			}
 
 			// One connection, one transaction. It has held the lifecycle advisory lock
@@ -1508,13 +1538,17 @@ public class Users {
 			// who is genuinely gone - the safe direction - and is logged loudly so
 			// the paths remain discoverable.
 			Spaces.cleanProcessorFiles(processorFiles);
-			deleteUsersPrimitiveDirectories(userToDeleteId, preGatheredJobIds, preGatheredSolverIds, preGatheredBenchmarkIds);
+			deleteUsersPrimitiveDirectories(userToDeleteId, preGatheredJobDirectories, preGatheredSolverIds, preGatheredBenchmarkIds);
 
 			log.debug("Successfully deleted user with id=" + userToDeleteId + " and all associated data");
 			return true;
 		} catch (PSQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
 				throw new StarExecDatabaseException("User not found: " + userToDeleteId, e);
+			}
+			if ("55006".equals(e.getSQLState()) || "55P03".equals(e.getSQLState())) {
+				throw new UserDeletionBlockedException(UserDeletionBlockedException.SOLVER_STORAGE_IN_USE,
+						"User deletion requires retained solver storage to be resolved", null, null, e);
 			}
 			log.error("deleteUser", e);
 		} catch (StarExecDatabaseException e) {
@@ -1540,6 +1574,28 @@ public class Users {
 		}
 		log.debug("internal error trying to delete user with id = " + userToDeleteId);
 		return false;
+	}
+
+	/** Refuses symbolic or inaccessible ancestors before committing recursive cleanup. */
+	private static void verifyUserCleanupAncestors(String value) throws java.io.IOException {
+		java.nio.file.Path path = java.nio.file.Path.of(value);
+		if (!path.isAbsolute() || path.getParent() == null || !path.equals(path.normalize())) {
+			throw new java.io.IOException("User cleanup requires an absolute normalized non-root path");
+		}
+		java.nio.file.Path ancestor = path;
+		while (ancestor != null) {
+			try {
+				var attributes = java.nio.file.Files.readAttributes(ancestor,
+						java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+				if (attributes.isSymbolicLink()) throw new java.io.IOException("User cleanup cannot follow a symbolic ancestor");
+				if (!attributes.isDirectory()) ancestor = ancestor.getParent();
+				try (DescriptorDirectory ignored = DescriptorDirectory.open(ancestor)) { }
+				return;
+			} catch (java.nio.file.NoSuchFileException absent) {
+				ancestor = ancestor.getParent();
+			}
+		}
+		throw new java.io.IOException("User cleanup ancestors are unavailable");
 	}
 
 	/** Locks the user's job lifecycle and verifies the user exists before deletion. */
@@ -1615,17 +1671,17 @@ public class Users {
 	 * This includes: solvers, benchmarks, jobs, and ALL pictures (user, solver, and
 	 * benchmark).
 	 *
-	 * <p>Accepts pre-gathered IDs so that filesystem cleanup works after the DB
+	 * <p>Accepts pre-gathered identities so that filesystem cleanup works after the DB
 	 * cascade has removed the user's rows.</p>
 	 *
 	 * @param userId Id of user whose data is to be completely deleted.
-	 * @param jobIds Ids of the user's jobs (pre-gathered before DB cascade).
+	 * @param jobDirectories Job directories checked before the DB cascade.
 	 * @param solverIds Ids of the user's solvers (pre-gathered before DB cascade).
 	 * @param benchmarkIds Ids of the user's benchmarks (pre-gathered before DB cascade).
 	 * @author Albert Giegerich, Andres Caicedo (comprehensive cleanup)
 	 */
 	private static void deleteUsersPrimitiveDirectories(int userId,
-			List<Integer> jobIds, List<Integer> solverIds, List<Integer> benchmarkIds) {
+			List<String> jobDirectories, List<Integer> solverIds, List<Integer> benchmarkIds) {
 		final String method = "deleteUsersPrimitiveDirectories";
 		log.info(method + ": Deleting ALL data for user with id=" + userId);
 
@@ -1635,8 +1691,8 @@ public class Users {
 		// Delete user's benchmark directory
 		deleteUsersBenchmarkDirectory(userId);
 
-		// Delete all job output directories for user's jobs (using pre-gathered IDs)
-		deleteUsersJobDirectories(userId, jobIds);
+		// Delete only the job output directories checked before the cascade.
+		deleteUsersJobDirectories(userId, jobDirectories);
 
 		// Delete user's profile pictures
 		deleteUserPictures(userId);
@@ -1651,22 +1707,20 @@ public class Users {
 	}
 
 	/**
-	 * Deletes the given user's job output directories using pre-gathered job IDs.
+	 * Deletes the given user's job output directories using prechecked paths.
 	 *
 	 * @param userId Id of user whose job directories are to be deleted.
-	 * @param jobIds Pre-gathered job IDs (collected before the DB cascade so they
-	 *               are still reachable after user row deletion).
+	 * @param jobDirectories Job paths captured and checked before the DB cascade.
 	 * @author Albert Giegerich
 	 */
-	private static void deleteUsersJobDirectories(int userId, List<Integer> jobIds) {
+	private static void deleteUsersJobDirectories(int userId, List<String> jobDirectories) {
 		final String method = "deleteUsersJobDirectories";
 		log.entry(method);
-		if (jobIds == null || jobIds.isEmpty()) {
-			log.debug(method + ": No pre-gathered job IDs for user " + userId);
+		if (jobDirectories == null || jobDirectories.isEmpty()) {
+			log.debug(method + ": No pre-gathered job directories for user " + userId);
 			return;
 		}
-		for (int jobId : jobIds) {
-			final String jobDirectory = Jobs.getDirectory(jobId);
+		for (String jobDirectory : jobDirectories) {
 			log.debug(method + ": Deleting job directory: " + jobDirectory);
 			Util.safeDeleteDirectory(jobDirectory);
 		}

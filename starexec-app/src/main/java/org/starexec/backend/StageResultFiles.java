@@ -2,9 +2,9 @@ package org.starexec.backend;
 
 import org.starexec.backend.exception.RetryableIngestionException;
 import org.starexec.logger.StarLogger;
+import org.starexec.util.DescriptorDirectory;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -21,6 +21,8 @@ import java.util.TreeSet;
  * is terminal, or the pair's terminal stage at completion -- and only if the pair actually has
  * that stage. Its file must be a regular file, not a link, and no larger than {@link #MAX_BYTES}.
  * What the file means is the parser's business.
+ * Trusted live producers publish complete files by atomic replacement. Untrusted producers
+ * require a private output directory and complete writer termination before these reads.
  */
 final class StageResultFiles {
 
@@ -152,19 +154,16 @@ final class StageResultFiles {
     }
 
     /**
-     * A file's content, or {@code null} when it is over {@link #MAX_BYTES}.
+     * A published file's content, or {@code null} when it is unsafe or over {@link #MAX_BYTES}.
      *
-     * @param refusal completes the log line when the file is too large: "file is N bytes, over
-     *                the MAX " + refusal
+     * @param refusal explains which result is omitted when the file is unsafe or too large
      */
     static String read(Path file, int pairId, String refusal) throws RetryableIngestionException {
-        try {
-            long size = Files.size(file);
-            if (size > MAX_BYTES) {
-                log.warn(file + " is " + size + " bytes, over the " + MAX_BYTES + " " + refusal);
-                return null;
-            }
-            return Files.readString(file, StandardCharsets.UTF_8);
+        try (DescriptorDirectory directory = DescriptorDirectory.open(file.toAbsolutePath().getParent())) {
+            return directory.readPublishedText(file.getFileName().toString(), (int) MAX_BYTES);
+        } catch (DescriptorDirectory.InvalidFileException e) {
+            log.warn(file + " cannot supply a regular file within " + MAX_BYTES + " bytes: " + refusal);
+            return null;
         } catch (IOException e) {
             throw new RetryableIngestionException(
                 "Could not read " + file + " for pair " + pairId, e);

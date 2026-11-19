@@ -15,6 +15,7 @@ import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.database.StageStatusBatchResult;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
+import org.starexec.util.DescriptorDirectory;
 
 /**
  * Monitors completed container jobs and updates the database with results.
@@ -588,18 +589,17 @@ public class ContainerJobMonitor {
         int stageNumber;
         StatusCode statusFromRecord;
         Integer declaredPairId = null;
-        Path statusJson = outputPath.resolve("status.json");
-        if (!Files.exists(statusJson)) {
+        JsonObject obj;
+        try {
+            String json = readMonitorText(outputPath,"status.json");
+            obj = JsonParser.parseString(json).getAsJsonObject();
+        } catch (NoSuchFileException missing) {
             throw new StageStatusSnapshots.InvalidSnapshotException(
                 "completed container " + info.containerId + " for pair " + info.pairId
                     + " has no status.json, so neither its result nor stage is known; "
-                    + missingOutputDiagnostic(outputPath)
-            );
-        }
-        JsonObject obj;
-        try {
-            String json = Files.readString(statusJson);
-            obj = JsonParser.parseString(json).getAsJsonObject();
+                    + missingOutputDiagnostic(outputPath),missing);
+        } catch (StageStatusSnapshots.InvalidSnapshotException unsafe) {
+            throw unsafe;
         } catch (IOException e) {
             // The file is there and could not be read. That is the filesystem, not the
             // contents, so it stays retryable rather than becoming a permanent refusal.
@@ -741,7 +741,7 @@ public class ContainerJobMonitor {
      * Parses runsolver var.out and watcher.out files.
      * Also checks for stats.json as an alternative format.
      */
-    private RunsolverStats parseRunsolverOutput(Path outputDir) {
+    private RunsolverStats parseRunsolverOutput(Path outputDir) throws StageStatusSnapshots.InvalidSnapshotException {
         RunsolverStats stats = new RunsolverStats();
 
         // stats.json (written by functions.bash in container mode) carries timings and
@@ -762,44 +762,35 @@ public class ContainerJobMonitor {
         // writes stats.json -- and the block below already guards on its existence, so
         // an installation that somehow lacks it behaves exactly as before.
         // Parse var.out
-        Path varFile = outputDir.resolve("var.out");
-        if (Files.exists(varFile)) {
-            try {
-                List<String> lines = Files.readAllLines(varFile);
-                for (String line : lines) {
-                    parseVarLine(line, stats);
-                }
-            } catch (IOException e) {
-                log.warn("Failed to parse var.out", e);
-            }
+        try {
+            readMonitorText(outputDir,"var.out").lines().forEach(line->parseVarLine(line,stats));
+        } catch (NoSuchFileException absent) {
+            // Legacy output need not carry this optional format.
+        } catch (IOException e) {
+            log.warn("Failed to parse var.out", e);
         }
 
         // Parse watcher.out
-        Path watcherFile = outputDir.resolve("watcher.out");
-        if (Files.exists(watcherFile)) {
-            try {
-                List<String> lines = Files.readAllLines(watcherFile);
-                for (String line : lines) {
-                    parseWatcherLine(line, stats);
-                }
-            } catch (IOException e) {
-                log.warn("Failed to parse watcher.out", e);
-            }
+        try {
+            readMonitorText(outputDir,"watcher.out").lines().forEach(line->parseWatcherLine(line,stats));
+        } catch (NoSuchFileException absent) {
+            // Legacy output need not carry this optional format.
+        } catch (IOException e) {
+            log.warn("Failed to parse watcher.out", e);
         }
 
         // stats.json last, so it stays authoritative for the fields it carries and this
         // remains a purely additive change: in container mode the timings are exactly
         // what they were before, and the only difference is that the limit flags read
         // from watcher.out above now survive instead of being skipped.
-        Path statsJson = outputDir.resolve("stats.json");
-        if (Files.exists(statsJson)) {
-            try {
-                String json = Files.readString(statsJson);
-                parseStatsJson(json, stats);
-                log.debug("Parsed stats from stats.json");
-            } catch (IOException e) {
-                log.warn("Failed to parse stats.json; using var.out and watcher.out only", e);
-            }
+        try {
+            String json = readMonitorText(outputDir,"stats.json");
+            parseStatsJson(json, stats);
+            log.debug("Parsed stats from stats.json");
+        } catch (NoSuchFileException absent) {
+            // Older runners provide only var.out and watcher.out.
+        } catch (IOException e) {
+            log.warn("Failed to parse stats.json; using var.out and watcher.out only", e);
         }
 
         return stats;
@@ -812,7 +803,7 @@ public class ContainerJobMonitor {
      * field leaves the corresponding {@link RunsolverStats} default value
      * intact rather than aborting the entire parse. This mirrors the
      * graceful-degradation pattern used for {@code status.json} parsing
-     * elsewhere in this class and satisfies the Gson mandate in AGENTS.md §5.2.</p>
+     * elsewhere in this class.</p>
      */
     private void parseStatsJson(String json, RunsolverStats stats) {
         JsonObject obj;
@@ -1033,33 +1024,44 @@ public class ContainerJobMonitor {
      * and unknown outcomes consistently. Only lines with a missing or blank
      * <em>key</em> are skipped.</p>
      */
-    private Properties parseAttributes(Path outputDir) {
+    private Properties parseAttributes(Path outputDir) throws StageStatusSnapshots.InvalidSnapshotException {
         Properties props = new Properties();
-        Path attrsFile = outputDir.resolve("attributes.txt");
 
-        if (Files.exists(attrsFile)) {
-            try (BufferedReader reader = Files.newBufferedReader(attrsFile)) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (line.isEmpty()) continue;
-                    int eq = line.indexOf('=');
-                    if (eq > 0) {
-                        String key = line.substring(0, eq).trim();
-                        String value = line.substring(eq + 1).trim();
-                        if (!key.isEmpty()) {
-                            if (R.STAREXEC_RESULT.equals(key) && value.isEmpty()) {
-                                value = R.STAREXEC_UNKNOWN;
-                            }
-                            props.setProperty(key, value);
+        try (BufferedReader reader = new BufferedReader(new StringReader(readMonitorText(outputDir,"attributes.txt")))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isEmpty()) continue;
+                int eq = line.indexOf('=');
+                if (eq > 0) {
+                    String key = line.substring(0, eq).trim();
+                    String value = line.substring(eq + 1).trim();
+                    if (!key.isEmpty()) {
+                        if (R.STAREXEC_RESULT.equals(key) && value.isEmpty()) {
+                            value = R.STAREXEC_UNKNOWN;
                         }
+                        props.setProperty(key, value);
                     }
                 }
-            } catch (IOException e) {
-                log.warn("Failed to parse attributes.txt", e);
             }
+        } catch (NoSuchFileException absent) {
+            // Post-processing attributes are optional.
+        } catch (IOException e) {
+            log.warn("Failed to parse attributes.txt", e);
         }
 
         return props;
+    }
+
+    /** Reads completed output only; the backend must exclude all remaining writers. */
+    private String readMonitorText(Path outputDir,String name)
+            throws IOException, StageStatusSnapshots.InvalidSnapshotException {
+        try (DescriptorDirectory directory=DescriptorDirectory.open(outputDir)) {
+            return directory.readQuiescentText(name,Math.toIntExact(StageResultFiles.MAX_BYTES));
+        } catch (DescriptorDirectory.InvalidFileException unsafe) {
+            if (unsafe.isDirectory()) throw new IOException("Monitor output file is a directory",unsafe);
+            throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "Unsafe monitor output "+name+"; "+missingOutputDiagnostic(outputDir),unsafe);
+        }
     }
 
     /**

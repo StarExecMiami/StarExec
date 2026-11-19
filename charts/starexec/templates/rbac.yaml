@@ -11,15 +11,17 @@ rules:
   # authorizes as deletecollection rather than delete.
   - apiGroups: ["batch"]
     resources: ["jobs"]
-    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
-  # Read-only, and needed to tell a pod that is running from one that has never
+    # update: resume a suspended build Job after committing its execution admission.
+    verbs: ["get", "list", "watch", "create", "update", "delete", "deletecollection"]
+  # Reads distinguish a pod that is running from one that has never
   # started. JobStatus.active counts pending and running pods alike, so without
   # this the monitor reports an unschedulable pair as RUNNING and it waits
   # forever holding a submission slot. Absent, the backend degrades to that
-  # earlier behaviour and logs once rather than failing.
+  # earlier behaviour and logs once rather than failing. Update removes only the
+  # build evidence finalizer after the matching stop receipt has committed.
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "update"]
   # The backend reads its namespace at startup and stays uninitialized if it
   # cannot, so no pair is ever submitted. A Role can grant this because a request
   # for a Namespace object is authorized within that namespace; resourceNames

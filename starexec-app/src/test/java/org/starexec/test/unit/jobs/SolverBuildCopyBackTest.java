@@ -33,6 +33,54 @@ public class SolverBuildCopyBackTest {
 	public File folder;
 
 	@Test
+	public void aContainerBuildRequiresAnIsolatedOutputDirectory() throws Exception {
+		Harness h = new Harness(folder, false);
+		h.stagingOverride = null;
+		Result result = h.run("copySolverBack");
+		assertNotEquals(0, result.exit, "container builds must not fall back to shared solver storage");
+		assertTrue(result.out.contains("container build requires an isolated output directory"), result.out);
+		assertTrue(Files.exists(h.bench));
+	}
+
+	@Test
+	public void nonContainerBuildsPreserveTheirLegacyCopyAndCleanup() throws Exception {
+		Harness h = new Harness(folder, false);
+		h.containerMode = false;
+		h.run("copySolverBack").assertFinished();
+		assertEquals("BUILT", Files.readString(h.canonical.resolve("bin/probe-solver")));
+		assertFalse(Files.exists(h.bench), "database-connected legacy jobs retain their cleanup behavior");
+		assertEquals("BUILD OUTPUT", Files.readString(h.shared.resolve("Solvers/buildoutput/7/starexec_build_log")));
+	}
+
+	@Test
+	public void aStagedLateBuildCannotOverwriteThePublishedSolver() throws Exception {
+		Harness h = new Harness(folder, false);
+		Files.createDirectories(h.canonical.resolve("bin"));
+		Files.writeString(h.canonical.resolve("bin/probe-solver"), "NEWER");
+		h.stagingOverride = Files.createDirectory(h.root.resolve("isolated-output"));
+		h.run("copySolverBack").assertFinished();
+		assertEquals("NEWER", Files.readString(h.canonical.resolve("bin/probe-solver")));
+		assertFalse(Files.exists(h.canonical.resolve("src/README")), "the published tree must not receive build files");
+		assertEquals("BUILT", Files.readString(h.stagingOverride.resolve("solver/bin/probe-solver")));
+	}
+
+	@Test
+	public void aStagedContainerBuildRetainsItsHelperBenchmarkForTrustedCleanup() throws Exception {
+		Harness h = new Harness(folder, false);
+		h.stagingOverride = Files.createDirectory(h.root.resolve("isolated-output"));
+		h.run("copySolverBack").assertFinished();
+		assertTrue(Files.exists(h.bench), "the runner must not delete its application-owned input");
+	}
+
+	@Test
+	public void aFailedContainerBuildDoesNotDeleteItsInputDirectory() throws Exception {
+		Harness h = new Harness(folder, false);
+		h.stagingOverride = Files.createDirectory(h.root.resolve("isolated-output"));
+		h.run("cleanUpAfterKilledBuildJob").assertFinished();
+		assertTrue(Files.exists(h.bench), "failed runners must leave input cleanup to the application");
+	}
+
+	@Test
 	public void theBuiltSolverIsCopiedBackWithoutItsBuildScript() throws Exception {
 		Harness h = new Harness(folder, false);
 		Result r = h.run("copySolverBack");
@@ -44,7 +92,7 @@ public class SolverBuildCopyBackTest {
 		assertFalse(Files.exists(h.built.resolve("starexec_build")), "the build script is not part of the built solver");
 		assertEquals("BUILD SCRIPT", Files.readString(h.solverSrc.resolve("starexec_build")),
 				"the uploaded source stays for a rebuild");
-		assertFalse(Files.exists(h.bench), "the dummy benchmark's file is deleted");
+		assertTrue(Files.exists(h.bench), "the application owns helper benchmark cleanup");
 	}
 
 	@Test
@@ -63,7 +111,7 @@ public class SolverBuildCopyBackTest {
 	}
 
 	@Test
-	public void theBuildLogIsSavedWhereTheSolverPageReadsIt() throws Exception {
+	public void theBuildLogIsStagedForTrustedPublication() throws Exception {
 		Harness h = new Harness(folder, false);
 		h.run("copySolverBack").assertFinished();
 
@@ -71,7 +119,7 @@ public class SolverBuildCopyBackTest {
 	}
 
 	@Test
-	public void aRebuildReplacesTheBuildLogOfTheLastBuild() throws Exception {
+	public void stagingReplacesOnlyItsExecutionBuildLog() throws Exception {
 		Harness h = new Harness(folder, false);
 		Files.createDirectories(h.buildLog.getParent());
 		Files.writeString(h.buildLog, "LAST BUILD");
@@ -99,7 +147,7 @@ public class SolverBuildCopyBackTest {
 		assertEquals("BUILT", Files.readString(h.built.resolve("bin/probe-solver")));
 		assertFalse(Files.exists(h.built.resolve("starexec_build")));
 		assertEquals("BUILD OUTPUT", Files.readString(h.buildLog));
-		assertFalse(Files.exists(h.bench));
+		assertTrue(Files.exists(h.bench));
 	}
 
 	/**
@@ -178,7 +226,7 @@ public class SolverBuildCopyBackTest {
 		assertEquals("BUILD OUTPUT", Files.readString(h.buildLog),
 				"a failed build's log is what its owner needs most");
 		assertFalse(r.out.contains("T-DB|"), "the server records the build, not the job script:\n" + r.out);
-		assertFalse(Files.exists(h.bench), "the dummy benchmark's file is deleted");
+		assertTrue(Files.exists(h.bench), "failed runners retain application-owned inputs");
 		try (var entries = Files.list(h.built)) {
 			assertEquals(0, entries.count(), "a failed build copies no solver");
 		}
@@ -193,7 +241,7 @@ public class SolverBuildCopyBackTest {
 		h.run("cleanUpAfterKilledBuildJob").assertFinished();
 
 		assertFalse(Files.exists(h.buildLog));
-		assertFalse(Files.exists(h.bench));
+		assertTrue(Files.exists(h.bench));
 	}
 
 	/**
@@ -213,7 +261,7 @@ public class SolverBuildCopyBackTest {
 		assertBuildLogNotSaved(h, r);
 		assertEquals("BUILT", Files.readString(h.built.resolve("bin/probe-solver")));
 		assertTrue(r.out.contains("T-LOG|solver copied back to " + h.built + "\n"), r.out);
-		assertFalse(Files.exists(h.bench), "the dummy benchmark's file is deleted");
+		assertTrue(Files.exists(h.bench), "the application owns helper benchmark cleanup");
 	}
 
 	/** The copy fails instead: the log's path is a directory that holds a directory named as the copy would be. */
@@ -228,7 +276,7 @@ public class SolverBuildCopyBackTest {
 		assertBuildLogNotSaved(h, r);
 		assertEquals("BUILT", Files.readString(h.built.resolve("bin/probe-solver")));
 		assertTrue(r.out.contains("T-LOG|solver copied back to " + h.built + "\n"), r.out);
-		assertFalse(Files.exists(h.bench), "the dummy benchmark's file is deleted");
+		assertTrue(Files.exists(h.bench), "the application owns helper benchmark cleanup");
 	}
 
 	/** A failed build's cleanup saves its log the same way, and still deletes the build's helper benchmark. */
@@ -241,7 +289,7 @@ public class SolverBuildCopyBackTest {
 
 		r.assertFinished();
 		assertBuildLogNotSaved(h, r);
-		assertFalse(Files.exists(h.bench), "the dummy benchmark's file is deleted");
+		assertTrue(Files.exists(h.bench), "failed runners retain application-owned inputs");
 	}
 
 	private static void assertBuildLogNotSaved(Harness h, Result r) {
@@ -254,6 +302,7 @@ public class SolverBuildCopyBackTest {
 		final Path shared;
 		final Path solverSrc;
 		final Path built;
+		final Path canonical;
 		final Path buildLog;
 		final Path sandbox;
 		final Path runsolver;
@@ -262,6 +311,8 @@ public class SolverBuildCopyBackTest {
 		final Path cache;
 		Path solverPath;
 		boolean buildJob = true;
+		boolean containerMode = true;
+		Path stagingOverride;
 
 		/** Laid out as an upload and a finished starexec_build leave it, for solver 7 and pair 42. */
 		Harness(File folder, boolean spaces) throws Exception {
@@ -274,10 +325,10 @@ public class SolverBuildCopyBackTest {
 			Files.writeString(solverSrc.resolve("starexec_build"), "BUILD SCRIPT");
 			Files.writeString(solverSrc.resolve("bin/starexec_run_default"), "RUN");
 			// The upload creates the built path empty, next to the source.
-			built = Files.createDirectory(solverDir.resolve("20261025-09.15.48.756"));
-			// The application creates the build log root when it starts.
-			Path buildOutput = Files.createDirectories(shared.resolve("Solvers/buildoutput"));
-			buildLog = buildOutput.resolve("7/starexec_build_log");
+			canonical = Files.createDirectory(solverDir.resolve("20261025-09.15.48.756"));
+			stagingOverride = Files.createDirectory(root.resolve("execution" + s + "output"));
+			built = Files.createDirectory(stagingOverride.resolve("solver"));
+			buildLog = stagingOverride.resolve("logs/starexec_build_log");
 			solverPath = solverSrc;
 
 			sandbox = Files.createDirectories(root.resolve("work" + s + "dir/solver"));
@@ -320,7 +371,8 @@ public class SolverBuildCopyBackTest {
 			env.put("WORKING_DIR_BASE", root.toString());
 			env.put("BENCH_PATH", encode(bench));
 			env.put("PAIR_OUTPUT_DIRECTORY", encode(output.getParent()));
-			env.put("CONTAINER_MODE", "true");
+			if (stagingOverride != null) env.put("STAREXEC_BUILD_OUTPUT_DIR", encode(stagingOverride));
+			env.put("CONTAINER_MODE", containerMode ? "true" : "false");
 			env.put("BUILD_JOB", buildJob ? "true" : "false");
 			env.put("PAIR_ID", "42");
 			env.put("SOLVER_ID", "7");

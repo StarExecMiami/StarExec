@@ -23,6 +23,8 @@ public class UserDeletionBlockedException extends StarExecDatabaseException {
 	public static final String AMBIGUOUS_PERSONAL_SPACE = "AMBIGUOUS_PERSONAL_SPACE";
 	/** At least one active job execution could not be safely stopped and retired. */
 	public static final String ACTIVE_JOB_NOT_RETIRED = "ACTIVE_JOB_NOT_RETIRED";
+	/** Conserved solver storage, surviving references or concurrent storage writers prevent deletion. */
+	public static final String SOLVER_STORAGE_IN_USE = "SOLVER_STORAGE_IN_USE";
 
 	private final String reasonCode;
 	private final List<Integer> blockingSpaceIds;

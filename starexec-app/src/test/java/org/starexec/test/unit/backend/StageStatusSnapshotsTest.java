@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.starexec.test.TemporaryFolders.newFolder;
@@ -91,6 +92,41 @@ public class StageStatusSnapshotsTest {
 	}
 
 	// ------------------------------------------------------------------ refusals
+
+	@Test
+	public void aLinkedSnapshotCannotSupplyAStageResult() throws Exception {
+		Path out = newFolder(folder, "linked-snapshot").toPath();
+		Path outside = newFolder(folder, "outside-snapshot").toPath();
+		write(outside, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
+		Files.createDirectory(out.resolve("stage-status"));
+		Files.createSymbolicLink(out.resolve("stage-status/1.json"),
+				outside.resolve("stage-status/1.json"));
+
+		assertThrows(StageStatusSnapshots.InvalidSnapshotException.class,
+				() -> StageStatusSnapshots.read(out, PAIR));
+	}
+
+	@Test
+	public void aLinkedSnapshotDirectoryCannotSupplyStageHistory() throws Exception {
+		Path out = newFolder(folder, "linked-directory").toPath();
+		Path outside = newFolder(folder, "outside-directory").toPath();
+		write(outside, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
+		Files.createSymbolicLink(out.resolve("stage-status"), outside.resolve("stage-status"));
+
+		assertThrows(StageStatusSnapshots.InvalidSnapshotException.class,
+				() -> StageStatusSnapshots.read(out, PAIR));
+	}
+
+	@Test
+	public void aLinkedOutputAncestorCannotSupplyStageHistory() throws Exception {
+		Path outside = newFolder(folder, "outside-parent").toPath();
+		write(outside, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
+		Path alias = folder.toPath().resolve("linked-parent");
+		Files.createSymbolicLink(alias, outside);
+
+		assertThrows(StageStatusSnapshots.InvalidSnapshotException.class,
+				() -> StageStatusSnapshots.read(alias, PAIR));
+	}
 
 	@Test
 	public void aRecordNamingAnotherPairIsRefused() throws Exception {

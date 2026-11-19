@@ -476,6 +476,11 @@ public class EnvironmentConfig {
         return getEnv("STAREXEC_CONFIG_PATH", "/config");
     }
 
+    /** Explicit controller-owned immutable output storage; absence must never select shared data. */
+    public static String getBuildArtifactDirectory() {
+        return getEnv("STAREXEC_BUILD_ARTIFACT_DIR", "");
+    }
+
     /** Explicit application-only upload storage; absence never selects shared runner data. */
     public static String getUploadStagingDirectory() {
         return getEnv("STAREXEC_UPLOAD_STAGING_DIR", "");

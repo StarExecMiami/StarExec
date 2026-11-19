@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: '0 6 * * 1'  # Weekly on Monday at 6 AM UTC
   pull_request:
-    branches: [UMprod, dev, containerised, fb1]
+    branches: [UMprod, dev, containerised, fb1, fix/security-api-contracts]
     paths:
       - 'starexec-app/**'
       - 'pom.xml'

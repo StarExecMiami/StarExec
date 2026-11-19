@@ -476,6 +476,28 @@ public class RESTServicesTest {
 		}
 	}
 
+	@Test
+	public void deleteUserExplainsRetainedSolverStorageWithoutExposingItsCause() throws Exception {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		UserDeletionBlockedException blocked = new UserDeletionBlockedException(
+				UserDeletionBlockedException.SOLVER_STORAGE_IN_USE,
+				"private-storage-path-and-sql-detail", null, null,
+				new java.sql.SQLException("private-driver-detail", "55006"));
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+				MockedStatic<UserSecurity> userSecurity = Mockito.mockStatic(UserSecurity.class);
+				MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(1);
+			userSecurity.when(() -> UserSecurity.canDeleteUser(99, 1)).thenReturn(new ValidatorStatusCode(true));
+			users.when(() -> Users.deleteUser(99)).thenThrow(blocked);
+			ValidatorStatusCode status = gson.fromJson(new RESTServices().deleteUser(99, request), ValidatorStatusCode.class);
+			assertFalse(status.isSuccess());
+			assertTrue(status.getMessage().contains("solver files or build records are still retained or in use"));
+			assertTrue(status.getMessage().contains("retry"));
+			assertFalse(status.getMessage().contains("private"));
+			assertFalse(status.getMessage().contains("55006"));
+		}
+	}
+
 	/**
 	 * An unexpected database failure must yield the stable generic category, with
 	 * no internal text reaching the client. This is what makes a future return to

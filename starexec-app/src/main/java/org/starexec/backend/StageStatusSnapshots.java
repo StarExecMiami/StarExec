@@ -3,10 +3,11 @@ package org.starexec.backend;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.starexec.data.to.Status.StatusCode;
+import org.starexec.util.DescriptorDirectory;
 
 import java.io.IOException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.Optional;
@@ -230,7 +231,7 @@ public final class StageStatusSnapshots {
             return Collections.emptyMap();
         }
         Path dir = outputDir.resolve(DIRECTORY);
-        if (!Files.isDirectory(dir)) {
+        if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
             return Collections.emptyMap();
         }
 
@@ -255,17 +256,9 @@ public final class StageStatusSnapshots {
 
         Map<Integer, Integer> snapshots = new TreeMap<>();
         Map<Integer, Integer> skipped = new TreeMap<>();
-        int seen = 0;
-
-        try (DirectoryStream<Path> entries = Files.newDirectoryStream(dir)) {
-            for (Path entry : entries) {
-                if (++seen > MAX_ENTRIES) {
-                    throw new InvalidSnapshotException(
-                        dir + " holds more than " + MAX_ENTRIES + " entries; refusing to read it"
-                    );
-                }
-
-                String name = entry.getFileName().toString();
+        try (DescriptorDirectory entries = DescriptorDirectory.open(dir)) {
+            for (String name : entries.childNames(MAX_ENTRIES)) {
+                Path entry = dir.resolve(name);
                 Matcher named = SNAPSHOT_NAME.matcher(name);
                 if (!named.matches()) {
                     // The producer's own temporary file, or something that is not a snapshot.
@@ -289,16 +282,9 @@ public final class StageStatusSnapshots {
                     );
                 }
 
-                long size = Files.size(entry);
-                if (size > MAX_BYTES) {
-                    throw new InvalidSnapshotException(
-                        entry + " is " + size + " bytes; a stage snapshot may not exceed " + MAX_BYTES
-                    );
-                }
-
                 JsonObject record;
                 try {
-                    record = JsonParser.parseString(Files.readString(entry)).getAsJsonObject();
+                    record = JsonParser.parseString(entries.readPublishedText(name, (int) MAX_BYTES)).getAsJsonObject();
                 } catch (IOException e) {
                     throw e;
                 } catch (Exception e) {
@@ -353,6 +339,9 @@ public final class StageStatusSnapshots {
                     snapshots.put(stageFromName, recordStatus);
                 }
             }
+        } catch (DescriptorDirectory.InvalidFileException invalid) {
+            throw new InvalidSnapshotException("Unsafe stage snapshot bytes in " + dir
+                + ": " + invalid.getMessage(), invalid);
         }
 
         lastContradiction.set(contradiction(expectedPairId, skipped, snapshots));

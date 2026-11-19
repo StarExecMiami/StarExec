@@ -34,6 +34,8 @@ import org.junit.jupiter.api.Assertions;
 import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.Backend;
@@ -43,6 +45,7 @@ import org.starexec.backend.KubernetesJobMonitor;
 import org.starexec.backend.PodPhaseView;
 import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.SolverBuildArtifacts;
 import org.starexec.data.to.JobPair;
 import org.starexec.data.database.JobPairs.NeverStartedRetryResult;
 import org.starexec.data.database.JobPairs.PairStatusLookupState;
@@ -55,6 +58,14 @@ import org.starexec.data.to.Status.StatusCode;
  * require a live Kubernetes cluster.
  */
 public class KubernetesNativeBackendTests {
+    private MockedStatic<SolverBuildArtifacts> legacyArtifacts;
+
+    @BeforeEach void legacyArtifactRegistry() {
+        legacyArtifacts = Mockito.mockStatic(SolverBuildArtifacts.class);
+        legacyArtifacts.when(() -> SolverBuildArtifacts.findCurrent(Mockito.anyInt())).thenReturn(java.util.Optional.empty());
+    }
+
+    @AfterEach void closeArtifactRegistry() { legacyArtifacts.close(); }
 
     private static Path terminalOutput(StatusCode status) throws Exception {
         Path dir = java.nio.file.Files.createTempDirectory("k8s-terminal-evidence");
@@ -3343,6 +3354,50 @@ public class KubernetesNativeBackendTests {
         setField(backend, "backoffLimit", 0);
         setField(backend, "ttlSecondsAfterFinished", 3600);
         return backend;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void theBuildOutputPathIsPresentOnlyInItsOwnPodSpec() throws Exception {
+        KubernetesNativeBackend backend = backendWithCpu("1");
+        var context = new org.starexec.backend.BuildExecutionContext(5, 42, 1,
+            java.util.UUID.randomUUID(), java.nio.file.Path.of("/data/source"),
+            java.nio.file.Path.of("/data/build output"));
+        Field field = KubernetesNativeBackend.class.getDeclaredField("pendingBuildContext");
+        field.setAccessible(true);
+        ThreadLocal<org.starexec.backend.BuildExecutionContext> pending =
+            (ThreadLocal<org.starexec.backend.BuildExecutionContext>) field.get(backend);
+        Method build = KubernetesNativeBackend.class.getDeclaredMethod("buildKubernetesJob",
+            int.class, int.class, String.class, String.class, String.class, String.class);
+        build.setAccessible(true);
+        pending.set(context);
+        Job built;
+        try {
+            built = (Job) build.invoke(backend, 42, 7, "build-job", "/script.sh", "/work", "/work/log.txt");
+        } finally { pending.remove(); }
+        var environment = built.getSpec().getTemplate().getSpec().getContainers().get(0).getEnv();
+        assertEquals(Boolean.TRUE, built.getSpec().getSuspend(), "build Pods must wait for durable admission");
+        assertEquals("5", built.getMetadata().getLabels().get("starexec.org/build-artifact"));
+        assertEquals("5", built.getSpec().getTemplate().getMetadata().getLabels().get("starexec.org/build-artifact"));
+        assertNull(built.getSpec().getTtlSecondsAfterFinished(), "build evidence must survive until its stop receipt commits");
+        assertEquals(List.of("starexec.org/build-stop-evidence"),
+            built.getSpec().getTemplate().getMetadata().getFinalizers(),
+            "controller cancellation must retain build Pod observations until their receipt commits");
+        assertEquals(Boolean.FALSE, built.getSpec().getTemplate().getSpec().getAutomountServiceAccountToken(),
+            "runners must not inherit the application permission to resume Jobs");
+        assertEquals(1, environment.stream().filter(value ->
+            org.starexec.backend.BuildExecutionContext.OUTPUT_VARIABLE.equals(value.getName())
+                && context.environment().get(value.getName()).equals(value.getValue())).count());
+        assertFalse(environment.toString().contains(context.token().toString()));
+        Job ordinary = (Job) build.invoke(backend, 43, 8, "ordinary-job", "/script.sh", "/work", "/work/log.txt");
+        assertNull(ordinary.getSpec().getSuspend(), "ordinary scheduling must remain unchanged");
+        assertTrue(ordinary.getSpec().getTemplate().getMetadata().getFinalizers() == null
+            || ordinary.getSpec().getTemplate().getMetadata().getFinalizers().isEmpty());
+        assertEquals(3600, ordinary.getSpec().getTtlSecondsAfterFinished());
+        assertFalse(ordinary.getMetadata().getLabels().containsKey("starexec.org/build-artifact"));
+        assertEquals(Boolean.FALSE, ordinary.getSpec().getTemplate().getSpec().getAutomountServiceAccountToken());
+        assertFalse(ordinary.getSpec().getTemplate().getSpec().getContainers().get(0).getEnv().stream()
+            .anyMatch(value -> org.starexec.backend.BuildExecutionContext.OUTPUT_VARIABLE.equals(value.getName())));
     }
 
     private Container buildContainer(String cpu) throws Exception {

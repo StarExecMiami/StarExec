@@ -13,12 +13,77 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Collection;
 import java.util.List;
+import java.util.HashSet;
+import java.util.OptionalInt;
 
 /**
  * Handles all database interaction for permissions
  */
 public class Permissions {
 	private static final StarLogger log = StarLogger.getLogger(Permissions.class);
+
+	public enum OutputAccess { ALLOWED, NOT_FOUND, FORBIDDEN, INVALID_REQUEST }
+
+	/** Checked output access keeps missing/denied targets separate from database failures. */
+	public static OutputAccess checkJobOutputAccess(int jobId, int userId) throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			return checkJobOutputAccess(con, jobId, userId);
+		}
+	}
+
+	private static OutputAccess checkJobOutputAccess(Connection con, int jobId, int userId) throws SQLException {
+		OptionalInt owner = outputTargetId(con, "SELECT user_id FROM starexec.GetJobById(?)", jobId);
+		if (owner.isEmpty()) return OutputAccess.NOT_FOUND;
+		if (owner.getAsInt() == R.PUBLIC_USER_ID
+				|| outputAccessCount(con, "SELECT starexec.JobInPublicSpace(?)", jobId) > 0
+				|| GeneralSecurity.hasAdminReadPrivilegesChecked(con, userId)) return OutputAccess.ALLOWED;
+		long allowed = outputAccessCount(con, "SELECT * FROM starexec.CanViewJob(?, ?)", jobId, userId);
+		if (allowed > 1) throw new SQLException("Invalid job visibility result");
+		return allowed == 1 ? OutputAccess.ALLOWED : OutputAccess.FORBIDDEN;
+	}
+
+	/** All output pairs must be visible and belong to one job before archive generation. */
+	public static OutputAccess checkPairOutputsAccess(List<Integer> pairIds, int userId) throws SQLException {
+		if (pairIds == null || pairIds.isEmpty() || pairIds.stream().anyMatch(id -> id == null || id <= 0)) {
+			return OutputAccess.INVALID_REQUEST;
+		}
+		try (Connection con = Common.getConnection()) {
+			var jobs = new HashSet<Integer>();
+			for (int pairId : pairIds) {
+				OptionalInt parent = outputTargetId(con, "SELECT job_id FROM starexec.GetJobPairById(?)", pairId);
+				if (parent.isEmpty()) return OutputAccess.NOT_FOUND;
+				if (jobs.add(parent.getAsInt())) {
+					OutputAccess access = checkJobOutputAccess(con, parent.getAsInt(), userId);
+					if (access != OutputAccess.ALLOWED) return access;
+				}
+			}
+			return jobs.size() == 1 ? OutputAccess.ALLOWED : OutputAccess.INVALID_REQUEST;
+		}
+	}
+
+	private static OptionalInt outputTargetId(Connection con, String sql, int id) throws SQLException {
+		try (PreparedStatement statement = con.prepareStatement(sql)) {
+			statement.setInt(1, id);
+			try (ResultSet rows = statement.executeQuery()) {
+				if (!rows.next()) return OptionalInt.empty();
+				int target = rows.getInt(1);
+				if (rows.wasNull() || target <= 0 || rows.next()) throw new SQLException("Invalid output target identity");
+				return OptionalInt.of(target);
+			}
+		}
+	}
+
+	private static long outputAccessCount(Connection con, String sql, int... ids) throws SQLException {
+		try (PreparedStatement statement = con.prepareStatement(sql)) {
+			for (int index = 0; index < ids.length; index++) statement.setInt(index + 1, ids[index]);
+			try (ResultSet rows = statement.executeQuery()) {
+				if (!rows.next()) throw new SQLException("Missing output visibility result");
+				long count = rows.getLong(1);
+				if (rows.wasNull() || count < 0 || rows.next()) throw new SQLException("Invalid output visibility result");
+				return count;
+			}
+		}
+	}
 
 	/**
 	 * Adds a new permission record to the database. This is an internal helper

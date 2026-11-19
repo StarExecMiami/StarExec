@@ -1299,6 +1299,7 @@ public class KubernetesNativeBackend implements Backend {
         execIdToPairId.clear();
         execIdToOutputDir.clear();
         execIdToAttemptNo.clear();
+        buildJobs.clear();
         initialized = false;
         log.info("KubernetesNativeBackend shut down");
     }
@@ -1943,6 +1944,44 @@ public class KubernetesNativeBackend implements Backend {
      * pod spec — which would be the original routing bug wearing a different hat.
      */
     private final ThreadLocal<String> pendingQueueName = new ThreadLocal<>();
+    private final ThreadLocal<BuildExecutionContext> pendingBuildContext = new ThreadLocal<>();
+    private enum BuildStopKind { TERMINATED, NEVER_STARTED, CANCELLED }
+
+    private static final class BuildTracking {
+        private final KubernetesBuildStopObserver.Identity identity;
+        private final String outputDirectory;
+        private volatile BuildStopKind stopKind;
+        private volatile boolean resourceGone;
+        private volatile boolean accountingSettled;
+
+        private BuildTracking(KubernetesBuildStopObserver.Identity identity, String outputDirectory) {
+            this.identity = identity; this.outputDirectory = outputDirectory;
+        }
+        private KubernetesBuildStopObserver.Identity identity() { return identity; }
+        private String outputDirectory() { return outputDirectory; }
+    }
+    private final Map<String, BuildTracking> buildJobs = new ConcurrentHashMap<>();
+
+    @Override
+    public boolean supportsBuildStaging() { return true; }
+
+    @Override
+    public int submitScript(int pairId, String scriptPath, String workingDirectoryPath,
+                            String logPath, String queueName, BuildExecutionContext build) {
+        pendingBuildContext.set(build);
+        try {
+            return submitScript(pairId, scriptPath, workingDirectoryPath, logPath, queueName);
+        } finally {
+            pendingBuildContext.remove();
+        }
+    }
+
+    private java.util.List<io.fabric8.kubernetes.api.model.EnvVar> buildStagingEnvironment() {
+        BuildExecutionContext build = pendingBuildContext.get();
+        if (build == null) return java.util.List.of();
+        return build.environment().entrySet().stream().map(entry ->
+                new io.fabric8.kubernetes.api.model.EnvVar(entry.getKey(), entry.getValue(), null)).toList();
+    }
 
     @Override
     public int submitScript(
@@ -2016,6 +2055,8 @@ public class KubernetesNativeBackend implements Backend {
         );
 
         try {
+            BuildExecutionContext build = pendingBuildContext.get();
+            if (build != null) build.requireMatches(pairId, attemptNo);
             Job job = buildKubernetesJob(
                 pairId,
                 execId,
@@ -2086,6 +2127,20 @@ public class KubernetesNativeBackend implements Backend {
                 );
             }
 
+            if (build != null) {
+                KubernetesBuildStopObserver.Identity identity = rememberBuild(created);
+                if (identity == null || identity.artifactId() != build.artifactId()
+                        || identity.pairId() != build.pairId() || identity.attemptNo() != build.attemptNo()) {
+                    throw new IllegalStateException("Created build Job lost its registered ownership");
+                }
+                execIdToPairId.put(execId, pairId);
+                putAttemptNo(execId, attemptNo);
+                execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
+                execIdToJobName.put(execId, submitted.jobName());
+                execIdToJobUid.put(execId, submitted.jobUid());
+                resumeAdmittedBuild(build, submitted, created);
+            }
+
             try {
                 if (!JobPairs.setStartTime(pairId)) {
                     log.warn(
@@ -2132,6 +2187,47 @@ public class KubernetesNativeBackend implements Backend {
         } catch (Exception e) {
             log.error("Failed to submit Kubernetes Job: " + jobName, e);
             return resolveAmbiguousSubmission(execId, pairId, jobName, logPath, attemptNo);
+        }
+    }
+
+    private void resumeAdmittedBuild(BuildExecutionContext build, ExecutionRef execution, Job created)
+        throws java.sql.SQLException {
+        if (created.getSpec() == null || !Boolean.TRUE.equals(created.getSpec().getSuspend())) {
+            throw new IllegalStateException("Build creation did not return a suspended Job");
+        }
+        if (KubernetesBuildLaunchFence.isFenced(created)) {
+            throw new IllegalStateException("Build initial launch has been fenced");
+        }
+        if (KubernetesBuildCancellation.isRequested(created)) {
+            throw new IllegalStateException("Build cancellation has already been requested");
+        }
+        String version = created.getMetadata().getResourceVersion();
+        if (version == null || version.isBlank()) {
+            throw new IllegalStateException("Build creation did not return a resource version");
+        }
+        String identity = "kubernetes:" + namespace + ":" + execution.execId() + ":" + execution.jobUid();
+        if (!org.starexec.data.database.SolverBuildArtifacts.admitExecution(build, identity)) {
+            throw new IllegalStateException("Build execution admission was refused; Job remains suspended");
+        }
+        // The controller can update suspension status after create returns. Observe
+        // the initial Job before this first write; never refresh after a failed write.
+        Job observed = kubernetesClient.batch().v1().jobs().inNamespace(namespace)
+            .withName(execution.jobName()).get();
+        var expected = new KubernetesBuildStopObserver.Identity(build.artifactId(), build.pairId(),
+            build.attemptNo(), execution);
+        KubernetesBuildLaunchFence.validate(namespace, expected, observed);
+        if (KubernetesBuildLaunchFence.isFenced(observed)
+                || KubernetesBuildCancellation.isRequested(observed)
+                || !KubernetesBuildPodRetention.isRetained(observed)) {
+            throw new IllegalStateException("Build initial observation cannot authorize launch");
+        }
+        version = observed.getMetadata().getResourceVersion();
+        Job resume = new JobBuilder(observed).editSpec().withSuspend(false).endSpec().build();
+        Job updated = kubernetesClient.batch().v1().jobs().inNamespace(namespace)
+            .resource(resume).lockResourceVersion(version).update();
+        if (!execution.equals(ExecutionRef.fromJob(execution.execId(), updated))
+                || updated.getSpec() == null || !Boolean.FALSE.equals(updated.getSpec().getSuspend())) {
+            throw new IllegalStateException("Build resume did not return the admitted enabled Job");
         }
     }
 
@@ -2271,6 +2367,9 @@ public class KubernetesNativeBackend implements Backend {
         if (attemptNo != null) {
             labels.put(ATTEMPT_NO_LABEL, String.valueOf(attemptNo));
         }
+        if (pendingBuildContext.get() != null) {
+            labels.put(KubernetesBuildStopObserver.ARTIFACT_LABEL, Long.toString(pendingBuildContext.get().artifactId()));
+        }
 
         Path outputDir = resolveOutputDirectory(logPath);
 
@@ -2355,14 +2454,17 @@ public class KubernetesNativeBackend implements Backend {
                 .addToAnnotations(OUTPUT_DIR_ANNOTATION, outputDir.toString())
             .endMetadata()
             .withNewSpec()
+                .withSuspend(pendingBuildContext.get() == null ? null : true)
                 .withBackoffLimit(backoffLimit)
-                .withTtlSecondsAfterFinished(ttlSecondsAfterFinished)
+                .withTtlSecondsAfterFinished(pendingBuildContext.get() == null ? ttlSecondsAfterFinished : null)
                 .withNewTemplate()
                     .withNewMetadata()
                         .addToLabels(labels)
+                        .withFinalizers(pendingBuildContext.get() == null ? null : List.of(KubernetesBuildPodRetention.FINALIZER))
                     .endMetadata()
                     .withNewSpec()
                         .withServiceAccountName(serviceAccountName)
+                        .withAutomountServiceAccountToken(false)
                         .withSecurityContext(jobPodSecurityContext())
                         .withRestartPolicy("Never")
                         .withNodeName(pinnedNodeName)
@@ -2375,6 +2477,7 @@ public class KubernetesNativeBackend implements Backend {
                             .withCommand("/bin/bash")
                             .withArgs(scriptPath)
                             .withWorkingDir(workingDirectoryPath)
+                            .addAllToEnv(buildStagingEnvironment())
                             .addNewEnv()
                                 .withName("STAREXEC_PAIR_ID")
                                 .withValue(String.valueOf(pairId))
@@ -2800,36 +2903,34 @@ public class KubernetesNativeBackend implements Backend {
      * same execution is a no-op rather than a double decrement.
      */
     private void releaseSubmissionSlot(int execId) {
+        if (kubernetesClient != null && !conserveBuildStops(execId)) {
+            buildJobs.values().stream().filter(b -> b.identity().execution().execId() == execId)
+                .forEach(this::restoreBuildTracking);
+            recordUnverified(execId, "build termination evidence is unresolved");
+            return;
+        }
         synchronized (slotLock) {
-            if (!jobsHoldingSlot.remove(execId)) {
-                return;
+            if (jobsHoldingSlot.remove(execId)) {
+                activeJobCount.set(jobsHoldingSlot.size());
+                log.debug(
+                    "Released K8s concurrency slot (execId=" +
+                    execId +
+                    ", active=" +
+                    jobsHoldingSlot.size() +
+                    ", max=" +
+                    maxConcurrentJobs +
+                    ")"
+                );
             }
-            activeJobCount.set(jobsHoldingSlot.size());
-            log.debug(
-                "Released K8s concurrency slot (execId=" +
-                execId +
-                ", active=" +
-                jobsHoldingSlot.size() +
-                ", max=" +
-                maxConcurrentJobs +
-                ")"
-            );
+        }
+        for (BuildTracking build : buildJobs.values()) {
+            if (build.identity().execution().execId() == execId) {
+                build.accountingSettled = true;
+                retireBuildTracking(build);
+            }
         }
     }
 
-    /**
-     * Clears an execution's tracking and slot, but only once nothing for it can still run.
-     *
-     * <p>The completion callbacks used to clear all four unconditionally, on the strength of
-     * the Job having reported a terminal outcome. A Job can carry a terminal condition while
-     * its Pod is still terminating, and releasing the slot then lets an unrelated pair be
-     * scheduled onto hardware the previous execution has not finished vacating — which on a
-     * benchmarking platform contaminates the measurement rather than merely wasting capacity.
-     *
-     * <p>When safety is not established the accounting is retained and the execution is
-     * registered for the sweep to revisit, so the hold is bounded by observation rather than
-     * by process lifetime.
-     */
     /**
      * Records that an execution was stopped, so its own late callbacks can be discarded.
      *
@@ -2853,7 +2954,7 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     /**
-     * As below, for a callback that knows which execution it is speaking for.
+     * Clears owned tracking and capacity after fresh stop proof and an ownership recheck.
      *
      * <p>The accounting under an execution id belongs to whichever execution holds the id
      * now. A superseded Job's terminal callback releasing it would hand the current
@@ -2869,10 +2970,7 @@ public class KubernetesNativeBackend implements Backend {
             );
             return;
         }
-        releaseAccountingIfSafe(execution.execId(), context);
-    }
-
-    private void releaseAccountingIfSafe(int execId, String context) {
+        int execId = execution.execId();
         if (observeExecutionSafety(execId) != KillOutcome.CONFIRMED_SAFE) {
             log.warn(
                 "Not releasing accounting for execId " + execId + " after " + context +
@@ -2880,6 +2978,10 @@ public class KubernetesNativeBackend implements Backend {
                     observeControllerFor(execId) + ", pods " + censusFor(execId) + ")."
             );
             recordUnverified(execId, context);
+            return;
+        }
+        if (!ownsTracking(execution)) {
+            log.info("Not releasing accounting after " + context + ": execution ownership changed during observation");
             return;
         }
         execIdToJobName.remove(execId);
@@ -2899,10 +3001,11 @@ public class KubernetesNativeBackend implements Backend {
      * stopped keeps its slot.
      */
     private void releaseAllSlots() {
-        int released = 0;
-        for (Integer execId : jobsHoldingSlot) {
-            releaseSubmissionSlot(execId);
-            released++;
+        int released;
+        synchronized (slotLock) {
+            released = jobsHoldingSlot.size();
+            jobsHoldingSlot.clear();
+            activeJobCount.set(0);
         }
         if (released > 0) {
             log.info("Released " + released +
@@ -2918,8 +3021,10 @@ public class KubernetesNativeBackend implements Backend {
      * <ul>
      *   <li>active K8s Job evidence rebuilds tracking and marks the pair RUNNING;</li>
      *   <li>terminal K8s Job evidence is processed through the normal completion callback;</li>
-     *   <li>ENQUEUED DB rows without Job evidence are reset to PENDING_SUBMIT;</li>
-     *   <li>RUNNING DB rows without Job evidence are marked as terminal failure.</li>
+     *   <li>conserved non-executions use the attempt-fenced retry lifecycle;</li>
+     *   <li>conserved cancellations finish owned cleanup without a scientific write;</li>
+     *   <li>unregistered ENQUEUED rows without Job evidence may reset to PENDING_SUBMIT;</li>
+     *   <li>RUNNING rows without attributable Job evidence remain unresolved.</li>
      * </ul>
      */
     private void reconcileOrphanedPairs() {
@@ -2999,17 +3104,23 @@ public class KubernetesNativeBackend implements Backend {
                 Job activeJob = pairIdToActiveJob.get(pairId);
                 Job terminalJob = pairIdToTerminalJob.get(pairId);
                 if (activeJob != null) {
-                    rebuildTrackingFromJob(activeJob, pods);
-                    enqueuedRebuilt++;
+                    if (KubernetesBuildLaunchFence.isFenced(activeJob)
+                            && activeJob.getMetadata().getLabels().containsKey(KubernetesBuildStopObserver.ARTIFACT_LABEL)) {
+                        if (processReconciledJobThroughCallback(activeJob, pods)) enqueuedProcessed++;
+                        else enqueuedWithheld++;
+                    } else {
+                        rebuildTrackingFromJob(activeJob, pods);
+                        enqueuedRebuilt++;
+                    }
                 } else if (terminalJob != null) {
                     if (processReconciledJobThroughCallback(terminalJob, pods)) {
                         enqueuedProcessed++;
                     }
-                } else if (!reconciledPairIsSafe(pairId, "reset to PENDING_SUBMIT")) {
-                    enqueuedWithheld++;
-                } else if (JobPairs.tryResetEnqueuedToPending(pairId)
-                        == JobPairs.ConditionalPairUpdateResult.UPDATED) {
-                    enqueuedReset++;
+                } else {
+                    BuildReconciliation build = reconcileRegisteredBuild(pairId);
+                    if (build == BuildReconciliation.PROCESSED) enqueuedProcessed++;
+                    else if (build == BuildReconciliation.HELD || !reconciledPairIsSafe(pairId, "reset to PENDING_SUBMIT")) enqueuedWithheld++;
+                    else if (JobPairs.tryResetEnqueuedToPending(pairId) == JobPairs.ConditionalPairUpdateResult.UPDATED) enqueuedReset++;
                 }
             }
 
@@ -3023,6 +3134,8 @@ public class KubernetesNativeBackend implements Backend {
                     if (processReconciledJobThroughCallback(terminalJob, pods)) {
                         runningProcessed++;
                     }
+                } else if (reconcileRegisteredBuild(pairId, true) == BuildReconciliation.PROCESSED) {
+                    runningProcessed++;
                 } else {
                     // A missing Job is lifecycle evidence only. Even when a fresh pod census
                     // proves that nothing can still run, it says neither which solver stage
@@ -3069,24 +3182,56 @@ public class KubernetesNativeBackend implements Backend {
         }
     }
 
+    private enum BuildReconciliation { LEGACY, PROCESSED, HELD }
+
+    private BuildReconciliation reconcileRegisteredBuild(int pairId) {
+        return reconcileRegisteredBuild(pairId, false);
+    }
+
+    private BuildReconciliation reconcileRegisteredBuild(int pairId, boolean cancellationOnly) {
+        try {
+            var current = org.starexec.data.database.SolverBuildArtifacts.findCurrent(pairId);
+            if (current.isEmpty()) return BuildReconciliation.LEGACY;
+            var artifact = current.get();
+            if (artifact.engineIdentity() == null && artifact.stoppedAt() == null
+                    && Set.of("PLANNED", "STAGED").contains(artifact.state())) return BuildReconciliation.LEGACY;
+            var receipt = org.starexec.data.database.SolverBuildArtifacts.findStopReceipt(pairId, artifact.attemptNo())
+                    .orElseThrow(() -> new IllegalStateException("Registered build stop evidence is unavailable"));
+            boolean cancelled = KubernetesBuildStopObserver.isCancelled(receipt.receipt());
+            if (cancellationOnly && !cancelled) return BuildReconciliation.HELD;
+            var identity = cancelled
+                    ? KubernetesBuildStopObserver.restoreCancelledIdentity(namespace, artifact, receipt)
+                    : KubernetesBuildUnstartedObserver.restoreIdentity(namespace, artifact, receipt);
+            if (cancelled && KubernetesBuildStopObserver.conserveExisting(namespace, identity) == null) return BuildReconciliation.HELD;
+            var tracking = new BuildTracking(identity, null);
+            var prior = buildJobs.putIfAbsent(identity.execution().jobName(), tracking);
+            if (prior != null) {
+                if (!identity.equals(prior.identity())) return BuildReconciliation.HELD;
+                tracking = prior;
+            }
+            recordConservedBuildStop(identity, cancelled ? BuildStopKind.CANCELLED : BuildStopKind.NEVER_STARTED);
+            restoreBuildTracking(tracking);
+            synchronized (idLock) {
+                if (identity.execution().execId() >= nextExecId) nextExecId = Math.incrementExact(identity.execution().execId());
+            }
+            var callback = new KubernetesJobCompletionCallback();
+            return (cancelled ? callback.settleConservedCancellation(identity.execution())
+                    : callback.settleConservedNeverStarted(identity.execution(), pairId))
+                    ? BuildReconciliation.PROCESSED : BuildReconciliation.HELD;
+        } catch (Exception unavailable) {
+            log.warn("Registered build reconciliation is unresolved; pair retained", unavailable);
+            return BuildReconciliation.HELD;
+        }
+    }
+
     /**
      * Whether a pair with no surviving Job may have its DB state changed at startup.
      *
-     * <p>"No Job in the listing" is controller-absence evidence, but only half of what is
-     * needed. A Pod can outlive its Job — deleting a Job with Background propagation removes
-     * the owner first and reaps dependents afterwards, and a crash in that window leaves
-     * exactly this state. Both reconciliation branches are replacement authorizations:
-     * resetting an ENQUEUED pair makes it dispatchable again, and marking a RUNNING pair
-     * failed gives it an {@code end_time} and so makes it eligible for an automatic rerun.
-     * Resetting an ENQUEUED pair while a Pod for that pair still runs produces two
-     * executions writing results for one pair. RUNNING pairs with no attributable Job are
-     * left unresolved regardless of this census because pod absence is not terminal solver
-     * evidence.
-     *
-     * <p>Identified by pair id rather than execution id because that is all a pair with no
-     * Job offers. A pair id is stable across reruns, so this over-matches — pods of earlier
-     * attempts count too. Over-matching is the safe direction: it can only withhold a
-     * transition, never authorize one.
+     * <p>A Job can disappear before its Pods. A pair id also covers earlier attempts,
+     * so the census deliberately over-matches: it may withhold a transition but must
+     * not authorize a replacement while another execution can still write. RUNNING
+     * pairs without an attributable Job remain scientifically unresolved; a conserved
+     * cancellation may finish physical cleanup without assigning a result.
      */
     private boolean reconciledPairIsSafe(int pairId, String intendedTransition) {
         PodPhaseView.Census census = censusForPair(pairId);
@@ -3121,6 +3266,10 @@ public class KubernetesNativeBackend implements Backend {
         rebuildTrackingFromJob(job, pods);
         KubernetesJobCompletionCallback callback =
             new KubernetesJobCompletionCallback();
+        if (KubernetesBuildLaunchFence.isFenced(job)
+                && job.getMetadata().getLabels().containsKey(KubernetesBuildStopObserver.ARTIFACT_LABEL)) {
+            return callback.onJobStuckPending(execution, "Recovering a fenced initial build launch");
+        }
         // Reached only for Jobs already established as controller-spent by the caller, so
         // the choice here is purely which terminal condition it carries.
         if (hasTrueCondition(job, "Complete")) {
@@ -3138,6 +3287,7 @@ public class KubernetesNativeBackend implements Backend {
         }
 
         // Pair and output directory first, then the identity that grants ownership of them.
+        rememberBuild(job);
         ExecutionRef execution = ExecutionRef.fromJob(execId, job);
         execIdToPairId.put(execId, pairId);
         // Null (no label: a Job from before #185) is stored as absent, i.e. unfenced.
@@ -3644,7 +3794,9 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     private void deleteKubernetesJob(Job job) {
-        ensureKubernetesJobGone(getJobName(job));
+        var identity = job == null ? null : rememberBuild(job);
+        if (identity == null) ensureKubernetesJobGone(getJobName(job));
+        else ensureKubernetesJobGone(identity.execution());
     }
 
     /**
@@ -3663,28 +3815,88 @@ public class KubernetesNativeBackend implements Backend {
      * @return true when the Job is confirmed absent afterwards
      */
     private boolean ensureKubernetesJobGone(String jobName) {
+        if (jobName == null) return true;
+        BuildTracking build = buildJobs.get(jobName);
+        return ensureKubernetesJobGone(jobName, build == null ? null : build.identity().execution());
+    }
+
+    private boolean ensureKubernetesJobGone(ExecutionRef expected) {
+        return ensureKubernetesJobGone(expected.jobName(), expected);
+    }
+
+    private boolean ensureKubernetesJobGone(String jobName, ExecutionRef expected) {
         if (jobName == null) {
             return true;
         }
         if (kubernetesClient == null) {
             return false;
         }
-        requestForegroundDeletion(jobName);
+        if (!requestForegroundDeletion(jobName, expected)) return false;
         // The delete RESULT is deliberately not consulted. A non-empty StatusDetails list
         // means "the API accepted the request", and under Foreground propagation that is
         // returned at the exact moment the Job is still present with its finalizer
         // attached. This method used to return true on that result without reading, so it
         // answered a different question from the one its name asks. Only a read can
         // answer this one.
-        return !kubernetesJobExists(jobName);
+        boolean gone = !kubernetesJobExists(jobName);
+        if (gone) {
+            BuildTracking build = buildJobs.get(jobName);
+            if (build != null && (expected == null || expected.equals(build.identity().execution()))) {
+                build.resourceGone = true;
+                retireBuildTracking(build);
+            }
+        }
+        return gone;
     }
 
     /**
-     * Asks the API server to delete a Job with Foreground propagation, without reading back.
+     * Requests an owned stop, then Foreground deletion after build stop proof commits.
      * Failures are logged, not thrown: whoever needs the outcome reads the Job afterwards.
      */
-    private void requestForegroundDeletion(String jobName) {
+    private boolean requestForegroundDeletion(String jobName) {
+        BuildTracking build = buildJobs.get(jobName);
+        return requestForegroundDeletion(jobName, build == null ? null : build.identity().execution());
+    }
+
+    private boolean requestForegroundDeletion(String jobName, ExecutionRef expected) {
         try {
+            Job observed = kubernetesClient.batch().v1().jobs().inNamespace(namespace).withName(jobName).get();
+            var known = buildJobs.get(jobName);
+            if (expected != null && known != null && !expected.equals(known.identity().execution())) return false;
+            if (observed != null) {
+                if (expected != null && !expected.equals(ExecutionRef.fromJob(expected.execId(), observed))) return false;
+                var identity = rememberBuild(observed);
+                if (identity != null) {
+                    if (isControllerSpent(observed)) {
+                        if (!conserveBuildStop(identity, observed)) return false;
+                        if (KubernetesBuildPodRetention.isRetained(observed)) {
+                            KubernetesBuildPodRetention.release(kubernetesClient, namespace, identity, observed);
+                        }
+                    } else if (observed.getMetadata().getGeneration() != null
+                            && observed.getMetadata().getGeneration() == 1L
+                            && observed.getSpec() != null && Boolean.TRUE.equals(observed.getSpec().getSuspend())) {
+                        observed = KubernetesBuildUnstartedObserver.record(kubernetesClient, namespace, identity, observed);
+                        recordConservedBuildStop(identity, BuildStopKind.NEVER_STARTED);
+                    } else {
+                        KubernetesBuildCancellation.request(kubernetesClient, namespace, identity, observed);
+                        return false;
+                    }
+                    var resource = kubernetesClient.batch().v1().jobs().inNamespace(namespace).resource(observed);
+                    if (!(resource instanceof io.fabric8.kubernetes.client.extension.ExtensibleResource<?>)) {
+                        throw new IllegalStateException("Kubernetes client cannot lock build cleanup to its observed resource version");
+                    }
+                    @SuppressWarnings("unchecked")
+                    var versioned = (io.fabric8.kubernetes.client.extension.ExtensibleResource<Job>) resource;
+                    versioned.withPropagationPolicy(DeletionPropagation.FOREGROUND)
+                        .lockResourceVersion(observed.getMetadata().getResourceVersion()).delete();
+                    return true;
+                }
+                if (known != null) return false;
+            } else if (known != null) {
+                return restoreConservedBuildStop(known);
+            } else if (expected != null) {
+                return true;
+            }
             // Foreground, explicitly.
             //
             // fabric8 6.10.0 sends Background when no policy is given
@@ -3704,13 +3916,122 @@ public class KubernetesNativeBackend implements Backend {
                 .withName(jobName)
                 .withPropagationPolicy(DeletionPropagation.FOREGROUND)
                 .delete();
+            return true;
         } catch (Exception e) {
             log.warn("Failed to delete Kubernetes Job: " + jobName, e);
+            return false;
+        }
+    }
+
+    private KubernetesBuildStopObserver.Identity rememberBuild(Job job) {
+        var identity = KubernetesBuildStopObserver.identify(namespace, job);
+        if (identity == null) return null;
+        String output = job.getMetadata().getAnnotations() == null ? null
+                : job.getMetadata().getAnnotations().get(OUTPUT_DIR_ANNOTATION);
+        var prior = buildJobs.putIfAbsent(identity.execution().jobName(), new BuildTracking(identity, output));
+        if (prior != null && !prior.identity().equals(identity)) {
+            throw new IllegalStateException("Build Job name now refers to a different execution");
+        }
+        return identity;
+    }
+
+    private boolean conserveBuildStop(KubernetesBuildStopObserver.Identity identity, Job observed) {
+        try {
+            if (!isControllerSpent(observed)) return false;
+            var pods = KubernetesBuildPodRetention.isRetained(observed)
+                    ? KubernetesBuildPodRetention.observe(kubernetesClient, namespace, identity, observed)
+                    : kubernetesClient.pods().inNamespace(namespace).withLabels(Map.of(
+                        MANAGED_LABEL, "true", EXEC_ID_LABEL, Integer.toString(identity.execution().execId()))).list();
+            if (pods != null && pods.getItems() != null && pods.getItems().isEmpty()) {
+                if (KubernetesBuildCancellation.isRequested(observed)) {
+                    KubernetesBuildStopObserver.requireCancellationMatches(namespace, identity, observed,
+                        KubernetesBuildStopObserver.conservedReceipt(namespace, identity));
+                }
+                return restoreTerminatedBuildStop(identity);
+            }
+            var receipt = KubernetesBuildStopObserver.record(namespace, identity, observed, pods);
+            recordConservedBuildStop(identity, KubernetesBuildStopObserver.isCancelled(receipt) ? BuildStopKind.CANCELLED : BuildStopKind.TERMINATED);
+            return true;
+        } catch (Exception failure) {
+            log.warn("Build termination evidence is unresolved; Job retained for retry", failure);
+            return false;
+        }
+    }
+
+    private boolean conserveBuildStops(int execId) {
+        for (BuildTracking tracking : buildJobs.values()) {
+            var identity = tracking.identity();
+            if (identity.execution().execId() != execId) continue;
+            if (tracking.stopKind != null) continue;
+            try {
+                Job current = kubernetesClient.batch().v1().jobs().inNamespace(namespace)
+                    .withName(identity.execution().jobName()).get();
+                if (current == null) {
+                    if (!restoreConservedBuildStop(tracking)) return false;
+                } else if (!identity.equals(KubernetesBuildStopObserver.identify(namespace, current))) {
+                    return false;
+                } else if (isControllerSpent(current)) {
+                    if (!conserveBuildStop(identity, current)) return false;
+                } else {
+                    if (!KubernetesBuildUnstartedObserver.hasConservedReceipt(namespace, identity)) return false;
+                    KubernetesBuildUnstartedObserver.record(kubernetesClient, namespace, identity, current);
+                    recordConservedBuildStop(identity, BuildStopKind.NEVER_STARTED);
+                }
+            } catch (Exception unavailable) {
+                log.warn("Could not conserve build termination evidence; capacity retained", unavailable);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void recordConservedBuildStop(KubernetesBuildStopObserver.Identity identity, BuildStopKind kind) {
+        BuildTracking build = buildJobs.get(identity.execution().jobName());
+        if (build == null || !identity.equals(build.identity())) throw new IllegalStateException("Build stop tracking differs");
+        synchronized (build) {
+            if (build.stopKind != null && build.stopKind != kind) throw new IllegalStateException("Build stop kind differs");
+            build.stopKind = kind;
+        }
+    }
+
+    private boolean restoreConservedBuildStop(BuildTracking build) throws java.sql.SQLException {
+        if (build.stopKind != null) return true;
+        if (KubernetesBuildUnstartedObserver.hasConservedReceipt(namespace, build.identity())) {
+            recordConservedBuildStop(build.identity(), BuildStopKind.NEVER_STARTED);
+            return true;
+        }
+        return restoreTerminatedBuildStop(build.identity());
+    }
+
+    private boolean restoreTerminatedBuildStop(KubernetesBuildStopObserver.Identity identity) throws java.sql.SQLException {
+        var receipt = KubernetesBuildStopObserver.conserveExisting(namespace, identity);
+        if (receipt == null) return false;
+        recordConservedBuildStop(identity, KubernetesBuildStopObserver.isCancelled(receipt) ? BuildStopKind.CANCELLED : BuildStopKind.TERMINATED);
+        return true;
+    }
+
+    private void retireBuildTracking(BuildTracking build) {
+        if (build.stopKind != null && build.resourceGone && build.accountingSettled) {
+            buildJobs.remove(build.identity().execution().jobName(), build);
+        }
+    }
+
+    private void restoreBuildTracking(BuildTracking tracking) {
+        var identity = tracking.identity(); int execId = identity.execution().execId();
+        String currentUid = execIdToJobUid.get(execId);
+        if (currentUid != null && !currentUid.equals(identity.execution().jobUid())) return;
+        String current = execIdToJobName.putIfAbsent(execId, identity.execution().jobName());
+        if (current != null && !current.equals(identity.execution().jobName())) return;
+        execIdToJobUid.putIfAbsent(execId, identity.execution().jobUid());
+        execIdToPairId.putIfAbsent(execId, identity.pairId());
+        execIdToAttemptNo.putIfAbsent(execId, identity.attemptNo());
+        if (tracking.outputDirectory() != null) {
+            execIdToOutputDir.putIfAbsent(execId, Paths.get(tracking.outputDirectory()));
         }
     }
 
     /**
-     * Starts the foreground deletion of a tracked execution's Job and records when, so that
+     * Requests a tracked execution's stop and records when, so that
      * its {@link #killPairConfirmed} waits from now rather than from its turn in the batch.
      * Never evidence of anything: tracking and accounting are untouched until the
      * confirmation establishes that the execution stopped.
@@ -3727,8 +4048,9 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     /**
-     * Waits, until {@code deadlineNanos}, for a Job whose foreground deletion has been
-     * requested to disappear. Reads fail closed exactly as {@link #kubernetesJobExists} does:
+     * Waits, until {@code deadlineNanos}, for a Job whose stop has been requested
+     * to disappear. Known builds advance their evidence-preserving cleanup.
+     * Reads fail closed exactly as {@link #kubernetesJobExists} does:
      * a read that cannot see the API counts as "still there".
      *
      * <p>Runs on real time, not {@code clock}: a test that freezes the clock must not be able
@@ -3737,7 +4059,7 @@ public class KubernetesNativeBackend implements Backend {
      * @return true once the Job is confirmed absent; false if it outlasted the wait or the
      *         thread was interrupted
      */
-    private boolean awaitKubernetesJobGone(String jobName, long deadlineNanos) {
+    private boolean awaitKubernetesJobGone(String jobName, long deadlineNanos, ExecutionRef expected) {
         while (System.nanoTime() < deadlineNanos) {
             try {
                 Thread.sleep(Math.max(1L, killConfirmPollMillis));
@@ -3745,7 +4067,7 @@ public class KubernetesNativeBackend implements Backend {
                 Thread.currentThread().interrupt();
                 return false;
             }
-            if (!kubernetesJobExists(jobName)) {
+            if (expected == null ? !kubernetesJobExists(jobName) : ensureKubernetesJobGone(expected)) {
                 return true;
             }
         }
@@ -3856,6 +4178,8 @@ public class KubernetesNativeBackend implements Backend {
         long waitDeadlineNanos = (stopRequested != null ? stopRequested : System.nanoTime())
             + TimeUnit.MILLISECONDS.toNanos(killConfirmWaitMillis);
         String jobName = execIdToJobName.get(execId);
+        BuildTracking build = jobName == null ? null : buildJobs.get(jobName);
+        ExecutionRef expected = build == null ? trackedExecution(execId) : build.identity().execution();
         if (jobName == null) {
             // Absent local bookkeeping is NOT proof that the execution stopped. This is
             // exactly the state left by a restart or partial state loss, which is when a
@@ -3940,15 +4264,14 @@ public class KubernetesNativeBackend implements Backend {
             return KillOutcome.UNPROVEN;
         }
 
-        // A running pod's Job is still present right after the delete: foreground propagation
-        // keeps it behind its finalizer until the pod is gone. So wait, bounded, for that to
-        // happen before calling the kill unproven; the pod normally terminates well inside
-        // its grace period.
-        if (!ensureKubernetesJobGone(jobName)
-                && !awaitKubernetesJobGone(jobName, waitDeadlineNanos)) {
+        // Foreground deletion can remain pending while Pods terminate. Builds first
+        // conserve their deadline termination proof, then release retained evidence
+        // and request deletion. Both paths use the same bounded confirmation wait.
+        if (!(build == null ? ensureKubernetesJobGone(jobName) : ensureKubernetesJobGone(expected))
+                && !awaitKubernetesJobGone(jobName, waitDeadlineNanos, build == null ? null : expected)) {
             log.error(
                 "Kubernetes Job " + jobName + " (execId " + execId + ") is still present" +
-                " " + (killConfirmWaitMillis / 1000) + " s after its foreground delete was" +
+                " " + (killConfirmWaitMillis / 1000) + " s after its stop was" +
                 " requested; refusing to release its accounting because a pod for it may" +
                 " still execute and a replacement could then run twice."
             );
@@ -3974,7 +4297,11 @@ public class KubernetesNativeBackend implements Backend {
             return KillOutcome.UNPROVEN;
         }
 
-        recordExecutionStopped(trackedExecution(execId), execId, "kill of " + jobName);
+        if (expected != null && !ownsTracking(expected)) {
+            log.warn("Execution ownership changed during stop confirmation; preserving current tracking for " + execId);
+            return KillOutcome.UNPROVEN;
+        }
+        recordExecutionStopped(expected, execId, "kill of " + jobName);
         execIdToJobName.remove(execId);
         execIdToJobUid.remove(execId);
         execIdToPairId.remove(execId);
@@ -4060,6 +4387,7 @@ public class KubernetesNativeBackend implements Backend {
             }
 
             for (Job job : list.getItems()) {
+                rememberBuild(job);
                 if (!isControllerSpent(job)) {
                     log.info(
                         "Job " + getJobName(job) + " for exec-id " + execId +
@@ -4100,6 +4428,7 @@ public class KubernetesNativeBackend implements Backend {
             );
             return Backend.KillOutcome.UNPROVEN;
         }
+        if (!conserveBuildStops(execId)) return Backend.KillOutcome.UNPROVEN;
         return Backend.KillOutcome.CONFIRMED_SAFE;
     }
 
@@ -4133,10 +4462,37 @@ public class KubernetesNativeBackend implements Backend {
                 .jobs()
                 .inNamespace(namespace)
                 .withLabel(MANAGED_LABEL, "true")
+                .withoutLabel(KubernetesBuildStopObserver.ARTIFACT_LABEL)
                 .withPropagationPolicy(DeletionPropagation.FOREGROUND)
                 .delete();
         } catch (Exception e) {
             log.error("Failed to request deletion of all Kubernetes jobs", e);
+        }
+
+        // The bulk selector excludes builds. Recover even untracked build Jobs so
+        // their receipt checks and accounting cannot be bypassed after a restart.
+        boolean buildInventoryKnown = true;
+        try {
+            JobList inventory = kubernetesClient.batch().v1().jobs().inNamespace(namespace)
+                .withLabel(MANAGED_LABEL, "true").list();
+            if (inventory == null || inventory.getItems() == null) {
+                buildInventoryKnown = false;
+            } else {
+                for (Job job : inventory.getItems()) {
+                    if (job == null || job.getMetadata() == null) {
+                        buildInventoryKnown = false;
+                        continue;
+                    }
+                    var identity = rememberBuild(job);
+                    if (identity != null) {
+                        restoreBuildTracking(buildJobs.get(identity.execution().jobName()));
+                        restoreSubmissionSlot(identity.execution().execId(), true);
+                    }
+                }
+            }
+        } catch (Exception unknown) {
+            buildInventoryKnown = false;
+            log.warn("Could not inventory build Jobs during bulk stop; completion is unverified", unknown);
         }
 
         // Then decide PER EXECUTION. This method used to call releaseAllSlots() and clear
@@ -4188,7 +4544,7 @@ public class KubernetesNativeBackend implements Backend {
             "killAll complete: " + released + " execution(s) confirmed stopped and" +
             " released, " + retained + " retained pending verification"
         );
-        return retained == 0;
+        return retained == 0 && buildInventoryKnown;
     }
 
     /**
@@ -4299,6 +4655,7 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
 
+                rememberBuild(job);
                 boolean finished = false;
                 if (job.getStatus() != null) {
                     Integer succeeded = job.getStatus().getSucceeded();
@@ -4313,6 +4670,7 @@ public class KubernetesNativeBackend implements Backend {
                 }
                 activeIds.add(execId);
             }
+            buildJobs.values().forEach(b -> activeIds.add(b.identity().execution().execId()));
             return activeIds;
         } catch (Exception e) {
             log.error("Failed to query active execution IDs from Kubernetes", e);
@@ -4764,7 +5122,12 @@ public class KubernetesNativeBackend implements Backend {
 
         @Override
         public boolean onJobComplete(ExecutionRef execution) {
-            return ingestCompletion(execution, true);
+            if (!ingestCompletion(execution, true)) return false;
+            BuildTracking build = buildJobs.get(execution.jobName());
+            if (build == null || !build.identity().execution().equals(execution)) return true;
+            if (!ensureKubernetesJobGone(execution)) return false;
+            retireBuildTracking(build);
+            return true;
         }
 
         /**
@@ -4810,7 +5173,18 @@ public class KubernetesNativeBackend implements Backend {
             // After the pair: resolvePairId may refill the attempt from the Job's label.
             Integer attemptNo = resolveAttemptNo(execution);
 
+            BuildTracking build = buildJobs.get(jobName);
             try {
+                if (!conserveBuildStops(execution.execId())) {
+                    recordUnverified(execution.execId(), "build completion has no conserved termination evidence");
+                    return false;
+                }
+                if (build != null && build.identity().execution().equals(execution) && build.stopKind == BuildStopKind.NEVER_STARTED) {
+                    return settleConservedNeverStarted(execution, pairId);
+                }
+                if (build != null && build.identity().execution().equals(execution) && build.stopKind == BuildStopKind.CANCELLED) {
+                    return settleConservedCancellation(execution);
+                }
                 // Guard: skip DB update when the pair row has disappeared or the
                 // job is no longer submit-eligible. Without this check a K8s job
                 // that completes after pause/kill/delete writes a status into a
@@ -5097,18 +5471,28 @@ public class KubernetesNativeBackend implements Backend {
             return onJobComplete(execution);
         }
 
+        private boolean settleConservedNeverStarted(ExecutionRef execution, int pairId) {
+            if (!ensureKubernetesJobGone(execution) || observeExecutionSafety(execution.execId()) != KillOutcome.CONFIRMED_SAFE) {
+                recordUnverified(execution.execId(), "non-execution cleanup is unresolved", true);
+                return false;
+            }
+            return settleNeverStarted(execution, pairId, "Build initial launch was fenced before execution");
+        }
+
+        private boolean settleConservedCancellation(ExecutionRef execution) {
+            if (!ensureKubernetesJobGone(execution) || observeExecutionSafety(execution.execId()) != KillOutcome.CONFIRMED_SAFE) {
+                recordUnverified(execution.execId(), "cancelled build cleanup is unresolved", true);
+                return false;
+            }
+            // The intervention owner settles the pair; cancelled output supplies no scientific result.
+            releaseAccountingIfSafe(execution, "cancelled build cleanup for " + execution);
+            return !ownsTracking(execution);
+        }
+
         /**
-         * A pod that has waited past the timeout without starting.
-         *
-         * <p>This is lifecycle evidence that the pod did not start, not scientific evidence
-         * of a run-script result or stage. The Job is removed so it cannot start later. Once
-         * the absence of a status.json is proven, the pair is queued again once, or filed
-         * ERROR_SUBMIT_FAIL when its automatic retry is spent; no result or stage is written.
-         * If a status.json may exist, it goes through completion ingestion instead.
-         *
-         * <p>The Kubernetes Job is deleted first. Left alone it would keep the pod pending,
-         * and if capacity later appeared the pod would run and write results for a pair
-         * StarExec has already accounted for.
+         * Settles a timed-out pending execution only after its Job cannot start later.
+         * Provider non-execution proof bypasses untrusted status files. Ordinary jobs
+         * retain the existing status-visibility and single automatic retry contract.
          */
         @Override
         public boolean onJobStuckPending(ExecutionRef execution, String reason) {
@@ -5144,7 +5528,23 @@ public class KubernetesNativeBackend implements Backend {
                 return false;
             }
 
+            BuildTracking build = buildJobs.get(jobName);
             try {
+                if (build != null && build.identity().execution().equals(execution) && build.stopKind == null) {
+                    if (org.starexec.data.database.SolverBuildArtifacts.findStopReceipt(
+                            build.identity().pairId(), build.identity().attemptNo()).isPresent()) {
+                        if (!restoreConservedBuildStop(build)) return false;
+                    } else {
+                        Job observed = kubernetesClient.batch().v1().jobs().inNamespace(namespace).withName(jobName).get();
+                        if (KubernetesBuildCancellation.isRequested(observed) && !conserveBuildStop(build.identity(), observed)) return false;
+                    }
+                }
+                if (build != null && build.identity().execution().equals(execution) && build.stopKind == BuildStopKind.NEVER_STARTED) {
+                    return settleConservedNeverStarted(execution, pairId);
+                }
+                if (build != null && build.identity().execution().equals(execution) && build.stopKind == BuildStopKind.CANCELLED) {
+                    return settleConservedCancellation(execution);
+                }
                 JobPairs.PairStatusLookupResult lookup = JobPairs.getPairStatusLookup(pairId);
                 if (lookup.isMissing()) {
                     log.debug(
@@ -5216,6 +5616,12 @@ public class KubernetesNativeBackend implements Backend {
                 // would spend the pair's one retry and let the next attempt clear whatever
                 // evidence is there. Nothing ran long enough to write a file that is merely
                 // not visible yet, so no visibility window.
+                if (build != null && build.identity().execution().equals(execution) && build.stopKind == BuildStopKind.NEVER_STARTED) {
+                    return settleNeverStarted(execution, pairId, "Build initial launch was fenced before execution");
+                }
+                if (build != null && build.identity().execution().equals(execution) && build.stopKind == BuildStopKind.CANCELLED) {
+                    return settleConservedCancellation(execution);
+                }
                 Path statusPath = resolveStatusPath(execution);
                 if (statusPath == null || !confirmedAbsent(statusPath)) {
                     log.info(
@@ -5382,6 +5788,7 @@ public class KubernetesNativeBackend implements Backend {
                     );
                     return null;
                 }
+                rememberBuild(job);
 
                 String pairIdValue = job.getMetadata().getLabels().get(PAIR_ID_LABEL);
                 if (pairIdValue == null || pairIdValue.trim().isEmpty()) {

@@ -2600,17 +2600,16 @@ public class Benchmarks {
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareStatement("SELECT * FROM starexec.GetRecycledBenchmarkPaths(?)");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetRecycledBenchmarkIds(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 
-			while (results.next()) {
-				Util.safeDeleteDirectory(results.getString("path"));
-			}
+			List<Integer> selected = new ArrayList<>();
+			while (results.next()) selected.add(results.getInt("id"));
+			Common.safeClose(results);
 			Common.safeClose(procedure);
-			procedure = con.prepareStatement("SELECT starexec.SetRecycledBenchmarksToDeleted(?)");
-			procedure.setInt(1, userId);
-			procedure.execute();
+			// Each deletion must pass its database guard before touching its files.
+			for (int id : selected) if (!Benchmarks.delete(id)) return false;
 
 			return true;
 		} catch (Exception e) {
