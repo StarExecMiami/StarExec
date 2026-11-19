@@ -84,7 +84,7 @@ spec:
             - -c
             - |
               echo "Ensuring directories exist and permissions are correct..."
-              mkdir -p /app/data /app/sandbox /app/backend /app/work
+              mkdir -p /app/data /app/sandbox /app/backend /app/work /var/lib/starexec/uploads-private
 {{- if $embeddedPostgres }}
               mkdir -p /var/lib/postgresql/data
 {{- end }}
@@ -107,11 +107,12 @@ spec:
                   fi
                 done
               }
-              fix_owner {{ .Values.security.app.runAsUser }}:{{ .Values.security.app.runAsGroup }} /app/data /app/sandbox /app/backend /app/work
+              fix_owner {{ .Values.security.app.runAsUser }}:{{ .Values.security.app.runAsGroup }} /app/data /app/sandbox /app/backend /app/work /var/lib/starexec/uploads-private
 {{- if $embeddedPostgres }}
               fix_owner 999:999 /var/lib/postgresql/data
 {{- end }}
               chmod 0770 /app/data /app/sandbox /app/backend /app/work
+              chmod 0700 /var/lib/starexec/uploads-private
 {{- if $embeddedPostgres }}
               chmod 0700 /var/lib/postgresql/data
 {{- end }}
@@ -132,6 +133,8 @@ spec:
               mountPath: /app/backend
             - name: work
               mountPath: /app/work
+            - name: upload-staging
+              mountPath: /var/lib/starexec/uploads-private
 {{- if $embeddedPostgres }}
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
@@ -163,6 +166,8 @@ spec:
 {{- end }}
 {{- end }}
         - name: tmp
+          emptyDir: {}
+        - name: upload-staging
           emptyDir: {}
 {{- if and (eq .Values.backend.type "podman") .Values.podman.containerSocket.enabled }}
         - name: podman-socket
@@ -291,6 +296,8 @@ spec:
 {{- end }}
             - name: STAREXEC_DATA_DIR
               value: "/app/data"
+            - name: STAREXEC_UPLOAD_STAGING_DIR
+              value: "/var/lib/starexec/uploads-private"
             - name: STAREXEC_SANDBOX_DIR
               value: "/app/sandbox"
             - name: STAREXEC_LOCAL_CONCURRENCY
@@ -341,6 +348,8 @@ spec:
               mountPath: /app/work
             - name: tmp
               mountPath: /tmp
+            - name: upload-staging
+              mountPath: /var/lib/starexec/uploads-private
 {{- if and (eq .Values.backend.type "podman") .Values.podman.containerSocket.enabled }}
             - name: podman-socket
               mountPath: /run/podman/podman.sock

@@ -185,6 +185,7 @@ services:
 
       # Data directories
       STAREXEC_DATA_DIR: /app/data
+      STAREXEC_UPLOAD_STAGING_DIR: /var/lib/starexec/uploads-private
       STAREXEC_SANDBOX_DIR: /app/sandbox
 
       # Backend Configuration
