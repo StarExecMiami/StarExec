@@ -106,8 +106,7 @@ public final class SolverBuildCreations {
                         +" AND r.resource_key=? AND r.observed_identity=? AND r.root_path=? AND r.capacity_bytes=? AND r.inode_limit=?"
                         +" AND c.owner_id=a.origin_owner_id AND c.path=a.staging_path AND c.limit_bytes>=r.capacity_bytes"
                         +" AND c.charged_bytes=c.limit_bytes AND c.verified_at IS NULL AND c.released_at IS NULL"
-                        +" AND u.disk_size>=(SELECT COALESCE(sum(charged_bytes),0) FROM starexec.solver_build_storage_charges"
-                        +" WHERE owner_id=u.id AND released_at IS NULL) FOR SHARE OF a,l,r,c,u NOWAIT")) {
+                        +" AND u.disk_size>=starexec.active_execution_storage_bytes(u.id) FOR SHARE OF a,l,r,c,u NOWAIT")) {
                     Object[] values={build.artifactId(),build.token(),resource.filesystemKey(),resource.identity(),resource.root().toString(),resource.capacityBytes(),resource.inodeLimit()};
                     for (int i=0;i<values.length;i++) locked.setObject(i+1,values[i]);
                     try (var rows=locked.executeQuery()) { if (!rows.next()) throw new Refused(); }
@@ -180,8 +179,7 @@ public final class SolverBuildCreations {
                         +" AND r.observed_identity=? AND r.root_path=? AND r.capacity_bytes=? AND r.inode_limit=?"
                         +" AND c.owner_id=a.origin_owner_id AND c.path=a.staging_path AND c.limit_bytes>=r.capacity_bytes"
                         +" AND c.charged_bytes=c.limit_bytes AND c.verified_at IS NULL AND c.released_at IS NULL"
-                        +" AND u.disk_size>=(SELECT COALESCE(sum(charged_bytes),0) FROM starexec.solver_build_storage_charges"
-                        +" WHERE owner_id=u.id AND released_at IS NULL)"
+                        +" AND u.disk_size>=starexec.active_execution_storage_bytes(u.id)"
                         +" AND NOT EXISTS (SELECT 1 FROM starexec.solver_build_release_decisions d WHERE d.artifact_id=a.id)"
                         +" FOR UPDATE OF a,l NOWAIT FOR SHARE OF r,c,u NOWAIT")) {
                     Object[] values={build.artifactId(),build.token(),build.pairId(),build.attemptNo(),build.source().toString(),

@@ -73,8 +73,7 @@ BEGIN
         OR _r.path IS DISTINCT FROM _staging OR _r.limit_bytes<=0
         OR _r.charged_bytes IS DISTINCT FROM _r.limit_bytes
         OR _r.verified_at IS NOT NULL OR _r.released_at IS NOT NULL THEN RETURN FALSE; END IF;
-    IF _usage<(SELECT COALESCE(sum(charged_bytes),0) FROM starexec.solver_build_storage_charges
-        WHERE owner_id=_a.origin_owner_id AND released_at IS NULL) THEN RETURN FALSE; END IF;
+    IF _usage<starexec.active_execution_storage_bytes(_a.origin_owner_id) THEN RETURN FALSE; END IF;
     RETURN starexec.bind_solver_build_execution(_pair,_attempt,_token,_engine);
 END;
 $$ LANGUAGE plpgsql;
