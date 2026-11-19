@@ -22,7 +22,12 @@ public class PartWrapper {
 	private void setFilenameFromHeaders() {
         for (String header : p.getHeader("content-disposition").split(";")) {
             if (header.trim().startsWith("filename=")) {
-                this.filePath = (header.substring(header.indexOf('=') + 1).trim().replace("\"", ""));
+                String filename = header.substring(header.indexOf('=') + 1).trim().replace("\"", "");
+                if (filename.contains("..") || filename.contains("/") || filename.contains("\\")
+                        || filename.contains(":") || filename.equals(".") || filename.indexOf('\0') >= 0) {
+                    throw new IllegalArgumentException("Uploaded filename must be a single safe path component");
+                }
+                this.filePath = filename;
                 return;
             }
         }
