@@ -9,6 +9,7 @@ on:
       - "Dockerfile"
       - "docker/migrations.sh"
       - "pom.xml"
+      - ".github/scripts/mvn_retry.py"
       - ".github/workflows/integration-test.yml"
   push:
     branches: [UMprod, dev, containerised]
@@ -18,6 +19,8 @@ on:
       - "Dockerfile"
       - "docker/migrations.sh"
       - "pom.xml"
+      - ".github/scripts/mvn_retry.py"
+      - ".github/workflows/integration-test.yml"
   workflow_dispatch:
 
 concurrency:
@@ -44,12 +47,20 @@ jobs:
         with:
           java-version: "17"
           distribution: "temurin"
-          cache: maven
+
+      - name: Cache Maven repository (verify-migrations)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-verify-migrations-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-verify-migrations-
+            ${{ runner.os }}-m2-
 
       - name: Build application WAR
         run: |
           cd starexec-app
-          mvn clean package -DskipTests -B -q
+          python3 ../.github/scripts/mvn_retry.py -- mvn clean package -DskipTests -B --no-transfer-progress
 
       - name: Verify runtime config excluded from WAR
         run: |
