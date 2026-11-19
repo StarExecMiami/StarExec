@@ -91,18 +91,13 @@
         }
       }
 
-      // Add message
+      // Add message (plain text by default; HTML requires explicit opt-in)
       if (config.message) {
-        if (
-          config.message.indexOf("<") > -1 ||
-          config.message.indexOf("&") > -1
-        ) {
-          // Message contains HTML/entities, use innerHTML
+        if (config.allowHtml === true) {
           var msgSpan = document.createElement("span");
           msgSpan.innerHTML = config.message;
           contentDiv.appendChild(msgSpan);
         } else {
-          // Plain text, use textContent for safety
           contentDiv.appendChild(document.createTextNode(config.message));
         }
       }

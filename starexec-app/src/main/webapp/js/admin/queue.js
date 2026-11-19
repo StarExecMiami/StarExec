@@ -13,7 +13,7 @@ $(document).ready(function() {
 
 	initDataTables();
 
-	document.getElementById('qName').innerHTML = document.getElementById(
+	document.getElementById('qName').textContent = document.getElementById(
 		"queueName").value;
 
 	var start_date = document.getElementById("start").value;
@@ -80,7 +80,7 @@ function InitUI() {
 				s = parseReturnCode(returnCode);
 				if (s) {
 					nodeTable.fnDraw();
-					document.getElementById('qName').innerHTML = queueName;
+					document.getElementById('qName').textContent = queueName;
 				}
 
 			},

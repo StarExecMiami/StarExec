@@ -548,20 +548,30 @@ function togglePlusMinus(addSiteButton) {
  */
 function editable(attribute) {
   $("#edit" + attribute).click(function () {
-    var old = $(this).html();
-    $(this)
-      .after(
-        '<td><input type="text" id="edit-' +
-          attribute +
-          '-field" value="' +
-          old +
-          '" />&nbsp;<button class="btn btn-secondary" id="save' +
-          attribute +
-          '">save</button>&nbsp;<button class="btn btn-secondary" id="cancel' +
-          attribute +
-          '">cancel</button>&nbsp;</td>'
-      )
-      .remove();
+    var old = $(this).text();
+    var $cell = $("<td>").append(
+      $("<input>", {
+        type: "text",
+        id: "edit-" + attribute + "-field",
+        val: old
+      }),
+      document.createTextNode("\u00a0"),
+      $("<button>", {
+        type: "button",
+        "class": "btn btn-secondary",
+        id: "save" + attribute,
+        text: "save"
+      }),
+      document.createTextNode("\u00a0"),
+      $("<button>", {
+        type: "button",
+        "class": "btn btn-secondary",
+        id: "cancel" + attribute,
+        text: "cancel"
+      }),
+      document.createTextNode("\u00a0")
+    );
+    $(this).after($cell).remove();
     $("#save" + attribute).click(function () {
       saveChanges(this, true, attribute, old);
     });
@@ -620,23 +630,16 @@ function saveChanges(obj, save, attr, old) {
         }
         s = parseReturnCode(returnCode);
         if (s) {
-          if (attr === "email") {
-            $(obj)
-              .closest("td")
-              .after('<td id="edit' + attr + '">' + old + "</td>")
-              .remove();
-          } else {
-            newVal = unmodifiedNewVal;
-            $(obj)
-              .closest("td")
-              .after('<td id="edit' + attr + '">' + newVal + "</td>")
-              .remove();
-          }
+          var displayVal = attr === "email" ? old : unmodifiedNewVal;
+          $(obj)
+            .closest("td")
+            .after($("<td>", { id: "edit" + attr, "data-editable": "true" }).text(displayVal))
+            .remove();
           editable(attr);
         } else {
           $(obj)
             .closest("td")
-            .after('<td id="edit' + attr + '">' + old + "</td>")
+            .after($("<td>", { id: "edit" + attr, "data-editable": "true" }).text(old))
             .remove();
           editable(attr);
         }
@@ -652,7 +655,7 @@ function saveChanges(obj, save, attr, old) {
     // Hide the input box and replace it with the table cell
     $(obj)
       .closest("td")
-      .after('<td id="edit' + attr + '">' + old + "</td>")
+      .after($("<td>", { id: "edit" + attr, "data-editable": "true" }).text(old))
       .remove();
     // Make the value editable again
     editable(attr);
