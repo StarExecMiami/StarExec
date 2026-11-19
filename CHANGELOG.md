@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Execution storage isolation and solver artifact lifecycle (`V0121`–`V0137`)**: Added an additive solver-artifact catalog, immutable build publication and stop-receipt fencing, dedicated ext4 storage inspection and PostgreSQL leases (`V0130`), durable creation/release/cleanup records, and ordinary job execution input/output reservations (`#499`, `#504`, `#505`), including fenced per-stage measurement ingestion, once-only output byte accounting, held-runtime verification, unified `/proc/self/mountinfo` parsing in `MountInfo`, and consistent `starexec.active_execution_storage_bytes(...)` admission guards.
-- **Private XML upload staging**: Added `PrivateUploadStage` and `STAREXEC_UPLOAD_STAGING_DIR` (`0700`, outside runner-writable roots and mount aliases) so `UploadJobXML` and `UploadSpaceXML` validate and extract archives in isolated per-upload directories and fail closed when unconfigured (`#503`).
+- **Private XML upload staging**: Added `PrivateUploadStage` and `STAREXEC_UPLOAD_STAGING_DIR` (`0700`, outside runner-writable roots and mount aliases) so `UploadJobXML` and `UploadSpaceXML` validate and extract archives in isolated per-upload directories and fail closed when unconfigured (`#503`), and provisioned `/var/lib/starexec/uploads-private` by default across `Dockerfile`, the Helm chart (app-pod-only `emptyDir`), `docker-compose.yml`, and `render.yaml.template` (`#506`).
 - **Git hygiene hooks**: Added `.githooks/pre-commit` and extended `.githooks/commit-msg` with `scripts/git_hygiene_guard.py` (and unit tests) to block staging private keys, dotenv secrets, or local tooling directories and prevent machine-local paths in commit messages (`#502`).
 - **Private job preparation**: Copy authorized ordinary-job inputs into reserved storage with durable identity checks and pre-engine restoration. Retain ownership after partial or uncertain preparation; dispatch remains separate.
 - **Job input snapshots**: Capture authorized input metadata for reserved ordinary-job attempts and recover their storage tokens after a controller restart. Runtime preparation and admission remain separate.
@@ -536,7 +536,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added Cluster MachineSpecs and overrides configuration for reproducible builds.
 - Initial implementation of the user Trash Bin/Recycle logic.
 
-[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.5.1...HEAD
+[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/StarExecMiami/StarExec/compare/v2.4.0...v2.6.0
 [2.5.1]: https://github.com/StarExecMiami/StarExec/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/StarExecMiami/StarExec/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/StarExecMiami/StarExec/compare/v2.3.0...v2.4.0
