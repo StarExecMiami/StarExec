@@ -27,20 +27,18 @@ public final class DedicatedStorageResource {
         }
     }
 
-    record Mount(long id, String device, Path root, Path point, String type,
-                 List<String> options, List<String> superOptions) { }
     record Capacity(long bytes, long inodes, String filesystemId) { }
 
     private final Path root;
     private final Limits limits;
     private final List<Path> protectedRoots;
-    private final Mount mount;
+    private final MountInfo.Mount mount;
     private final Capacity capacity;
     private final Object fileKey;
     private final String filesystemOptions;
 
     private DedicatedStorageResource(Path root, Limits limits, List<Path> protectedRoots,
-                                     Mount mount, Capacity capacity, Object fileKey, String filesystemOptions) {
+                                     MountInfo.Mount mount, Capacity capacity, Object fileKey, String filesystemOptions) {
         this.root = root;
         this.limits = limits;
         this.protectedRoots = protectedRoots;
@@ -75,8 +73,8 @@ public final class DedicatedStorageResource {
                     .equals(PosixFilePermissions.fromString("rwx------"))) {
                 throw new IOException("Execution storage requires a private identifiable root");
             }
-            List<Mount> mounts = mounts();
-            Mount mount = dedicatedMount(mounts, root);
+            List<MountInfo.Mount> mounts = MountInfo.mounts();
+            MountInfo.Mount mount = dedicatedMount(mounts, root);
             Object device = Files.getAttribute(root, "unix:dev", LinkOption.NOFOLLOW_LINKS);
             for (Path protectedRoot : protectedCopy) {
                 try (DescriptorDirectory checked = DescriptorDirectory.open(protectedRoot)) {
@@ -93,7 +91,7 @@ public final class DedicatedStorageResource {
                 throw new IOException("Execution storage capacity observations disagree");
             }
             if (!before.fileKey().equals(attributes(root).fileKey())
-                    || !mount.equals(dedicatedMount(mounts(), root))
+                    || !mount.equals(dedicatedMount(MountInfo.mounts(), root))
                     || !filesystemOptions.equals(fullOptions(mount.device()))) {
                 throw new IOException("Execution storage changed during inspection");
             }
@@ -122,7 +120,7 @@ public final class DedicatedStorageResource {
         return identity(root, mount, capacity, fileKey, filesystemOptions);
     }
 
-    static String identity(Path root, Mount mount, Capacity capacity, Object fileKey, String filesystemOptions) {
+    static String identity(Path root, MountInfo.Mount mount, Capacity capacity, Object fileKey, String filesystemOptions) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             digest.update(root.toString().getBytes(StandardCharsets.UTF_8));
@@ -155,70 +153,16 @@ public final class DedicatedStorageResource {
         return result;
     }
 
-    static List<Mount> mounts() throws IOException {
-        try (var stream = Files.newInputStream(Path.of("/proc/self/mountinfo"))) {
-            byte[] bytes = stream.readNBytes(1024 * 1024 + 1);
-            if (bytes.length > 1024 * 1024) throw new IOException("Mount table exceeds its inspection limit");
-            return parseMounts(new String(bytes, StandardCharsets.UTF_8));
-        }
-    }
-
-    static List<Mount> parseMounts(String text) throws IOException {
-        List<Mount> result = new ArrayList<>();
-        for (String line : text.lines().toList()) {
-            String[] fields = line.split(" ");
-            int separator = Arrays.asList(fields).indexOf("-");
-            if (separator < 6 || fields.length != separator + 4 || !fields[2].matches("[0-9]+:[0-9]+")) {
-                throw new IOException("Malformed kernel mount observation");
-            }
-            try {
-                long id = Long.parseLong(fields[0]);
-                Path root = Path.of(unescape(fields[3]));
-                Path point = Path.of(unescape(fields[4]));
-                String type = fields[separator + 1];
-                // Pseudo-filesystems such as nsfs can use an opaque root name.
-                if (id <= 0 || !point.isAbsolute() || !point.equals(point.normalize())
-                        || type.equals("ext4") && (!root.isAbsolute() || !root.equals(root.normalize()))) {
-                    throw new IllegalArgumentException("Invalid mount identity");
-                }
-                result.add(new Mount(id, fields[2], root, point, type,
-                        List.of(fields[5].split(",")), List.of(fields[separator + 3].split(","))));
-            } catch (IllegalArgumentException invalid) {
-                throw new IOException("Invalid kernel mount identity", invalid);
-            }
-        }
-        return List.copyOf(result);
-    }
-
-    private static String unescape(String value) throws IOException {
-        StringBuilder decoded = new StringBuilder();
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (c != '\\') { decoded.append(c); continue; }
-            if (i + 3 >= value.length()) throw new IOException("Truncated mount escape");
-            String octal = value.substring(i + 1, i + 4);
-            switch (octal) {
-                case "040" -> decoded.append(' ');
-                case "011" -> decoded.append('\t');
-                case "012" -> decoded.append('\n');
-                case "134" -> decoded.append('\\');
-                default -> throw new IOException("Invalid mount escape");
-            }
-            i += 3;
-        }
-        return decoded.toString();
-    }
-
-    static Mount dedicatedMount(List<Mount> mounts, Path root) throws IOException {
-        List<Mount> matching = mounts.stream().filter(m -> m.point().equals(root)).toList();
+    static MountInfo.Mount dedicatedMount(List<MountInfo.Mount> mounts, Path root) throws IOException {
+        List<MountInfo.Mount> matching = mounts.stream().filter(m -> m.point().equals(root)).toList();
         if (matching.size() != 1) throw new IOException("Execution storage must have one unambiguous dedicated mount");
-        Mount selected = matching.get(0);
+        MountInfo.Mount selected = matching.get(0);
         if (!selected.type().equals("ext4") || !selected.root().equals(root.getRoot())
                 || !selected.options().containsAll(List.of("rw", "nodev", "nosuid"))
                 || selected.options().contains("ro") || quotaMode(selected.options()) || quotaMode(selected.superOptions())) {
             throw new IOException("Execution storage requires a writable dedicated ext4 root with nodev and nosuid");
         }
-        for (Mount mount : mounts) {
+        for (MountInfo.Mount mount : mounts) {
             if (mount == selected) continue;
             if (mount.device().equals(selected.device()) || mount.point().startsWith(root)) {
                 throw new IOException("Execution storage has an alias or nested mount");

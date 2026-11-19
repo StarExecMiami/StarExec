@@ -294,12 +294,12 @@ class BuildExecutionRuntimeTest {
         put("mounts",mounts);put("nodes",nodes);assertThrows(IOException.class,()->runtime.verify(json()));
     }
     @Test void sourceMountResolutionUsesPathComponentsAndBindRoots() throws Exception {
-        var root=new DedicatedStorageResource.Mount(1,"0:1",Path.of("/"),Path.of("/"),"overlay",List.of("rw"),List.of("rw"));
-        var data=new DedicatedStorageResource.Mount(2,"8:2",Path.of("/physical/data"),Path.of("/app/data"),"ext4",List.of("rw"),List.of("rw"));
-        var selected=BuildExecutionRuntime.sourceMount(List.of(root,data),Path.of("/app/data/solver"));
+        var root=new MountInfo.Mount(1,"0:1",Path.of("/"),Path.of("/"),"overlay",List.of("rw"),List.of("rw"));
+        var data=new MountInfo.Mount(2,"8:2",Path.of("/physical/data"),Path.of("/app/data"),"ext4",List.of("rw"),List.of("rw"));
+        var selected=MountInfo.sourceMount(List.of(root,data),Path.of("/app/data/solver"));
         assertEquals(Path.of("/physical/data/solver"),selected.root().resolve(selected.point().relativize(Path.of("/app/data/solver"))));
-        assertEquals(root,BuildExecutionRuntime.sourceMount(List.of(root,data),Path.of("/app/database/solver")));
-        assertThrows(IOException.class,()->BuildExecutionRuntime.sourceMount(List.of(root,data,data),Path.of("/app/data/solver")));
+        assertEquals(root,MountInfo.sourceMount(List.of(root,data),Path.of("/app/database/solver")));
+        assertThrows(IOException.class,()->MountInfo.sourceMount(List.of(root,data,data),Path.of("/app/data/solver")));
     }
 
     @Test void deviceFilesCannotMasqueradeAsWritableStorageOrConversely() throws Exception {

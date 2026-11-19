@@ -50,7 +50,7 @@ public final class BuildArtifactStore {
                     || (((Number)before.get("mode")).intValue()&07777)!=0700) {
                 throw new IOException("Artifact storage requires application ownership and owner-only permissions");
             }
-            var mounts=DedicatedStorageResource.mounts();
+            var mounts=MountInfo.mounts();
             Location physical=location(mounts,root);
             for (Path runner:excluded) {
                 Path ancestor=runner;
@@ -62,7 +62,7 @@ public final class BuildArtifactStore {
                     }
                 }
             }
-            if (!before.equals(identity(root)) || !physical.equals(location(DedicatedStorageResource.mounts(),root))) {
+            if (!before.equals(identity(root)) || !physical.equals(location(MountInfo.mounts(),root))) {
                 throw new IOException("Artifact storage changed during observation");
             }
             return new BuildArtifactStore(root,excluded,before,physical);
@@ -98,11 +98,11 @@ public final class BuildArtifactStore {
         Path solver=solver(artifact);
         try (DescriptorDirectory ignored=DescriptorDirectory.open(solver)) {
             var before=identity(solver);
-            Location source=location(DedicatedStorageResource.mounts(),solver);
+            Location source=location(MountInfo.mounts(),solver);
             String node=Long.toUnsignedString(((Number)before.get("dev")).longValue())+":"
                     +Long.toUnsignedString(((Number)before.get("ino")).longValue())+":"
                     +Integer.toHexString(((Number)before.get("mode")).intValue());
-            if (!before.equals(identity(solver)) || !source.equals(location(DedicatedStorageResource.mounts(),solver))) {
+            if (!before.equals(identity(solver)) || !source.equals(location(MountInfo.mounts(),solver))) {
                 throw new IOException("Published solver identity changed during mount capture");
             }
             requireUnchanged();
@@ -114,8 +114,8 @@ public final class BuildArtifactStore {
         return value.toString().replace("\\","\\134").replace(" ","\\040").replace("\t","\\011").replace("\n","\\012");
     }
 
-    private static Location location(List<DedicatedStorageResource.Mount> mounts,Path path) throws IOException {
-        var mount=BuildExecutionRuntime.sourceMount(mounts,path);
+    private static Location location(List<MountInfo.Mount> mounts,Path path) throws IOException {
+        var mount=MountInfo.sourceMount(mounts,path);
         return new Location(mount.id(),mount.device(),mount.root().resolve(mount.point().relativize(path)));
     }
 
