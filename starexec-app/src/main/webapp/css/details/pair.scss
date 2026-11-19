@@ -1,3 +1,4 @@
+@use "../global/mixins" as m;
 @import "shared/prettyprint";
 
 #liveLogControls {
@@ -42,7 +43,7 @@
 	word-break: break-word;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	#wrapper {
 		#detailTable tr > * {
 			&:nth-child(1), &:nth-child(2) {

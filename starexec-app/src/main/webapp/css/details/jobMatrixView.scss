@@ -610,7 +610,7 @@ input:focus-visible {
   @include m.focus-ring;
 }
 
-@media (width <= 1024px) {
+@include m.tablet-down {
   .matrixControls {
     justify-content: flex-start;
   }
@@ -625,7 +625,7 @@ input:focus-visible {
   }
 }
 
-@media (width <= 768px) {
+@include m.mobile {
   .matrixControls {
     align-items: stretch;
     gap: s.$spacing-xs;
