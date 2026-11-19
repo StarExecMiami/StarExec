@@ -229,7 +229,7 @@ a.ui-button:active,
   color: $text-main-color !important;
 }
 
-@media (max-width: 767px) {
+@include mobile {
   .ui-dialog {
     width: calc(100vw - 16px) !important;
   }

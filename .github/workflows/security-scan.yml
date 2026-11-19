@@ -12,6 +12,7 @@ on:
       - 'package-lock.json'
       - 'dependency-check-suppressions.xml'
       - '.github/npm-audit-exceptions.json'
+      - '.github/scripts/mvn_retry.py'
       - '.github/scripts/npm_audit_gate.py'
       - '.github/workflows/security-scan.yml'
   push:
@@ -22,6 +23,7 @@ on:
       - 'package-lock.json'
       - 'dependency-check-suppressions.xml'
       - '.github/npm-audit-exceptions.json'
+      - '.github/scripts/mvn_retry.py'
       - '.github/scripts/npm_audit_gate.py'
       - 'starexec-app/**'
       - '.github/workflows/security-scan.yml'
@@ -56,7 +58,15 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'maven'
+
+      - name: Cache Maven repository (dependency-scan)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-dependency-scan-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-dependency-scan-
+            ${{ runner.os }}-m2-
 
       # Every npm package here is a devDependency, jQuery included, which does ship, so the
       # audit cannot simply omit dev dependencies. npm audit cannot set one advisory aside
@@ -103,14 +113,14 @@ jobs:
             # bootstrap. Subsequent runs restore the persisted database.
             NVD_KEY_OPTION=(-DnvdApiDelay=10000 -DnvdMaxRetryCount=10)
           fi
-          mvn -B dependency-check:update-only \
+          python3 .github/scripts/mvn_retry.py -- mvn -B --no-transfer-progress dependency-check:update-only \
             -DnvdValidForHours=24 \
             -DfailOnError=true \
             "${NVD_KEY_OPTION[@]}"
 
       - name: Run OWASP Dependency Check
         run: |
-          mvn -B dependency-check:aggregate \
+          python3 .github/scripts/mvn_retry.py -- mvn -B --no-transfer-progress dependency-check:aggregate \
             -DautoUpdate=false \
             -DfailOnError=true \
             -DfailBuildOnCVSS=7 \
@@ -173,12 +183,20 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'maven'
+
+      - name: Cache Maven repository (sast-scan)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-sast-scan-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-sast-scan-
+            ${{ runner.os }}-m2-
       
       - name: Build project for analysis
         run: |
           echo "Building project for CodeQL analysis..."
-          mvn clean package -DskipTests -q
+          python3 .github/scripts/mvn_retry.py -- mvn -B --no-transfer-progress clean package -DskipTests
       
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4
@@ -200,12 +218,20 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'maven'
+
+      - name: Cache Maven repository (license-inventory)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-license-inventory-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-license-inventory-
+            ${{ runner.os }}-m2-
       
       - name: Generate license inventory
         run: |
           echo "Generating an informational Maven dependency license inventory..."
-          mvn -B license:add-third-party
+          python3 .github/scripts/mvn_retry.py -- mvn -B --no-transfer-progress license:add-third-party
       
       - name: Upload license inventory
         if: always()

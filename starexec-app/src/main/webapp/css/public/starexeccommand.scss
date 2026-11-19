@@ -199,7 +199,7 @@ $container-max-width: s.$container-max-width;
   margin-bottom: auto;
   align-items: start;
 
-  @include m.tablet {
+  @include m.tablet-down {
     grid-template-columns: 240px minmax(0, 1fr);
   }
 

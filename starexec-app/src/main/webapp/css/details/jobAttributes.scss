@@ -95,7 +95,7 @@ td {
   background-color: c.$foreground-color;
 }
 
-@media (width <= 1024px) {
+@include m.tablet-down {
   #explorer {
     width: 100%;
     float: none;
@@ -112,7 +112,7 @@ td {
   }
 }
 
-@media (width <= 768px) {
+@include m.mobile {
   .attributesControls {
     flex-direction: column;
     align-items: flex-start;

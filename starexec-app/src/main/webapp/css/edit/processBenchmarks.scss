@@ -1,3 +1,5 @@
+@use "../global/mixins" as m;
+
 fieldset {						
 	width: 75%;	
 	margin-bottom: 30px;
@@ -35,7 +37,7 @@ tr th {
 	float:right;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	#processorSelectionTable td, #processorSelectionTable th {
 		width: 50%;
 	}
