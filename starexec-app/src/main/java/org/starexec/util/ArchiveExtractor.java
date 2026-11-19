@@ -203,7 +203,7 @@ public class ArchiveExtractor {
             // Safety limit exceeded - cleanup partial extraction
             log.warn(method, "Safety limit exceeded for archive: " + archivePath, e);
             cleanupOnFailure(extractDir);
-            throw new IOException("Archive exceeds safety limits: " + e.getMessage());
+            throw new IOException("Archive exceeds safety limits: " + e.getMessage(), e);
         }
     }
     

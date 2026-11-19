@@ -2,6 +2,7 @@ package org.starexec.servlets;
 
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.fileupload2.javax.JavaxServletFileUpload;
+import org.starexec.backend.storage.PrivateUploadStage;
 import org.starexec.constants.R;
 import org.starexec.data.database.Permissions;
 import org.starexec.data.security.ValidatorStatusCode;
@@ -141,23 +142,18 @@ public class UploadJobXML extends HttpServlet {
 			throws StarExecException {
 		final String method = "handleXMLFile";
 		log.entry(method);
-		// Only ever the directory this upload claimed: its parent holds other uploads' directories.
-		File uniqueDir = null;
-		try {
+		try (PrivateUploadStage stage = PrivateUploadStage.configured()) {
 			log.info(method, "Handling Upload of XML File from user with id=" + userId);
 			PartWrapper item = (PartWrapper) form.get(UploadJobXML.UPLOAD_FILE);
-			// The directory holds the archive and its XML only until the jobs are created.
-			File parent = new File(new File(R.getBatchSpaceXMLDir(), "Job" + userId), "TEMP_JOB_XML_FOLDER_");
-			uniqueDir = Util.claimNewDirectory(new File(parent, Util.pathDate()));
-			//Process the archive file and extract
-
-			File archiveFile = new File(uniqueDir, FilenameUtils.getName(item.getName()));
+			File archiveFile = stage.archivePath(FilenameUtils.getName(item.getName())).toFile();
 			item.write(archiveFile);
-			if (!ArchiveUtil.extractArchive(archiveFile.getAbsolutePath())) {
+			File uniqueDir;
+			try {
+				uniqueDir = stage.extractArchive().toFile();
+			} catch (PrivateUploadStage.InvalidArchiveException refused) {
 				jobUtil.setErrorMessage(ArchiveUtil.NOT_EXTRACTED);
 				return null;
 			}
-			archiveFile.delete();
 
 			//Typically there will just be 1 file, but might as well allow more
 
@@ -189,10 +185,6 @@ public class UploadJobXML extends HttpServlet {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			throw new StarExecException(e.getMessage());
-		} finally {
-			if (uniqueDir != null) {
-				Util.safeDeleteDirectory(uniqueDir.getAbsolutePath());
-			}
 		}
 	}
 
