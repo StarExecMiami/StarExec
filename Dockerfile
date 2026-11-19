@@ -340,7 +340,13 @@ RUN addgroup starexec1 starexec && \
     # Set group-based permissions for /home/starexec (sandbox users need access to bin/)
     # Using group permissions instead of world-readable for better security
     chmod 750 /home/starexec && \
-    chmod 750 /home/starexec/bin
+    chmod 750 /home/starexec/bin && \
+    # Private application-only upload staging root (0700, outside runner-writable roots)
+    mkdir -p /var/lib/starexec/uploads-private && \
+    chown root:root /var/lib/starexec && \
+    chmod 0755 /var/lib/starexec && \
+    chown starexec:starexec /var/lib/starexec/uploads-private && \
+    chmod 0700 /var/lib/starexec/uploads-private
 
 # Security hardening - Update Tomcat server.xml
 # Sets connection limits to prevent resource exhaustion
