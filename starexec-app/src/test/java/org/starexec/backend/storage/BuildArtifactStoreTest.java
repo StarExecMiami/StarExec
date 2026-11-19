@@ -82,12 +82,12 @@ class BuildArtifactStoreTest {
     }
 
     @Test void aPhysicalAliasCannotHideBehindAnotherPath() throws Exception {
-        var mounts=new ArrayList<>(DedicatedStorageResource.mounts());
-        var physical=BuildExecutionRuntime.sourceMount(mounts,root);
+        var mounts=new ArrayList<>(MountInfo.mounts());
+        var physical=MountInfo.sourceMount(mounts,root);
         Path position=physical.root().resolve(physical.point().relativize(root));
-        mounts.add(new DedicatedStorageResource.Mount(999999,physical.device(),position,runner,physical.type(),List.of("rw"),List.of("rw")));
-        try (var kernel=mockStatic(DedicatedStorageResource.class,CALLS_REAL_METHODS)) {
-            kernel.when(DedicatedStorageResource::mounts).thenReturn(mounts);
+        mounts.add(new MountInfo.Mount(999999,physical.device(),position,runner,physical.type(),List.of("rw"),List.of("rw")));
+        try (var kernel=mockStatic(MountInfo.class,CALLS_REAL_METHODS)) {
+            kernel.when(MountInfo::mounts).thenReturn(mounts);
             assertThrows(IOException.class,()->BuildArtifactStore.inspect(root,List.of(runner)));
         }
     }
@@ -112,11 +112,11 @@ class BuildArtifactStoreTest {
 
     @Test void aNewMountIncarnationCannotReuseTheRootIdentity() throws Exception {
         var store=BuildArtifactStore.inspect(root,List.of(runner));
-        var old=DedicatedStorageResource.mounts();
-        var selected=BuildExecutionRuntime.sourceMount(old,root);
-        var changed=old.stream().map(m->m.equals(selected)?new DedicatedStorageResource.Mount(m.id()+1,m.device(),m.root(),m.point(),m.type(),m.options(),m.superOptions()):m).toList();
-        try (var kernel=mockStatic(DedicatedStorageResource.class,CALLS_REAL_METHODS)) {
-            kernel.when(DedicatedStorageResource::mounts).thenReturn(changed);
+        var old=MountInfo.mounts();
+        var selected=MountInfo.sourceMount(old,root);
+        var changed=old.stream().map(m->m.equals(selected)?new MountInfo.Mount(m.id()+1,m.device(),m.root(),m.point(),m.type(),m.options(),m.superOptions()):m).toList();
+        try (var kernel=mockStatic(MountInfo.class,CALLS_REAL_METHODS)) {
+            kernel.when(MountInfo::mounts).thenReturn(changed);
             assertThrows(IOException.class,store::requireUnchanged);
         }
     }

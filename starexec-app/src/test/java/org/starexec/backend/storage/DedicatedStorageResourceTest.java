@@ -50,7 +50,7 @@ class DedicatedStorageResourceTest {
     }
 
     @Test void dedicatedExt4MountRetainsItsIncarnationAndDevice() throws Exception {
-        var mount = DedicatedStorageResource.dedicatedMount(DedicatedStorageResource.parseMounts(MOUNT), ROOT);
+        var mount = DedicatedStorageResource.dedicatedMount(MountInfo.parseMounts(MOUNT), ROOT);
         assertEquals(42, mount.id());
         assertEquals("7:1", mount.device());
         assertEquals(Path.of("/"), mount.root());
@@ -58,7 +58,7 @@ class DedicatedStorageResourceTest {
     }
 
     @Test void projectQuotaCountersCannotQualifyAsWholeFilesystemCapacity() throws Exception {
-        var mounts = DedicatedStorageResource.parseMounts(MOUNT.replace("loop1 rw", "loop1 rw,prjquota"));
+        var mounts = MountInfo.parseMounts(MOUNT.replace("loop1 rw", "loop1 rw,prjquota"));
         assertThrows(IOException.class, () -> DedicatedStorageResource.dedicatedMount(mounts, ROOT));
     }
 
@@ -67,7 +67,7 @@ class DedicatedStorageResourceTest {
     void quotaModesAreRefusedInBothMountAndFullKernelOptions(String mode) throws Exception {
         for (String observed : java.util.List.of(MOUNT.replace("loop1 rw", "loop1 rw," + mode),
                 MOUNT.replace("rw,nodev,nosuid", "rw,nodev,nosuid," + mode))) {
-            var mounts = DedicatedStorageResource.parseMounts(observed);
+            var mounts = MountInfo.parseMounts(observed);
             assertThrows(IOException.class, () -> DedicatedStorageResource.dedicatedMount(mounts, ROOT));
         }
         assertThrows(IOException.class, () -> DedicatedStorageResource.requireUnfilteredCounters("rw\ndata=ordered\n" + mode));
@@ -83,7 +83,7 @@ class DedicatedStorageResourceTest {
     }
 
     @Test void conservedIdentityIncludesTheRootAndFullFilesystemOptions() throws Exception {
-        var mount = DedicatedStorageResource.dedicatedMount(DedicatedStorageResource.parseMounts(MOUNT), ROOT);
+        var mount = DedicatedStorageResource.dedicatedMount(MountInfo.parseMounts(MOUNT), ROOT);
         var capacity = DedicatedStorageResource.capacity("4096:16:32:ab12", LIMITS);
         String identity = DedicatedStorageResource.identity(ROOT, mount, capacity, "root-inode", "rw\ndata=ordered\n");
         assertEquals(identity, DedicatedStorageResource.identity(ROOT, mount, capacity, "root-inode", "rw\ndata=ordered\n"));
@@ -94,27 +94,27 @@ class DedicatedStorageResourceTest {
                 new DedicatedStorageResource.Capacity(131072, 32, "ab12"), "root-inode", "rw\ndata=ordered\n"));
         assertNotEquals(identity, DedicatedStorageResource.identity(ROOT, mount,
                 new DedicatedStorageResource.Capacity(65536, 64, "ab12"), "root-inode", "rw\ndata=ordered\n"));
-        var changedMount = DedicatedStorageResource.dedicatedMount(DedicatedStorageResource.parseMounts(
+        var changedMount = DedicatedStorageResource.dedicatedMount(MountInfo.parseMounts(
                 MOUNT.replace("rw,nodev,nosuid", "rw,nodev,nosuid,noexec")), ROOT);
         assertNotEquals(identity, DedicatedStorageResource.identity(ROOT, changedMount, capacity, "root-inode", "rw\ndata=ordered\n"));
     }
 
     @ParameterizedTest @ValueSource(strings = {"tmpfs", "overlay", "btrfs", "xfs", "nfs", "fuse.ext4"})
     void anUnimplementedCapacityProviderCannotUseExt4Assumptions(String type) throws Exception {
-        var mounts = DedicatedStorageResource.parseMounts(MOUNT.replace("- ext4 ", "- " + type + " "));
+        var mounts = MountInfo.parseMounts(MOUNT.replace("- ext4 ", "- " + type + " "));
         assertThrows(IOException.class, () -> DedicatedStorageResource.dedicatedMount(mounts, ROOT));
     }
 
     @ParameterizedTest @ValueSource(strings = {"rw", "rw,nodev", "rw,nosuid", "ro,nodev,nosuid", "rw,ro,nodev,nosuid"})
     void requiredMountProtectionsCannotBeOmitted(String options) throws Exception {
-        var mounts = DedicatedStorageResource.parseMounts(MOUNT.replace("rw,nodev,nosuid", options));
+        var mounts = MountInfo.parseMounts(MOUNT.replace("rw,nodev,nosuid", options));
         assertThrows(IOException.class, () -> DedicatedStorageResource.dedicatedMount(mounts, ROOT));
     }
 
     @Test void aDirectoryOrBindSubtreeIsNotAnIndependentFilesystem() throws Exception {
-        var mounts = DedicatedStorageResource.parseMounts(MOUNT);
+        var mounts = MountInfo.parseMounts(MOUNT);
         assertThrows(IOException.class, () -> DedicatedStorageResource.dedicatedMount(mounts, ROOT.resolve("child")));
-        var subtree = DedicatedStorageResource.parseMounts(MOUNT.replace("7:1 / ", "7:1 /shared/subtree "));
+        var subtree = MountInfo.parseMounts(MOUNT.replace("7:1 / ", "7:1 /shared/subtree "));
         assertThrows(IOException.class, () -> DedicatedStorageResource.dedicatedMount(subtree, ROOT));
     }
 
@@ -124,18 +124,18 @@ class DedicatedStorageResourceTest {
             "43 42 0:12 / /storage/slot/nested rw,nodev,nosuid - tmpfs tmpfs rw\n"
     })
     void aliasesStackedMountsAndNestedMountsAreAmbiguous(String extra) throws Exception {
-        var mounts = DedicatedStorageResource.parseMounts(MOUNT + extra);
+        var mounts = MountInfo.parseMounts(MOUNT + extra);
         assertThrows(IOException.class, () -> DedicatedStorageResource.dedicatedMount(mounts, ROOT));
     }
 
     @Test void unrelatedFilesystemMountsDoNotChangeTheSlot() throws Exception {
-        var mounts = DedicatedStorageResource.parseMounts(MOUNT
+        var mounts = MountInfo.parseMounts(MOUNT
                 + "43 1 7:2 / /storage/other rw,nodev,nosuid - ext4 /dev/loop2 rw\n");
         assertEquals(42, DedicatedStorageResource.dedicatedMount(mounts, ROOT).id());
     }
 
     @Test void kernelNamespaceRootsAreOpaqueOnUnrelatedPseudoFilesystems() throws Exception {
-        var mounts = DedicatedStorageResource.parseMounts(MOUNT
+        var mounts = MountInfo.parseMounts(MOUNT
                 + "43 1 0:4 net:[123] /run/netns/worker rw - nsfs nsfs rw\n");
         assertEquals(42, DedicatedStorageResource.dedicatedMount(mounts, ROOT).id());
         assertEquals(Path.of("net:[123]"), mounts.get(1).root());
@@ -143,7 +143,7 @@ class DedicatedStorageResourceTest {
 
     @Test void kernelEscapesAndOptionalFieldsAreParsedWithoutSplittingNames() throws Exception {
         String escaped = "42 1 7:1 / /storage/slot\\040a\\134b\\011c\\012d rw,nodev,nosuid shared:5 master:1 - ext4 /dev/loop1 rw\n";
-        var mount = DedicatedStorageResource.parseMounts(escaped).get(0);
+        var mount = MountInfo.parseMounts(escaped).get(0);
         assertEquals(Path.of("/storage/slot a\\b\tc\nd"), mount.point());
         assertEquals("ext4", mount.type());
     }
@@ -159,7 +159,7 @@ class DedicatedStorageResourceTest {
             "42 1 7:1 / /storage/slot rw,nodev,nosuid - ext4 /dev/loop1 rw extra"
     })
     void malformedMountIdentityIsRefused(String observed) {
-        assertThrows(IOException.class, () -> DedicatedStorageResource.parseMounts(observed));
+        assertThrows(IOException.class, () -> MountInfo.parseMounts(observed));
     }
 
     @Test void ordinaryPrivateDirectoryCannotPretendToHaveItsOwnCapacity() throws Exception {

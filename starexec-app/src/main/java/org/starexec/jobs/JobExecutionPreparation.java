@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParser;
 import org.starexec.backend.storage.DedicatedStorageResource;
+import org.starexec.backend.storage.MountInfo;
 import org.starexec.data.database.JobExecutionInputs;
 import org.starexec.data.database.JobExecutionProtocol;
 import org.starexec.data.database.JobStorageLeases;
@@ -442,19 +443,8 @@ public final class JobExecutionPreparation {
         }
     }
     private static void requireNoNestedMounts(Path root,boolean directory) throws IOException {
-        byte[] bytes;
-        try (var input=Files.newInputStream(Path.of("/proc/self/mountinfo"))) { bytes=input.readNBytes(1024*1024+1); }
-        require(bytes.length<=1024*1024,"Mount observation exceeds its input limit");
-        var escaped=Pattern.compile("\\\\([0-7]{3})");
-        for (String line:new String(bytes,StandardCharsets.UTF_8).split("\n")) {
-            String[] parts=line.split(" ");require(parts.length>=6,"Invalid mount observation");
-            var matcher=escaped.matcher(parts[4]);StringBuilder decoded=new StringBuilder();
-            try {
-                while (matcher.find()) matcher.appendReplacement(decoded,java.util.regex.Matcher.quoteReplacement(Character.toString((char)Integer.parseInt(matcher.group(1),8))));
-            } catch (NumberFormatException invalid) {
-                throw new IOException("Invalid mount escape", invalid);
-            }
-            matcher.appendTail(decoded);Path point=Path.of(decoded.toString());
+        for (MountInfo.Mount mount:MountInfo.mounts()) {
+            Path point=mount.point();
             require(!(point.startsWith(root) && (!directory || !point.equals(root))),"Input contains an unsupported nested mount");
         }
     }

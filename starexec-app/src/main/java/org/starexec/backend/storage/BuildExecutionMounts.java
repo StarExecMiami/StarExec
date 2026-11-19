@@ -359,7 +359,7 @@ public final class BuildExecutionMounts {
     }
 
     private static void requireNoNestedMounts(Path source) throws IOException {
-        for (var mount:DedicatedStorageResource.mounts()) {
+        for (var mount:MountInfo.mounts()) {
             if (!mount.point().equals(source) && mount.point().startsWith(source)) {
                 throw new IOException("Read-only input contains an unsupported nested mount");
             }

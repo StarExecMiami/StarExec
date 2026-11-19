@@ -550,10 +550,10 @@ class BuildExecutionMountsTest {
     }
 
     @Test void nestedInputMountsAreRefusedBeforeCreatingDirectories() throws Exception {
-        var nested=new DedicatedStorageResource.Mount(7,"8:2",Path.of("/"),build.source().resolve("nested"),
+        var nested=new MountInfo.Mount(7,"8:2",Path.of("/"),build.source().resolve("nested"),
                 "ext4",List.of("rw"),List.of("rw"));
-        try (var guard=authorization();var mounts=mockStatic(DedicatedStorageResource.class,CALLS_REAL_METHODS)) {
-            mounts.when(DedicatedStorageResource::mounts).thenReturn(List.of(nested));
+        try (var guard=authorization();var mounts=mockStatic(MountInfo.class,CALLS_REAL_METHODS)) {
+            mounts.when(MountInfo::mounts).thenReturn(List.of(nested));
             assertThrows(IOException.class,this::prepare);
             assertEquals(0,stagingEntries());
         }

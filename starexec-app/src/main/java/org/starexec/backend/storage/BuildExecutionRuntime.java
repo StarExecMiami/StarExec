@@ -128,7 +128,7 @@ public final class BuildExecutionRuntime {
     }
     record Expected(Path target,String device,Path root,String type,long nodeDevice,long inode,int mode,boolean readOnly) { }
     private record Node(long device,long inode,int mode,long size,long links) { }
-    private record RuntimeMount(DedicatedStorageResource.Mount mount,List<String> propagation) { }
+    private record RuntimeMount(MountInfo.Mount mount,List<String> propagation) { }
 
     private final List<Expected> expected;
     private final Identity identity;
@@ -196,12 +196,12 @@ public final class BuildExecutionRuntime {
                 if (mode!=0100000 && mode!=0040000 || mode==0100000 && ((Number)before.get("nlink")).longValue()!=1) {
                     throw new IOException("Runtime source is not an unaliased file or directory");
                 }
-                var mounts=DedicatedStorageResource.mounts();
-                var mount=sourceMount(mounts,source);
+                var mounts=MountInfo.mounts();
+                var mount=MountInfo.sourceMount(mounts,source);
                 Path root=mount.root().resolve(mount.point().relativize(source));
                 if (!root.isAbsolute() || !root.equals(root.normalize())) throw new IOException("Source mount has no absolute kernel root");
                 var after=Files.readAttributes(source,"unix:dev,ino,mode,nlink",LinkOption.NOFOLLOW_LINKS);
-                if (!before.equals(after) || !mount.equals(sourceMount(DedicatedStorageResource.mounts(),source))) {
+                if (!before.equals(after) || !mount.equals(MountInfo.sourceMount(MountInfo.mounts(),source))) {
                     throw new IOException("Runtime source changed during capture");
                 }
                 expected.add(new Expected(binding.target(),mount.device(),root,mount.type(),
@@ -212,14 +212,6 @@ public final class BuildExecutionRuntime {
         command.addAll(BuildExecutionHold.command(script));
         return new BuildExecutionRuntime(expected,identity,limits,forbiddenNamespaces,
                 (String.join("\0",command)+"\0").getBytes(StandardCharsets.UTF_8));
-    }
-
-    static DedicatedStorageResource.Mount sourceMount(List<DedicatedStorageResource.Mount> mounts,Path source) throws IOException {
-        List<DedicatedStorageResource.Mount> ancestors=mounts.stream().filter(m->source.startsWith(m.point())).toList();
-        int depth=ancestors.stream().mapToInt(m->m.point().getNameCount()).max().orElse(-1);
-        var deepest=ancestors.stream().filter(m->m.point().getNameCount()==depth).toList();
-        if (deepest.size()!=1) throw new IOException("Ambiguous source mount topology");
-        return deepest.get(0);
     }
 
     List<Expected> expectedMounts() { return expected; }
@@ -273,7 +265,7 @@ public final class BuildExecutionRuntime {
     }
 
     private void verifyMounts(String text,String nodesText,String devicesText,long memory) throws IOException {
-        var parsed=DedicatedStorageResource.parseMounts(text);String[] lines=text.lines().toArray(String[]::new);
+        var parsed=MountInfo.parseMounts(text);String[] lines=text.lines().toArray(String[]::new);
         require(!parsed.isEmpty() && parsed.size()<=1024,"Invalid runtime mount count");
         Map<Path,RuntimeMount> mounts=new HashMap<>();
         for (int i=0;i<parsed.size();i++) {

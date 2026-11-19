@@ -9,13 +9,13 @@ import java.util.Arrays;
 import java.util.List;
 
 /** Linux {@code /proc/self/mountinfo} reader and longest-prefix mount resolver. */
-final class MountInfo {
-    record Mount(long id, String device, Path root, Path point, String type,
-                 List<String> options, List<String> superOptions) { }
+public final class MountInfo {
+    public record Mount(long id, String device, Path root, Path point, String type,
+                        List<String> options, List<String> superOptions) { }
 
     private MountInfo() { }
 
-    static List<Mount> mounts() throws IOException {
+    public static List<Mount> mounts() throws IOException {
         try (var stream = Files.newInputStream(Path.of("/proc/self/mountinfo"))) {
             byte[] bytes = stream.readNBytes(1024 * 1024 + 1);
             if (bytes.length > 1024 * 1024) {
@@ -25,7 +25,7 @@ final class MountInfo {
         }
     }
 
-    static List<Mount> parseMounts(String text) throws IOException {
+    public static List<Mount> parseMounts(String text) throws IOException {
         List<Mount> result = new ArrayList<>();
         for (String line : text.lines().toList()) {
             String[] fields = line.split(" ");
@@ -52,7 +52,7 @@ final class MountInfo {
         return List.copyOf(result);
     }
 
-    static Mount sourceMount(List<Mount> mounts, Path source) throws IOException {
+    public static Mount sourceMount(List<Mount> mounts, Path source) throws IOException {
         List<Mount> ancestors = mounts.stream().filter(m -> source.startsWith(m.point())).toList();
         int depth = ancestors.stream().mapToInt(m -> m.point().getNameCount()).max().orElse(-1);
         List<Mount> deepest = ancestors.stream().filter(m -> m.point().getNameCount() == depth).toList();
