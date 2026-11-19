@@ -106,7 +106,7 @@
 			}
 
 			function logout() {
-				window.location.href = '${pageContext.request.contextPath}/Logout';
+				window.location.href = '${pageContext.request.contextPath}/logout';
 			}
 
 			// Initialize countdowns if elements exist

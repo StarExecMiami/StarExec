@@ -35,12 +35,21 @@ $(document).ready(function() {
 	initUI();
 	fetch(starexecRoot + "services/job/" + curSpaceId + "/allbench/pagination", {
 		method: 'POST',
+		headers: {
+			[$('meta[name="csrf-header"]').attr("content") || "X-CSRF-Token"]:
+				$('meta[name="csrf-token"]').attr("content") || ""
+		},
 	  })
-		.then(response => response.json())
+		.then(response => {
+			if (!response.ok) {
+				throw new Error("HTTP " + response.status);
+			}
+			return response.json();
+		})
 		.then(data => {
 		  // Handle the response data
-			var aaData = data.aaData;
-			if (aaData.length == 0) {
+			var aaData = data && data.aaData;
+			if (Array.isArray(aaData) && aaData.length == 0) {
 				hasNoBenchmarks = true;
 			}
 		})
