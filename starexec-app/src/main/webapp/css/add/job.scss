@@ -1,3 +1,5 @@
+@use "../global/mixins" as m;
+
 #content fieldset {
 	width: 600px;
 	margin: 50px auto 50px auto;	
@@ -9,7 +11,7 @@
 	}
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	#content fieldset {
 		width: 100%;
 	}
@@ -100,7 +102,7 @@ fieldset h6 {
 	overflow: auto;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 
 	#wrapper .ui-button-icon-primary, #wrapper .ui-button-icon-secondary {
 		position: static;

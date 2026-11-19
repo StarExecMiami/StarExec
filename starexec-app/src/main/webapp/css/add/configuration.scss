@@ -1,3 +1,5 @@
+@use "../global/mixins" as m;
+
 fieldset {						
 	width: 75%;	
 	margin: 30px auto;
@@ -47,7 +49,7 @@ textarea {
 	margin-left: 1px;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	#wrapper input {
 		width: 90%;
 	}

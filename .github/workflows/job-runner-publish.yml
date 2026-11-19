@@ -36,9 +36,6 @@ on:
       - '.github/workflows/job-runner-publish.yml'
   pull_request:
     branches: [UMprod, containerised, main]
-    paths:
-      - 'docker/job-runner.Dockerfile'
-      - 'docker/job-entrypoint.sh'
   release:
     types: [published]
   workflow_dispatch:
@@ -52,6 +49,10 @@ on:
         required: true
         default: true
         type: boolean
+
+concurrency:
+  group: job-runner-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -68,6 +69,8 @@ jobs:
   build:
     name: Build & Publish Job Runner
     runs-on: ubuntu-latest
+    env:
+      LOCAL_IMAGE_TAG: starexec-job-runner:pr-${{ github.event.pull_request.number }}
     
     outputs:
       image-tag: ${{ steps.meta.outputs.version }}
@@ -75,14 +78,23 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Check runner workflow contracts
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 -m unittest discover -s scripts -p 'test_runner_sarif_workflows.py'
       
       - name: Set up QEMU
+        if: github.event_name != 'pull_request'
         uses: docker/setup-qemu-action@v3
         with:
           platforms: linux/amd64,linux/arm64
       
       - name: Set up Docker Buildx
+        if: github.event_name != 'pull_request'
         uses: docker/setup-buildx-action@v3
       
       - name: Log in to GitHub Container Registry
@@ -113,6 +125,7 @@ jobs:
         
       - name: Extract metadata for Docker
         id: meta
+        if: github.event_name != 'pull_request'
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -134,8 +147,22 @@ jobs:
             org.opencontainers.image.description=Minimal Alpine-based container for executing StarExec solver jobs
             org.opencontainers.image.vendor=StarExec Miami
       
+      - name: Build pull request image
+        if: github.event_name == 'pull_request'
+        run: docker build --file docker/job-runner.Dockerfile --tag "${LOCAL_IMAGE_TAG}" .
+
+      - name: Scan pull request image for vulnerabilities
+        if: github.event_name == 'pull_request'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE_TAG }}
+          format: 'sarif'
+          output: 'trivy-job-runner.sarif'
+          severity: 'CRITICAL,HIGH'
+
       - name: Build and push image
         id: build
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -151,7 +178,7 @@ jobs:
       
       - name: Scan image for vulnerabilities
         if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           # Use the first tag from metadata (most specific one)
           image-ref: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
@@ -160,9 +187,10 @@ jobs:
           severity: 'CRITICAL,HIGH'
       
       - name: Upload Trivy scan results
-        if: github.event_name != 'pull_request'
-        uses: github/codeql-action/upload-sarif@v3
-        continue-on-error: true
+        id: sarif
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
+        continue-on-error: ${{ github.event_name != 'pull_request' }}
         with:
           sarif_file: 'trivy-job-runner.sarif'
           category: 'trivy-job-runner'
@@ -174,7 +202,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ github.event_name }}" == "pull_request" ]; then
-            echo "**Mode:** Build validation only (PR)" >> $GITHUB_STEP_SUMMARY
+            echo "**Mode:** Build and security scan (PR)" >> $GITHUB_STEP_SUMMARY
           else
             echo "**Mode:** Build and push to GHCR" >> $GITHUB_STEP_SUMMARY
           fi
@@ -185,7 +213,11 @@ jobs:
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Registry | \`${{ env.REGISTRY }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Image | \`${{ env.IMAGE_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Platforms | \`linux/amd64, linux/arm64\` |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "| Platforms | \`linux/amd64\` |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Platforms | \`linux/amd64, linux/arm64\` |" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "| Base | \`alpine:3.21\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
@@ -201,10 +233,12 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
           
-          if [ -f "trivy-job-runner.sarif" ]; then
+          if [ "${{ steps.sarif.outcome }}" == "success" ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### Security Scan" >> $GITHUB_STEP_SUMMARY
             echo "✅ Trivy scan results uploaded to Security tab" >> $GITHUB_STEP_SUMMARY
+          elif [ -f "trivy-job-runner.sarif" ]; then
+            echo "Trivy results generated; upload status: ${{ steps.sarif.outcome }}" >> $GITHUB_STEP_SUMMARY
           fi
 
   # Notify on failure (optional - can be extended with Slack/email)
