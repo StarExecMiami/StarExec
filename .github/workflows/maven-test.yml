@@ -10,7 +10,7 @@ on:
       - ".github/scripts/test_mvn_retry.py"
       - ".github/workflows/maven-test.yml"
   pull_request:
-    branches: [UMprod, dev, main, containerised, fix/security-api-contracts]
+    branches: [UMprod, dev, main, containerised]
     paths:
       - "starexec-app/**"
       - "pom.xml"
@@ -72,10 +72,15 @@ jobs:
         run: python3 .github/scripts/mvn_retry.py -- mvn -B --no-transfer-progress clean test -pl starexec-app
 
       # Surefire matches **/*Test.java and **/*Tests.java, which do not match *IT.java,
-      # so the step above runs none of the stored routines. Without this step the
-      # StoredRoutineSmokeIT added for exactly that purpose never executed in CI.
+      # so the step above runs none of the stored routines. Scope Failsafe explicitly to
+      # StoredRoutineSmokeIT here; PopulatedSchemaUpgradeIT runs in its own PostgreSQL job.
       - name: Run stored-routine integration tests
-        run: python3 .github/scripts/mvn_retry.py -- mvn -B --no-transfer-progress verify -Pit -pl starexec-app -Dsurefire.skip=true
+        run: >-
+          python3 .github/scripts/mvn_retry.py --
+          mvn -B --no-transfer-progress verify -Pit -pl starexec-app
+          -Dsurefire.skip=true
+          -Dit.test=StoredRoutineSmokeIT
+          -Dfailsafe.failIfNoSpecifiedTests=true
 
       - name: Assert the integration tests actually executed
         run: |
@@ -353,7 +358,14 @@ jobs:
         with:
           java-version: "17"
           distribution: "temurin"
-          cache: "maven"
+      - name: Cache Maven repository (populated-schema-upgrade)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-populated-schema-upgrade-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-populated-schema-upgrade-
+            ${{ runner.os }}-m2-
       - name: Upgrade populated V0121 to V0137 and verify a fresh installation
         env:
           STAREXEC_UPGRADE_DB_URL: jdbc:postgresql://localhost:5432/postgres
@@ -361,7 +373,8 @@ jobs:
           STAREXEC_UPGRADE_DB_PASSWORD: ci_upgrade_password
           STAREXEC_UPGRADE_BASELINE_DIR: ${{ github.workspace }}/upgrade-baseline/starexec-app/src/main/resources/db/migration
         run: >-
-          mvn -B -pl starexec-app -Pit test-compile failsafe:integration-test failsafe:verify
+          python3 .github/scripts/mvn_retry.py --
+          mvn -B --no-transfer-progress -pl starexec-app -Pit test-compile failsafe:integration-test failsafe:verify
           -Dit.test=PopulatedSchemaUpgradeIT -Dfailsafe.failIfNoSpecifiedTests=true
       - name: Verify the upgrade actually executed without omissions
         run: |
