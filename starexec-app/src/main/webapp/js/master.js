@@ -564,7 +564,7 @@ function showMessage(type, message, duration) {
 function showMessageLegacy(type, message, duration) {
   // Create the element that will allow the user to close the message
   var closeMessage = $("<span class='exit'>X</span>");
-  var messageSpan = $("<div></div>").html(message);
+  var messageSpan = $("<div></div>").text(message);
 
   // Create a new DOM element to insert to display the message, and inject its classes and message
   var tmp = "<div><span class='message__icon' aria-hidden='true'></span></div>";
