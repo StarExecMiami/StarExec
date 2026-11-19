@@ -61,8 +61,6 @@ public final class PrivateUploadStage implements AutoCloseable {
                 Path.of(EnvironmentConfig.getDataDir()),
                 Path.of(EnvironmentConfig.getJobOutputDirectory()),
                 Path.of(EnvironmentConfig.getJobLogDirectory())));
-            String artifacts = EnvironmentConfig.getBuildArtifactDirectory();
-            if (artifacts != null && !artifacts.isBlank()) excluded.add(Path.of(artifacts));
             return create(Path.of(configured), excluded);
         } catch (InvalidPathException invalid) {
             throw new IOException("Private upload storage configuration is invalid", invalid);
@@ -188,7 +186,7 @@ public final class PrivateUploadStage implements AutoCloseable {
         if (removed || !identity.equals(identity(directory))) {
             throw new IOException("Upload staging no longer matches its conserved identity");
         }
-        for (var mount : DedicatedStorageResource.mounts()) {
+        for (var mount : MountInfo.mounts()) {
             if (mount.point().startsWith(directory)) {
                 throw new IOException("Upload staging contains an unexpected mount");
             }
@@ -266,7 +264,7 @@ public final class PrivateUploadStage implements AutoCloseable {
                 || (((Number) identity.get("mode")).intValue() & 07777) != 0700) {
             throw new IOException("Private upload storage requires application ownership and mode 0700");
         }
-        var mounts = DedicatedStorageResource.mounts();
+        var mounts = MountInfo.mounts();
         Location location = location(mounts, path);
         for (Path runner : excluded) {
             Location other = location(mounts, runner);
@@ -279,7 +277,7 @@ public final class PrivateUploadStage implements AutoCloseable {
                 throw new IOException("Private upload storage changed during observation");
             }
         }
-        if (!location.equals(location(DedicatedStorageResource.mounts(), path))) {
+        if (!location.equals(location(MountInfo.mounts(), path))) {
             throw new IOException("Private upload storage mount changed during observation");
         }
         return new Root(path, List.copyOf(excluded), Map.copyOf(ancestors), identity, location, owner);
@@ -289,8 +287,8 @@ public final class PrivateUploadStage implements AutoCloseable {
         return Map.copyOf(Files.readAttributes(path, "unix:dev,ino,mode,uid", LinkOption.NOFOLLOW_LINKS));
     }
 
-    private static Location location(List<DedicatedStorageResource.Mount> mounts, Path path) throws IOException {
-        var mount = BuildExecutionRuntime.sourceMount(mounts, path);
+    private static Location location(List<MountInfo.Mount> mounts, Path path) throws IOException {
+        var mount = MountInfo.sourceMount(mounts, path);
         return new Location(mount.id(), mount.device(), mount.root().resolve(mount.point().relativize(path)));
     }
 

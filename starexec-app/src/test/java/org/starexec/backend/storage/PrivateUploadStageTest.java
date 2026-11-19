@@ -96,13 +96,13 @@ class PrivateUploadStageTest {
     }
 
     @Test void physicalAliasIsRefusedEvenWithDifferentNames() throws Exception {
-        var mounts = new ArrayList<>(DedicatedStorageResource.mounts());
-        var selected = BuildExecutionRuntime.sourceMount(mounts, root);
+        var mounts = new ArrayList<>(MountInfo.mounts());
+        var selected = MountInfo.sourceMount(mounts, root);
         Path physical = selected.root().resolve(selected.point().relativize(root));
-        mounts.add(new DedicatedStorageResource.Mount(999999, selected.device(), physical,
+        mounts.add(new MountInfo.Mount(999999, selected.device(), physical,
             runner, selected.type(), List.of("rw"), List.of("rw")));
-        try (var kernel = mockStatic(DedicatedStorageResource.class, CALLS_REAL_METHODS)) {
-            kernel.when(DedicatedStorageResource::mounts).thenReturn(mounts);
+        try (var kernel = mockStatic(MountInfo.class, CALLS_REAL_METHODS)) {
+            kernel.when(MountInfo::mounts).thenReturn(mounts);
             assertThrows(IOException.class, () -> PrivateUploadStage.create(root, List.of(runner)));
         }
     }
@@ -167,13 +167,13 @@ class PrivateUploadStageTest {
 
     @Test void mountReplacementInvalidatesTheClaim() throws Exception {
         var stage = PrivateUploadStage.create(root, List.of(runner));
-        var old = DedicatedStorageResource.mounts();
-        var selected = BuildExecutionRuntime.sourceMount(old, root);
+        var old = MountInfo.mounts();
+        var selected = MountInfo.sourceMount(old, root);
         var changed = old.stream().map(m -> m.equals(selected)
-            ? new DedicatedStorageResource.Mount(m.id() + 1, m.device(), m.root(), m.point(),
+            ? new MountInfo.Mount(m.id() + 1, m.device(), m.root(), m.point(),
                 m.type(), m.options(), m.superOptions()) : m).toList();
-        try (var kernel = mockStatic(DedicatedStorageResource.class, CALLS_REAL_METHODS)) {
-            kernel.when(DedicatedStorageResource::mounts).thenReturn(changed);
+        try (var kernel = mockStatic(MountInfo.class, CALLS_REAL_METHODS)) {
+            kernel.when(MountInfo::mounts).thenReturn(changed);
             assertThrows(IOException.class, stage::directory);
             assertThrows(IOException.class, stage::close);
         }
@@ -183,12 +183,12 @@ class PrivateUploadStageTest {
     @Test void aNestedMountCannotBeCleanedAsOwnedContent() throws Exception {
         var stage = PrivateUploadStage.create(root, List.of(runner));
         Path nested = Files.createDirectory(stage.directory().resolve("nested"));
-        var mounts = new ArrayList<>(DedicatedStorageResource.mounts());
-        var selected = BuildExecutionRuntime.sourceMount(mounts, root);
-        mounts.add(new DedicatedStorageResource.Mount(999998, selected.device(), Path.of("/"),
+        var mounts = new ArrayList<>(MountInfo.mounts());
+        var selected = MountInfo.sourceMount(mounts, root);
+        mounts.add(new MountInfo.Mount(999998, selected.device(), Path.of("/"),
             nested, selected.type(), List.of("rw"), List.of("rw")));
-        try (var kernel = mockStatic(DedicatedStorageResource.class, CALLS_REAL_METHODS)) {
-            kernel.when(DedicatedStorageResource::mounts).thenReturn(mounts);
+        try (var kernel = mockStatic(MountInfo.class, CALLS_REAL_METHODS)) {
+            kernel.when(MountInfo::mounts).thenReturn(mounts);
             assertThrows(IOException.class, stage::close);
             assertTrue(Files.exists(nested));
         }

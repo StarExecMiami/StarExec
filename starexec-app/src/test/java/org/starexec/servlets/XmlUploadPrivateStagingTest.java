@@ -90,7 +90,6 @@ class XmlUploadPrivateStagingTest {
             config.when(EnvironmentConfig::getDataDir).thenReturn(runner.toString());
             config.when(EnvironmentConfig::getJobOutputDirectory).thenReturn(runner.resolve("output").toString());
             config.when(EnvironmentConfig::getJobLogDirectory).thenReturn(runner.resolve("logs").toString());
-            config.when(EnvironmentConfig::getBuildArtifactDirectory).thenReturn("");
             r.when(R::getBatchSpaceXMLDir).thenReturn(runner.resolve("batchSpace/uploads").toString());
             util.when(() -> Util.parseMultipartRequest(any(HttpServletRequest.class))).thenReturn(form);
             util.when(() -> Util.threadPoolExecute(any(Runnable.class))).thenAnswer(invocation -> {

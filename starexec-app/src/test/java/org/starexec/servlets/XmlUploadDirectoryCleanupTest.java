@@ -374,7 +374,6 @@ public class XmlUploadDirectoryCleanupTest {
 			config.when(EnvironmentConfig::getDataDir).thenReturn(runnerRoot.getAbsolutePath());
 			config.when(EnvironmentConfig::getJobOutputDirectory).thenReturn(new File(runnerRoot, "output").getAbsolutePath());
 			config.when(EnvironmentConfig::getJobLogDirectory).thenReturn(new File(runnerRoot, "logs").getAbsolutePath());
-			config.when(EnvironmentConfig::getBuildArtifactDirectory).thenReturn("");
 			uploads.when(() -> Uploads.setXMLErrorMessage(eq(STATUS), anyString())).thenAnswer(invocation -> {
 				xmlErrors.add(invocation.getArgument(1));
 				return true;
