@@ -11,17 +11,15 @@
 # Triggers:
 #   - Push to main branches when job-runner files change
 #   - Manual dispatch with version input
-#   - Release tags (must follow semantic versioning: v1.0.0 or 1.0.0)
+#   - Release tags (must use the job-runner-vX.Y.Z prefix)
 #
-# IMPORTANT: Release tags MUST follow semantic versioning format:
-#   • v1.0.0 (with v prefix) - RECOMMENDED
-#   • 1.0.0 (without v prefix)
-#   • v1.0 (major.minor) or v1 (major only) - also supported
+# IMPORTANT: Release tags MUST follow the job-runner semantic versioning format:
+#   • job-runner-v1.0.0 (major.minor.patch)
 #
 # Published tags:
 #   - latest (on default branch)
 #   - <branch>-<sha> (on any branch push)
-#   - <major>.<minor>.<patch>, <major>.<minor>, <major> (on release tags)
+#   - <major>.<minor>.<patch>, <major>.<minor>, <major> (on job-runner-vX.Y.Z releases)
 #
 # =============================================================================
 
@@ -69,6 +67,18 @@ jobs:
   build:
     name: Build & Publish Job Runner
     runs-on: ubuntu-latest
+    # The job-runner image is versioned independently of the StarExec
+    # application. This workflow also triggers on `release: published`, so
+    # without this guard publishing the application release v2.6.0 would
+    # stamp starexec-job-runner:2.6.0 / :2.6 / :2 from the *application*
+    # tag (see the event_name == 'release' semver rules below).
+    #
+    # The guard sits on the job, not on individual steps, so an application
+    # release event does not build, tag, push, sign, or publish anything.
+    # Branch pushes, pull requests, and workflow_dispatch are unaffected.
+    if: >-
+      github.event_name != 'release' ||
+      startsWith(github.event.release.tag_name, 'job-runner-v')
     env:
       LOCAL_IMAGE_TAG: starexec-job-runner:pr-${{ github.event.pull_request.number }}
     
@@ -89,44 +99,51 @@ jobs:
       
       - name: Set up QEMU
         if: github.event_name != 'pull_request'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
         with:
           platforms: linux/amd64,linux/arm64
       
       - name: Set up Docker Buildx
         if: github.event_name != 'pull_request'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Validate release tag format
+        id: release_tag
         if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          VERSION_TAG="${{ github.ref_name }}"
-          echo "Release tag: $VERSION_TAG"
-          
-          # Validate semantic versioning format (v1.2.3 or 1.2.3)
-          if [[ ! $VERSION_TAG =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            echo "ERROR: Release tag must follow semantic versioning (v1.0.0 or 1.0.0)"
-            echo "   Received: $VERSION_TAG"
-            echo ""
-            echo "Please create a new release with a valid semantic version tag:"
-            echo "  • v1.0.0 (with v prefix) - RECOMMENDED"
-            echo "  • 1.0.0 (without prefix)"
+          echo "Release tag: $RELEASE_TAG"
+
+          # Validate job-runner semantic versioning format (job-runner-vX.Y.Z)
+          if [[ ! "$RELEASE_TAG" =~ ^job-runner-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "ERROR: Job-runner release tag must follow job-runner-vX.Y.Z format" >&2
+            echo "   Received: $RELEASE_TAG" >&2
             exit 1
           fi
-          echo "Tag format is valid semantic version"
+
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+          {
+            echo "version=${major}.${minor}.${patch}"
+            echo "major_minor=${major}.${minor}"
+            echo "major=${major}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tag format is valid job-runner semantic version: ${major}.${minor}.${patch}"
         
       - name: Extract metadata for Docker
         id: meta
         if: github.event_name != 'pull_request'
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -136,10 +153,10 @@ jobs:
             type=sha,prefix=sha-,format=long,enable=${{ github.event_name == 'push' }}
             # Branch + short SHA (push events)
             type=sha,prefix={{branch}}-,format=short,enable=${{ github.event_name == 'push' }}
-            # Semantic version from release tag (releases must use vX.Y.Z format)
-            type=semver,pattern={{version}},enable=${{ github.event_name == 'release' }}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'release' }}
-            type=semver,pattern={{major}},enable=${{ github.event_name == 'release' }}
+            # Semantic version tags parsed from validated job-runner-vX.Y.Z release tag
+            type=raw,value=${{ steps.release_tag.outputs.version }},enable=${{ github.event_name == 'release' }}
+            type=raw,value=${{ steps.release_tag.outputs.major_minor }},enable=${{ github.event_name == 'release' }}
+            type=raw,value=${{ steps.release_tag.outputs.major }},enable=${{ github.event_name == 'release' }}
             # Manual version input (workflow_dispatch)
             type=raw,value=${{ github.event.inputs.version }},enable=${{ github.event.inputs.version != '' }}
           labels: |
@@ -163,7 +180,7 @@ jobs:
       - name: Build and push image
         id: build
         if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           file: docker/job-runner.Dockerfile
