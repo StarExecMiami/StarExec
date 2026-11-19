@@ -213,6 +213,10 @@ def connect_postgres():
             password=os.environ.get("PGPASSWORD", ""),
             dbname=os.environ.get("PGDATABASE", "starexec"),
         )
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        # Session-level async commit cuts bulk COPY WAL fsync stalls without altering target config.
+        cur.execute("SET SESSION synchronous_commit = off")
     conn.autocommit = False
     return conn
 
