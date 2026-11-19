@@ -62,7 +62,7 @@ public final class PublishedSolverMounts {
               done < /proc/self/mountinfo
               [[ "$matches" == 1 ]] || exit 75
             done
-            exec /bin/bash --noprofile --norc -p "$@"
+            exec /bin/bash --noprofile --norc -p -- "$@"
             """;
     private final BuildArtifactStore store;
     private final List<BuildArtifactStore.ReadOnlyMount> mounts;

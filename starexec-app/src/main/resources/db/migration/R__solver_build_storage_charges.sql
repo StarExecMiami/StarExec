@@ -24,7 +24,7 @@ BEGIN
             OR NOT starexec.solver_build_stop_receipt_matches(_a.execution_stop_receipt_payload,
                 _a.execution_stop_receipt_sha256,_a.id,_a.origin_pair_id,_a.attempt_no,_a.engine_identity)
             OR NOT COALESCE(_a.execution_stop_receipt_payload::jsonb->>'backend' IN ('podman','kubernetes'),FALSE)
-            OR _a.execution_stop_receipt_payload::jsonb ? 'disposition'
+            OR (_a.execution_stop_receipt_payload::jsonb->'facts') ? 'disposition'
             OR _a.engine_identity NOT LIKE (_a.execution_stop_receipt_payload::jsonb->>'backend') || ':%'
             OR _a.storage_root IS NOT NULL AND _a.storage_root IS DISTINCT FROM _path
             OR EXISTS (SELECT 1 FROM unnest(ARRAY[_a.source_path,_a.staging_path]) p

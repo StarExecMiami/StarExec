@@ -1925,6 +1925,8 @@ public class RESTServices {
 		}
 		try {
 			return Solvers.readSolverBuildLog(id, userId).orElseThrow(() -> RESTException.NOT_FOUND);
+		} catch (RESTException e) {
+			throw e;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			throw RESTException.INTERNAL_SERVER_ERROR;
