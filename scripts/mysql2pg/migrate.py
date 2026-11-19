@@ -190,6 +190,8 @@ def connect_mysql(source_tz: str):
     )
     with conn.cursor() as cur:
         cur.execute("SET SESSION time_zone = %s", (source_tz,))
+        cur.execute("SET SESSION net_write_timeout = 3600")
+        cur.execute("SET SESSION net_read_timeout = 3600")
         try:
             cur.execute("SET SESSION TRANSACTION READ ONLY")
         except pymysql.err.OperationalError as exc:
