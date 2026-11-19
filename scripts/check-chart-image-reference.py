@@ -50,8 +50,10 @@ def app_images(rendered):
 def main():
     failures = 0
     chart_meta = yaml.safe_load(open(f"{CHART}/Chart.yaml"))
+    chart_version = str(chart_meta.get("version") or "").strip()
     app_version = str(chart_meta.get("appVersion") or "").strip()
-    print(f"check-chart-image-reference: Chart.yaml appVersion = {app_version!r}")
+    print(f"check-chart-image-reference: Chart.yaml version = {chart_version!r}, "
+          f"appVersion = {app_version!r}")
 
     # 1. No template may reference .Chart.AppVersion in an image position.
     import os
@@ -89,7 +91,7 @@ def main():
             continue  # digest-pinned; appVersion is irrelevant
         if app_version and tag == app_version:
             print(f"check-chart-image-reference: ERROR: {dep}/{cname} defaults to tag "
-                  f"{tag!r}, which equals appVersion. Chart 0.2.0 publishes at merge, "
+                  f"{tag!r}, which equals appVersion. Chart {chart_version} publishes at merge, "
                   "before that image exists.", file=sys.stderr)
             failures += 1
     if not failures:
@@ -115,8 +117,8 @@ def main():
     if failures:
         print(f"check-chart-image-reference: FAILED ({failures})", file=sys.stderr)
         return 1
-    print("check-chart-image-reference: PASSED -- chart 0.2.0 is a metadata-only bump; "
-          "publishing it before the tag cannot point anyone at a missing image")
+    print(f"check-chart-image-reference: PASSED -- chart {chart_version} is decoupled from "
+          "appVersion; publishing it before the tag cannot point anyone at a missing image")
     return 0
 
 

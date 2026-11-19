@@ -502,6 +502,26 @@ def case_no_temp_residue_after_prepare():
               f"prepare rc={rc} residue={residue or 'none'} all_hidden={hidden or 'none'}")
 
 
+def case_rerun_same_version_preserves_digest():
+    """Re-running prepare when the current chart version is already published must
+    preserve the published .tgz bytes and digest instead of repacking it."""
+    with scenario("ok") as (ws, fx, out, old):
+        # First publish 0.2.0 into the live fixture, simulating post-merge state.
+        publish(ws, fx.pub, fx.url, "0.2.0")
+        pub_pkg = os.path.join(fx.pub, f"{CHART}-0.2.0.tgz")
+        pub_sha = hashlib.sha256(open(pub_pkg, "rb").read()).hexdigest()
+        # Mutate the working-tree chart without bumping version (same version 0.2.0)
+        # and ensure a different gzip mtime would occur if repacked.
+        write_chart(ws, "0.2.0", extra="-post-merge-noop")
+        rc, log = prepare(ws, fx.url, out, old)
+        out_pkg = os.path.join(out, f"{CHART}-0.2.0.tgz")
+        out_sha = hashlib.sha256(open(out_pkg, "rb").read()).hexdigest() if os.path.isfile(out_pkg) else ""
+        rrc, rlog = retention(ws, out, old)
+        ok = rc == 0 and rrc == 0 and out_sha == pub_sha
+        check("re-running on an already-published version preserves immutable digest", ok,
+              f"prepare rc={rc} retention rc={rrc} digest_match={out_sha == pub_sha}")
+
+
 CASES = [
     case_ok200,
     case_http404_default,
@@ -520,6 +540,7 @@ CASES = [
     case_install_producer_fails,
     case_install_success,
     case_no_temp_residue_after_prepare,
+    case_rerun_same_version_preserves_digest,
 ]
 
 

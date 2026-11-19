@@ -275,8 +275,24 @@ PY
   done < "$WORK/urls.txt"
 fi
 
-# Package the charts in this tree (overwrites same-version files intentionally).
-helm package charts/* --destination "$OUT_DIR"
+# Package charts whose current version is not already published in the retained index.
+# Already-published chart versions are immutable: overwriting them with a freshly gzipped
+# tarball would alter their SHA-256 digest and fail retention verification.
+for chart_dir in charts/*; do
+  [ -f "$chart_dir/Chart.yaml" ] || continue
+  pkg_name="$(python3 - "$chart_dir/Chart.yaml" <<'PY'
+import sys, yaml
+with open(sys.argv[1]) as fh:
+    meta = yaml.safe_load(fh) or {}
+print(f"{meta['name']}-{meta['version']}.tgz")
+PY
+)"
+  if [ "$HAVE_EXISTING" -eq 1 ] && [ -f "$OUT_DIR/$pkg_name" ]; then
+    echo "helm-repo-prepare: preserving already-published $pkg_name (immutable)"
+  else
+    helm package "$chart_dir" --destination "$OUT_DIR"
+  fi
+done
 
 if [ "$HAVE_EXISTING" -eq 1 ]; then
   helm repo index "$OUT_DIR" --url "$BASE_URL" --merge "$EXISTING_INDEX"
