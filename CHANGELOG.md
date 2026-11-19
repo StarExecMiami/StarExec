@@ -9,40 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.6.0] - 2026-11-19
 
-- Ingest conserved per-stage scientific measurements through a fenced SQL path without changing measured disk charges.
-- Account verified ordinary output bytes to the immutable original job once, atomically with completion and without a second owner charge.
-- Conserve the original job in new ordinary creation payloads and reject mismatched admission labels without rewriting historical requests.
-- Refuse premature legacy refunds, resets and quota reconciliation while ordinary execution storage remains unsettled.
-- Refuse legacy statistics accounting for registered ordinary executions while preserving unmanaged and stale-attempt behavior.
-- Retain bounded stopped ordinary output in immutable reserved copies and bind completion to exact bytes and directory ownership.
-- Conserve once-only ordinary output-copy claims and immutable copy-directory bindings before retained writes.
-- Exclude reserved ordinary output parents from writable execution resources and serialize concurrent registration.
-- Add durable ordinary output-copy reservations with exact source manifests, bounded quota booking and immutable allocation readback.
-- Persist ordinary job creation requests and cancellation locators atomically, retaining exact immutable request bytes across uncertain replies and cancellation.
-- Retain immutable ordinary execution phase receipts and fence late creation or payload release after cleanup intent.
-- Match ordinary creation validation to the prepared execution working directory.
-- Recover prepared ordinary inputs through the exact conserved creation request without rebinding storage ownership.
-- Capture authorized ordinary mount policies with the existing held-runtime kernel verifier.
-- Preserve exact ordinary creation and phase acknowledgements across database reply loss and connection failures.
-- Collect runtime mount identity for the exact prepared inputs, preserving scientific filenames without shell interpolation.
-- Configure private ordinary scripts without shared writable paths and retain final files for trusted cleanup.
-- Bind private ordinary creation policies to exact prepared inputs and durable ownership without replay permission.
-- Preserve real provider zero timestamps when recording a positively never-started ordinary container, without granting payload release or storage settlement.
-- Send conserved ordinary creation requests once over the local curl transport, preserving uncertain outcomes and bounding response handling and child cleanup.
-- Send the same conserved ordinary request through the selected Java transport without automatic replay, with bounded slow-response handling and verified worker cleanup.
-- Conserve exact ordinary created-container configuration after validating its immutable request, launcher, limits, environment and bind access, without treating configuration as execution admission.
-- Require a first acknowledged ordinary hold-start claim against the current job, attempt, owner and cancellation locator; historical observations cannot authorize another start.
-- Couple ordinary creation to bounded same-socket inspection and one acknowledged trusted hold start, preserving transport selection and uncertain outcomes without payload release.
-- Conserve exact ordinary stopped-provider facts and revalidate them before retirement, preserving cancellation and never-started distinctions without releasing used storage.
-- Verify the ordinary held runtime and current inputs before one durable payload-release decision and a non-repeatable signal; historical releases cannot authorize another send.
-- Recover stopped ordinary output from its conserved private layout and immutable inputs without reusing pre-payload empty-directory assumptions.
-- Observe stopped monitor and saved-output bytes under one reservation-bounded budget without granting publication or cleanup from a source manifest.
-
-- Serialize dedicated storage ownership across solver builds and ordinary job
-  attempts, preserving build lease history and booking each job allowance once.
-  Refuse reclamation after storage use begins or while its contents are unknown.
-
 ### Added
+- **Execution storage isolation and solver artifact lifecycle (`V0121`–`V0137`)**: Added an additive solver-artifact catalog, immutable build publication and stop-receipt fencing, dedicated ext4 storage inspection and PostgreSQL leases (`V0130`), durable creation/release/cleanup records, and ordinary job execution input/output reservations (`#499`, `#504`, `#505`), including fenced per-stage measurement ingestion, once-only output byte accounting, held-runtime verification, unified `/proc/self/mountinfo` parsing in `MountInfo`, and consistent `starexec.active_execution_storage_bytes(...)` admission guards.
+- **Private XML upload staging**: Added `PrivateUploadStage` and `STAREXEC_UPLOAD_STAGING_DIR` (`0700`, outside runner-writable roots and mount aliases) so `UploadJobXML` and `UploadSpaceXML` validate and extract archives in isolated per-upload directories and fail closed when unconfigured (`#503`).
+- **Git hygiene hooks**: Added `.githooks/pre-commit` and extended `.githooks/commit-msg` with `scripts/git_hygiene_guard.py` (and unit tests) to block staging private keys, dotenv secrets, or local tooling directories and prevent machine-local paths in commit messages (`#502`).
 - **Private job preparation**: Copy authorized ordinary-job inputs into reserved storage with durable identity checks and pre-engine restoration. Retain ownership after partial or uncertain preparation; dispatch remains separate.
 - **Job input snapshots**: Capture authorized input metadata for reserved ordinary-job attempts and recover their storage tokens after a controller restart. Runtime preparation and admission remain separate.
 - **Build storage admission**: Added dedicated ext4 capacity verification and PostgreSQL storage leases tied to current attempts and booked quotas. Independent staging cleanup preserves published output and settles its own allowance once; private resource roots cannot become asset references. Runtime pool activation still requires private mounts and dispatch integration.
@@ -53,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Operational audits**: Added read-only SQL audits for disk quota, space hierarchy, and limit misclassification, with a two-phase disk quota repair.
 
 ### Changed
+- **Kubernetes client and dependency alignment**: Upgraded Fabric8 Kubernetes Client to `7.9.0` with OkHttp `5.4.0` (Vert.x excluded) and Jackson `2.21.7` (`#499`), and bumped Guava to `33.7.2` (`#486`).
+- **JUnit 5 (Jupiter) test suite**: Migrated all tests to JUnit 5 and enforced `jupiter-only` via `maven-enforcer-plugin` (`#485`).
+- **CI resilience and Trivy PR coverage**: Isolated per-job `~/.m2/repository` caches and added `.github/scripts/mvn_retry.py` for transient Maven Central resolution errors (`#501`), added `PopulatedSchemaUpgradeIT` (`V0121` to `V0137`) to CI (`#499`), and reported comparable Trivy SARIF checks for both app and job-runner images on pull requests (`#495`, `#500`).
+- **Standardized operational CLI output**: Unified Makefile and script operational output formatting (`#492`) and masked password values in `make config-show` (`#488`).
 - **The security scan checks the Java dependencies again**: From 2026-10-14 the scan stopped at `npm audit`, which failed on GHSA-vfj7-8cjw-p6xm in `braces`, an advisory with no patched release, and so skipped the OWASP scan of the Java dependencies on every run. The Node audit now runs through a gate with documented, expiring exceptions, and no longer stops the Java scan; the job fails if either does. See docs/SECURITY.md.
 - **Kubernetes job concurrency matches the workers**: `values-prod.yaml` caps job pods at 6, the number Quokka's workers can run at once (each pod requests 31 CPUs and 250Gi on 32-CPU workers), instead of 50. Jobs above capacity waited as Pending pods, which the backend cannot tell apart from pods that will never start; deferred pairs now wait in StarExec's queue. The job pods' `requests` block, which no template read, is removed, and the docs say a submission above the cap is deferred, not rejected.
 - **Kubernetes execution safety**: Execution is now treated as stopped only when both the controller and its pods are confirmed stopped. Unknown or unobservable cluster state fails closed, so StarExec defers replacement work and retains the accounting rather than risk two executions writing the same measurement.
@@ -65,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - **Dead stress-test endpoint**: Removed the `/secure/add/stressTest` mapping and the admin UI that reached it. The mapping pointed at a class in `src/test/java`, so it was never packaged into the WAR and every request returned HTTP 500. The stress-test capability itself is unchanged; it is driven by `TestManager` in the test harness.
+
+### Security
+- **REST, upload, and authentication hardening (`#498`, `#496`, `#230`, `#487`)**:
+  - Stopped logging plaintext passwords on user creation (`Users.java`).
+  - Enforced CSRF protection on mapped state-mutating REST endpoints, aligned HTTP `403`/`404`/`500` REST error responses (including `RESTServices.getSolverBuildLog`), and set picture `Content-Type` headers before streaming.
+  - Rejected path syntax in multipart filenames (`PartWrapper`) and denied processor uploads without community membership (`#496`).
+  - Refused single-element `String[]` commands in `Util.buildProcess` instead of routing through `/bin/sh -c`, and switched `GridEngineBackend.submitCommand` to tokenized argv (`#230`).
+  - Built download exports in a private temporary directory (`#487`).
 
 ### Fixed
 - **Incremental output polling**: Compare timestamps by value so unchanged output returns 304 instead of an empty ZIP. Newly completed pairs still deliver output whose modification time predates the previous poll.
