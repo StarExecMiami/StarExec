@@ -16,4 +16,12 @@ fi
     echo "warning: scripts/english_only.py not found; skipping the English-only commit check" >&2
     exit 0
 }
-exec python3 "$script" commit-msg "$1"
+python3 "$script" commit-msg "$1" || exit $?
+
+hygiene=$(dirname "$0")/../scripts/git_hygiene_guard.py
+if [ ! -f "$hygiene" ]; then
+    root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+    hygiene=$root/scripts/git_hygiene_guard.py
+fi
+[ -f "$hygiene" ] || exit 0
+exec python3 "$hygiene" commit-msg "$1"
