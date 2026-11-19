@@ -103,9 +103,9 @@ tiers:
       - name: job_attributes
       - name: jobpair_inputs
       - name: jobpair_stage_data
+      - name: pairs_rerun
       - name: job_pair_completion
       - name: jobpair_time_delta
-      - name: pairs_rerun
       - name: job_stats
       - name: runscript_errors
       - name: anonymous_primitive_names

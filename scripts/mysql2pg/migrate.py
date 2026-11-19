@@ -402,6 +402,9 @@ def run_migration(
     try:
         if clear_seed:
             clear_target_tables(pg_conn, schema, planned_tables)
+        elif resume_from:
+            # Clear the resume boundary and all remaining tables so no prior partial rows collide.
+            clear_target_tables(pg_conn, schema, tables_to_load)
 
         for pre_spec in already_loaded:
             pre_table = pre_spec["name"]
@@ -453,8 +456,6 @@ def run_migration(
             total_rows = 0
             skipped_dupes = 0
             with my_conn.cursor() as my_cur, pg_conn.cursor() as pg_cur:
-                if resume_from and table == resume_from:
-                    pg_cur.execute(f"DELETE FROM {_quote_ident(schema)}.{_quote_ident(table)}")
                 my_cur.execute(
                     f"SELECT {select_list} FROM {_quote_mysql_ident(mysql_db)}.{_quote_mysql_ident(table)}"
                 )
