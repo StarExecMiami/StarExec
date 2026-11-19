@@ -58,6 +58,11 @@ class DownloadPrivateOutputHttpTest {
             @Override
             protected void service(HttpServletRequest request, HttpServletResponse response) throws java.io.IOException {
                 String scenario = request.getParameter("fixture");
+                // Keep Mockito/ByteBuddy from caching java.sql.* mock classes in Tomcat's disposable
+                // WebappClassLoader, which is closed in @AfterAll and would cause NoClassDefFoundError
+                // in subsequent Surefire tests sharing this JVM.
+                ClassLoader previousCl = Thread.currentThread().getContextClassLoader();
+                Thread.currentThread().setContextClassLoader(DownloadPrivateOutputHttpTest.class.getClassLoader());
                 try (var fixture = new DownloadPrivateOutputPolicyTest.Fixture(request.getParameter("type"),
                         !"missing".equals(scenario), "owner".equals(scenario) || "running".equals(scenario)
                                 || "archive-failure".equals(scenario),
@@ -92,6 +97,8 @@ class DownloadPrivateOutputHttpTest {
                     new Download().service(request, response);
                 } catch (Exception failure) {
                     throw new java.io.IOException(failure);
+                } finally {
+                    Thread.currentThread().setContextClassLoader(previousCl);
                 }
             }
         });
