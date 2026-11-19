@@ -58,7 +58,8 @@ def fetch_mysql_counts(my_conn, db_name: str, tables: Sequence[str]) -> Dict[str
             cur.execute(
                 f"SELECT COUNT(*) FROM {migrate._quote_mysql_ident(db_name)}.{migrate._quote_mysql_ident(table)}"
             )
-            counts[table] = int(cur.fetchone()[0])
+            rows = cur.fetchall()
+            counts[table] = int(rows[0][0])
     return counts
 
 

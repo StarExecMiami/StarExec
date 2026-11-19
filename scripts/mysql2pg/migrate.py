@@ -284,12 +284,27 @@ def sync_sequences(pg_conn, schema: str, tables: Sequence[str]) -> int:
     return updated
 
 
+def clear_target_tables(pg_conn, schema: str, planned_tables: Sequence[Dict[str, Any]]) -> None:
+    """Clear target tables via DELETE in reverse FK order.
+
+    DELETE is used instead of TRUNCATE ... CASCADE because Flyway V0135+
+    attaches immutability BEFORE TRUNCATE triggers on execution history tables.
+    """
+    with pg_conn.cursor() as cur:
+        for spec in reversed(planned_tables):
+            table = spec["name"]
+            cur.execute(f"DELETE FROM {_quote_ident(schema)}.{_quote_ident(table)}")
+    pg_conn.commit()
+    print(f"[clear-seed] cleared {len(planned_tables)} target tables via DELETE")
+
+
 def run_migration(
     manifest: Dict[str, Any],
     planned_tables: Sequence[Dict[str, Any]],
     chunk_size: int = 5000,
     dry_run: bool = False,
     skip_post_sql: bool = False,
+    clear_seed: bool = False,
 ) -> None:
     schema = manifest["schema"]
     source_tz = manifest.get("source_timezone", "+00:00")
@@ -319,6 +334,9 @@ def run_migration(
     loaded_names: List[str] = []
 
     try:
+        if clear_seed:
+            clear_target_tables(pg_conn, schema, planned_tables)
+
         for spec in planned_tables:
             table = spec["name"]
             my_cols = fetch_mysql_columns(my_conn, mysql_db, table)
@@ -418,6 +436,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--chunk-size", type=int, default=5000, help="Rows per COPY batch")
     parser.add_argument("--dry-run", action="store_true", help="Print load plan without connecting")
     parser.add_argument("--skip-post-sql", action="store_true", help="Skip post_load_sql scripts")
+    parser.add_argument(
+        "--clear-seed",
+        action="store_true",
+        help="Clear planned target tables via reverse-order DELETE before COPY (for fresh Flyway V0002 seed rows)",
+    )
     return parser.parse_args(argv)
 
 
@@ -436,6 +459,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         chunk_size=args.chunk_size,
         dry_run=args.dry_run,
         skip_post_sql=args.skip_post_sql,
+        clear_seed=args.clear_seed,
     )
     return 0
 
