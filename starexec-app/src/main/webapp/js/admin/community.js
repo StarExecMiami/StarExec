@@ -74,5 +74,10 @@ jQuery(function($) {
 
 	initCommunityRequestsTable('#commRequests', true);
 
-	setInterval($("#commRequests").DataTable().ajax.reload, 10000);
+	var commReqRefreshId = window.setInterval(function() {
+		$("#commRequests").DataTable().ajax.reload(null, false);
+	}, 10000);
+	$(window).on("pagehide", function() {
+		window.clearInterval(commReqRefreshId);
+	});
 });

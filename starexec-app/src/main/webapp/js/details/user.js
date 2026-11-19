@@ -203,7 +203,7 @@ function printao(elements) {
 		jsonStr += printaoElement(elements[i]) + ",";
 	}
 	jsonStr += elements[len - 1];
-	console.log(elements);
+	log(elements);
 }
 
 /*this handles the pagination of the page.

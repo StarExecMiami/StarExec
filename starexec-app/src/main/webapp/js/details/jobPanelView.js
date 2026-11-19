@@ -21,9 +21,12 @@ $(document).ready(function() {
 	});
 
 	//update the tables every 5 seconds
-	setInterval(function() {
+	var panelRefreshId = window.setInterval(function() {
 		refreshPanels();
 	}, 5000);
+	$(window).on("pagehide", function() {
+		window.clearInterval(panelRefreshId);
+	});
 	initUI();
 	initializePanels();
 });

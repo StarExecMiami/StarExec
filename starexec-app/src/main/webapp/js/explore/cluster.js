@@ -540,8 +540,9 @@ function getDetails(id, type, parent_node) {
 		.load();
 		window['type'] = 'queues';
 		if (star.JobTableRefresh === undefined) {
-			star.JobTableRefresh = window.setInterval($jobs.DataTable().ajax.reload,
-				10000);
+			star.JobTableRefresh = window.setInterval(function() {
+				$jobs.DataTable().ajax.reload(null, false);
+			}, 10000);
 		}
 		$("#detailField .expdContainer").css("display", "none");
 		$("#descriptionContainer").show();
