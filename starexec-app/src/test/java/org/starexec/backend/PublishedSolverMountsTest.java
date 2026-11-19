@@ -117,8 +117,12 @@ class PublishedSolverMountsTest {
                 Files.writeString(solver.resolve("program"),"tampered\n");
             }
             case "linked-solver" -> {
+                Path moved=output.resolve("other");
                 Files.setPosixFilePermissions(output,PosixFilePermissions.fromString("rwx------"));
-                Files.move(solver,output.resolve("other"));Files.createSymbolicLink(solver,output.resolve("other"));
+                Files.setPosixFilePermissions(solver,PosixFilePermissions.fromString("rwx------"));
+                Files.move(solver,moved);
+                Files.setPosixFilePermissions(moved,PosixFilePermissions.fromString("r-x------"));
+                Files.createSymbolicLink(solver,moved);
             }
             case "image-volumes" -> imageConfig.withVolumes(Map.of("/declared",Map.of()));
             case "image-id" -> when(inspected.getId()).thenReturn("runner:latest");

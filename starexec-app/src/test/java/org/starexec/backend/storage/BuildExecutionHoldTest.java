@@ -26,7 +26,11 @@ class BuildExecutionHoldTest {
         Path marker=directory.resolve("started");
         Path script=directory.resolve("script with spaces.bash");
         Files.writeString(script,"#!/bin/bash\nset -eu\nprintf 'started' > '"+marker+"'\nprintf 'PAYLOAD_EXECUTED\\n'\n");
-        List<String> command=new ArrayList<>(BuildExecutionHold.entrypoint(seconds));
+        List<String> command=new ArrayList<>();
+        // Reset INT/HUP/TERM to SIG_DFL: non-interactive bash cannot trap signals inherited as SIG_IGN from CI runners.
+        command.add("/usr/bin/env");
+        command.add("--default-signal=INT,HUP,TERM");
+        command.addAll(BuildExecutionHold.entrypoint(seconds));
         command.addAll(BuildExecutionHold.command(script));
         Path output=directory.resolve("stdout");ProcessBuilder builder=new ProcessBuilder(command);
         builder.environment().putAll(environment);
