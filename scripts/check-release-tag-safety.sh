@@ -15,10 +15,10 @@
 set -uo pipefail
 
 VALIDATOR="$(dirname "$0")/validate-release-tag.sh"
-SENTINEL="${TMPDIR:-/tmp}/release-ref-executed"
+SENTINEL_DIR="$(mktemp -d)"
+trap 'rm -rf "$SENTINEL_DIR"' EXIT
+SENTINEL="$SENTINEL_DIR/release-ref-executed"
 fail=0
-
-rm -f "$SENTINEL"
 
 run_case() { # $1 = expected rc (0|1), $2 = label, $3 = ref value
   local want="$1" label="$2" ref="$3" rc

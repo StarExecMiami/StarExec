@@ -28,16 +28,19 @@ fi
 # abort this script silently: a broken reactor is itself a release blocker and
 # must be reported, not swallowed by `set -e`.
 mvn_version() { # $1 = label, $2 = extra -pl args (may be empty)
-  local label="$1" plargs="$2" out rc
+  local label="$1" plargs="$2" out errfile rc
+  errfile="$(mktemp)"
   # shellcheck disable=SC2086
-  out="$(mvn $plargs help:evaluate -Dexpression=project.version -q -DforceStdout 2>&1)" && rc=0 || rc=$?
+  out="$(mvn $plargs help:evaluate -Dexpression=project.version -q -DforceStdout 2>"$errfile")" && rc=0 || rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "check-release-version: ERROR: Maven could not evaluate $label version (exit $rc)." >&2
     echo "check-release-version: this usually means the reactor is inconsistent," >&2
     echo "check-release-version: e.g. starexec-app's <parent> version does not match the root POM." >&2
-    printf '%s\n' "$out" | tail -n 15 | sed 's/^/    | /' >&2
+    { printf '%s\n' "$out"; cat "$errfile"; } | tail -n 15 | sed 's/^/    | /' >&2
+    rm -f "$errfile"
     return 1
   fi
+  rm -f "$errfile"
   printf '%s' "$out" | tail -n 1 | tr -d '[:space:]'
 }
 

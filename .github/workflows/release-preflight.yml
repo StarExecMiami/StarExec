@@ -68,19 +68,19 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa8c78aa6df2d33d3e20d9 # v4
         with:
           java-version: "17"
           distribution: "temurin"
           cache: "maven"
 
       - name: Setup Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
         with:
           version: v3.15.1
 
@@ -137,15 +137,17 @@ jobs:
 
       # ---- 5. Artifacts ---------------------------------------------------
       - name: Build release artifacts
-        run: mvn -B -DskipTests package -pl starexec-app
+        run: python3 .github/scripts/mvn_retry.py -- mvn -B -DskipTests package -pl starexec-app
 
       - name: Artifacts exist, are non-empty, and hash deterministically
         run: ./scripts/check-release-assets.sh starexec-app/target
 
       - name: CLI distribution contains StarexecCommand.jar
         run: |
-          unzip -l starexec-app/target/starexeccommand.zip | tee /tmp/zip.txt
-          grep -q "StarexecCommand.jar" /tmp/zip.txt \
+          ZIP_LIST="$(mktemp)"
+          trap 'rm -f "$ZIP_LIST"' EXIT
+          unzip -l starexec-app/target/starexeccommand.zip | tee "$ZIP_LIST"
+          grep -q "StarexecCommand.jar" "$ZIP_LIST" \
             || { echo "starexeccommand.zip does not contain StarexecCommand.jar" >&2; exit 1; }
           echo "StarexecCommand.jar present"
 
@@ -186,12 +188,16 @@ jobs:
         run: ./scripts/test-helm-repo-fetch.py
 
       - name: Publishing the chart retains every published version
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
         run: |
           # Read-only against the published repository, prepared in scratch
           # space. Nothing here deploys: no gh-pages action appears in this file.
           SCRATCH="$(mktemp -d)"
+          trap 'rm -rf "$SCRATCH"' EXIT
           ./scripts/helm-repo-prepare.sh \
-            "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" \
+            "https://${REPO_OWNER}.github.io/${REPO_NAME}" \
             "$SCRATCH/helm-repo" \
             "$SCRATCH/published-index.yaml"
           ./scripts/check-helm-retention.py \
