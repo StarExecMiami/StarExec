@@ -48,7 +48,7 @@ $surface-tertiary: lighten($foreground-color, 10%);
 // --- Text Semantic Colors ---
 $text-primary: $text-main-color;
 $text-secondary: $text-accent-color;
-$text-tertiary: darken($text-accent-color, 10%);
+$text-tertiary: #949494;       // >= 4.5:1 contrast on #1f1f1f (5.43:1) and #2c2c2c (4.60:1)
 
 // --- Status Colors ---
 $success: $button-green;      // Use darker green for better contrast
