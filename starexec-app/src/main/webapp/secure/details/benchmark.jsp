@@ -5,6 +5,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		String uniqueId = request.getParameter("anonId");
@@ -29,7 +30,7 @@
 		return;
 	}
 %>
-<star:template title="${benchPageTitle}" js="${js}"
+<star:template title="${fn:escapeXml(benchPageTitle)}" js="${js}"
                css="common/delaySpinner, details/shared, common/table, details/benchmark, shared/copyToStardev, prettify/prettify">
 	<star:primitiveTypes/>
 	<span style="display:none;" id="isAnonymousPage"
@@ -47,7 +48,7 @@
 				<legend>Warning</legend>
 				<span> Missing bench dependency:</span>
 				<c:forEach var="brokeBench" items="${brokenBenchDeps}">
-				<br>${brokeBench.getName()}<span>
+				<br><c:out value="${brokeBench.getName()}"/>
 				</c:forEach>
 			</fieldset>
 		</c:if>
@@ -63,7 +64,7 @@
 				<tbody>
 				<tr>
 					<td>description</td>
-					<td>${bench.description}</td>
+					<td><c:out value="${bench.description}"/></td>
 				</tr>
 				<tr>
 					<td>owner</td>
@@ -98,7 +99,7 @@
 			<tbody>
 			<tr>
 				<td>name</td>
-				<td>${bench.type.name}</td>
+				<td><c:out value="${bench.type.name}"/></td>
 			</tr>
 			<tr>
 				<td>processor id</td>
@@ -106,7 +107,7 @@
 			</tr>
 			<tr>
 				<td>description</td>
-				<td>${bench.type.description}</td>
+				<td><c:out value="${bench.type.description}"/></td>
 			</tr>
 			<c:if test="${!isAnonymousPage}">
 				<tr>
@@ -131,8 +132,8 @@
 				<tbody>
 				<c:forEach var="entry" items="${attributes}">
 					<tr>
-						<td>${entry.key}</td>
-						<td>${entry.value}</td>
+						<td><c:out value="${entry.key}"/></td>
+						<td><c:out value="${entry.value}"/></td>
 					</tr>
 				</c:forEach>
 				</tbody>
@@ -155,7 +156,7 @@
 					<tr>
 						<td><star:benchmark
 								value="${dependency.secondaryBench}"/></td>
-						<td>${dependency.dependencyPath}</td>
+						<td><c:out value="${dependency.dependencyPath}"/></td>
 					</tr>
 				</c:forEach>
 				</tbody>

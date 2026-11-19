@@ -1,5 +1,6 @@
 package org.starexec.data.database;
 
+import org.starexec.data.security.GeneralSecurity;
 import org.starexec.logger.StarLogger;
 
 import com.google.gson.*;
@@ -10,6 +11,21 @@ public class StatusMessage {
 	private static final Gson gson = new GsonBuilder().create();
 
 	private StatusMessage() {} // Class is not instantiable
+
+	/**
+	 * Formats an enabled status banner safely for HTML output.
+	 * Escapes message text and only renders a link for http(s) or site-relative URLs.
+	 */
+	public static String formatStatusHtml(String message, String url) {
+		String safeMessage = GeneralSecurity.getHTMLSafeString(message == null ? "" : message);
+		String trimmedUrl = url == null ? "" : url.trim();
+		String linkHtml = "";
+		if (trimmedUrl.startsWith("http://") || trimmedUrl.startsWith("https://") || trimmedUrl.startsWith("/")) {
+			String safeUrl = GeneralSecurity.getHTMLAttributeSafeString(trimmedUrl);
+			linkHtml = "<a href='" + safeUrl + "'>More Information</a>";
+		}
+		return "<div class='status-message'><p>" + safeMessage + linkHtml + "</p></div>";
+	}
 
 	public static void set(boolean enabled, String message, String url) throws SQLException {
 		java.sql.Connection con = null;
@@ -40,9 +56,7 @@ public class StatusMessage {
 				if (results.getBoolean("enabled")) {
 					final String message = results.getString("message");
 					final String url = results.getString("url");
-					html = "<div class='status-message'><p>" + message
-							+ (url.isEmpty() ? "" : "<a href='" + url + "'>More Information</a>")
-							+ "</p></div>";
+					html = formatStatusHtml(message, url);
 				} else {
 					html = "";
 				}
