@@ -83,13 +83,17 @@
         font-size: 0.9em;
     }
 
-    @media (max-width: 768px) {
+    @include mobile {
         display: flex;
         width: 100%;
 
+        // Equal widths in a row, each label on one line; rows wrap. The
+        // shared button rule sets min-width: 48px on phones; auto keeps each
+        // button as wide as its label.
         .btn-preset {
             flex: 1;
-            min-width: 80px;
+            min-width: auto;
+            white-space: nowrap;
         }
     }
 }
@@ -225,16 +229,6 @@
     }
 }
 
-.table-wrapper {
-    margin-top: 1em;
-    overflow-x: auto;
-
-    @media (max-width: 768px) {
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-    }
-}
-
 #jobpairErrors {
     width: 100%;
     border-collapse: collapse;
@@ -315,7 +309,7 @@
 }
 
 /* ========== Responsive Design ========== */
-@media (max-width: 768px) {
+@include mobile {
     #dateselector {
         fieldset {
             padding: 10px 15px;

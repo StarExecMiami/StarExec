@@ -40,10 +40,39 @@ backend:
 
 kubernetes:
   jobNamespace: starexec
-  jobImage: ghcr.io/starexecmiami/starexec-job-runner:latest
+  # Immutable linux/amd64 manifest digest, not a tag.
+  #
+  # The compute nodes are isolated from the public registry and receive this image by
+  # cluster-local side-load, so the reference has to name bytes that are already resident
+  # rather than something to fetch. A tag cannot do that: ":latest" is mutable, and
+  # Kubernetes derives Always as the pull policy from it, which asks isolated nodes to
+  # reach a registry they cannot see.
+  #
+  # This pin previously lived only as a live Helm override while the chart default stayed
+  # ":latest", so an upgrade whose values omitted it silently reverted the reference.
+  # Recording it here is what stops that from recurring.
+  #
+  # sha256:63ae82d5... is the linux/amd64 manifest inside index sha256:b3b08512...,
+  # built from StarExec revision faccd0aac917a9ce54d68dabd2e664a49beaaf18.
+  # Deliberately the platform manifest and not the index digest, because that is the form
+  # the workers' side-load was validated against.
+  jobImage: ghcr.io/starexecmiami/starexec-job-runner@sha256:63ae82d539f7c26bc70f42036f968897fc110416043d2fedc8a917b828537cdd
   jobImagePullPolicy: IfNotPresent
   jobServiceAccount: starexec-job
-  maxConcurrentJobs: 50
+  # How many job pods may exist at once: what the workers can run at the same time, and no
+  # more. Each job pod requests its full limits (resources below), so a worker with 32
+  # allocatable CPUs and ~251Gi allocatable memory runs exactly one, and Quokka has six
+  # workers labelled starexec.org/worker=true (all in kubernetes.q). Raise this with the
+  # worker count, or if the job size below shrinks.
+  #
+  # A Job created beyond that capacity does not wait in StarExec's queue but as a Pending
+  # pod, and Pending is also what a pod that will never start looks like: it covers both
+  # waiting to be scheduled and failing to start. The backend warns about each such pod
+  # after STAREXEC_K8S_PENDING_WARN_MINUTES and treats it as never started after
+  # STAREXEC_K8S_PENDING_TIMEOUT_MINUTES. Deferred pairs stay PENDING_SUBMIT in the
+  # database instead, at no cost. At 50, with three healthy workers, 47 pods sat Pending
+  # at once during the job 5 rerun on 2026-10-15.
+  maxConcurrentJobs: 6
   nodeSelector:
     starexec.org/worker: "true"
   dataPvc:
@@ -54,9 +83,10 @@ kubernetes:
     accessModes:
       - ReadWriteMany
   resources:
-    requests:
-      cpu: "100m"
-      memory: "256Mi"
+    # Job pods request exactly these limits. KubernetesNativeBackend sets requests equal to
+    # limits (Guaranteed QoS, which the static CPU manager needs before it grants exclusive
+    # cores), and no template reads a separate requests block, so none is set here: the
+    # 100m/256Mi that used to be here never reached a pod.
     limits:
       cpu: "31"
       memory: "250Gi"
@@ -89,12 +119,13 @@ monitoring:
   enabled: false
 
 resources:
-  requests:
-    cpu: "500m"
-    memory: "2Gi"
-  limits:
-    cpu: "4"
-    memory: "8Gi"
+  app:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
 
 web:
   address: "quokka.acorn.miami.edu"

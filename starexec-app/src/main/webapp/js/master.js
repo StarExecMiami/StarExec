@@ -198,7 +198,7 @@ $(document).ready(function () {
         var $this = $(this);
         var $legend = $this.children("legend:first");
 
-        $legend.siblings().wrapAll('<div class="expdContainer" />');
+        $legend.siblings().wrapAll('<div class="expdContainer"></div>');
         $legend.css("cursor", "pointer");
         $legend.data("open", isOpen);
 
@@ -225,12 +225,22 @@ $(document).ready(function () {
     checkForHelpFile();
   }
 
-  $(".hiddenDialog").hide();
+  // A dialog sized to its content (height "auto", jQuery UI's default) grows
+  // up to 90% of the window, as getResponsiveDialogConfig in details/job.js
+  // does; past that its content scrolls and the buttons stay in view. A
+  // dialog with a fixed height, or with its own maxHeight, is left as it is.
+  $.widget("ui.dialog", $.ui.dialog, {
+    _create: function () {
+      if (this.options.height === "auto" && this.options.maxHeight === null) {
+        this.options.maxHeight = Math.max(260, Math.floor($(window).height() * 0.9));
+      }
+      this._super();
+    },
+  });
 
   var defaultDialogConfig = {
     modal: true,
     width: 380,
-    height: 165,
     appendTo: "body",
     autoOpen: true,
   };
@@ -245,6 +255,79 @@ $(document).ready(function () {
     d.dialog($.extend({}, defaultDialogConfig, config));
     d.on("dialogclose", removeThis);
   };
+});
+
+jQuery(function ($) {
+  "use strict";
+
+  /**
+   * A .table-wrapper whose table is wider than the box scrolls, and keyboard
+   * users must be able to reach it to scroll it (WCAG 2.1.1). While it
+   * overflows, it is a focusable region named after its fieldset's legend,
+   * its table's caption or the heading before it; once its content fits, it
+   * leaves the tab order.
+   * Boxes whose tabindex or role a page set itself are left alone. Not in the
+   * DataTables block below, which returns on pages without DataTables.
+   */
+  function updateScrollBox(box) {
+    var $box = $(box);
+    var ours = $box.attr("data-scroll-region") === "true";
+    if (!box || (!ours && ($box.is("[tabindex]") || $box.is("[role]")))) {
+      return;
+    }
+    if (box.scrollWidth > box.clientWidth) {
+      var name = [
+        $box.closest("fieldset").children("legend").first(),
+        $box.find("caption").first(),
+        $box.prevAll("h1, h2, h3, h4, h5, h6").first(),
+      ]
+        .map(function ($el) {
+          return $el.text().replace(/\s+/g, " ").trim();
+        })
+        .filter(Boolean)[0];
+      $box.attr({
+        tabindex: "0",
+        role: "region",
+        "aria-label": name || "Table",
+        "data-scroll-region": "true",
+      });
+    } else if (ours) {
+      $box.removeAttr("tabindex role aria-label data-scroll-region");
+    }
+  }
+
+  // A box starts or stops overflowing when the window or the table resizes.
+  var scrollBoxObserver =
+    typeof ResizeObserver === "function"
+      ? new ResizeObserver(function (entries) {
+          entries.forEach(function (entry) {
+            updateScrollBox($(entry.target).closest(".table-wrapper")[0]);
+          });
+        })
+      : null;
+  if (!scrollBoxObserver) {
+    $(window).on("resize", function () {
+      $(".table-wrapper").each(function () {
+        updateScrollBox(this);
+      });
+    });
+  }
+
+  star.watchScrollBox = function (box) {
+    updateScrollBox(box);
+    if (scrollBoxObserver && box) {
+      scrollBoxObserver.observe(box);
+      $(box)
+        .children("table")
+        .each(function () {
+          scrollBoxObserver.observe(this);
+        });
+    }
+  };
+
+  $(".table-wrapper").each(function () {
+    star.watchScrollBox(this);
+  });
 });
 
 /**
@@ -337,6 +420,24 @@ jQuery(function ($) {
       .parents("fieldset")
       .find(".list-count") // Find the label
       .text(info.recordsTotal); // Set the current count
+  });
+
+  /**
+   * Wide tables scroll inside their own box (.table-wrapper) instead of
+   * stretching their container. Skip tables that DataTables already scrolls
+   * (scrollX/scrollY) and tables a page has wrapped itself.
+   */
+  $(document).on("preInit.dt", function (e, settings) {
+    var table = $(settings.nTable);
+    if (
+      settings.oScroll.sX ||
+      settings.oScroll.sY ||
+      table.closest(".table-wrapper").length
+    ) {
+      return;
+    }
+    table.wrap('<div class="table-wrapper table-wrapper--flush"></div>');
+    star.watchScrollBox(table.parent()[0]);
   });
 
   /**
@@ -466,8 +567,7 @@ function showMessageLegacy(type, message, duration) {
   var messageSpan = $("<div></div>").html(message);
 
   // Create a new DOM element to insert to display the message, and inject its classes and message
-  var tmp =
-    "<div><img src='" + starexecRoot + "images/icons/exclaim.png' /></div>";
+  var tmp = "<div><span class='message__icon' aria-hidden='true'></span></div>";
   log(starexecRoot);
   var msg = $(tmp).attr("class", type + " message");
   $(msg).append(messageSpan);

@@ -5,17 +5,20 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/lib/cli-output.sh"
+
 RELEASE_NAME="${1:-starexec}"
 PODMAN_CMD="${PODMAN_CMD:-podman}"
 FORCE="${2:-false}"
 
-echo "Cleaning up existing StarExec deployment resources..."
+ui_info "Cleaning up existing StarExec deployment resources..."
 
 # 1. Remove Pods
 # We need to find pods associated with the release.
 # Modern Podman supports --filter, older ones might not.
 
-echo "  Scanning for pods..."
+ui_detail "Scanning for pods..."
 POD_IDS=""
 
 # Try obtaining Pod IDs using multiple methods
@@ -38,18 +41,19 @@ fi
 POD_IDS=$(echo "$POD_IDS" | tr ' ' '\n' | sort -u | grep -v '^$')
 
 if [ -n "$POD_IDS" ]; then
-    echo "  Found pods to remove:"
-    echo "$POD_IDS" | sed 's/^/    - /'
-    echo "$POD_IDS" | xargs -n 1 $PODMAN_CMD pod rm -f >/dev/null 2>&1 || {
-        echo "  ⚠️  Some pods could not be removed cleanly (ignoring)"
+    ui_detail "Found pods to remove: $POD_IDS"
+    # PODMAN_CMD is intentionally split into its command prefix and options.
+    # shellcheck disable=SC2086
+    echo "$POD_IDS" | ui_run xargs -n 1 $PODMAN_CMD pod rm -f || {
+        ui_warn "Some pods could not be removed (continuing)"
     }
 else
-    echo "  No existing pods found."
+    ui_detail "Pod queries returned no matching pods."
 fi
 
 # 2. Cleanup Secrets
 # Secret filtering is newer than pod filtering.
-echo "  scanning for secrets..."
+ui_detail "Scanning for secrets..."
 SECRET_NAMES=""
 
 # Method 1: --filter
@@ -69,11 +73,11 @@ fi
 SECRET_NAMES=$(echo "$SECRET_NAMES" | tr ' ' '\n' | sort -u | grep -v '^$')
 
 if [ -n "$SECRET_NAMES" ]; then
-    echo "  Found secrets to remove:"
-    echo "$SECRET_NAMES" | sed 's/^/    - /'
-    echo "$SECRET_NAMES" | xargs -n 1 $PODMAN_CMD secret rm >/dev/null 2>&1 || true
+    ui_detail "Found secrets to remove: $SECRET_NAMES"
+    # shellcheck disable=SC2086
+    echo "$SECRET_NAMES" | ui_run xargs -n 1 $PODMAN_CMD secret rm || true
 else
-    echo "  No secrets to remove."
+    ui_detail "Secret queries returned no matching secrets."
 fi
 
-echo "✓ Cleanup complete."
+ui_info "Cleanup steps finished; review any warnings above."

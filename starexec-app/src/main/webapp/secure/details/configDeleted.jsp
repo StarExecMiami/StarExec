@@ -30,7 +30,7 @@
 
     <header id="pageHeader">
     <div id="starexecLogoWrapper">
-        <a href="<c:url value='/secure/index.jsp'/>"><img src="<c:url value='/images/starlogo.png'/>" alt="StarExec Logo"></a>
+        <a href="<c:url value='/secure/index.jsp'/>"><img src="<c:url value='/images/starlogo.svg'/>" alt="StarExec" width="293" height="70"></a>
     </div>
 
     <div id="starexecNavWrapper">
@@ -68,7 +68,7 @@
     <div id="mainHeaderWrapper">
         <h1 style="width:100%; word-wrap:break-word;" id="mainTemplateHeader">This configuration has been deleted.</h1>
     </div>
-    <img alt="loading" src="<c:url value='/images/loader.gif'/>" id="loader">
+    <div id="loader" class="loading-spinner" role="status"><span class="sr-only">Loading</span></div>
 
     <p>Although this configuration file was used in the job you were just viewing, since then it has been deleted and no longer exists.</p>
     </div>

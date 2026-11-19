@@ -12,6 +12,7 @@ import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
 import org.starexec.logger.StarLogger;
@@ -35,26 +36,31 @@ import org.starexec.logger.StarLogger;
  * The backend is configured via environment variables:
  * </p>
  * <ul>
- * <li>{@code STAREXEC_LOCAL_CONCURRENCY} - Number of concurrent jobs (default:
- * min(4, CPU cores))</li>
+ * <li>{@code STAREXEC_LOCAL_CONCURRENCY} - Number of concurrent physical-core
+ * leases (default: min(4, JVM available processors), then topology-validated)</li>
+ * <li>{@code STAREXEC_LOCAL_CORE_LIST} - Ordered comma-separated logical CPU
+ * leases. Every lease must be allowed and online; the validated length determines
+ * concurrency.</li>
  * <li>{@code STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS} - Per-job timeout in seconds
  * (default: 3600)</li>
  * <li>{@code STAREXEC_LOCAL_USE_RUNSOLVER} - Whether to wrap jobs with
  * runsolver (default: false)</li>
  * <li>{@code STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS} - Shutdown timeout
  * (default: 30)</li>
- * <li>{@code STAREXEC_LOCAL_FORCE_SANDBOX} - Enforce physical core isolation
- * via sandbox locking (default: false)</li>
+ * <li>{@code STAREXEC_LOCAL_FORCE_SANDBOX} - Retain the legacy two-slot sandbox
+ * lock and workspace path in container mode (default: false)</li>
  * </ul>
  *
  * <h3>Configuration Guidance</h3>
  * <ul>
- * <li><strong>STAREXEC_LOCAL_CONCURRENCY</strong>: Set to match your system's
- * CPU cores for optimal performance.
- * Values higher than available cores may cause thrashing. For I/O-bound jobs,
- * higher values may be beneficial.
- * Default is conservative (min of 4 and CPU cores) to prevent system
- * overload.</li>
+ * <li><strong>STAREXEC_LOCAL_CONCURRENCY</strong>: Set no higher than the
+ * distinct physical-core count in this process's effective affinity. Startup
+ * fails closed when sysfs topology cannot prove that many cores. Unset, it is
+ * min(4, available processors), lowered to that count. Ignored when
+ * {@code STAREXEC_LOCAL_CORE_LIST} is set.</li>
+ * <li><strong>STAREXEC_LOCAL_CORE_LIST</strong>: Select one allowed logical CPU
+ * per physical core. Startup rejects malformed or duplicate IDs, CPUs outside
+ * the process affinity, and two leases that are SMT siblings.</li>
  * <li><strong>STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS</strong>: Adjust based on
  * expected job duration.
  * Longer timeouts allow more complex jobs but increase resource usage for stuck
@@ -64,17 +70,18 @@ import org.starexec.logger.StarLogger;
  * Requires runsolver to be installed and configured.</li>
  * <li><strong>STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS</strong>: Increase for
  * systems with slow shutdown processes.</li>
- * <li><strong>STAREXEC_LOCAL_FORCE_SANDBOX</strong>: Set to true to enable
- * strict CPU affinity via sandbox locking (limited to 2 concurrent jobs).
- * Useful for precise benchmarking to avoid cache interference.</li>
+ * <li><strong>STAREXEC_LOCAL_FORCE_SANDBOX</strong>: Set to true to use the
+ * legacy two-slot sandbox lock and workspace path (limited to 2 concurrent
+ * jobs). CPU affinity continues to come from the validated per-job core lease;
+ * this option does not reserve SMT siblings or provide host-wide CPU isolation.</li>
  * </ul>
  *
  * <h2>Performance Considerations</h2>
  * <ul>
  * <li>Concurrent execution improves throughput but increases CPU and memory
  * usage</li>
- * <li>Thread pool uses bounded queue (10,000 jobs) with CallerRunsPolicy for
- * backpressure</li>
+ * <li>Thread pool uses a bounded queue (10,000 jobs) and defers submissions
+ * when that queue is full</li>
  * <li>Monitor thread pool metrics (active threads, queue size) to tune
  * concurrency</li>
  * <li>Jobs are isolated in separate processes with proper cleanup on
@@ -117,11 +124,13 @@ public class LocalBackend implements Backend {
             LocalBackend.class);
 
     // Configuration constants with defaults
-    private static final int DEFAULT_CONCURRENCY = Math.min(
-            4,
-            Runtime.getRuntime().availableProcessors());
+    /** Upper bound of the concurrency used when STAREXEC_LOCAL_CONCURRENCY is unset. */
+    private static final int MAX_DEFAULT_CONCURRENCY = 4;
     private static final int DEFAULT_JOB_TIMEOUT_SECONDS = 3600; // 1 hour
     private static final int DEFAULT_GRACEFUL_SHUTDOWN_SECONDS = 30;
+    private static final Path PROC_SELF_STATUS_PATH = Path.of("/proc/self/status");
+    private static final Path SYSFS_CPU_PATH = Path.of("/sys/devices/system/cpu");
+    private static final Path CPU_ONLINE_PATH = SYSFS_CPU_PATH.resolve("online");
 
     // Node and queue names
     private String nodeName = "local-node";
@@ -129,7 +138,7 @@ public class LocalBackend implements Backend {
 
     // Thread pool for concurrent job execution
     private ExecutorService executorService;
-    private String coreList;
+    private List<Integer> configuredCores = Collections.emptyList();
     private int maxConcurrency;
     private int jobTimeoutSeconds;
     private int gracefulShutdownSeconds;
@@ -142,6 +151,38 @@ public class LocalBackend implements Backend {
     // Thread-safe mapping of execution IDs to job futures and metadata
     private final ConcurrentHashMap<Integer, LocalJob> activeJobs = new ConcurrentHashMap<>();
 
+    // Executions that have left activeJobs but whose pair still has a result waiting for
+    // LocalJobMonitor to ingest (execId -> pairId). Reported by getActiveExecutionIds() so
+    // the periodic broken-pair sweep does not declare a finished pair a submit failure while
+    // the monitor still owns its result. Pruned lazily, when the monitor no longer holds it.
+    private final ConcurrentHashMap<Integer, Integer> awaitingIngestion = new ConcurrentHashMap<>();
+
+    /** A leased core withheld from the pool because part of its job's tree is still alive. */
+    private static final class QuarantinedCore {
+        final int core;
+        final List<ProcessHandle> survivors;
+
+        QuarantinedCore(int core, List<ProcessHandle> survivors) {
+            this.core = core;
+            this.survivors = survivors;
+        }
+
+        boolean anyAlive() {
+            for (ProcessHandle handle : survivors) {
+                if (handle.isAlive()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    // execId -> core that must not be leased again until its job's tree has exited.
+    private final ConcurrentHashMap<Integer, QuarantinedCore> quarantinedCores = new ConcurrentHashMap<>();
+
+    // Bounded wait for each of the SIGTERM and SIGKILL phases of a tree kill.
+    private volatile long treeKillWaitMillis = 5000L;
+
     // Metrics counters
     private final AtomicInteger completedJobCount = new AtomicInteger(0);
     private final AtomicInteger failedJobCount = new AtomicInteger(0);
@@ -149,8 +190,9 @@ public class LocalBackend implements Backend {
     // Job completion monitor (reads status files and updates database)
     private LocalJobMonitor jobMonitor;
 
-    // Cached node ID for database updates to avoid N+1 queries
-    private int cachedNodeId = -1;
+    // Cached node ID for database updates to avoid N+1 queries. Written by the worker
+    // threads that look it up again while it is unknown (recordExecutionHost).
+    private volatile int cachedNodeId = -1;
 
     // Core leasing for physical isolation
     private LinkedBlockingQueue<Integer> availableCores;
@@ -177,6 +219,14 @@ public class LocalBackend implements Backend {
         volatile long startedAt;
         volatile long completedAt;
         volatile Integer coreId; // The leased CPU core ID
+        /** The pair's attempt at submit (#185); null for maintenance jobs. */
+        volatile Integer attemptNo;
+        BuildExecutionContext buildContext;
+
+        // Serialises tree kills for this job, and remembers every descendant observed so a
+        // later kill can still find processes that were re-parented after an earlier one.
+        final Object killLock = new Object();
+        final Set<ProcessHandle> knownTree = ConcurrentHashMap.newKeySet();
 
         enum JobState {
             PENDING, // Submitted but not yet started
@@ -273,9 +323,30 @@ public class LocalBackend implements Backend {
      *
      * @param outputDir The directory containing job output
      */
-    private void cleanupPreviousRunArtifacts(File outputDir) {
+    /**
+     * Removes the previous attempt's results so this one cannot be judged on them.
+     *
+     * <p>Output directories are keyed by pair, not by attempt --
+     * {@code new File(job.logPath).getParentFile()}, where {@code logPath} is the
+     * {@code JobPairs.getLogFilePath(pair)} JobManager submits with -- so a rerun writes into
+     * exactly the tree its predecessor left behind.
+     *
+     * @return true when nothing from a previous attempt can still be read
+     */
+    private boolean cleanupPreviousRunArtifacts(File outputDir) {
         if (outputDir == null || !outputDir.exists()) {
-            return;
+            return true;
+        }
+        // Checked here, not left to the per-artifact probes below: under a non-directory
+        // ancestor, JDK 25 reports each probe as NoSuchFileException ("absent") while JDK 17
+        // reports FileSystemException, so whether this attempt fails closed would depend on
+        // the JVM.
+        if (!outputDir.isDirectory()) {
+            log.error(
+                    "Output path " + outputDir.getAbsolutePath() + " exists but is not a" +
+                            " directory; refusing to start this attempt, because its previous" +
+                            " results cannot be shown to be gone");
+            return false;
         }
 
         String[] artifacts = {
@@ -288,15 +359,187 @@ public class LocalBackend implements Backend {
                 "stderr.txt"
         };
 
+        boolean allRemoved = true;
         for (String artifact : artifacts) {
             File file = new File(outputDir, artifact);
-            if (file.exists()) {
-                if (file.delete()) {
-                    log.debug("Deleted previous run artifact: " + file.getAbsolutePath());
+            if (!deleteTree(file) || pathStillPresent(file)) {
+                // Fail closed, not warn-and-continue. The monitor is registered immediately
+                // after this returns, so a surviving status.json is read as THIS generation's
+                // result before the new process has written anything -- the previous attempt's
+                // outcome recorded against this one. The same reasoning covers stats.json,
+                // var.out, watcher.out and attributes.txt: all are ingestion inputs.
+                //
+                // stdout.txt and stderr.txt are not on that list. They are the solver's own
+                // output, copied back for the user rather than parsed for a status, so a
+                // stale one is a cosmetic problem and blocking a run over it would be worse
+                // than the fault. They are still cleared; they just do not gate the attempt.
+                if (AUTHORITATIVE_INGESTION_INPUTS.contains(artifact)) {
+                    allRemoved = false;
+                    log.error(
+                            "Stale " + artifact + " from a previous attempt survives in " +
+                                    outputDir.getAbsolutePath() +
+                                    "; refusing to start this attempt, because it would be" +
+                                    " read as this attempt's result");
                 } else {
                     log.warn("Failed to delete previous run artifact: " + file.getAbsolutePath());
                 }
             }
+        }
+
+        // The per-stage snapshots, which the list above predates. They were not read by
+        // anything until stage-history ingestion existed, so leaving them was harmless;
+        // now they are authoritative input, and a surviving directory would let this
+        // attempt be recorded with its predecessor's stage history.
+        //
+        // Reported rather than merely logged, unlike the files above: a stale status.json
+        // is overwritten by this run, whereas a stale stage-status/2.json for a run that
+        // only reaches stage 1 is never overwritten by anything.
+        File staleSnapshots = new File(outputDir, STAGE_STATUS_DIRECTORY);
+        boolean snapshotsRemoved = deleteTree(staleSnapshots);
+        if (!snapshotsRemoved || pathStillPresent(staleSnapshots)) {
+            log.error(
+                    "Stale stage-status snapshots from a previous attempt survive in " +
+                            outputDir.getAbsolutePath() +
+                            "; refusing to start this attempt, because they would be read" +
+                            " as its stage history");
+            return false;
+        }
+
+        // The per-stage attributes, for the same reason and with the same consequence. The
+        // directory is also the marker that this attempt's helper speaks the per-stage
+        // protocol, so a survivor would both supply a previous attempt's attributes -- a
+        // stage 2 file for an attempt that dies in stage 1 -- and hide an older helper's
+        // legacy attributes.txt.
+        File staleAttributes = new File(outputDir, STAGE_ATTRIBUTES_DIRECTORY);
+        boolean attributesRemoved = deleteTree(staleAttributes);
+        if (!attributesRemoved || pathStillPresent(staleAttributes)) {
+            log.error(
+                    "Stale stage-attributes from a previous attempt survive in " +
+                            outputDir.getAbsolutePath() +
+                            "; refusing to start this attempt, because they would be read" +
+                            " as its attributes");
+            return false;
+        }
+
+        // The per-stage measurements, likewise: a stage-stats/2.json from an attempt that reached
+        // stage 2 would be recorded as the measurements of one that did not.
+        File staleStats = new File(outputDir, STAGE_STATS_DIRECTORY);
+        boolean statsRemoved = deleteTree(staleStats);
+        if (!statsRemoved || pathStillPresent(staleStats)) {
+            log.error(
+                    "Stale stage-stats from a previous attempt survive in " +
+                            outputDir.getAbsolutePath() +
+                            "; refusing to start this attempt, because they would be read" +
+                            " as its measurements");
+            return false;
+        }
+        return allRemoved;
+    }
+
+    /** Fixed, application-defined name. Never derived from anything a job supplies. */
+    private static final String STAGE_STATUS_DIRECTORY = "stage-status";
+
+    /** Fixed, application-defined name; see {@link StageAttributeFiles}. */
+    private static final String STAGE_ATTRIBUTES_DIRECTORY = StageAttributeFiles.DIRECTORY;
+
+    /** Fixed, application-defined name; see {@link StageStatsFiles}. */
+    private static final String STAGE_STATS_DIRECTORY = StageStatsFiles.DIRECTORY;
+
+    /**
+     * Artifacts a later attempt would READ as its own result, so a stale one is a wrong
+     * measurement rather than untidiness. Deleting any of these must succeed before a new
+     * attempt may start.
+     */
+    private static final java.util.Set<String> AUTHORITATIVE_INGESTION_INPUTS =
+            java.util.Set.of(
+                    "status.json",
+                    "stats.json",
+                    "var.out",
+                    "watcher.out",
+                    "attributes.txt");
+
+    /** Existence of the entry itself, following no links, treating doubt as presence. */
+    private boolean pathStillPresent(File path) {
+        try {
+            java.nio.file.Files.readAttributes(
+                    path.toPath(),
+                    java.nio.file.attribute.BasicFileAttributes.class,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            return true;
+        } catch (java.nio.file.NoSuchFileException absent) {
+            return false;
+        } catch (Exception e) {
+            log.warn("Could not establish whether " + path + " exists; treating as present", e);
+            return true;
+        }
+    }
+
+    /**
+     * Removes a tree without ever following a symbolic link out of it.
+     *
+     * <p>This matters because the tree being removed is solver-writable. A previous attempt's
+     * solver can leave {@code stage-status/link -> /anywhere}, and a traversal that follows it
+     * would have the next attempt's cleanup delete somebody else's files. {@code File.listFiles}
+     * and {@code File.delete} establish no link boundary at all, which is what the first
+     * version of this used.
+     *
+     * <p>{@code walkFileTree} without {@code FOLLOW_LINKS} visits a symbolic link as a file --
+     * so the link itself is deleted and its target is never entered, whether the link is inside
+     * the tree or is the root of it. A broken link is likewise just a file to unlink.
+     *
+     * @return true when nothing of the tree remains
+     */
+    private boolean deleteTree(File target) {
+        java.nio.file.Path root = target.toPath();
+        // No existence check via File.exists(): that follows links, so a dangling link would
+        // report absent and be left in place. readAttributes with NOFOLLOW_LINKS asks about
+        // the entry itself.
+        try {
+            java.nio.file.Files.readAttributes(
+                    root,
+                    java.nio.file.attribute.BasicFileAttributes.class,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        } catch (java.nio.file.NoSuchFileException absent) {
+            return true;
+        } catch (Exception e) {
+            log.error("Could not determine whether " + root + " exists", e);
+            return false;
+        }
+
+        try {
+            java.nio.file.Files.walkFileTree(
+                    root,
+                    java.util.EnumSet.noneOf(java.nio.file.FileVisitOption.class),
+                    Integer.MAX_VALUE,
+                    new java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+                        @Override
+                        public java.nio.file.FileVisitResult visitFile(
+                                java.nio.file.Path file,
+                                java.nio.file.attribute.BasicFileAttributes attrs)
+                                throws java.io.IOException {
+                            // Symbolic links arrive here rather than in preVisitDirectory,
+                            // because FOLLOW_LINKS is absent. Deleting one unlinks it.
+                            java.nio.file.Files.delete(file);
+                            return java.nio.file.FileVisitResult.CONTINUE;
+                        }
+
+                        @Override
+                        public java.nio.file.FileVisitResult postVisitDirectory(
+                                java.nio.file.Path dir, java.io.IOException failure)
+                                throws java.io.IOException {
+                            if (failure != null) {
+                                throw failure;
+                            }
+                            java.nio.file.Files.delete(dir);
+                            return java.nio.file.FileVisitResult.CONTINUE;
+                        }
+                    });
+            return true;
+        } catch (Exception e) {
+            // Reported, not swallowed. Inferring success from the root having disappeared
+            // would call a partial deletion clean.
+            log.error("Could not remove " + root, e);
+            return false;
         }
     }
 
@@ -314,10 +557,24 @@ public class LocalBackend implements Backend {
         // CLEANUP: Delete artifacts from previous runs BEFORE registering with monitor
         // This prevents the race condition where monitor sees old status.json
         File outputDir = new File(job.logPath).getParentFile();
-        cleanupPreviousRunArtifacts(outputDir);
+        if (!cleanupPreviousRunArtifacts(outputDir)) {
+            // Fail closed at the attempt boundary. Starting anyway would let this run be
+            // recorded with the previous attempt's stage history, which is a wrong
+            // measurement -- worse than a job that visibly did not start.
+            job.state = LocalJob.JobState.FAILED;
+            failedJobCount.incrementAndGet();
+            log.error(
+                    "Refusing to execute pair " + pairId + " (execId " + job.execId +
+                            "): a previous attempt's stage snapshots could not be removed." +
+                            " The pair remains unresolved; no solver result or stage was" +
+                            " invented from this cleanup failure.");
+            job.completedAt = System.currentTimeMillis();
+            activeJobs.remove(job.execId, job);
+            return;
+        }
 
         if (pairId > 0 && jobMonitor != null) {
-            jobMonitor.registerJob(outputDir.getAbsolutePath(), pairId);
+            jobMonitor.registerJob(outputDir.getAbsolutePath(), pairId, job.attemptNo);
             log.info(
                     "Registered job with monitor: execId=" +
                             job.execId +
@@ -359,13 +616,17 @@ public class LocalBackend implements Backend {
             // Start the job process
             job.process = startJobProcess(job);
 
+            // Record when the pair started. Outside container mode the job script does it
+            // through SetPairStartTime; in container mode it cannot reach the database and
+            // leaves the stamp to the host, as PodmanBackend and KubernetesNativeBackend do.
+            // setStartTime only fills an empty start_time, and a rerun clears it.
+            if (pairId > 0) {
+                org.starexec.data.database.JobPairs.setStartTime(pairId);
+            }
+
             // Update execution host mapping now that the process is alive
-            if (job.process != null && job.process.isAlive() && pairId > 0 && cachedNodeId > 0) {
-                try {
-                    org.starexec.data.database.JobPairs.updatePairExecutionHost(pairId, cachedNodeId);
-                } catch (Exception e) {
-                    log.error("Failed to update pair execution host for pair " + pairId, e);
-                }
+            if (job.process != null && job.process.isAlive() && pairId > 0) {
+                recordExecutionHost(pairId);
             }
 
             // Wait for completion with timeout and zombie detection
@@ -379,19 +640,17 @@ public class LocalBackend implements Backend {
                     finished = true;
                     break;
                 }
+                // Keep a record of the tree while the wrapper is alive: once it exits its
+                // children are re-parented and can no longer be found from it.
+                recordDescendants(job);
 
                 // Check if the job reported completion status >= 7 (Complete/Error) via file
                 // This handles "zombie" processes that write status but don't exit
                 if (isJobReportedComplete(job)) {
                     log.warn("Job " + job.execId
                             + " reported complete via status file but process is still running. Killing zombie process.");
-                    killProcess(job.process);
-                    // Give it a moment to die
-                    finished = job.process.waitFor(5, TimeUnit.SECONDS);
-                    if (!finished) {
-                        job.process.destroyForcibly();
-                        finished = true;
-                    }
+                    killTree(job);
+                    finished = !job.process.isAlive();
                     break;
                 }
             }
@@ -407,7 +666,7 @@ public class LocalBackend implements Backend {
                                 ") exceeded timeout of " +
                                 jobTimeoutSeconds +
                                 " seconds, killing process");
-                killProcess(job.process);
+                killTree(job);
                 job.state = LocalJob.JobState.TIMEOUT;
                 failedJobCount.incrementAndGet();
             } else {
@@ -422,11 +681,9 @@ public class LocalBackend implements Backend {
                                     pairId +
                                     ") completed successfully with exit code " +
                                     exitCode);
-                    // Safety net: if the wrapper (runsolver) exits 0 but no status.json
-                    // was written (e.g. the job script aborted before its EXIT trap was
-                    // registered), mark the pair as ERROR_RUNSCRIPT so it doesn't stay
-                    // stuck in ENQUEUED forever. The monitor will not find status.json
-                    // in this case, so we must act here.
+                    // Process exit is lifecycle information, not terminal solver evidence.
+                    // Keep the monitor registration so late evidence can still be ingested;
+                    // without status.json the scientific result remains unresolved.
                     if (pairId > 0 && jobMonitor != null) {
                         File statusFile = new File(new File(job.logPath).getParent(), "status.json");
                         if (!statusFile.exists()) {
@@ -434,15 +691,8 @@ public class LocalBackend implements Backend {
                                     "Job " + job.execId + " (pairId=" + pairId +
                                     ") exited 0 but produced no status.json at " +
                                     statusFile.getAbsolutePath() +
-                                    ". This typically means the job script aborted before" +
-                                    " the EXIT trap was registered (e.g. arithmetic with" +
-                                    " set -e). Marking pair as ERROR_RUNSCRIPT.");
-                            try {
-                                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_RUNSCRIPT.getVal());
-                            } catch (Exception e) {
-                                log.error("Failed to set error status for pairId=" + pairId, e);
-                            }
-                            jobMonitor.clearPairTracking(pairId);
+                                    ". The pair remains unresolved and tracked; no solver" +
+                                    " result or stage was invented from the process exit.");
                         }
                     }
                 } else {
@@ -458,16 +708,10 @@ public class LocalBackend implements Backend {
                                     ". Check " +
                                     job.logPath +
                                     " for details");
-                    // Explicitly fail the pair in the DB
                     if (pairId > 0) {
-                        try {
-                            JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_GENERAL.getVal());
-                        } catch (Exception e) {
-                            log.error("Failed to set error status for pairId=" + pairId, e);
-                        }
-                        if (jobMonitor != null) {
-                            jobMonitor.clearPairTracking(pairId);
-                        }
+                        log.error(
+                                "Pair " + pairId + " remains unresolved and tracked: process" +
+                                " exit code " + exitCode + " is not terminal solver evidence.");
                     }
                 }
             }
@@ -480,9 +724,7 @@ public class LocalBackend implements Backend {
                             pairId +
                             ") was interrupted/cancelled");
             job.state = LocalJob.JobState.CANCELLED;
-            if (job.process != null) {
-                killProcess(job.process);
-            }
+            killTree(job);
             Thread.currentThread().interrupt();
         } catch (IOException e) {
             // Process creation failed - likely a user/system error
@@ -501,13 +743,10 @@ public class LocalBackend implements Backend {
                     e);
             job.state = LocalJob.JobState.FAILED;
             failedJobCount.incrementAndGet();
-            // Explicitly fail the pair in the DB so it doesn't get stuck in Enqueued
             if (pairId > 0) {
-                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_RUNSCRIPT.getVal());
-                // Also ensure monitor stops tracking it if it was registered
-                if (jobMonitor != null) {
-                    jobMonitor.clearPairTracking(pairId);
-                }
+                log.error(
+                        "Pair " + pairId + " remains unresolved and tracked: failure to" +
+                        " start its process is not terminal solver evidence.");
             }
         } catch (Exception e) {
             // Other unexpected errors
@@ -521,24 +760,54 @@ public class LocalBackend implements Backend {
                     e);
             job.state = LocalJob.JobState.FAILED;
             failedJobCount.incrementAndGet();
-            if (job.process != null) {
-                killProcess(job.process);
-            }
-            // Explicitly fail the pair in the DB
+            killTree(job);
             if (pairId > 0) {
-                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_GENERAL.getVal());
-                if (jobMonitor != null) {
-                    jobMonitor.clearPairTracking(pairId);
-                }
+                log.error(
+                        "Pair " + pairId + " remains unresolved and tracked: an unexpected" +
+                        " backend failure is not terminal solver evidence.");
             }
         } finally {
-            if (job.coreId != null) {
-                availableCores.offer(job.coreId);
-                job.coreId = null;
-            }
+            releaseCore(job);
             job.completedAt = System.currentTimeMillis();
-            // Remove from active jobs immediately
-            activeJobs.remove(job.execId);
+            // Remove from active jobs immediately, after recording that the monitor may
+            // still owe this pair an ingestion (see getActiveExecutionIds).
+            retainForIngestion(job);
+            activeJobs.remove(job.execId, job);
+        }
+    }
+
+    /**
+     * Records that this pair runs on this host, which is what lists it in the cluster page's
+     * node view while it runs.
+     *
+     * <p>The node id is looked up again while it is unknown. {@link #initialize} looks it up
+     * once, but on a fresh database or a new host name the node is only registered by the first
+     * cluster refresh, which runs after initialization; caching that miss left every pair of
+     * the lifetime without an execution host until its statistics were written.
+     */
+    private void recordExecutionHost(int pairId) {
+        int nodeId = cachedNodeId;
+        if (nodeId <= 0) {
+            nodeId = org.starexec.data.database.Cluster.getNodeIdByName(nodeName);
+            if (nodeId <= 0) {
+                log.warn("Could not find nodeId for " + nodeName + ". Pair " + pairId
+                        + " has no execution host until its statistics are recorded; the lookup"
+                        + " is retried when the next pair starts.");
+                return;
+            }
+            cachedNodeId = nodeId;
+        }
+        try {
+            org.starexec.data.database.JobPairs.updatePairExecutionHost(pairId, nodeId);
+        } catch (Exception e) {
+            log.error("Failed to update pair execution host for pair " + pairId, e);
+        }
+    }
+
+    /** Remembers an execution whose pair may still have a result awaiting ingestion. */
+    private void retainForIngestion(LocalJob job) {
+        if (job.pairId > 0 && jobMonitor != null) {
+            awaitingIngestion.put(job.execId, job.pairId);
         }
     }
 
@@ -622,6 +891,8 @@ public class LocalBackend implements Backend {
         // Jobs write status.json instead of directly calling database functions
         // The LocalJobMonitor will read these files and update the database
         env.put("CONTAINER_MODE", "true");
+        env.remove(BuildExecutionContext.OUTPUT_VARIABLE);
+        if (job.buildContext != null) env.putAll(job.buildContext.environment());
         if (forceSandbox) {
             env.put("STAREXEC_FORCE_SANDBOX", "true");
         }
@@ -647,92 +918,237 @@ public class LocalBackend implements Backend {
 
         // NOTE: Process is created without explicit resource limits.
         // If running untrusted code, STAREXEC_LOCAL_USE_RUNSOLVER must be enabled.
+        if (job.buildContext != null) return startAdmittedBuild(builder, job);
         return builder.start();
     }
 
+    private Process startAdmittedBuild(ProcessBuilder builder, LocalJob job) throws IOException {
+        List<String> command = new ArrayList<>(List.of("/bin/bash", "-c",
+                "IFS= read -r admission && [ \"$admission\" = start ] && exec \"$@\"",
+                "starexec-build-admission"));
+        command.addAll(builder.command());
+        Process process = builder.command(command).start();
+        job.process = process;
+        try {
+            String started = process.info().startInstant()
+                    .orElseThrow(() -> new IOException("Local build process start identity is unavailable")).toString();
+            String identity = "local:" + job.execId + ":" + process.pid() + ":" + started;
+            if (!org.starexec.data.database.SolverBuildArtifacts.admitExecution(job.buildContext, identity)) {
+                throw new IOException("Local build execution admission was refused");
+            }
+            try (var permission = process.getOutputStream()) {
+                permission.write("start\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                permission.flush();
+            }
+            return process;
+        } catch (IOException | java.sql.SQLException | RuntimeException failure) {
+            try { process.getOutputStream().close(); }
+            catch (IOException close) { failure.addSuppressed(close); }
+            killTree(job);
+            throw new IOException("Local build could not pass execution admission", failure);
+        }
+    }
+
+    /**
+     * Has the job script already reported a result the pair may be left holding?
+     *
+     * <p>A true answer kills the process on the caller's next statement, so a false positive is
+     * a live solver truncated mid-run, not a tidy-up. Both halves of the test are therefore the
+     * shared ones rather than local approximations of them.
+     *
+     * <p>Parsed with Gson because {@code status.json} is: it is written in place by the job
+     * script and a read can land mid-write, so the failure that matters is a partial document,
+     * and a regex answers that by matching whatever prefix happens to be there. Gson refuses it
+     * instead, and a refusal here means "not terminal yet", which is the safe direction.
+     *
+     * <p>Terminality is {@link StatusCode#isTerminalExecutionResult()} rather than a numeric
+     * {@code >= 7}. The two disagree on {@code STATUS_PROCESSING_RESULTS(19)},
+     * {@code STATUS_PAUSED(20)}, {@code STATUS_PROCESSING(22)} and every code above the highest
+     * defined one -- all of which mean work is still owed. The job script does not currently
+     * emit any of them, so this changes no behaviour today; it stops the safety of this path
+     * depending on that remaining true, which nothing tests and no comment recorded. An
+     * unrecognised code resolves to {@code STATUS_UNKNOWN(0)}, which is not terminal, so the
+     * process is left alone and the existing timeout path handles it.
+     */
     private boolean isJobReportedComplete(LocalJob job) {
         try {
             File logDir = new File(job.logPath).getParentFile();
             File statusFile = new File(logDir, "status.json");
             if (statusFile.exists()) {
-                // Read file content - limited size so safe to read fully
-                String content = new String(java.nio.file.Files.readAllBytes(statusFile.toPath()));
-                // Simple regex to find status value
-                // Looks for "status": 7 or "status":7 etc.
-                java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"status\"\\s*:\\s*(\\d+)")
-                        .matcher(content);
-                if (m.find()) {
-                    int status = Integer.parseInt(m.group(1));
-                    // Check if status is terminal (COMPLETE=7, ERROR>=8)
-                    // See org.starexec.data.to.Status.StatusCode
-                    return status >= 7;
+                // Bounded by the producer: one short JSON object, rewritten per stage.
+                String content = java.nio.file.Files.readString(statusFile.toPath());
+                com.google.gson.JsonObject record =
+                        com.google.gson.JsonParser.parseString(content).getAsJsonObject();
+                if (record.has("status") && !record.get("status").isJsonNull()) {
+                    int status = record.get("status").getAsInt();
+                    return StatusCode.toStatusCode(status).isTerminalExecutionResult();
                 }
             }
         } catch (Exception e) {
+            // Includes JsonSyntaxException and IllegalStateException from a document that is
+            // still being written. Kept broad, and kept answering false: this method's only
+            // caller reads a false as "keep waiting", which is what a half-written file means.
             log.debug("Error checking status file for zombie detection: " + e.getMessage());
         }
         return false;
     }
 
     /**
-     * Forcibly kills a process and its descendants.
-     * Attempts graceful termination first, then forceful termination if needed.
-     * Also attempts to kill child processes to prevent zombies.
+     * Kills a job's whole process tree and reports whether every member has exited.
      *
-     * @param process The process to kill
+     * <p>The tree is bash -> runsolver -> solver. Signalling the bash wrapper alone leaves
+     * the rest alive, reparented to PID 1, still burning the leased core. The descendants
+     * are therefore snapshotted <em>before</em> the wrapper is signalled (afterwards they
+     * are no longer its children and cannot be found), each is sent SIGTERM, and survivors
+     * are sent SIGKILL after a bounded wait.
+     *
+     * <p>This deliberately signals individual processes, never a process group
+     * ({@code kill -- -pgid}). The commented-out group kill it replaces was disabled because
+     * a group signal can reach the JVM's own group and take the test runner or the
+     * application down. A {@link ProcessHandle} can only name processes that were observed
+     * as descendants of the job, and never the JVM itself.
+     *
+     * <p>Safe to call concurrently and repeatedly: calls for one job serialise, and a later
+     * call finds the tree already gone. A process that re-parents itself away from the
+     * wrapper before a snapshot (a double fork) is not reachable this way.
+     *
+     * @return true only if the wrapper and every recorded descendant have exited
      */
-    private void killProcess(Process process) {
-        if (process == null)
+    private boolean killTree(LocalJob job) {
+        Process process = job.process;
+        if (process == null) {
+            return true;
+        }
+        synchronized (job.killLock) {
+            try {
+                recordDescendants(job);
+                List<ProcessHandle> tree = treeOf(job);
+                for (ProcessHandle handle : tree) {
+                    if (handle.isAlive()) {
+                        handle.destroy();
+                    }
+                }
+                if (!awaitExit(tree, treeKillWaitMillis)) {
+                    // A member may have forked between the snapshot and the signal.
+                    for (ProcessHandle handle : tree) {
+                        if (handle.isAlive()) {
+                            handle.descendants().forEach(job.knownTree::add);
+                        }
+                    }
+                    tree = treeOf(job);
+                    for (ProcessHandle handle : tree) {
+                        if (handle.isAlive()) {
+                            handle.destroyForcibly();
+                        }
+                    }
+                    if (!awaitExit(tree, treeKillWaitMillis)) {
+                        log.warn("Process tree of job " + job.execId + " did not exit after"
+                                + " SIGKILL; its CPU core stays out of service until it does");
+                        return false;
+                    }
+                }
+                return true;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                for (ProcessHandle handle : treeOf(job)) {
+                    if (handle.isAlive()) {
+                        handle.destroyForcibly();
+                    }
+                }
+                return !isTreeAlive(job);
+            }
+        }
+    }
+
+    /** Adds the wrapper's current descendants to the job's recorded tree. */
+    private void recordDescendants(LocalJob job) {
+        Process process = job.process;
+        if (process != null) {
+            process.descendants().forEach(job.knownTree::add);
+        }
+    }
+
+    private List<ProcessHandle> treeOf(LocalJob job) {
+        List<ProcessHandle> tree = new ArrayList<>(job.knownTree);
+        if (job.process != null) {
+            tree.add(job.process.toHandle());
+        }
+        return tree;
+    }
+
+    private boolean isTreeAlive(LocalJob job) {
+        for (ProcessHandle handle : treeOf(job)) {
+            if (handle.isAlive()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean awaitExit(List<ProcessHandle> handles, long millis)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis);
+        for (ProcessHandle handle : handles) {
+            if (!handle.isAlive()) {
+                continue;
+            }
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                return false;
+            }
+            try {
+                handle.onExit().get(remaining, TimeUnit.NANOSECONDS);
+            } catch (TimeoutException e) {
+                return false;
+            } catch (ExecutionException e) {
+                // onExit does not complete exceptionally in practice; liveness is re-checked.
+            }
+            if (handle.isAlive()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Returns the job's core to the pool only once its whole tree has exited. A tree that
+     * outlives the kill keeps its core out of service: leasing it to the next pair would
+     * put two solvers on one core, which the benchmark isolation policy forbids.
+     */
+    private void releaseCore(LocalJob job) {
+        Integer core = job.coreId;
+        if (core == null) {
             return;
-
-        try {
-            long pid = process.pid();
-
-            // Try graceful termination first (SIGTERM)
-            process.destroy();
-            if (!process.waitFor(5, TimeUnit.SECONDS)) {
-                // Force kill if still running (SIGKILL)
-                process.destroyForcibly();
-                if (!process.waitFor(5, TimeUnit.SECONDS)) {
-                    log.warn(
-                            "Process " +
-                                    pid +
-                                    " did not terminate after SIGKILL, may become zombie");
+        }
+        job.coreId = null;
+        if (isTreeAlive(job) && !killTree(job)) {
+            List<ProcessHandle> survivors = new ArrayList<>();
+            for (ProcessHandle handle : treeOf(job)) {
+                if (handle.isAlive()) {
+                    survivors.add(handle);
                 }
             }
+            quarantinedCores.put(job.execId, new QuarantinedCore(core, survivors));
+            log.error("Core " + core + " of job " + job.execId + " is quarantined: "
+                    + survivors.size() + " process(es) of its tree are still alive");
+            for (ProcessHandle handle : survivors) {
+                handle.onExit().thenRun(this::reclaimQuarantinedCores);
+            }
+            reclaimQuarantinedCores();
+            return;
+        }
+        availableCores.offer(core);
+    }
 
-            // Attempt to kill any child processes (process group)
-            // This helps prevent orphaned child processes on Unix systems
-            // Commented out to prevent potential system crashes during testing
-            /*
-             * try {
-             * if (
-             * System.getProperty("os.name")
-             * .toLowerCase()
-             * .contains("linux") ||
-             * System.getProperty("os.name")
-             * .toLowerCase()
-             * .contains("unix") ||
-             * System.getProperty("os.name").toLowerCase().contains("mac")
-             * ) {
-             * // On Unix-like systems, try to kill the process group
-             * Runtime.getRuntime().exec(
-             * new String[] { "kill", "-9", "-" + pid }
-             * );
-             * }
-             * } catch (Exception e) {
-             * // Silently ignore if process group kill fails - process may already be dead
-             * log.debug(
-             * "Could not kill process group for " +
-             * pid +
-             * ": " +
-             * e.getMessage()
-             * );
-             * }
-             */
-        } catch (InterruptedException e) {
-            process.destroyForcibly();
-            Thread.currentThread().interrupt();
+    /** Returns quarantined cores whose processes have all exited to the pool. */
+    private void reclaimQuarantinedCores() {
+        for (Map.Entry<Integer, QuarantinedCore> entry : quarantinedCores.entrySet()) {
+            QuarantinedCore quarantined = entry.getValue();
+            if (!quarantined.anyAlive() && quarantinedCores.remove(entry.getKey(), quarantined)) {
+                availableCores.offer(quarantined.core);
+                log.info("Core " + quarantined.core + " reclaimed after job " + entry.getKey()
+                        + " tree exited");
+            }
         }
     }
 
@@ -748,11 +1164,16 @@ public class LocalBackend implements Backend {
      * <strong>Concurrency Note:</strong> This method blocks the calling thread only
      * during
      * queue insertion. Job execution happens asynchronously in the thread pool.
+     * If the bounded queue is full, a job-pair submission is deferred; a non-pair
+     * maintenance submission returns {@code -1}. The job is never run on the
+     * submitting thread.
      *
      * @param scriptPath           Path to the executable job script
      * @param workingDirectoryPath Working directory for job execution
      * @param logPath              Path where job output/logs should be written
      * @return Execution ID for tracking the job, or -1 on error
+     * @throws SubmissionDeferredException if a job pair reaches a full or shutting-down
+     *                                     executor and should remain queued
      */
     @Override
     public synchronized int submitScript(
@@ -760,8 +1181,30 @@ public class LocalBackend implements Backend {
             String scriptPath,
             String workingDirectoryPath,
             String logPath) {
-        if (executorService == null || executorService.isShutdown()) {
+        return submitScriptInternal(pairId, scriptPath, workingDirectoryPath, logPath, null);
+    }
+
+    @Override
+    public boolean supportsBuildStaging() { return true; }
+
+    @Override
+    public synchronized int submitScript(int pairId, String scriptPath, String workingDirectoryPath,
+                                          String logPath, String queueName, BuildExecutionContext build) {
+        return submitScriptInternal(pairId, scriptPath, workingDirectoryPath, logPath, build);
+    }
+
+    private int submitScriptInternal(int pairId, String scriptPath, String workingDirectoryPath,
+                                     String logPath, BuildExecutionContext build) {
+        if (executorService == null) {
             log.error("Cannot submit job: executor service is not available");
+            return -1;
+        }
+        if (executorService.isShutdown()) {
+            log.warn("Cannot submit job: executor service is shutting down");
+            if (pairId > 0) {
+                throw new SubmissionDeferredException(
+                        "Local executor is shutting down; pair " + pairId + " stays queued");
+            }
             return -1;
         }
 
@@ -790,6 +1233,28 @@ public class LocalBackend implements Backend {
                 }
             }
 
+            // Capture the attempt this execution belongs to (#185). Read here, after
+            // JobManager has claimed the pair (and so after any rerun reset), so every result
+            // write can be fenced on it and a superseded execution cannot overwrite the
+            // rerun. A failed read is not guessed at -- running the pair unfenced could let a
+            // superseded execution overwrite the rerun -- and it is not the pair's fault
+            // either, so it defers: returning -1 would become a terminal ERROR_SGE_REJECT for
+            // a healthy pair. Nothing is reserved yet (activeJobs is only written below), so
+            // there is no slot to release. Maintenance jobs (pairId <= 0) carry no attempt.
+            Integer attemptNo = null;
+            if (pairId > 0) {
+                try {
+                    attemptNo = JobPairs.getCurrentAttemptNo(pairId);
+                } catch (java.sql.SQLException e) {
+                    log.warn("Cannot read attempt for pair " + pairId + ": " + e.getMessage(), e);
+                    throw new SubmissionDeferredException(
+                            "Could not read the current attempt of pair " + pairId +
+                                    " (" + e.getMessage() + "); pair stays queued");
+                }
+            }
+
+            if (build != null) build.requireMatches(pairId, attemptNo);
+
             // Create the job
             int execId = generateExecId();
             LocalJob job = new LocalJob(
@@ -798,13 +1263,44 @@ public class LocalBackend implements Backend {
                     scriptPath,
                     workingDirectoryPath,
                     logPath);
+            job.attemptNo = attemptNo;
+            job.buildContext = build;
 
-            // Submit to executor
-            Future<?> future = executorService.submit(() -> executeJob(job));
+            // Publish all cancellation state before a worker can observe the job. This
+            // also makes a custom caller-run handler safe: a synchronously completed job
+            // removes the entry that is already present instead of being reinserted here.
+            FutureTask<Void> future = new FutureTask<>(() -> {
+                executeJob(job);
+                return null;
+            });
             job.future = future;
-
-            // Track the job
             activeJobs.put(execId, job);
+
+            try {
+                executorService.execute(future);
+            } catch (RejectedExecutionException e) {
+                future.cancel(false);
+                job.state = LocalJob.JobState.CANCELLED;
+                job.completedAt = System.currentTimeMillis();
+                activeJobs.remove(execId, job);
+                log.warn(
+                        "Cannot submit job " + execId +
+                                ": local executor queue is full or shutting down");
+                if (pairId > 0) {
+                    throw new SubmissionDeferredException(
+                            "Local executor queue is full or shutting down; pair " + pairId +
+                                    " stays queued");
+                }
+                return -1;
+            } catch (RuntimeException e) {
+                // Any other hand-off failure must not strand the entry registered above;
+                // the outer handler reports it and returns -1.
+                future.cancel(false);
+                job.state = LocalJob.JobState.FAILED;
+                job.completedAt = System.currentTimeMillis();
+                activeJobs.remove(execId, job);
+                throw e;
+            }
 
             log.debug(
                     "Job submitted: execId=" +
@@ -815,6 +1311,8 @@ public class LocalBackend implements Backend {
                             activeJobs.size());
 
             return execId;
+        } catch (SubmissionDeferredException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Error submitting job: " + e.getMessage(), e);
             return -1;
@@ -823,10 +1321,32 @@ public class LocalBackend implements Backend {
 
     @Override
     public synchronized boolean killPair(int execId) {
+        return killPairOutcome(execId) != null;
+    }
+
+    /**
+     * Unlike the default, does not claim safety it has not seen: a job whose process tree
+     * still has a live member (or whose core is quarantined for that reason) is UNPROVEN.
+     * An execution this backend never held, or whose tree is gone, is CONFIRMED_SAFE.
+     */
+    @Override
+    public synchronized KillOutcome killPairConfirmed(int execId) {
+        KillOutcome outcome = killPairOutcome(execId);
+        if (outcome != null) {
+            return outcome;
+        }
+        QuarantinedCore quarantined = quarantinedCores.get(execId);
+        return quarantined != null && quarantined.anyAlive()
+                ? KillOutcome.UNPROVEN
+                : KillOutcome.CONFIRMED_SAFE;
+    }
+
+    /** @return null if the execution is not held here, otherwise whether its tree is gone */
+    private KillOutcome killPairOutcome(int execId) {
         LocalJob job = activeJobs.get(execId);
         if (job == null) {
             log.debug("Cannot kill job " + execId + ": not found");
-            return false;
+            return null;
         }
 
         try {
@@ -837,18 +1357,17 @@ public class LocalBackend implements Backend {
                 job.future.cancel(true);
             }
 
-            // Kill the process directly
-            if (job.process != null) {
-                killProcess(job.process);
-            }
+            // Kill the whole process tree, not only the bash wrapper
+            boolean treeGone = killTree(job);
 
             job.state = LocalJob.JobState.CANCELLED;
-            activeJobs.remove(execId);
+            retainForIngestion(job);
+            activeJobs.remove(execId, job);
 
-            return true;
+            return treeGone ? KillOutcome.CONFIRMED_SAFE : KillOutcome.UNPROVEN;
         } catch (Exception e) {
             log.error("Error killing job " + execId + ": " + e.getMessage(), e);
-            return false;
+            return null;
         }
     }
 
@@ -899,9 +1418,27 @@ public class LocalBackend implements Backend {
         return sb.toString();
     }
 
+    /**
+     * Executions this backend still answers for: those running or queued, plus those that
+     * have exited but whose terminal result the monitor has not yet recorded (or has held
+     * for intervention). Without the second group, {@code Jobs.setBrokenPairsToErrorStatus}
+     * records a finished pair as {@code ERROR_SUBMIT_FAIL} in the window between process
+     * exit and ingestion, and the real result is then refused as a conflicting terminal
+     * status. An exited execution with no terminal {@code status.json} is not reported:
+     * nothing will complete it, so it is a genuine orphan.
+     */
     @Override
     public Set<Integer> getActiveExecutionIds() throws IOException {
-        return new HashSet<>(activeJobs.keySet());
+        Set<Integer> ids = new HashSet<>(activeJobs.keySet());
+        LocalJobMonitor monitor = jobMonitor;
+        for (Map.Entry<Integer, Integer> entry : awaitingIngestion.entrySet()) {
+            if (monitor != null && monitor.holdsUningestedResult(entry.getValue())) {
+                ids.add(entry.getKey());
+            } else {
+                awaitingIngestion.remove(entry.getKey(), entry.getValue());
+            }
+        }
+        return ids;
     }
 
     /**
@@ -1038,8 +1575,8 @@ public class LocalBackend implements Backend {
 
         // Kill any remaining processes
         for (LocalJob job : activeJobs.values()) {
-            if (job.process != null && job.process.isAlive()) {
-                killProcess(job.process);
+            if (job.process != null && isTreeAlive(job)) {
+                killTree(job);
             }
         }
         activeJobs.clear();
@@ -1155,25 +1692,53 @@ public class LocalBackend implements Backend {
      */
     private void loadConfiguration() {
         // Concurrency level and Core Pinning
-        coreList = EnvironmentConfig.getLocalCoreList();
+        String coreList = EnvironmentConfig.getLocalCoreList();
+        List<Integer> effectiveAffinity = readEffectiveCpuAffinity(PROC_SELF_STATUS_PATH);
+        List<Integer> onlineCpus = readOnlineCpuList(CPU_ONLINE_PATH);
         if (coreList != null && !coreList.trim().isEmpty()) {
-            // If core list is provided, concurrency is bounded by the number of configured cores
-            String[] cores = coreList.split(",");
-            maxConcurrency = cores.length;
-            log.info("Using explicitly configured core list for CPU pinning: " + coreList + " (Concurrency: " + maxConcurrency + ")");
+            List<Integer> parsedCores = parseConfiguredCoreList(coreList);
+            configuredCores = validateConfiguredCoreList(
+                    parsedCores,
+                    effectiveAffinity,
+                    onlineCpus,
+                    CpuPartitionManager.readThreadSiblings(SYSFS_CPU_PATH));
+            // Concurrency is derived only after the complete lease list is valid.
+            maxConcurrency = configuredCores.size();
+            log.info(
+                    "Using validated core list for CPU pinning: " + configuredCores +
+                            " (Concurrency: " + maxConcurrency + ")");
         } else {
-            maxConcurrency = getEnvInt(
-                    "STAREXEC_LOCAL_CONCURRENCY",
-                    DEFAULT_CONCURRENCY);
-            if (maxConcurrency < 1) {
-                log.warn(
-                        "Invalid concurrency " +
-                                maxConcurrency +
-                                ", using default: " +
-                                DEFAULT_CONCURRENCY);
-                maxConcurrency = DEFAULT_CONCURRENCY;
+            Map<Integer, List<Integer>> siblingTopology =
+                    CpuPartitionManager.readThreadSiblings(SYSFS_CPU_PATH);
+            OptionalInt configuredConcurrency = getEnvOptionalInt(
+                    "STAREXEC_LOCAL_CONCURRENCY");
+            if (configuredConcurrency.isPresent() && configuredConcurrency.getAsInt() >= 1) {
+                maxConcurrency = configuredConcurrency.getAsInt();
+            } else {
+                // Computed only without a valid value, so an explicit one never depends on
+                // the topology that a larger default would need.
+                maxConcurrency = defaultConcurrency(
+                        Runtime.getRuntime().availableProcessors(),
+                        effectiveAffinity,
+                        onlineCpus,
+                        siblingTopology);
+                if (configuredConcurrency.isPresent()) {
+                    log.warn(
+                            "Invalid concurrency " +
+                                    configuredConcurrency.getAsInt() +
+                                    ", using default: " +
+                                    maxConcurrency);
+                }
             }
-            log.warn("STAREXEC_LOCAL_CORE_LIST not set. CPU pinning will use blind sequential assignment (0 to " + (maxConcurrency - 1) + "). This may cause SMT/L3 cache thrashing.");
+            configuredCores = selectDefaultCoreList(
+                    maxConcurrency,
+                    effectiveAffinity,
+                    onlineCpus,
+                    siblingTopology);
+            log.info(
+                    "STAREXEC_LOCAL_CORE_LIST not set. Using one allowed logical CPU " +
+                            "from each of " + maxConcurrency + " physical cores: " +
+                            configuredCores);
         }
 
         // Job timeout
@@ -1205,16 +1770,374 @@ public class LocalBackend implements Backend {
         }
     }
 
+    /**
+     * Parses the operator-provided lease list without reordering it.
+     *
+     * <p>Each entry is one worker lease, so accepting a duplicate would let two jobs run on
+     * the same logical CPU while the executor reports two independent slots.</p>
+     */
+    static List<Integer> parseConfiguredCoreList(String rawCoreList) {
+        if (rawCoreList == null || rawCoreList.trim().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CORE_LIST must contain at least one CPU ID");
+        }
+
+        String[] tokens = rawCoreList.split(",", -1);
+        List<Integer> cores = new ArrayList<>(tokens.length);
+        Set<Integer> seen = new HashSet<>();
+        for (int i = 0; i < tokens.length; i++) {
+            String token = tokens[i].trim();
+            if (token.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST token " + (i + 1) +
+                                " is empty; provide comma-separated integer CPU IDs");
+            }
+
+            final int cpu;
+            try {
+                cpu = Integer.parseInt(token);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST token " + (i + 1) + " ('" + token +
+                                "') is not an integer CPU ID",
+                        e);
+            }
+            if (cpu < 0) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST CPU IDs must be non-negative; token " +
+                                (i + 1) + " was " + cpu);
+            }
+            if (!seen.add(cpu)) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST contains duplicate CPU ID " + cpu +
+                                "; each logical CPU can back only one concurrent job");
+            }
+            cores.add(cpu);
+        }
+        return Collections.unmodifiableList(cores);
+    }
+
+    /**
+     * Checks leases against the kernel affinity, online mask, and physical-core topology.
+     */
+    static List<Integer> validateConfiguredCoreList(
+            List<Integer> cores,
+            List<Integer> effectiveAffinity,
+            List<Integer> onlineCpus,
+            Map<Integer, List<Integer>> siblingTopology) {
+        if (cores == null || cores.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CORE_LIST must contain at least one CPU ID");
+        }
+        if (effectiveAffinity == null || effectiveAffinity.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot validate STAREXEC_LOCAL_CORE_LIST: effective CPU affinity is empty");
+        }
+        if (onlineCpus == null || onlineCpus.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot validate STAREXEC_LOCAL_CORE_LIST: online CPU list is empty");
+        }
+
+        Set<Integer> allowed = new HashSet<>(effectiveAffinity);
+        Set<Integer> online = new HashSet<>(onlineCpus);
+        for (int cpu : cores) {
+            if (!allowed.contains(cpu)) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST CPU " + cpu +
+                                " is outside this process's effective affinity " +
+                                CpuPartitionManager.compressCpuset(effectiveAffinity));
+            }
+            if (!online.contains(cpu)) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST CPU " + cpu +
+                                " is offline; online CPUs: " +
+                                CpuPartitionManager.compressCpuset(onlineCpus));
+            }
+        }
+
+        if (cores.size() > 1) {
+            Map<Integer, List<Integer>> topology = siblingTopology == null
+                    ? Collections.emptyMap()
+                    : siblingTopology;
+            Set<Integer> selected = new HashSet<>(cores);
+            for (int cpu : cores) {
+                List<Integer> siblings = topology.get(cpu);
+                if (siblings == null || siblings.isEmpty()) {
+                    throw new IllegalStateException(
+                            "Cannot validate STAREXEC_LOCAL_CORE_LIST CPU " + cpu +
+                                    ": sysfs thread_siblings_list topology is unavailable; " +
+                                    "refusing multiple scientific CPU leases");
+                }
+                for (int sibling : siblings) {
+                    if (sibling != cpu && selected.contains(sibling)) {
+                        throw new IllegalArgumentException(
+                                "STAREXEC_LOCAL_CORE_LIST CPUs " + cpu + " and " + sibling +
+                                        " are SMT siblings on the same physical core; select " +
+                                        "at most one logical CPU per physical core");
+                    }
+                }
+            }
+        }
+
+        return Collections.unmodifiableList(new ArrayList<>(cores));
+    }
+
+    /**
+     * The concurrency used when STAREXEC_LOCAL_CONCURRENCY is unset: the largest value up to
+     * {@code min(4, availableProcessors)} for which {@link #selectDefaultCoreList} finds that
+     * many distinct physical cores. The JVM counts logical CPUs, so on an SMT host with fewer
+     * than four physical cores in the affinity (GitHub's runner: two cores, four threads) that
+     * bound alone asked for more cores than exist, and startup failed with nothing configured.
+     * Topology that cannot be read, or is inconsistent, still fails closed for more than one
+     * lease, as it does for an explicit value.
+     */
+    static int defaultConcurrency(
+            int availableProcessors,
+            List<Integer> effectiveAffinity,
+            List<Integer> onlineCpus,
+            Map<Integer, List<Integer>> siblingTopology) {
+        for (int concurrency = Math.min(MAX_DEFAULT_CONCURRENCY, availableProcessors);
+                concurrency > 1;
+                concurrency--) {
+            try {
+                selectDefaultCoreList(concurrency, effectiveAffinity, onlineCpus, siblingTopology);
+                return concurrency;
+            } catch (IllegalArgumentException fewerCoresThanRequested) {
+                // selectDefaultCoreList reports only a shortfall this way; ask for one fewer.
+            }
+        }
+        return 1;
+    }
+
+    /**
+     * Selects one allowed, online logical CPU per physical core without expanding the
+     * affinity inherited by this JVM.
+     */
+    static List<Integer> selectDefaultCoreList(
+            int concurrency,
+            List<Integer> effectiveAffinity,
+            List<Integer> onlineCpus,
+            Map<Integer, List<Integer>> siblingTopology) {
+        if (concurrency < 1) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CONCURRENCY must be at least 1, but was " + concurrency);
+        }
+        if (effectiveAffinity == null || effectiveAffinity.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot select LocalBackend CPU leases: effective CPU affinity is empty");
+        }
+
+        Set<Integer> uniqueAllowedCpus = new HashSet<>();
+        for (Integer cpu : effectiveAffinity) {
+            if (cpu == null || cpu < 0) {
+                throw new IllegalStateException(
+                        "Cannot select LocalBackend CPU leases: effective affinity contains " +
+                                "an invalid CPU ID: " + cpu);
+            }
+            if (!uniqueAllowedCpus.add(cpu)) {
+                throw new IllegalStateException(
+                        "Cannot select LocalBackend CPU leases: effective affinity contains " +
+                                "duplicate CPU ID " + cpu);
+            }
+        }
+        if (concurrency > effectiveAffinity.size()) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CONCURRENCY requests " + concurrency +
+                            " CPU leases, but effective affinity " +
+                            CpuPartitionManager.compressCpuset(effectiveAffinity) +
+                            " has an allowed CPU count of " + effectiveAffinity.size());
+        }
+
+        if (onlineCpus == null || onlineCpus.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot select LocalBackend CPU leases: online CPU list is empty");
+        }
+        Set<Integer> online = new HashSet<>();
+        for (Integer cpu : onlineCpus) {
+            if (cpu == null || cpu < 0) {
+                throw new IllegalStateException(
+                        "Cannot select LocalBackend CPU leases: online CPU list contains " +
+                                "an invalid CPU ID: " + cpu);
+            }
+            if (!online.add(cpu)) {
+                throw new IllegalStateException(
+                        "Cannot select LocalBackend CPU leases: online CPU list contains " +
+                                "duplicate CPU ID " + cpu);
+            }
+        }
+
+        List<Integer> schedulableCpus = new ArrayList<>();
+        for (int cpu : effectiveAffinity) {
+            if (online.contains(cpu)) {
+                schedulableCpus.add(cpu);
+            }
+        }
+        if (schedulableCpus.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot select LocalBackend CPU leases: effective affinity " +
+                            CpuPartitionManager.compressCpuset(effectiveAffinity) +
+                            " contains no online CPUs");
+        }
+        if (concurrency > schedulableCpus.size()) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CONCURRENCY requests " + concurrency +
+                            " CPU leases, but effective/online CPU intersection " +
+                            CpuPartitionManager.compressCpuset(schedulableCpus) +
+                            " has a schedulable CPU count of " + schedulableCpus.size());
+        }
+
+        if (concurrency == 1) {
+            return Collections.singletonList(schedulableCpus.get(0));
+        }
+
+        Map<Integer, List<Integer>> topology = siblingTopology == null
+                ? Collections.emptyMap()
+                : siblingTopology;
+        if (topology.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot select multiple LocalBackend CPU leases: sysfs " +
+                            "thread_siblings_list topology is unavailable");
+        }
+
+        Map<Integer, Set<Integer>> normalizedGroups = new HashMap<>();
+        for (int cpu : schedulableCpus) {
+            Set<Integer> group = normalizedSiblingGroup(cpu, topology, normalizedGroups);
+            for (int sibling : group) {
+                Set<Integer> reciprocal = normalizedSiblingGroup(
+                        sibling,
+                        topology,
+                        normalizedGroups);
+                if (!group.equals(reciprocal)) {
+                    throw new IllegalStateException(
+                            "Cannot select multiple LocalBackend CPU leases from asymmetric " +
+                                    "thread_siblings_list topology: CPU " + cpu + " reports " +
+                                    group + ", but CPU " + sibling + " reports " + reciprocal);
+                }
+            }
+        }
+
+        List<Integer> physicalCoreRepresentatives = new ArrayList<>();
+        Set<Set<Integer>> seenPhysicalCores = new HashSet<>();
+        for (int cpu : schedulableCpus) {
+            Set<Integer> group = normalizedGroups.get(cpu);
+            if (seenPhysicalCores.add(group)) {
+                physicalCoreRepresentatives.add(cpu);
+            }
+        }
+        if (concurrency > physicalCoreRepresentatives.size()) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CONCURRENCY requests " + concurrency +
+                            " physical-core leases, but effective/online CPU intersection " +
+                            CpuPartitionManager.compressCpuset(schedulableCpus) +
+                            " provides only " + physicalCoreRepresentatives.size() +
+                            " distinct physical core" +
+                            (physicalCoreRepresentatives.size() == 1 ? "" : "s"));
+        }
+        return Collections.unmodifiableList(
+                new ArrayList<>(physicalCoreRepresentatives.subList(0, concurrency)));
+    }
+
+    private static Set<Integer> normalizedSiblingGroup(
+            int cpu,
+            Map<Integer, List<Integer>> topology,
+            Map<Integer, Set<Integer>> normalizedGroups) {
+        Set<Integer> cached = normalizedGroups.get(cpu);
+        if (cached != null) {
+            return cached;
+        }
+
+        List<Integer> siblings = topology.get(cpu);
+        if (siblings == null || siblings.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot select multiple LocalBackend CPU leases: sysfs " +
+                            "thread_siblings_list topology is unavailable for CPU " + cpu);
+        }
+
+        Set<Integer> group = new LinkedHashSet<>();
+        for (Integer sibling : siblings) {
+            if (sibling == null || sibling < 0) {
+                throw new IllegalStateException(
+                        "Malformed thread_siblings_list for CPU " + cpu +
+                                ": invalid sibling CPU ID " + sibling);
+            }
+            if (!group.add(sibling)) {
+                throw new IllegalStateException(
+                        "Malformed thread_siblings_list for CPU " + cpu +
+                                ": duplicate sibling CPU ID " + sibling);
+            }
+        }
+        if (!group.contains(cpu)) {
+            throw new IllegalStateException(
+                    "Malformed thread_siblings_list for CPU " + cpu +
+                            ": thread_siblings_list for CPU " + cpu +
+                            " does not include CPU " + cpu + " itself");
+        }
+
+        Set<Integer> normalized = Collections.unmodifiableSet(group);
+        normalizedGroups.put(cpu, normalized);
+        return normalized;
+    }
+
+    /**
+     * Reads the kernel's effective scheduler affinity for this process.
+     */
+    static List<Integer> readEffectiveCpuAffinity(Path statusPath) {
+        final String field = "Cpus_allowed_list:";
+        try (BufferedReader reader = Files.newBufferedReader(statusPath)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.startsWith(field)) {
+                    String cpuset = line.substring(field.length()).trim();
+                    return Collections.unmodifiableList(
+                            CpuPartitionManager.expandCpuset(cpuset));
+                }
+            }
+        } catch (IOException | IllegalArgumentException e) {
+            throw new IllegalStateException(
+                    "Cannot read LocalBackend effective CPU affinity from " + statusPath,
+                    e);
+        }
+        throw new IllegalStateException(
+                "Cannot read LocalBackend effective CPU affinity: " + statusPath +
+                        " does not contain Cpus_allowed_list");
+    }
+
+    /**
+     * Reads the CPUs on which Linux can currently schedule work.
+     */
+    static List<Integer> readOnlineCpuList(Path onlinePath) {
+        if (onlinePath == null) {
+            throw new IllegalStateException("Cannot read online CPU list: path is null");
+        }
+        try {
+            String cpuset = Files.readString(onlinePath).trim();
+            return Collections.unmodifiableList(
+                    CpuPartitionManager.expandCpuset(cpuset));
+        } catch (IOException | IllegalArgumentException e) {
+            throw new IllegalStateException(
+                    "Cannot read online CPU list from " + onlinePath,
+                    e);
+        }
+    }
+
     private int getEnvInt(String key, int defaultValue) {
+        return getEnvOptionalInt(key).orElse(defaultValue);
+    }
+
+    /**
+     * The variable's value as an integer; empty when it is unset or empty, or when it is
+     * not an integer, which is logged.
+     */
+    private OptionalInt getEnvOptionalInt(String key) {
         String value = System.getenv(key);
         if (value != null && !value.isEmpty()) {
             try {
-                return Integer.parseInt(value.trim());
+                return OptionalInt.of(Integer.parseInt(value.trim()));
             } catch (NumberFormatException e) {
                 log.warn("Invalid integer for " + key + ": " + value);
             }
         }
-        return defaultValue;
+        return OptionalInt.empty();
     }
 
     private boolean getEnvBoolean(String key, boolean defaultValue) {
@@ -1252,24 +2175,7 @@ public class LocalBackend implements Backend {
 
         // Initialize available cores for CPU pinning
         availableCores = new LinkedBlockingQueue<>();
-        if (coreList != null && !coreList.trim().isEmpty()) {
-            String[] cores = coreList.split(",");
-            for (String core : cores) {
-                try {
-                    availableCores.offer(Integer.parseInt(core.trim()));
-                } catch (NumberFormatException e) {
-                    log.error("Invalid core ID in STAREXEC_LOCAL_CORE_LIST: " + core);
-                }
-            }
-            // CRITICAL: Ensure maxConcurrency exactly matches the number of valid cores leased
-            // to prevent executor threads from blocking indefinitely waiting for a core.
-            maxConcurrency = availableCores.size();
-        } else {
-            // Fallback to blind sequential assignment if not configured
-            for (int i = 0; i < maxConcurrency; i++) {
-                availableCores.offer(i);
-            }
-        }
+        availableCores.addAll(configuredCores);
 
         // Create thread pool with custom thread factory for better naming
         ThreadFactory threadFactory = new ThreadFactory() {
@@ -1299,7 +2205,7 @@ public class LocalBackend implements Backend {
                 TimeUnit.SECONDS, // Keep-alive time for idle threads
                 new LinkedBlockingQueue<>(queueSize), // Work queue with bounded capacity
                 threadFactory,
-                new ThreadPoolExecutor.CallerRunsPolicy() // Backpressure: caller thread runs if queue is full
+                new ThreadPoolExecutor.AbortPolicy()
         );
 
         // Create and start job completion monitor

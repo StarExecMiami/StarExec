@@ -25,7 +25,7 @@
 //
 //   Old (DEPRECATED):
 //   <div class="message error">
-//     <img src="..." alt="error icon"/>
+//     <span class="message__icon" aria-hidden="true"></span>
 //     Error message text
 //     <span class="exit">×</span>
 //   </div>
@@ -90,7 +90,9 @@
     }
 
     // DEPRECATED: Use .alert-icon span instead
-    img:first-child {
+    .message__icon {
+        @include icon-mask("circle-alert");
+
         width: 28px;
         height: 28px;
         margin-right: 16px;

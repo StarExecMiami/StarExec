@@ -10,7 +10,7 @@ StarExec supports multiple backends for job execution, each with different chara
 | -------------- | ------------ | ------------------------ | ------------------------ |
 | **Local**      | ❌ None      | Single host, 4-16 jobs   | Development, testing     |
 | **Podman**     | ✅ Container | Single host, 64-100 jobs | Production (single-node) |
-| **Kubernetes** | ✅ Container | Multi-node, scalable     | Production (cluster)     |
+| **Kubernetes** | ✅ Container | Multi-node, scalable     | Controlled use (under validation) |
 | **SGE**        | ⚠️ Process   | Multi-node (HPC)         | Legacy HPC clusters      |
 | **OAR**        | ⚠️ Process   | Multi-node (HPC)         | Legacy HPC clusters      |
 
@@ -51,8 +51,8 @@ backend:
 
 ### Default startup policy (`make start`)
 
-`make start` defaults to the Podman deployment path for better production parity and
-safer execution of untrusted solver binaries.
+`make start` defaults to the Podman deployment path for container runtime parity.
+This default does not establish isolation of shared application data from solvers.
 
 - **Default**: Podman backend (container isolation)
 - **Fallback (explicit opt-in)**: Local backend for trusted-only debugging workflows
@@ -115,9 +115,20 @@ or backend mismatch incidents across releases).
 | Resource limits     | ⚠️    | ✅     | ✅                                         | ✅   | ✅   |
 | Job persistence     | ❌    | ✅     | ✅                                         | ✅   | ✅   |
 | Horizontal scaling  | ❌    | ❌     | Limited by current implementation maturity | ✅   | ✅   |
-| Untrusted code safe | ❌    | ✅     | ✅                                         | ⚠️   | ⚠️   |
+| Untrusted code safe | ❌    | ⚠️     | ⚠️                                         | ⚠️   | ⚠️   |
 | Setup complexity    | Low   | Medium | High                                       | High | High |
 | Maintenance         | Low   | Medium | High                                       | High | High |
+
+Podman and Kubernetes ordinary jobs currently mount shared application data with
+write access. Container namespaces and CPU/memory limits do not restrict writes
+through those mounts. Read-only published solver inputs protect those inputs;
+they do not isolate the remaining job data or enforce a per-execution disk limit.
+See [Bounded execution storage](EXECUTION_STORAGE.md) for the required private
+input/output boundary. Until that boundary is enforced for every execution path,
+use trusted workloads and do not treat either backend as safe for hostile code.
+Mount access semantics are documented by
+[Podman](https://docs.podman.io/en/stable/markdown/podman-run.1.html#volume-v-source-volume-host-dir-container-dir-options)
+and [Kubernetes](https://kubernetes.io/docs/concepts/storage/volumes/).
 
 ### Performance Comparison
 
@@ -141,18 +152,51 @@ The Local Backend executes jobs as processes on the host system. It's simple and
 
 **Not for:** Production, untrusted code, large-scale jobs
 
+Build-aware submissions hold a real process on an anonymous input pipe while the
+server records its PID and start identity and commits execution admission. The
+server then releases the existing CPU-affinity command. Refusal or an admission
+failure closes the pipe and terminates the owned process. Use this lifecycle
+control only with trusted local workloads.
+
 ### Configuration
 
 ```bash
 # Required
 export STAREXEC_BACKEND_TYPE=local
 
+# Choose one concurrency control (the validated core list takes precedence)
+export STAREXEC_LOCAL_CORE_LIST=2,4,6,8      # Example only; use IDs measured on this host
+# export STAREXEC_LOCAL_CONCURRENCY=4        # Used only when the core list is unset
+
 # Optional (with defaults)
-export STAREXEC_LOCAL_CONCURRENCY=4          # Max parallel jobs
 export STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS=3600   # 1 hour timeout
 export STAREXEC_LOCAL_USE_RUNSOLVER=false    # Use runsolver wrapper
 export STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS=30
 ```
+
+When `STAREXEC_LOCAL_CORE_LIST` is set, LocalBackend fails startup unless every
+entry is a unique, non-negative, online CPU in the process's effective affinity.
+It also rejects two entries that sysfs identifies as SMT siblings. The validated
+list order becomes the lease order, and its length is the executor concurrency.
+More than one lease requires readable sysfs `thread_siblings_list` topology.
+Both modes require a readable, valid `/sys/devices/system/cpu/online`; no
+fallback may invent schedulable CPUs. When the list is unset, LocalBackend walks
+the intersection of `Cpus_allowed_list` and the online mask in affinity order,
+then leases the first logical CPU from each distinct sysfs sibling group.
+Multiple leases fail startup when `thread_siblings_list` is unavailable,
+inconsistent, or describes fewer physical cores than
+`STAREXEC_LOCAL_CONCURRENCY`. This prevents two LocalBackend jobs from sharing
+a physical core. It does not reserve the unused sibling against unrelated host
+workloads; full-core exclusivity still requires host CPU isolation or an
+equivalent cgroup/cpuset policy.
+
+Each LocalBackend job starts under `taskset -c` with its validated one-CPU lease.
+In container mode, `functions.bash` passes that inherited `Cpus_allowed_list` to
+`runexec --cores`; it must not reconstruct a CPU range from host `lscpu` data,
+because that could widen the solver beyond its lease. If the kernel affinity list
+cannot be read, the job fails closed. `STAREXEC_LOCAL_FORCE_SANDBOX=true` retains
+the legacy two-slot lock and workspace path, but it does not change CPU leases or
+reserve SMT siblings.
 
 ### Concurrency Tuning
 
@@ -197,9 +241,11 @@ export STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS=30
 
 ### Overview
 
-The Podman Backend executes jobs in isolated containers. It provides strong isolation, enforced resource limits, and database-backed job persistence.
+The Podman Backend executes jobs in containers with CPU/memory limits and
+database-backed job persistence. Mounted data remains subject to the shared
+storage limitations described above.
 
-**Best for:** Production single-node deployments, untrusted code
+**Best for:** Single-node container deployments with trusted workloads
 
 **Not for:** Multi-node scaling (use Kubernetes instead)
 
@@ -210,22 +256,45 @@ The Podman Backend executes jobs in isolated containers. It provides strong isol
 export STAREXEC_BACKEND_TYPE=podman
 
 # Optional (with defaults)
-export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096      # 4GB per job
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1         # 1 CPU per job
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=300 # 5 minutes
+export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=2048      # 2 GiB cgroup ceiling per container
+export STAREXEC_CPU_PARTITION_COUNT=auto              # Multi-NUMA partitions; single-NUMA stays unpinned
 export STAREXEC_CONTAINER_POLL_INTERVAL_MS=5000       # Poll every 5s
 export STAREXEC_CONTAINER_EXITED_CLEANUP_AGE_SECONDS=86400 # Sweep stale exited managed containers after 24h
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5             # Batch size
 ```
 
+The CPU-time and wallclock budgets used by the solver come from the selected
+StarExec queue and job. `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` and
+`STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` were removed because the generated
+job script replaced both values before execution. They never selected cores or
+changed the effective solver budgets.
+
+The memory limit runsolver enforces on the solver is the job's own.
+`STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` caps each pair's whole container, the job
+script and runsolver included, whatever the job's limit, so a pair whose job
+allows more runs at the ceiling. A job created without a memory limit gets
+16 GiB, more than the default ceiling of 2048 MiB. A solver the kernel stops at
+the ceiling is recorded as a memory breach (`EXCEED_MEM`), and the pair log
+gives both limits. Set the ceiling above the largest memory limit your jobs use.
+
+For scientific measurements, configure topology-aware cpusets with
+`STAREXEC_CPU_PARTITION_COUNT` or `STAREXEC_CPU_PARTITIONS`; see
+[CPU partition scheduling](cpu-partition-scheduling.md). On an unpartitioned
+host, `STAREXEC_CONTAINER_CPU_QUOTA_CORES` can impose a CFS bandwidth cap, but it
+does not pin a solver or make measurements publication-grade.
+
+An explicit partition count greater than one groups whole physical cores but
+uses every online CPU. For publication runs, use explicit, topology-checked
+cpusets when the operating system or application needs reserved cores.
+
 ### Resource Limits
 
-| Solver Type              | Memory   | CPU | Wallclock |
-| ------------------------ | -------- | --- | --------- |
-| Lightweight (SMT, QF_BV) | 2048 MB  | 1   | 300s      |
-| Standard (SAT, LIA)      | 4096 MB  | 1   | 600s      |
-| Heavy (QF_NIA)           | 8192 MB  | 2   | 1200s     |
-| Industry (Z3, CVC5)      | 16384 MB | 4   | 3600s     |
+| Solver Type              | Container memory | CPU partition width | Queue/job wallclock budget |
+| ------------------------ | ---------------- | ------------------- | -------------------------- |
+| Lightweight (SMT, QF_BV) | 2048 MB          | 1 physical core     | 300s                       |
+| Standard (SAT, LIA)      | 4096 MB          | 1 physical core     | 600s                       |
+| Heavy (QF_NIA)           | 8192 MB          | 2 physical cores    | 1200s                      |
+| Industry (Z3, CVC5)      | 16384 MB         | 4 physical cores    | 3600s                      |
 
 ### Architecture
 
@@ -263,22 +332,84 @@ Jobs write results to mounted volumes:
 | `status.json`    | Job status updates    |
 | `stats.json`     | Runtime statistics    |
 | `attributes.txt` | Post-processor output |
-| `var.out`        | Solver stdout         |
-| `watcher.out`    | Runsolver output      |
+| `var.out`        | runsolver's measurements (`-v`) |
+| `watcher.out`    | runsolver's log (`-w`) |
+| `stage-status/<n>.json`   | Stage `n`'s latest status    |
+| `stage-attributes/<n>.txt` | Stage `n`'s post-processor output |
+| `stage-stats/<n>.json`    | Stage `n`'s runtime statistics    |
+
+`stats.json` and `attributes.txt` hold one stage at a time: each stage of a multi-stage
+pair replaces them. The job script writes them to a temporary file and renames it, so a
+monitor that polls while a pair runs reads one stage's complete file, never an empty or
+half-replaced one.
+
+Because `attributes.txt` does not say which stage wrote it, each stage's post-processor
+output is also published as `stage-attributes/<n>.txt`. The job script creates the
+`stage-attributes/` directory when the pair starts, before any stage runs, and the monitors
+treat that directory as the protocol marker:
+
+- **Present:** attributes are recorded per stage from `stage-attributes/<n>.txt` only, and
+  `attributes.txt` is never read. A stage is recorded once it has finished (its
+  `stage-status/<n>.json` is terminal, or it produced the pair's final status) and only if the
+  pair has that stage. A finished stage with no file, because it ran no post-processor or its
+  post-processor failed, gets no attributes; the monitors log that at DEBUG, since it is not a
+  fault (a failed post-processor is already the stage's status, `ERROR_POST_PROCESSOR`).
+- **Absent** (a job script from before this protocol): `attributes.txt` is recorded only for
+  a single-stage pair, under its only stage. A multi-stage pair's `attributes.txt` is not
+  recorded, because the stage that wrote it cannot be known.
+
+LocalBackend and KubernetesNativeBackend delete `stage-attributes/` before a rerun, as they
+delete `stage-status/`, and refuse to start the attempt if it survives. PodmanBackend clears
+neither directory, so the job script itself removes any `*.txt` and `*.txt.tmp` left in
+`stage-attributes/` when the pair starts, keeping the directory as the marker. If one cannot
+be removed, the pair fails with a pair-level `ERROR_RUNSCRIPT` before any stage runs.
+`stage-status/` is still not cleared on Podman.
+
+Runtime statistics follow the same protocol. Each stage's `stats.json` is also published as
+`stage-stats/<n>.json`, and `stage-stats/` is created when the pair starts. It is a separate
+marker, because a job script can publish per-stage attributes without per-stage statistics.
+
+- **Present:** statistics are recorded per stage from `stage-stats/<n>.json` only, under the
+  same finished-stage and membership rules. A file is used only if it names this pair and this
+  stage and carries every measurement as a non-negative number. Zero is a valid measurement:
+  runsolver reports `MAXVM=0` for a run shorter than its first 0.1 s sample. A time in
+  exponent form is a number too: runsolver prints a time below 1e-4 s or from 1e6 s that way
+  (`WCTIME=9.90467e-05`), and the job script writes it to the file unchanged. A finished stage
+  with no usable file, for example one whose var file was missing, gets no statistics, never
+  another stage's.
+- **Absent:** `stats.json` is recorded only if it explicitly names this pair and a finished
+  stage the pair has, and it is recorded under that stage. Earlier stages are lost, as they
+  were before this protocol.
+
+Each stage is charged its own saved output against the user's disk quota, as on Grid Engine.
+Container backends used to charge only the final stage's output, so multi-stage jobs now
+count more against the quota. Recording the same stage again charges only the difference.
+
+The job script clears `stage-stats/` at pair start the same way it clears
+`stage-attributes/`, and LocalBackend and KubernetesNativeBackend delete it before a rerun. A
+stage whose statistics cannot be published fails with `ERROR_GENERAL`, as one whose attributes
+cannot be published does.
+
+These writes live in `functions.bash`. The generated job script comes from the image's
+template but sources the helper from `/app/data/sge_scripts/` on the data volume, so the two
+must come from the same release. `docker/entrypoint.sh` therefore synchronises
+`/app/data/sge_scripts/` with the image's `/config/sge/` on every start. A persisted file that
+differs is moved to `/app/data/sge_scripts/.replaced-<UTC timestamp>/` before it is replaced, so
+a hand-applied patch is recoverable, but it does not survive a restart: put it in the image.
 
 ### Tuning for Performance
 
 ```bash
-# High-throughput cluster (32-core, 256GB RAM)
+# High-throughput cluster (32 physical cores, 256GB RAM; 2 cores per partition)
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=8
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=2
+export STAREXEC_CPU_PARTITION_COUNT=16
 export STAREXEC_CONTAINER_POLL_INTERVAL_MS=2000
 
-# Memory-constrained (16GB RAM)
+# Memory-constrained host (16 physical cores, 16GB RAM; 1 core per partition)
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=3
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=2048
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
+export STAREXEC_CPU_PARTITION_COUNT=16
 export STAREXEC_CONTAINER_POLL_INTERVAL_MS=10000
 ```
 
@@ -293,6 +424,97 @@ The Kubernetes backend routes `kubernetes`, `k8s`, and `kubernetes-native` to `K
 **Best for:** Controlled Kubernetes experiments and backend development
 
 **Status:** Experimental. Core submission logic exists, but monitoring still runs in polling mode and production-scale validation is still pending.
+
+The build-aware `Backend.submitScript` overload carries a registered per-attempt
+staging destination. Podman commits execution admission before calling the engine
+start operation. Kubernetes creates build Jobs suspended, admits their returned
+UID in the database, and resumes the exact observed UID and resource version.
+An uncertain engine response retains execution tracking and capacity.
+
+After admission commits, Kubernetes reads the initial suspended Job once before
+resuming it. The read must still identify the registered build and initial
+generation, retain Pod evidence, and have no launch-fence or cancellation marker.
+The single resume write uses that observed resource version; a conflicting or
+ambiguous write is not retried against a newer version.
+
+Resuming a build requires `update` on Jobs in the application's namespace Role.
+The Helm chart grants this to the application account. Runner Pods explicitly
+disable service-account token mounting, including when a custom account is used.
+Engine termination, artifact validation and publication remain separate operations;
+a terminal `status.json` does not establish that writers have stopped.
+
+Podman build containers marked with a registered artifact identity require a matching
+terminal engine inspection before ingestion or removal. The observer checks the
+actual container ID, pair attempt, admitted execution, effective restart policy,
+private process namespace and stopped process flags. It commits an immutable stop
+receipt before cleanup. A failed observation or database write retains the build
+resource and its capacity for retry. A positively inspected, never-started
+container refused by admission can be removed without claiming build completion.
+These checks establish process termination separately from input and output mount
+authorization, artifact validation, and publication.
+
+Kubernetes build Jobs retain their resources until a matching terminal controller
+and terminated containers can be recorded durably. The observer checks Job and
+Pod UIDs, owner references, runtime container and image IDs, and all regular,
+initialization and ephemeral containers. Marked build Jobs have no automatic TTL;
+individual cleanup uses Foreground propagation with a resource-version precondition.
+Bulk deletion excludes these Jobs and recovers their accounting individually.
+Missing Pod observations, an unreadable API or a failed receipt write retain the
+resource and capacity. An explicit stop of an eligible enabled build sets the
+Job's active deadline to one second with its observed resource version and a
+request marker; it preserves the remaining specification and does not suspend
+the Job. A stale or ambiguous update cannot authorize deletion or capacity release.
+The first matching terminal controller and container observations after the
+acknowledged request conserve a cancelled receipt before cleanup. A bounded stop
+wait advances this cleanup using the captured Job identity. Passive safety checks
+do not request cancellation. Old Jobs without retained Pod evidence and enabled
+Pods without positive runtime termination observations remain unresolved.
+
+Build Pod templates include an evidence-retention finalizer before admission.
+Cleanup requires a complete census bound to the actual Job UID, conserves the
+matching physical observations, and removes only the application's finalizer
+using each Pod's observed resource version. Unknown or changed container evidence,
+conflicts and failed acknowledgements retain the Job for retry. Other owners'
+finalizers remain untouched; accepting deletion does not establish resource absence.
+The application service account needs namespace-scoped Pod `update` permission for
+this metadata operation. Runner Pods do not receive its service account token.
+Build stop validation requires `spec.managedBy` to remain unset, checking both
+the modeled field and additional properties before fencing or releasing evidence.
+
+The artifact catalog distinguishes a build that never ran from a completed build.
+Recording non-execution atomically rejects the artifact and conserves its immutable
+receipt, including after the solver is deleted. Such a receipt cannot authorize
+publication or another launch. The backend must fence launch before using this
+operation; suspension or a missing Pod alone is insufficient.
+
+The catalog can atomically reject a cancelled build while conserving its positive
+termination receipt from the admitted engine. Replays preserve the original bytes
+and timestamps, including after cleanup. Runtime publication refuses cancellation
+and non-execution receipts; the publication state transition enforces the same
+rule for callers of the lower-level catalog function. Conserving a cancellation
+receipt does not itself establish termination or decide the pair's intervention.
+
+Native callbacks conserve cancellation as a distinct outcome and acknowledge its
+catalog rejection before cleanup. They do not read scientific status files or
+write solver results for that outcome; the intervention owner settles the pair.
+Cleanup and accounting retain the original Job UID through retries and startup,
+including when the Job is already gone. Callback ownership is checked again after
+provider I/O before tracking and capacity are released. Unknown receipt outcomes
+remain unresolved rather than being treated as normal completion.
+
+The initial launch fence accepts only a generation-one suspended Job with a
+UID-bound selector and complete empty Pod census. It updates metadata using the
+observed resource version; build admission refuses the resulting marker. A
+conflict leaves the newer Job untouched. The fence alone does not record
+non-execution or authorize artifact publication.
+
+Cleanup of an initially suspended build commits its non-execution receipt and
+artifact rejection before deleting the acknowledged fenced Job version. Tracking
+remains until resource removal and accounting settlement both finish. Callbacks
+use the attempt-fenced retry routine without reading status files or recording
+scientific results. Startup resumes this lifecycle from the conserved catalog
+even if the Job is already gone. Unknown registered builds cannot use the legacy
+pending reset, which would otherwise reuse a rejected artifact.
 
 ### Architecture
 
@@ -351,10 +573,21 @@ On startup, `KubernetesNativeBackend` now performs a reconciliation pass
 before the monitor starts. It scans ENQUEUED and RUNNING DB pairs,
 compares them to live managed Kubernetes Jobs, rebuilds in-memory tracking
 for live jobs, processes terminal jobs through the normal completion
-callback, resets stale ENQUEUED pairs back to pending, and marks stale
-RUNNING pairs as failed. During graceful shutdown it stops accepting new
-submissions, drains terminal jobs one final time, stops the monitor, and
-preserves still-running Kubernetes Jobs for the next startup recovery pass.
+callback, and resets stale ENQUEUED pairs back to pending. A RUNNING pair
+whose Job no longer exists is left RUNNING and logged as
+`RECONCILIATION INTERVENTION REQUIRED`: no result is invented for it. Within
+three hours the periodic broken-pair check sets it to `ERROR_SUBMIT_FAIL`,
+which the automatic rerun does not retry; rerun such pairs by hand. During
+graceful shutdown it stops accepting new submissions, drains terminal jobs
+one final time, stops the monitor, and preserves still-running Kubernetes
+Jobs for the next startup recovery pass.
+
+Kubernetes deletes a finished Job `kubernetes.ttlSecondsAfterFinished`
+seconds after it ends (`STAREXEC_K8S_JOB_TTL_SECONDS`, default 3600). When
+a pair's Job finishes while StarExec is down and is deleted before StarExec
+starts again, the pair's result is never recorded and the pair ends up as
+above. To ride out a longer outage, raise the value above its length; every
+finished Job then stays in the namespace that much longer.
 
 ### Verified differences from the legacy backend
 
@@ -379,10 +612,61 @@ introduce noise that is unacceptable for scientific comparison. Prefer lower
 throughput over biased benchmark data.
 
 For local execution, follow the repository's CPU-pinning guidance: exclude
-logical CPU 0, use exactly one logical CPU per physical core, and derive
-concurrency from the selected core list. For Kubernetes, keep
+logical CPU 0 and use exactly one logical CPU per physical core. Both local
+selection modes enforce that mapping, but host CPU isolation is still needed
+to keep unrelated processes off each core's unused sibling. For Kubernetes, keep
 `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true` unless you have workload-specific
-validation that relaxing it preserves benchmark integrity.
+validation that relaxing it preserves benchmark integrity, and check the worker
+nodes as described below: on Kubernetes the isolation comes from the kubelet,
+not from StarExec.
+
+#### What Kubernetes needs for exclusive cores
+
+StarExec controls the pod. Job pods request exactly their limits, so they are
+in the `Guaranteed` QoS class, and with
+`STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true` StarExec refuses a
+`STAREXEC_K8S_CPU_LIMIT` that is not a whole number of CPUs. The kubelet on each
+worker decides the rest
+([Kubernetes: node resource managers](https://kubernetes.io/docs/concepts/resource-management/resource-managers/)).
+StarExec does not check it: reading a kubelet's configuration needs the
+`nodes/proxy` permission, which the chart does not grant.
+
+- **`cpuManagerPolicy: static`.** Only then does a container of a `Guaranteed`
+  pod with an integer CPU request get exclusive CPUs. Under the default `none`
+  policy its limit is enforced with a CFS quota, and it shares the node's CPUs
+  with other pods. The static policy also requires a CPU reservation
+  (`reservedSystemCPUs`, `kubeReserved` or `systemReserved`).
+- **`cpuManagerPolicyOptions: {full-pcpus-only: "true"}`, or SMT turned off.**
+  Without it, on an SMT machine the static policy can give two containers the
+  two hardware threads of one physical core. With it, the static policy gives
+  exclusive CPUs only as whole physical cores, and a pod fails with
+  `SMTAlignmentError` if a container's exclusive CPUs cannot be given as whole
+  cores. Containers that get no exclusive CPUs are not checked: they run on the
+  shared CPUs. `STAREXEC_K8S_CPU_LIMIT` must then be a multiple of the threads
+  per core, typically 2 on x86 machines with SMT on.
+
+Changing the policy of a node means draining it and removing the kubelet's
+`cpu_manager_state` file; follow
+[Changing the CPU Manager Policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#changing-the-cpu-manager-policy).
+
+To check a node, read the configuration its kubelet is running with. This
+needs `nodes/proxy` access, which a cluster administrator has:
+
+```bash
+kubectl get --raw "/api/v1/nodes/<node>/proxy/configz" \
+  | jq '.kubeletconfig | {cpuManagerPolicy, cpuManagerPolicyOptions, reservedSystemCPUs, kubeReserved, systemReserved}'
+```
+
+To check a run, read the pairs' job logs. Each log records the CPUs its pod was
+allowed to use, in the message
+`Container mode: using the CPUs this container is allowed: <list>`. Pairs that
+ran at the same time on one node must show disjoint lists, and with SMT on,
+each list must hold whole cores: compare it with
+`/sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list` on the node.
+Under the `none` policy no pair gets CPUs of its own, so the lists normally
+overlap, and usually each is the node's full CPU set. Disjoint lists alone do
+not show that the static policy is on: an inherited affinity, or a cpuset set
+outside Kubernetes, can also separate them, so check the node as well.
 
 ### Configuration
 
@@ -412,6 +696,10 @@ export STAREXEC_K8S_JOB_TTL_SECONDS=3600
 export STAREXEC_K8S_JOB_BACKOFF_LIMIT=0
 
 # Capacity and reconciliation
+# Size the cap to the job pods the workers can run at once (workers x pods that fit
+# per worker at the cpu/memory limits). A Job above it waits as a Pending pod, which
+# the pending timeout below cannot tell apart from one that will never start; a pair
+# deferred by the cap waits in StarExec's queue instead.
 export STAREXEC_K8S_MAX_CONCURRENT_JOBS=50
 export STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS=300000
 
@@ -423,10 +711,15 @@ export STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS=300000
 # any work at all.
 #
 # After the warn threshold the pair is logged with Kubernetes' own reason.
-# After the timeout its Job is deleted, the slot is released and the pair is set
-# to ERROR_RUNSCRIPT, which is the status the RERUN_FAILED_PAIRS task reruns --
-# once per pair, recorded in pairs_rerun, surviving a restart. Nothing ran, so
-# no measurement is affected by the retry.
+# After the timeout its Job is deleted, the slot is released and, once nothing
+# of the execution can still run, the pair is queued again -- once per pair: the
+# allowance RERUN_FAILED_PAIRS also spends, recorded in pairs_rerun, surviving a
+# restart. Nothing ran, so no result or stage is recorded and no measurement is
+# affected by the retry. A pair whose allowance is already spent is filed as
+# ERROR_SUBMIT_FAIL, which only a manual rerun retries. The pair is queued again
+# only once the absence of a status.json is proven: if the pod did start after
+# all, or its output directory cannot be read, the execution goes through
+# completion ingestion instead and its evidence is kept.
 #
 # Set the timeout to 0 to warn without ever changing a pair's status.
 export STAREXEC_K8S_PENDING_WARN_MINUTES=5
@@ -452,15 +745,29 @@ helm install starexec ./charts/starexec \
 
 ### Prerequisites
 
-- Kubernetes cluster (v1.19+) with worker nodes
+- Kubernetes cluster (tested baseline 1.24+; the chart declares `kubeVersion >=1.16.0`) with worker nodes
 - Shared PersistentVolumeClaim support matched to your topology:
   - ReadWriteOnce is acceptable for validated single-node same-namespace deployments
   - ReadWriteMany is required for validated multi-node shared-PVC scheduling
 - Worker nodes labeled: `starexec.org/worker=true`
 - (Optional) Queue labels: `starexec/queue=<queue-name>`
 - RBAC for the application's ServiceAccount, which the chart's `rbac.yaml`
-  provides: `batch/jobs` (`get, list, watch, create, delete`) and, read-only,
-  `pods` (`get, list`).
+  provides whenever the backend is Kubernetes:
+  - a Role in the release namespace: `batch/jobs` (`get, list, watch, create,
+    delete, deletecollection`), `pods` (`get, list`), and `get` on the
+    release's own Namespace object;
+  - a ClusterRole, `<fullname>-<namespace>-node-reader` (for release
+    `starexec` in namespace `starexec`, `starexec-starexec-node-reader`):
+    `nodes` (`get, list`). Nodes are cluster-scoped, so a Role cannot grant
+    this.
+
+  On a cluster that enforces RBAC, both reads are required: without the
+  namespace read the backend does not initialize, and without the node read it
+  never learns which queues have a schedulable node and holds every pair.
+  `deletecollection` is the admin "pause all", which deletes every managed Job
+  in one request. Changing node labels from StarExec (queue management) also
+  needs `kubernetes.nodeManagement.enabled: true`, which adds a ClusterRole
+  with `update` and `patch` on nodes.
 
   The pods rule is what separates a pod that is running from one that has never
   started — `JobStatus.active` is defined by Kubernetes as counting pending and
@@ -472,21 +779,39 @@ helm install starexec ./charts/starexec \
 
 ### Queue Management
 
-Worker labels are used for Kubernetes-native node selection, and queue labels
-are preserved for node grouping and queue administration APIs. The current
-backend does not yet add queue-specific selectors to submitted Job pods.
+Every pair's pod runs only on worker nodes (`starexec.org/worker=true`, set by
+`STAREXEC_K8S_WORKER_SELECTOR_KEY` and `STAREXEC_K8S_WORKER_SELECTOR_VALUE`), and
+its queue decides which ones, through the queue label
+(`STAREXEC_K8S_QUEUE_LABEL`, default `starexec/queue`):
+
+- A named queue's pods select nodes labelled with that queue, for example
+  `starexec/queue=fast-solvers`.
+- The default queue, `all.q`, runs on worker nodes with no queue label, or with
+  one of the default spellings: `all.q`, `all`, `default`, or an empty value.
+- A pair whose queue no worker node carries is not submitted. It ends with
+  status `ERROR_SGE_REJECT`, and the application log names the missing label.
+  Pairs wait rather than fail while all of a queue's nodes are cordoned or
+  NotReady, while `STAREXEC_K8S_CPU_LIMIT` is not smaller than the allocatable
+  CPU of the queue's largest schedulable node (the log says `Impossible CPU
+  configuration`), and until the backend has listed the nodes once. The
+  backend logs why it holds a queue when the hold starts or its reason
+  changes, again every 6 hours while it lasts, and `Kubernetes no longer holds
+  dispatch for queue '<q>'` at INFO when it ends.
+
+The backend reads queue labels only from worker nodes, so a node needs both
+labels:
 
 ```bash
 # Label worker nodes
 kubectl label nodes worker-1 starexec.org/worker=true
 kubectl label nodes worker-1 starexec/queue=fast-solvers
+kubectl label nodes worker-2 starexec.org/worker=true
 kubectl label nodes worker-2 starexec/queue=heavy-solvers
 ```
 
 ### Current limitations
 
 - End-to-end operator validation is still in progress.
-- Queue labels are not yet enforced in Job pod placement.
 - Monitoring is polling-based today; watch/informer integration is still future work.
 - No repository benchmark currently proves large-scale concurrency claims.
 - Treat Kubernetes support as controlled-use rather than fully mature production guidance.
@@ -564,14 +889,15 @@ export OAR_SERVER=oar-server.example.com
 
 ### Key Parameters
 
-| Parameter                                    | Default | Description                      |
-| -------------------------------------------- | ------- | -------------------------------- |
-| `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME`           | 5       | Batch size per submission cycle  |
-| `STAREXEC_NODE_MULTIPLIER`                   | 16      | Queue depth = multiplier × nodes |
-| `STAREXEC_CONTAINER_POLL_INTERVAL_MS`        | 5000    | Poll interval for job completion |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB`       | 4096    | Memory limit per container       |
-| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT`       | 1       | CPU cores per container          |
-| `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` | 300     | Wallclock timeout (seconds)      |
+| Parameter                              | Default | Description                                              |
+| -------------------------------------- | ------- | -------------------------------------------------------- |
+| `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME`     | 5       | Batch size per submission cycle                          |
+| `STAREXEC_NODE_MULTIPLIER`             | 16      | Queue depth = multiplier × nodes                         |
+| `STAREXEC_CONTAINER_POLL_INTERVAL_MS`  | 5000    | Poll interval for job completion                         |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048    | Podman cgroup memory ceiling per container; caps every job's memory limit |
+| `STAREXEC_CPU_PARTITION_COUNT`         | `auto`  | `N > 1` creates topology-aware partitions; `auto` uses multiple NUMA nodes and otherwise remains unpinned |
+| `STAREXEC_CPU_PARTITIONS`              | unset   | Explicit cpusets; overrides the partition count          |
+| `STAREXEC_CONTAINER_CPU_QUOTA_CORES`   | 0       | Unpartitioned CFS cap; does not provide CPU affinity     |
 
 ### Tuning by Workload
 
@@ -579,28 +905,32 @@ export OAR_SERVER=oar-server.example.com
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=300
+export STAREXEC_CPU_PARTITION_COUNT=16 # Example: 16 physical cores, one per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5
+# Configure the 300s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 #### SMT-LIB Benchmarks
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=1200
+export STAREXEC_CPU_PARTITION_COUNT=16 # Example: 16 physical cores, one per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=4
+# Configure the 1200s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 #### Parallel Solvers
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=16384
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=8
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=3600
+export STAREXEC_CPU_PARTITION_COUNT=4 # Example: 16 physical cores, four per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=2
+# Configure the 3600s CPU/wallclock budgets in the StarExec queue/job.
 ```
+
+The per-workload wallclock and CPU-time values that earlier versions of these profiles
+set through `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` / `..._CPU_LIMIT` were never
+applied; configure them on the queue or the job instead.
 
 ### Monitoring
 
@@ -609,9 +939,9 @@ Track these metrics:
 | Metric             | Healthy Range | Action if Out of Range           |
 | ------------------ | ------------- | -------------------------------- |
 | Queue depth        | 50-100        | Adjust `NUM_JOB_PAIRS_AT_A_TIME` |
-| CPU utilization    | 70-90%        | Adjust `CPU_LIMIT`               |
+| CPU utilization    | 70-90%        | Review partition width and concurrency |
 | Memory utilization | 60-80%        | Adjust `MEMORY_MB`               |
-| Job timeout rate   | < 1%          | Increase `WALLCLOCK_LIMIT`       |
+| Job timeout rate   | < 1%          | Review the queue/job wallclock budget |
 | OOM kill rate      | 0%            | Increase `MEMORY_MB`             |
 
 ---
@@ -624,8 +954,8 @@ Track these metrics:
 # Check backend logs
 make logs-app | grep Backend
 
-# Verify backend is initialized
-grep "Backend initialized" logs/starexec.log
+# Verify backend is initialized (`podman ps` shows the app container's name)
+podman exec <app-container> grep "Backend initialized" /var/log/starexec/starexec.log
 
 # Check configuration
 echo $STAREXEC_BACKEND_TYPE
@@ -717,21 +1047,25 @@ Jobs run as the application user with full host access.
 
 ### Podman Backend
 
-Recommended for untrusted code
+Container controls do not establish isolation of shared writable application data.
 
-- Container isolation via namespaces
-- Resource limits enforced by cgroups
-- Rootless mode for additional security
-- No host access from containers
+- Namespaces restrict process scope; mounted host paths remain accessible.
+- Cgroups enforce configured CPU/memory limits, not per-execution disk capacity.
+- Rootless mode reduces host privileges but does not prevent writes allowed to the
+  application user through shared mounts.
+- Published solver inputs are read-only; ordinary job output still requires the
+  private storage boundary described in [Bounded execution storage](EXECUTION_STORAGE.md).
 
 ### Kubernetes Backend
 
-Safe for untrusted code
+Shared writable data volumes remain accessible to job pods. Kubernetes controls
+must be configured and verified together with per-execution storage isolation.
 
-- Pod security policies
-- NetworkPolicies for isolation
-- Resource quotas
-- RBAC for access control
+- Pod security settings limit privileges and host integration.
+- NetworkPolicies govern network traffic, not mounted filesystem access.
+- Resource quotas govern admitted resources; they do not establish a hard write
+  limit on a shared persistent volume.
+- RBAC controls Kubernetes API access, not files exposed by a volume mount.
 
 ### HPC Backends (SGE/OAR)
 

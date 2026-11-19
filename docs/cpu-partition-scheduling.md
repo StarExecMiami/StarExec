@@ -93,9 +93,12 @@ cat /sys/devices/system/cpu/cpu0/topology/thread_siblings_list
   physical cores, so two job pairs contend for the same L1 and L2 caches while appearing
   isolated. On such a machine the equivalent safe value is `"0-3,8-11 4-7,12-15"`.
 
-StarExec refuses to start when an explicit `STAREXEC_CPU_PARTITIONS` splits siblings, so
-a wrong value fails loudly rather than quietly producing untrustworthy measurements. It
-also warns if a partition includes CPU 0, which handles interrupts and OS work.
+The Podman backend refuses to start when an explicit `STAREXEC_CPU_PARTITIONS` splits
+siblings, so a wrong value fails loudly rather than quietly producing untrustworthy
+measurements. The web application still comes up, but no Podman job runs and pairs stay
+queued until the value is fixed and StarExec is restarted; the startup log says
+`Podman backend not started:` and names the value. It also warns if a partition includes
+CPU 0, which handles interrupts and OS work.
 
 `STAREXEC_CPU_PARTITION_COUNT=N` needs none of this care: it groups whole physical cores
 before splitting, so it cannot separate siblings whichever enumeration the machine uses.

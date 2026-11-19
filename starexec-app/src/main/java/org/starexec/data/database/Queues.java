@@ -791,6 +791,28 @@ public class Queues {
 	}
 
 	/**
+	 * The pairs of the given queue's jobs that are waiting to be submitted (status 1), as the
+	 * dispatcher finds them. Not {@link #getSizeOfQueue}, which counts the pairs already enqueued
+	 * (status 2): a queue with no nodes never enqueues a pair, so its waiting pairs are these.
+	 *
+	 * @param queueId The queue in question
+	 * @return The number of pairs, or -1 when they cannot be counted
+	 */
+	public static int countPendingPairs(int queueId) {
+		final String query = "SELECT count(*) AS count FROM starexec.job_pairs jp"
+				+ " JOIN starexec.jobs j ON j.id = jp.job_id WHERE jp.status_code = 1 AND j.queue_id = ?";
+		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(query)) {
+			ps.setInt(1, queueId);
+			try (ResultSet results = ps.executeQuery()) {
+				return results.next() ? results.getInt("count") : -1;
+			}
+		} catch (Exception e) {
+			log.error("countPendingPairs", e);
+			return -1;
+		}
+	}
+
+	/**
 	 * Returns the number of job pairs enqueued in the given queue
 	 *
 	 * @param queueId The queue in question
@@ -1164,6 +1186,37 @@ public class Queues {
 			Common.safeClose(results);
 		}
 		return -1;
+	}
+
+	/**
+	 * The queue for a job StarExec creates on a user's behalf: a new solver's test job, or the job
+	 * that builds it.
+	 *
+	 * <p>The configured test queue when that user can use it, otherwise the lowest-numbered queue
+	 * they can use. "Can use" is {@link #getUserQueues(int)}: ACTIVE, and global or given to a
+	 * community the user leads (every ACTIVE queue for an admin). {@code JobManager.checkPendingJobs}
+	 * schedules only ACTIVE queues, so a job placed anywhere else stays pending forever (#204). This
+	 * neither activates a queue nor changes the configured test queue.
+	 *
+	 * @param userId the user who will own the job
+	 * @return the queue's id, or -1 when the user can use no queue
+	 */
+	public static int getQueueForSystemJob(int userId) {
+		List<Queue> usable = getUserQueues(userId);
+		if (usable == null || usable.isEmpty()) {
+			return -1;
+		}
+		int testQueue = getTestQueue();
+		int lowest = -1;
+		for (Queue q : usable) {
+			if (q.getId() == testQueue) {
+				return testQueue;
+			}
+			if (lowest < 0 || q.getId() < lowest) {
+				lowest = q.getId();
+			}
+		}
+		return lowest;
 	}
 
 	/**

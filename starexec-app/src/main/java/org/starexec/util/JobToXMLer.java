@@ -38,24 +38,24 @@ public class JobToXMLer {
 	/**
 	 *  Will generate an xml file for a job.
 	 *  @author Julio Cervantes
+	 *  @param directory The directory to write the file into (a private temporary directory)
 	 *  @param job The job for which we want an xml representation.
 	 *  @param userId the id of the user making the request
 	 *  @return xml file to represent job
 	 *  @throws Exception
 	 */
-	public File generateXMLfile(Job job, int userId) throws Exception{
+	public File generateXMLfile(File directory, Job job, int userId) throws Exception{
 
 		log.info("Start generating XML for Job = " +job.getId());
 
 		doc = XMLUtil.generateNewDocument();
 		Element rootSpace = generateJobsXML(job, userId);
 		doc.appendChild(rootSpace);
-		return writeDocumentPreservingAttrOrder(job.getName()+".xml", doc);
+		return writeDocumentPreservingAttrOrder(XMLUtil.fileIn(directory, job.getName()+".xml"), doc);
 
 	}
 
-	public static File writeDocumentPreservingAttrOrder(String fileName, Document doc) throws Exception {
-		File out = new File(fileName);
+	public static File writeDocumentPreservingAttrOrder(File out, Document doc) throws Exception {
 		DOMImplementationLS impl = (DOMImplementationLS) doc.getImplementation().getFeature("LS", "3.0");
 		LSSerializer serializer = impl.createLSSerializer();
 		DOMConfiguration cfg = serializer.getDomConfig();
@@ -146,7 +146,7 @@ public class JobToXMLer {
 				stageElement.appendChild(getDependencyElement(dep));
 			}
 			stageElement.setAttribute("config-id", Integer.toString(stage.getConfigId()));
-			stageElement.setAttribute("primary", Boolean.toString(stage.getId()==pipeline.getPrimaryStageNumber()));
+			stageElement.setAttribute("primary", Boolean.toString(stage.getId() == pipeline.getPrimaryStageId()));
 			return stageElement;
 		}
 	}
@@ -173,10 +173,7 @@ public class JobToXMLer {
 		log.info("Generating Jobs XML " + job.getId());
 		Element jobsElement=null;
 
-		jobsElement = doc.createElementNS(Util.url(R.JOB_XML_SCHEMA_RELATIVE_LOC), "tns:Jobs");
-		jobsElement.setAttribute("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance");
-		jobsElement.setAttribute("xsi:schemaLocation",
-				Util.url("public/batchJobSchema.xsd batchJobSchema.xsd"));
+		jobsElement = XMLUtil.createJobsRoot(doc);
 
 		List<SolverPipeline> neededPipes = Pipelines.getPipelinesByJob(job.getId());
 		log.debug("going to add this many pipelines to the xml document = "+ neededPipes.size());

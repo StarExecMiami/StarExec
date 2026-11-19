@@ -34,8 +34,7 @@
 				<tr>
 					<td>
 						<a href="${starexecRoot}/secure/details/solver.jsp?id=${solverTriple.getRight()}">${solverTriple.getLeft()}</a>
-						<img class="extLink"
-						     src="${starexecRoot}/images/external.png">
+						<span class="ext-link-icon"></span>
 					</td>
 					<td>${solverTriple.getMiddle()}</td>
 				</tr>

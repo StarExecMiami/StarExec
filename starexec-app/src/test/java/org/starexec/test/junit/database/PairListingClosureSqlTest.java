@@ -1,0 +1,314 @@
+package org.starexec.test.junit.database;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.starexec.constants.PaginationQueries;
+import org.starexec.data.database.Common;
+import org.starexec.data.database.Jobs;
+import org.starexec.data.to.JobPair;
+import org.starexec.data.to.Status.StatusCode;
+import org.starexec.test.util.DatabaseTestSupport;
+import org.starexec.util.DataTablesQuery;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
+/**
+ * A job space's pair listing -- the table and its record counts -- finds the pairs in the space
+ * hierarchy without the job's stats having been viewed first (#207).
+ *
+ * <p>Both queries join {@code job_space_closure}, which is filled on demand by
+ * {@code Spaces.updateJobSpaceClosureTable}. Only the stats paths filled it, so a listing opened
+ * before them returned no pairs and a count of 0.
+ *
+ * <p>The fixture is a job whose root space holds one completed pair and has one subspace holding
+ * another, both run by the same configuration. Nothing in it touches the stats.
+ *
+ * <p>Skips unless a PostgreSQL instance is configured. Point the {@code STAREXEC_DB_*} variables
+ * at a <strong>disposable</strong> database: these tests insert and delete rows.
+ */
+public class PairListingClosureSqlTest extends Common {
+
+	private int userId;
+	private int jobId;
+	private int rootSpace;
+	private int subSpace;
+	private int solverId;
+	private int configId;
+	private int benchId;
+	private int rootPair;
+	private int subPair;
+
+	@BeforeAll
+	public static void requireDatabase() throws Exception {
+		DatabaseTestSupport.assumeDatabaseAvailable("PairListingClosureSqlTest");
+		Common.initialize();
+		PaginationQueries.loadPaginationQueries();
+	}
+
+	@BeforeEach
+	public void seed() throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			userId = selectInt(con, "SELECT min(id) FROM starexec.users");
+			jobId = returningId(con,
+					"INSERT INTO starexec.jobs (user_id, name, total_pairs, disk_size)"
+							+ " VALUES (?, 'pair-listing-closure-test', 2, 0) RETURNING id",
+					userId);
+			rootSpace = returningId(con,
+					"INSERT INTO starexec.job_spaces (job_id, name) VALUES (?, 'root') RETURNING id", jobId);
+			subSpace = returningId(con,
+					"INSERT INTO starexec.job_spaces (job_id, name) VALUES (?, 'sub') RETURNING id", jobId);
+			try (PreparedStatement ps = con.prepareStatement(
+					"INSERT INTO starexec.job_space_assoc (space_id, child_id) VALUES (?, ?)")) {
+				ps.setInt(1, rootSpace);
+				ps.setInt(2, subSpace);
+				assertEquals(1, ps.executeUpdate());
+			}
+			solverId = returningId(con,
+					"INSERT INTO starexec.solvers (user_id, name, path, disk_size)"
+							+ " VALUES (?, 'pair-listing-solver', '/s', 0) RETURNING id",
+					userId);
+			configId = returningId(con,
+					"INSERT INTO starexec.configurations (solver_id, name, updated)"
+							+ " VALUES (?, 'pair-listing-config', NOW()) RETURNING id",
+					solverId);
+			benchId = returningId(con,
+					"INSERT INTO starexec.benchmarks (user_id, name, uploaded, path, disk_size)"
+							+ " VALUES (?, 'pair-listing-bench', NOW(), '/b', 0) RETURNING id",
+					userId);
+			rootPair = insertPair(con, rootSpace);
+			subPair = insertPair(con, subSpace);
+
+			// Pair filters must classify the selected stage, not a later stage's pair status.
+			int resourceOut = StatusCode.EXCEED_RUNTIME.getVal();
+			int dependencyFailure = StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal();
+			update(con, "UPDATE starexec.job_pairs SET status_code = ? WHERE id = ?", resourceOut, rootPair);
+			insertStage(con, rootPair, 2, resourceOut);
+			update(con, "UPDATE starexec.job_pairs SET status_code = ? WHERE id = ?", dependencyFailure, subPair);
+			update(con, "UPDATE starexec.jobpair_stage_data SET status_code = ?"
+					+ " WHERE jobpair_id = ? AND stage_number = 1", dependencyFailure, subPair);
+		}
+		assertEquals(0, closureRows(rootSpace), "precondition: nothing has filled the closure for the root");
+		assertEquals(0, closureRows(subSpace), "precondition: nothing has filled the closure for the subspace");
+	}
+
+	@AfterEach
+	public void dropFixture() throws SQLException {
+		if (jobId == 0) {
+			return;
+		}
+		try (Connection con = Common.getConnection()) {
+			// Stage data, attributes, closure and association rows go with their pair and spaces.
+			update(con, "DELETE FROM starexec.job_pair_completion WHERE pair_id IN"
+					+ " (SELECT id FROM starexec.job_pairs WHERE job_id = ?)", jobId);
+			update(con, "DELETE FROM starexec.job_pairs WHERE job_id = ?", jobId);
+			update(con, "DELETE FROM starexec.job_spaces WHERE job_id = ?", jobId);
+			update(con, "DELETE FROM starexec.solvers WHERE id = ?", solverId);
+			update(con, "DELETE FROM starexec.benchmarks WHERE id = ?", benchId);
+			update(con, "DELETE FROM starexec.jobs WHERE id = ?", jobId);
+		}
+	}
+
+	@Test
+	public void theCountFindsTheHierarchysPairs() {
+		assertEquals(2, count(rootSpace), "root: its own pair and the subspace's");
+		assertEquals(1, count(subSpace), "subspace: its own pair");
+	}
+
+	@Test
+	public void theTableListsTheHierarchysPairs() {
+		assertEquals(List.of(rootPair, subPair), listedPairs(rootSpace), "root: its own pair and the subspace's");
+		assertEquals(List.of(subPair), listedPairs(subSpace), "subspace: its own pair");
+	}
+
+	/** Filling the closure on every read does not add rows once they are there. */
+	@Test
+	public void repeatedListingsDoNotDuplicateClosureRows() throws SQLException {
+		for (int i = 0; i < 2; i++) {
+			for (int space : new int[] {rootSpace, subSpace}) {
+				count(space);
+				listedPairs(space);
+			}
+		}
+
+		assertEquals(2, closureRows(rootSpace), "root: itself and the subspace");
+		assertEquals(1, closureRows(subSpace), "subspace: itself");
+	}
+
+	@Test
+	public void typeFiltersClassifyTheRequestedStage() {
+		// The root pair's primary stage is complete; its later stage is a resource-out.
+		assertEquals(0, count(rootSpace, "resource", 1));
+		assertEquals(List.of(), listedPairs(rootSpace, 1, "resource"));
+		assertEquals(1, count(rootSpace, "resource", 2));
+		assertEquals(List.of(rootPair), listedPairs(rootSpace, 2, "resource"));
+		// Resource-out stages deliberately also count as complete for solver statistics.
+		assertEquals(1, count(rootSpace, "complete", 2));
+		assertEquals(List.of(rootPair), listedPairs(rootSpace, 2, "complete"));
+
+		// A dependency failure is failed, never incomplete, in both the table and count.
+		assertEquals(1, count(rootSpace, "failed", 1));
+		assertEquals(List.of(subPair), listedPairs(rootSpace, 1, "failed"));
+		assertEquals(0, count(rootSpace, "incomplete", 1));
+		assertEquals(List.of(), listedPairs(rootSpace, 1, "incomplete"));
+	}
+
+	/** A stage the pair never ran has no row to classify, so no type lists it, "all" included. */
+	@Test
+	public void aStageThePairNeverRanIsInNoType() {
+		for (String type : new String[] {"all", "resource", "complete", "failed", "incomplete"}) {
+			assertEquals(0, count(subSpace, type, 2), type + " count, stage 2 of the subspace pair");
+			assertEquals(List.of(), listedPairs(subSpace, 2, type),
+					type + " listing, stage 2 of the subspace pair");
+			assertEquals(0, count(rootSpace, type, 3), type + " count, stage 3");
+			assertEquals(List.of(), listedPairs(rootSpace, 3, type), type + " listing, stage 3");
+		}
+	}
+
+	/**
+	 * For every status code, the listing and the count put a stage in the same types as
+	 * {@code Jobs.addStageToSolverStats} does, whatever the pair's final status is.
+	 */
+	@Test
+	public void everyStatusCodeIsClassifiedLikeTheStatsRow() throws SQLException {
+		for (int code = 0; code <= StatusCode.ERROR_POST_PROCESSOR.getVal(); code++) {
+			try (Connection con = Common.getConnection()) {
+				// The pair's own status stays a resource-out, so it can never be what decides.
+				update(con, "UPDATE starexec.job_pairs SET status_code = ? WHERE id = ?",
+						StatusCode.EXCEED_RUNTIME.getVal(), subPair);
+				update(con, "UPDATE starexec.jobpair_stage_data SET status_code = ?"
+						+ " WHERE jobpair_id = ? AND stage_number = 1", code, subPair);
+			}
+			StatusCode sc = StatusCode.toStatusCode(code);
+			boolean failed = sc.failed();
+			boolean resource = !failed && sc.resource();
+			boolean incomplete = !failed && !resource && sc.incomplete();
+			boolean complete = resource || (!failed && !incomplete && sc.statComplete());
+			assertClassified(code, "failed", failed);
+			assertClassified(code, "resource", resource);
+			assertClassified(code, "incomplete", incomplete);
+			assertClassified(code, "complete", complete);
+		}
+	}
+
+	private void assertClassified(int code, String type, boolean expected) {
+		String message = "status " + code + " as " + type;
+		assertEquals(expected ? 1 : 0, count(subSpace, type, 1), message + " (count)");
+		assertEquals(expected ? List.of(subPair) : List.of(), listedPairs(subSpace, 1, type),
+				message + " (listing)");
+	}
+
+	private int count(int jobSpaceId) {
+		return count(jobSpaceId, "all", 0);
+	}
+
+	private int count(int jobSpaceId, String type, int stageNumber) {
+		return Jobs.getCountOfJobPairsByConfigInJobSpaceHierarchy(
+				jobSpaceId, configId, type, "", stageNumber);
+	}
+
+	private List<Integer> listedPairs(int jobSpaceId) {
+		return listedPairs(jobSpaceId, 0, "all");
+	}
+
+	private List<Integer> listedPairs(int jobSpaceId, int stageNumber, String type) {
+		List<JobPair> pairs = Jobs.getJobPairsForTableInJobSpaceHierarchy(
+				jobSpaceId, new DataTablesQuery(0, 10, 0, true, ""), configId, stageNumber, type);
+		assertNotNull(pairs, "the listing loads");
+		List<Integer> ids = new ArrayList<>();
+		for (JobPair pair : pairs) {
+			ids.add(pair.getId());
+		}
+		ids.sort(null);
+		return ids;
+	}
+
+	private int insertPair(Connection con, int jobSpaceId) throws SQLException {
+		int complete = StatusCode.STATUS_COMPLETE.getVal();
+		int pairId = returningId(con,
+				"INSERT INTO starexec.job_pairs (job_id, job_space_id, bench_id, bench_name,"
+						+ " status_code, primary_jobpair_data)"
+						+ " VALUES (?, ?, ?, 'pair-listing-bench', ?, 1) RETURNING id",
+				jobId, jobSpaceId, benchId, complete);
+		try (PreparedStatement ps = con.prepareStatement(
+				"INSERT INTO starexec.jobpair_stage_data (jobpair_id, stage_number, status_code,"
+						+ " solver_id, solver_name, config_id, config_name, wallclock, cpu, disk_size)"
+						+ " VALUES (?, 1, ?, ?, 'pair-listing-solver', ?, 'pair-listing-config', 1, 1, 0)")) {
+			ps.setInt(1, pairId);
+			ps.setInt(2, complete);
+			ps.setInt(3, solverId);
+			ps.setInt(4, configId);
+			assertEquals(1, ps.executeUpdate());
+		}
+		returningId(con,
+				"INSERT INTO starexec.job_pair_completion (pair_id) VALUES (?) RETURNING completion_id", pairId);
+		return pairId;
+	}
+
+	private void insertStage(Connection con, int pairId, int stageNumber, int status) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(
+				"INSERT INTO starexec.jobpair_stage_data (jobpair_id, stage_number, status_code,"
+						+ " solver_id, solver_name, config_id, config_name, wallclock, cpu, disk_size)"
+						+ " VALUES (?, ?, ?, ?, 'pair-listing-solver', ?, 'pair-listing-config', 1, 1, 0)")) {
+			ps.setInt(1, pairId);
+			ps.setInt(2, stageNumber);
+			ps.setInt(3, status);
+			ps.setInt(4, solverId);
+			ps.setInt(5, configId);
+			assertEquals(1, ps.executeUpdate());
+		}
+	}
+
+	private static int closureRows(int ancestor) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"SELECT count(*) FROM starexec.job_space_closure WHERE ancestor = ?")) {
+			ps.setInt(1, ancestor);
+			try (ResultSet rs = ps.executeQuery()) {
+				rs.next();
+				return rs.getInt(1);
+			}
+		}
+	}
+
+	private static int returningId(Connection con, String sql, int... params) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			for (int i = 0; i < params.length; i++) {
+				ps.setInt(i + 1, params[i]);
+			}
+			try (ResultSet rs = ps.executeQuery()) {
+				if (!rs.next()) {
+					throw new IllegalStateException("No id returned: " + sql);
+				}
+				return rs.getInt(1);
+			}
+		}
+	}
+
+	private static int selectInt(Connection con, String sql) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
+			if (!rs.next()) {
+				throw new IllegalStateException("Query returned no rows: " + sql);
+			}
+			return rs.getInt(1);
+		}
+	}
+
+	private static void update(Connection con, String sql, int... params) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			for (int i = 0; i < params.length; i++) {
+				ps.setInt(i + 1, params[i]);
+			}
+			ps.executeUpdate();
+		}
+	}
+}

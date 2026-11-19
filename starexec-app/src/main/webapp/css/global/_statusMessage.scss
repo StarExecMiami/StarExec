@@ -54,8 +54,9 @@
     z-index: 999;
 
     p {
-        width: 1024px;
+        max-width: 1024px;
         margin: 0 auto;
+        padding: 0 10px;
 
         a {
             margin: 0 0 0 1em;

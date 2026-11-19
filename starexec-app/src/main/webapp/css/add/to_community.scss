@@ -11,9 +11,8 @@ fieldset {
     @include card-shadow;
 }
 
-@media only screen and (max-width: 767px) {
+@include mobile {
     fieldset {
-        width: 95%;
         padding: 20px;
         background-color: $surface-primary;
         border: 1px solid $input-background-selected;

@@ -1,6 +1,6 @@
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.mockito.Mockito;
 import org.starexec.backend.GridEngineBackend;
 import org.starexec.constants.R;
@@ -59,17 +59,17 @@ public class JobPairTests extends TestSequence {
 		Properties p=new Properties();
 		String prop=TestUtil.getRandomAlphaString(14);
 		p.put(prop, prop);
-		Assert.assertTrue(JobPairs.addJobPairAttributes(jp.getId(),jp.getPrimaryStage().getStageNumber(), p));
+		Assertions.assertTrue(JobPairs.addJobPairAttributes(jp.getId(),jp.getPrimaryStage().getStageNumber(), p));
 		Properties test=JobPairs.getAttributes(jp.getId()).get(jp.getPrimaryStage().getStageNumber());
-		Assert.assertTrue(test.contains(prop));
+		Assertions.assertTrue(test.contains(prop));
 	}
 
 	@StarexecTest
 	private void updateBackendIdTest() {
 		JobPair jp = job.getJobPairs().get(0);
 		int backendId = rand.nextInt();
-		Assert.assertTrue(JobPairs.updateBackendExecId(jp.getId(), backendId));
-		Assert.assertEquals(backendId, JobPairs.getPair(jp.getId()).getBackendExecId());
+		Assertions.assertTrue(JobPairs.updateBackendExecId(jp.getId(), backendId));
+		Assertions.assertEquals(backendId, JobPairs.getPair(jp.getId()).getBackendExecId());
 		jp.setBackendExecId(backendId);
 
 	}
@@ -77,41 +77,41 @@ public class JobPairTests extends TestSequence {
 	@StarexecTest
 	private void getJobPairLogTest() {
 		String path=JobPairs.getLogFilePath(job.getJobPairs().get(0));
-		Assert.assertNotNull(path);
+		Assertions.assertNotNull(path);
 	}
 
 	@StarexecTest
 	private void getJobPairLogByIdTest() {
 		String path=JobPairs.getStdout(job.getJobPairs().get(0).getId());
-		Assert.assertNotNull(path);
+		Assertions.assertNotNull(path);
 	}
 
 	@StarexecTest
 	private void getJobPairPathTest() {
 		String path=JobPairs.getPairStdout(job.getJobPairs().get(0));
-		Assert.assertNotNull(path);
+		Assertions.assertNotNull(path);
 	}
 
 	@StarexecTest
 	private void getJobPairPathByIdTest() {
 		String path=JobPairs.getStdout(job.getJobPairs().get(0).getId());
-		Assert.assertNotNull(path);
+		Assertions.assertNotNull(path);
 	}
 
 	@StarexecTest
 	private void getJobPairTest() {
 		JobPair test=JobPairs.getPair(job.getJobPairs().get(0).getId());
-		Assert.assertNotNull(test);
-		Assert.assertEquals(test.getJobId(),job.getId());
+		Assertions.assertNotNull(test);
+		Assertions.assertEquals(test.getJobId(),job.getId());
 	}
 
 	@StarexecTest
 	private void getJobPairDetailedTest() {
 		JobPair test=JobPairs.getPairDetailed(job.getJobPairs().get(0).getId());
-		Assert.assertNotNull(test);
-		Assert.assertEquals(test.getJobId(),job.getId());
+		Assertions.assertNotNull(test);
+		Assertions.assertEquals(test.getJobId(),job.getId());
 
-		Assert.assertEquals(test.getPrimarySolver().getName(),solver.getName());
+		Assertions.assertEquals(test.getPrimarySolver().getName(),solver.getName());
 	}
 
 	@StarexecTest
@@ -120,7 +120,7 @@ public class JobPairTests extends TestSequence {
 			int testTimeThreshold = 100000;
 			JobPairs.getNodesThatMayHavePairsEnqueuedLongerThan(testTimeThreshold);
 		} catch (SQLException e) {
-			Assert.fail("Caught an SQLException.");
+			Assertions.fail("Caught an SQLException.");
 		}
 	}
 
@@ -131,41 +131,41 @@ public class JobPairTests extends TestSequence {
 			int testTimeThreshold = 100000;
 			JobPairs.getPairsEnqueuedLongerThan(testTimeThreshold);
 		} catch (SQLException e) {
-			Assert.fail("Caught an SQLException.");
+			Assertions.fail("Caught an SQLException.");
 		}
 	}
 
 	@StarexecTest
 	private void setPairStatusTest() {
 		JobPair jp=JobPairs.getPair(job.getJobPairs().get(0).getId());
-		Assert.assertTrue(JobPairs.setPairStatus(jp.getId(), StatusCode.STATUS_UNKNOWN.getVal()));
-		Assert.assertEquals(StatusCode.STATUS_UNKNOWN.getVal(),JobPairs.getPair(jp.getId()).getStatus().getCode().getVal());
+		Assertions.assertTrue(JobPairs.setPairStatus(jp.getId(), StatusCode.STATUS_UNKNOWN.getVal()));
+		Assertions.assertEquals(StatusCode.STATUS_UNKNOWN.getVal(),JobPairs.getPair(jp.getId()).getStatus().getCode().getVal());
 	}
 
 	@StarexecTest
 	private void setPairStatusRejectsTerminalDowngradeTest() {
 		JobPair jp = JobPairs.getPair(job.getJobPairs().get(0).getId());
 
-		Assert.assertTrue(JobPairs.setPairStatus(jp.getId(), StatusCode.STATUS_COMPLETE.getVal()));
-		Assert.assertFalse(
-			"Terminal pair status must not downgrade back to running.",
-			JobPairs.setPairStatus(jp.getId(), StatusCode.STATUS_RUNNING.getVal())
+		Assertions.assertTrue(JobPairs.setPairStatus(jp.getId(), StatusCode.STATUS_COMPLETE.getVal()));
+		Assertions.assertFalse(
+			JobPairs.setPairStatus(jp.getId(), StatusCode.STATUS_RUNNING.getVal()),
+			"Terminal pair status must not downgrade back to running."
 		);
-		Assert.assertEquals(
+		Assertions.assertEquals(
 			StatusCode.STATUS_COMPLETE.getVal(),
 			JobPairs.getPair(jp.getId()).getStatus().getCode().getVal()
 		);
 
-		Assert.assertFalse(
-			"Precise status updates must also reject terminal downgrades.",
+		Assertions.assertFalse(
 			JobPairs.setPairStatusPrecise(
 				jp.getId(),
 				1,
 				StatusCode.STATUS_RUNNING.getVal(),
 				StatusCode.STATUS_NOT_REACHED.getVal()
-			)
+			),
+			"Precise status updates must also reject terminal downgrades."
 		);
-		Assert.assertEquals(
+		Assertions.assertEquals(
 			StatusCode.STATUS_COMPLETE.getVal(),
 			JobPairs.getPair(jp.getId()).getStatus().getCode().getVal()
 		);
@@ -176,7 +176,7 @@ public class JobPairTests extends TestSequence {
 		JobPair jp=JobPairs.getPair(job.getJobPairs().get(0).getId());
 		JobPairs.setPairStatus(jp.getId(), StatusCode.STATUS_ENQUEUED.getVal());
 		Jobs.setBrokenPairsToErrorStatus(R.BACKEND);
-		Assert.assertEquals(Status.StatusCode.ERROR_SUBMIT_FAIL.getVal(),JobPairs.getPair(jp.getId()).getStatus().getCode().getVal());
+		Assertions.assertEquals(Status.StatusCode.ERROR_SUBMIT_FAIL.getVal(),JobPairs.getPair(jp.getId()).getStatus().getCode().getVal());
 	}
 
 	@StarexecTest
@@ -188,9 +188,9 @@ public class JobPairTests extends TestSequence {
 
 		JobPairs.setBrokenPairStatus(JobPairs.getPair(pairId));
 
-		Assert.assertEquals(StatusCode.ERROR_SUBMIT_FAIL.getVal(), JobPairs.getPair(pairId).getStatus().getCode().getVal());
-		Assert.assertTrue("Broken pair should be inserted into job_pair_completion.", pairHasCompletionRecord(pairId));
-		Assert.assertNotNull("Job should be marked complete when no active pairs remain.", Jobs.get(job.getId()).getCompleteTime());
+		Assertions.assertEquals(StatusCode.ERROR_SUBMIT_FAIL.getVal(), JobPairs.getPair(pairId).getStatus().getCode().getVal());
+		Assertions.assertTrue(pairHasCompletionRecord(pairId), "Broken pair should be inserted into job_pair_completion.");
+		Assertions.assertNotNull(Jobs.get(job.getId()).getCompleteTime(), "Job should be marked complete when no active pairs remain.");
 	}
 
 	@StarexecTest
@@ -203,9 +203,9 @@ public class JobPairTests extends TestSequence {
 
 		JobPairs.setBrokenPairStatus(stalePair);
 
-		Assert.assertEquals(StatusCode.STATUS_RUNNING.getVal(), JobPairs.getPair(pairId).getStatus().getCode().getVal());
-		Assert.assertFalse("Stale broken-pair update should not insert completion side effects.", pairHasCompletionRecord(pairId));
-		Assert.assertNull("Stale broken-pair update should not complete the job.", Jobs.get(job.getId()).getCompleteTime());
+		Assertions.assertEquals(StatusCode.STATUS_RUNNING.getVal(), JobPairs.getPair(pairId).getStatus().getCode().getVal());
+		Assertions.assertFalse(pairHasCompletionRecord(pairId), "Stale broken-pair update should not insert completion side effects.");
+		Assertions.assertNull(Jobs.get(job.getId()).getCompleteTime(), "Stale broken-pair update should not complete the job.");
 	}
 
 	@StarexecTest
@@ -221,8 +221,8 @@ public class JobPairTests extends TestSequence {
 			enqueuedPairIds.add(pair.getId());
 		}
 
-		Assert.assertTrue("Expected first enqueued pair to be returned.", enqueuedPairIds.contains(firstPair.getId()));
-		Assert.assertTrue("Expected second enqueued pair to be returned.", enqueuedPairIds.contains(secondPair.getId()));
+		Assertions.assertTrue(enqueuedPairIds.contains(firstPair.getId()), "Expected first enqueued pair to be returned.");
+		Assertions.assertTrue(enqueuedPairIds.contains(secondPair.getId()), "Expected second enqueued pair to be returned.");
 	}
 
 	@StarexecTest
@@ -230,9 +230,9 @@ public class JobPairTests extends TestSequence {
 		JobPair jp = job.getJobPairs().get(0);
 		try {
 			Optional<String> output = JobPairs.getStdOut(jp.getId(), 1, 1000);
-			Assert.assertTrue("stdout for job pairs was not available.",output.isPresent());
+			Assertions.assertTrue(output.isPresent(),"stdout for job pairs was not available.");
 		} catch (IOException e) {
-			Assert.fail("IOException: " + Util.getStackTrace(e));
+			Assertions.fail("IOException: " + Util.getStackTrace(e));
 		}
 	}
 	@StarexecTest
@@ -240,7 +240,7 @@ public class JobPairTests extends TestSequence {
 		JobPair jp = job.getJobPairs().get(0);
 
 		String output = JobPairs.getStdout(jp.getId());
-		Assert.assertNotNull(output);
+		Assertions.assertNotNull(output);
 	}
 
 	@StarexecTest
@@ -252,7 +252,7 @@ public class JobPairTests extends TestSequence {
 		for (PairStageProcessorTriple triple : pairs) {
 			found = found || triple.getPairId()==jp.getId();
 		}
-		Assert.assertTrue(found);
+		Assertions.assertTrue(found);
 		JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_COMPLETE.getVal());
 	}
 
@@ -265,14 +265,14 @@ public class JobPairTests extends TestSequence {
 		GridEngineBackend backend = Mockito.mock(GridEngineBackend.class);
 		Mockito.when(backend.getActiveExecutionIds()).thenReturn(set);
 		Jobs.setBrokenPairsToErrorStatus(backend);
-		Assert.assertTrue(JobPairs.getPair(job.getJobPairs().get(0).getId()).getStatus().getCode()==Status.StatusCode.STATUS_ENQUEUED);
+		Assertions.assertTrue(JobPairs.getPair(job.getJobPairs().get(0).getId()).getStatus().getCode()==Status.StatusCode.STATUS_ENQUEUED);
 	}
 
 	@StarexecTest
 	private void isPairCorrectIncompleteTest() {
 		JoblineStage stage = new JoblineStage();
 		stage.getStatus().setCode(StatusCode.STATUS_PENDING_SUBMIT.getVal());
-		Assert.assertEquals(-1, JobPairs.isPairCorrect(stage));
+		Assertions.assertEquals(-1, JobPairs.isPairCorrect(stage));
 	}
 
 	@StarexecTest
@@ -283,7 +283,7 @@ public class JobPairTests extends TestSequence {
 		attrs.setProperty(R.STAREXEC_RESULT, "result");
 		stage.setAttributes(attrs);
 		stage.getStatus().setCode(StatusCode.STATUS_COMPLETE.getVal());
-		Assert.assertEquals(0, JobPairs.isPairCorrect(stage));
+		Assertions.assertEquals(0, JobPairs.isPairCorrect(stage));
 	}
 
 	@StarexecTest
@@ -294,7 +294,7 @@ public class JobPairTests extends TestSequence {
 		attrs.setProperty(R.STAREXEC_RESULT, "wrong");
 		stage.setAttributes(attrs);
 		stage.getStatus().setCode(StatusCode.STATUS_COMPLETE.getVal());
-		Assert.assertEquals(1, JobPairs.isPairCorrect(stage));
+		Assertions.assertEquals(1, JobPairs.isPairCorrect(stage));
 	}
 
 	@StarexecTest
@@ -305,7 +305,7 @@ public class JobPairTests extends TestSequence {
 		attrs.setProperty(R.STAREXEC_RESULT,R.STAREXEC_UNKNOWN);
 		stage.setAttributes(attrs);
 		stage.getStatus().setCode(StatusCode.STATUS_COMPLETE.getVal());
-		Assert.assertEquals(2, JobPairs.isPairCorrect(stage));
+		Assertions.assertEquals(2, JobPairs.isPairCorrect(stage));
 	}
 
 	@StarexecTest
@@ -315,7 +315,7 @@ public class JobPairTests extends TestSequence {
 		attrs.setProperty(R.STAREXEC_RESULT,"result");
 		stage.setAttributes(attrs);
 		stage.getStatus().setCode(StatusCode.STATUS_COMPLETE.getVal());
-		Assert.assertEquals(2, JobPairs.isPairCorrect(stage));
+		Assertions.assertEquals(2, JobPairs.isPairCorrect(stage));
 	}
 
 	@StarexecTest
@@ -326,7 +326,7 @@ public class JobPairTests extends TestSequence {
 		attrs.setProperty(R.STAREXEC_RESULT, "sat");
 		stage.setAttributes(attrs);
 		stage.getStatus().setCode(StatusCode.STATUS_COMPLETE.getVal());
-		Assert.assertEquals(2, JobPairs.isPairCorrect(stage));
+		Assertions.assertEquals(2, JobPairs.isPairCorrect(stage));
 	}
 
 	@StarexecTest
@@ -336,33 +336,33 @@ public class JobPairTests extends TestSequence {
 		attrs.setProperty(R.EXPECTED_RESULT, "sat");
 		stage.setAttributes(attrs);
 		stage.getStatus().setCode(StatusCode.STATUS_COMPLETE.getVal());
-		Assert.assertEquals(1, JobPairs.isPairCorrect(stage));
+		Assertions.assertEquals(1, JobPairs.isPairCorrect(stage));
 	}
 
 	@StarexecTest
 	private void setPairStageStatusTest() {
 		JobPair jp = job.getJobPairs().get(0);
 		JoblineStage stage = jp.getStages().get(0);
-		Assert.assertTrue(JobPairs.setPairStatus(jp.getId(), stage.getStageNumber(), StatusCode.STATUS_UNKNOWN.getVal()));
-		Assert.assertEquals(StatusCode.STATUS_UNKNOWN.getVal(), JobPairs.getPairDetailed(jp.getId()).getStages().get(0).getStatus().getCode().getVal());
+		Assertions.assertTrue(JobPairs.setPairStatus(jp.getId(), stage.getStageNumber(), StatusCode.STATUS_UNKNOWN.getVal()));
+		Assertions.assertEquals(StatusCode.STATUS_UNKNOWN.getVal(), JobPairs.getPairDetailed(jp.getId()).getStages().get(0).getStatus().getCode().getVal());
 		JobPairs.setPairStatus(jp.getId(), stage.getStageNumber(), StatusCode.STATUS_COMPLETE.getVal());
 	}
 
 	@StarexecTest
 	private void setAllPairStageStatusTest() {
 		JobPair jp = job.getJobPairs().get(0);
-		Assert.assertTrue(JobPairs.setAllPairStageStatus(jp.getId(), StatusCode.STATUS_UNKNOWN.getVal()));
-		Assert.assertEquals(StatusCode.STATUS_UNKNOWN.getVal(), JobPairs.getPairDetailed(jp.getId()).getStages().get(0).getStatus().getCode().getVal());
+		Assertions.assertTrue(JobPairs.setAllPairStageStatus(jp.getId(), StatusCode.STATUS_UNKNOWN.getVal()));
+		Assertions.assertEquals(StatusCode.STATUS_UNKNOWN.getVal(), JobPairs.getPairDetailed(jp.getId()).getStages().get(0).getStatus().getCode().getVal());
 		JobPairs.setAllPairStageStatus(jp.getId(),StatusCode.STATUS_COMPLETE.getVal());
 	}
 
 	@StarexecTest
 	private void setStatusForPairAndStagesTest() {
 		JobPair jp = job.getJobPairs().get(0);
-		Assert.assertTrue(JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_KILLED.getVal()));
+		Assertions.assertTrue(JobPairs.setStatusForPairAndStages(jp.getId(), StatusCode.STATUS_KILLED.getVal()));
 		JobPair updatedPair = JobPairs.getPairDetailed(jp.getId());
-		Assert.assertEquals(StatusCode.STATUS_KILLED.getVal(), updatedPair.getStages().get(0).getStatus().getCode().getVal());
-		Assert.assertEquals(StatusCode.STATUS_KILLED.getVal(), updatedPair.getStatus().getCode().getVal());
+		Assertions.assertEquals(StatusCode.STATUS_KILLED.getVal(), updatedPair.getStages().get(0).getStatus().getCode().getVal());
+		Assertions.assertEquals(StatusCode.STATUS_KILLED.getVal(), updatedPair.getStatus().getCode().getVal());
 		JobPairs.setStatusForPairAndStages(jp.getId(),StatusCode.STATUS_COMPLETE.getVal());
 	}
 
@@ -373,11 +373,11 @@ public class JobPairTests extends TestSequence {
 		try {
 			List<JobPair> jobPairsContainingBench = JobPairs.getPairsInJobContainingBenchmark(jobId, benchId);
 			for (JobPair pair : jobPairsContainingBench) {
-				Assert.assertEquals("Job pair did not contain benchmark.", pair.getBench().getId(), benchId);
-				Assert.assertEquals("Job pair was not in job.", pair.getJobId(), jobId);
+				Assertions.assertEquals(pair.getBench().getId(), benchId, "Job pair did not contain benchmark.");
+				Assertions.assertEquals(pair.getJobId(), jobId, "Job pair was not in job.");
 			}
 		} catch (SQLException e) {
-			Assert.fail("SQL Exception: " + Util.getStackTrace(e));
+			Assertions.fail("SQL Exception: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -392,11 +392,11 @@ public class JobPairTests extends TestSequence {
 				for (JoblineStage stage : pair.getStages()) {
 					atLeastOneHadSolver = atLeastOneHadSolver || stage.getSolver().getId() == solverId;
 				}
-				Assert.assertTrue("Pair with id : " + pair.getId() + " did not contain solver with id: " + solverId, atLeastOneHadSolver);
-				Assert.assertEquals("Pair was not in job with id: " + jobId, pair.getJobId(), jobId);
+				Assertions.assertTrue(atLeastOneHadSolver, "Pair with id : " + pair.getId() + " did not contain solver with id: " + solverId);
+				Assertions.assertEquals(pair.getJobId(), jobId, "Pair was not in job with id: " + jobId);
 			}
 		} catch (SQLException e) {
-			Assert.fail("SQL Exception: " + Util.getStackTrace(e));
+			Assertions.fail("SQL Exception: " + Util.getStackTrace(e));
 		}
 	}
 
@@ -415,7 +415,7 @@ public class JobPairTests extends TestSequence {
 		solverIds.add(solver.getId());
 		job=loader.loadJobIntoDatabase(space.getId(), user.getId(), -1, postProc.getId(), solverIds, benchmarkIds,cpuTimeout,wallclockTimeout,gbMemory);
 		job2=loader.loadJobIntoDatabase(space.getId(), user2.getId(), -1, postProc.getId(), solverIds, benchmarkIds, cpuTimeout, wallclockTimeout, gbMemory);
-		Assert.assertNotNull(Jobs.get(job.getId()));
+		Assertions.assertNotNull(Jobs.get(job.getId()));
 	}
 
 	private void resetJobCompletionTime(int jobId) throws SQLException {

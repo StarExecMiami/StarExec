@@ -1,5 +1,7 @@
 
-@media only screen and (max-width: 767px) {
+@use "../global/mixins" as m;
+
+@include m.mobile {
 	#infoTable tr {
 		display: flex;
 		flex-direction: column;
@@ -10,11 +12,6 @@
 		margin-bottom: 1rem;
 		width: 100%;
 		text-align: center;
-	}
-
-	#wrapper fieldset {
-		width: 75%;
-
 	}
 
 	#tblSolverConfig tr > *:nth-child(2) {

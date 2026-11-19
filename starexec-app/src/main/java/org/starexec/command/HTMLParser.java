@@ -3,6 +3,8 @@ package org.starexec.command;
 import org.apache.http.Header;
 import org.starexec.util.Validator;
 
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.regex.*;
 
@@ -25,12 +27,15 @@ public class HTMLParser {
 	 */
 
 	public static String URLEncode(String u, Map<String, String> params) {
+		// Each key and value is encoded: unencoded, getjobpairs' "id[]" made Tomcat refuse the
+		// request with HTTP 400 ("Invalid character found in the request target") before
+		// StarExec ever saw it. The server decodes them again.
 		StringBuilder answer = new StringBuilder(u);
 		answer.append("?");
 		params.forEach ( (key, value) -> {
-			answer.append(key);
+			answer.append(java.net.URLEncoder.encode(key, java.nio.charset.StandardCharsets.UTF_8));
 			answer.append("=");
-			answer.append(value);
+			answer.append(java.net.URLEncoder.encode(String.valueOf(value), java.nio.charset.StandardCharsets.UTF_8));
 			answer.append("&");
 		} );
 
@@ -100,6 +105,19 @@ public class HTMLParser {
 	}
 
 	/**
+	 * Decodes a cookie value. The server URL-encodes every value it sets, because RFC 6265 does
+	 * not allow commas, spaces or parentheses in one. A value that is not valid encoding, which
+	 * an older server may send, is returned as it was.
+	 */
+	private static String decode(String raw) {
+		try {
+			return URLDecoder.decode(raw, StandardCharsets.UTF_8);
+		} catch (IllegalArgumentException e) {
+			return raw;
+		}
+	}
+
+	/**
 	 * Extracts all the values of a comma-separated cookie as a list of strings.
 	 *
 	 * @param headers Array of headers to check for cookies in
@@ -152,7 +170,9 @@ public class HTMLParser {
 			// form like
 			// Set-Cookie: name=Nicholas; expires=Sat, 02 May 2009 23:38:25 GMT
 			// where all cookies are on a single semicolon-delimited line.
-			if (x.getName().equals("Set-Cookie")) {
+			// Header names are case-insensitive (RFC 7230 3.2): a proxy, HTTP/2 or another server
+			// may send "set-cookie" or "Set-cookie".
+			if (x.getName().equalsIgnoreCase("Set-Cookie")) {
 							// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 //							System.out.println( "\tfound a header with name 'Set-Cookie'!" );
 							// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -186,7 +206,7 @@ public class HTMLParser {
 //								System.out.println( "---- now EXITING HTMLParser.extractCookie() --------\n" );
 								// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-					return value.substring(begin, end);
+					return decode(value.substring(begin, end));
 				}
 			}
 		}

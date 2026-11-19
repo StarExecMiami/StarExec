@@ -213,13 +213,14 @@
 
 // --- Responsive ---
 
-@media only screen and (max-width: 767px) {
+@include mobile {
 	.upload-table-wrapper {
 		max-width: 100%;
 	}
 
 	.upload-table-wrapper .shaded td:first-child {
 		width: auto;
+		white-space: normal;
 	}
 
 	body td, body th {

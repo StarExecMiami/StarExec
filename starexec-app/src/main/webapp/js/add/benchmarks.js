@@ -54,6 +54,16 @@ function getSelectedFile() {
 	return input.files[0];
 }
 
+// The form's permission checkboxes: the default permissions of the spaces the upload creates.
+var SPACE_PERMISSION_NAMES = ['addSolver', 'addBench', 'addUser', 'addSpace', 'addJob',
+	'removeSolver', 'removeBench', 'removeUser', 'removeSpace', 'removeJob'];
+
+function checkedSpacePermissions() {
+	return SPACE_PERMISSION_NAMES.filter(function(name) {
+		return $('input[name="' + name + '"]').is(':checked');
+	});
+}
+
 function buildResumableUploadPayload() {
 	var hasDependencies = $('input[name="dependency"]:checked').val() === 'true';
 	var depRootValue = hasDependencies ? $('#depRoot').val() : null;
@@ -66,7 +76,8 @@ function buildResumableUploadPayload() {
 		downloadable: $('input[name="download"]:checked').val() === 'true',
 		hasDependencies: hasDependencies,
 		depRootSpaceId: depRootValue ? parseInt(depRootValue, 10) : null,
-		linked: hasDependencies && $('input[name="linked"]:checked').val() === 'true'
+		linked: hasDependencies && $('input[name="linked"]:checked').val() === 'true',
+		spacePermissions: checkedSpacePermissions()
 	};
 }
 
@@ -81,7 +92,9 @@ function buildUploadFingerprint(file, payload) {
 		payload.downloadable,
 		payload.hasDependencies,
 		payload.depRootSpaceId || '',
-		payload.linked
+		payload.linked,
+		// A stored session is resumed only with the permissions it was created with.
+		(payload.spacePermissions || []).join(',')
 	].join('|');
 }
 

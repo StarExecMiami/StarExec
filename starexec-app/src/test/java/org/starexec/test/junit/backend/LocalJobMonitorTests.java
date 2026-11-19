@@ -1,10 +1,11 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -12,10 +13,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.starexec.backend.LocalJobMonitor;
+import org.starexec.backend.StageStatusSnapshots;
+import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.StageStatusBatchResult;
+import org.starexec.data.to.Status.StatusCode;
 
 /**
  * Tests for the ways LocalJobMonitor could strand or misreport a job pair.
@@ -37,7 +44,7 @@ public class LocalJobMonitorTests {
 
     private LocalJobMonitor monitor;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         monitor = new LocalJobMonitor();
     }
@@ -46,7 +53,7 @@ public class LocalJobMonitorTests {
      * The constructor allocates a scheduler thread whether or not the monitor is ever
      * started, so a test that just drops the instance leaks one per test method.
      */
-    @After
+    @AfterEach
     public void tearDown() {
         if (monitor != null) {
             monitor.stop();
@@ -73,13 +80,13 @@ public class LocalJobMonitorTests {
 
     private long generationOf(int pairId) throws Exception {
         Object state = stateFor(pairId);
-        assertNotNull("no tracking entry for pairId=" + pairId, state);
+        assertNotNull(state, "no tracking entry for pairId=" + pairId);
         return (Long) field(state, "generation");
     }
 
     private String logDirOf(int pairId) throws Exception {
         Object state = stateFor(pairId);
-        assertNotNull("no tracking entry for pairId=" + pairId, state);
+        assertNotNull(state, "no tracking entry for pairId=" + pairId);
         return (String) field(state, "logDir");
     }
 
@@ -180,11 +187,11 @@ public class LocalJobMonitorTests {
 
         assertEquals(42.5, statDouble(stats, "wallclockTime"), 0.0001);
         assertEquals(
-            "cpuTime is absent from stats.json, so var.out's value must survive rather"
-                + " than being overwritten with 0",
             41.25,
             statDouble(stats, "cpuTime"),
-            0.0001
+            0.0001,
+            "cpuTime is absent from stats.json, so var.out's value must survive rather"
+                + " than being overwritten with 0"
         );
     }
 
@@ -209,9 +216,9 @@ public class LocalJobMonitorTests {
         ));
 
         assertEquals(
-            "Watcher.hh:396 writes this line with '='; a parser expecting ':' records 0",
             4096L,
-            statLong(stats, "maxResidentSetSize")
+            statLong(stats, "maxResidentSetSize"),
+            "Watcher.hh:396 writes this line with '='; a parser expecting ':' records 0"
         );
     }
 
@@ -228,13 +235,35 @@ public class LocalJobMonitorTests {
         assertEquals(98.0, statDouble(stats, "cpuTime"), 0.0001);
     }
 
+    /**
+     * A time in exponent form is read whole. runsolver prints a time below 1e-4 s or from 1e6 s
+     * that way, and the job script writes it to stats.json as it is. There is no var.out here,
+     * so each value can only come from stats.json.
+     */
+    @Test
+    public void aTimeInExponentFormInStatsJsonIsReadWhole() throws Exception {
+        Object stats = parseRunSolverStats(outputDir(
+            null,
+            null,
+            "{\"wallclockTime\": 9.90467e-05, \"cpuTime\": 1.23457e+06,"
+                + " \"userTime\": 4.1e-05, \"systemTime\": 4.22E-05}"
+        ));
+
+        assertEquals(9.90467e-05, statDouble(stats, "wallclockTime"), 0.0);
+        assertEquals(1234570.0, statDouble(stats, "cpuTime"), 0.0);
+        assertEquals(4.1e-05, statDouble(stats, "userTime"), 0.0);
+        assertEquals(4.22e-05, statDouble(stats, "systemTime"),
+            0.0, "an upper-case E is an exponent in JSON too");
+    }
+
     // ------------------------------------------------------------------
     // A malformed number in stats.json must not escape parseRunSolverStats
     //
-    // extractDoubleOr matches [0-9.]+ and extractLongOr/extractIntOr match
-    // [0-9]+, so "1.2.3", ".", "1..2" and digit strings past Integer/Long range
-    // all match the regex and then throw out of the parse. The enclosing catch
-    // took IOException only, so the NumberFormatException left the monitor.
+    // extractDoubleOr matches a digit or dot followed by digits, dots and exponent
+    // characters, and extractLongOr/extractIntOr match [0-9]+, so "1.2.3", ".",
+    // "1..2", "1e" and digit strings past Integer/Long range all match the regex and
+    // then throw out of the parse. The enclosing catch took IOException only, so the
+    // NumberFormatException left the monitor.
     //
     // Both tests below turn on one witness: hostname is applied last, at the very
     // end of the stats.json block. A malformed value that merely failed to match
@@ -263,29 +292,29 @@ public class LocalJobMonitorTests {
         ));
 
         assertEquals(
-            "the fields applied before the malformed one must still come from"
-                + " stats.json -- the block does run, it just cannot finish",
             43.75,
             statDouble(stats, "wallclockTime"),
-            0.0001
+            0.0001,
+            "the fields applied before the malformed one must still come from"
+                + " stats.json -- the block does run, it just cannot finish"
         );
         assertEquals(
-            "cpuTime must fall back to var.out's measurement, not to 0",
             41.25,
             statDouble(stats, "cpuTime"),
-            0.0001
+            0.0001,
+            "cpuTime must fall back to var.out's measurement, not to 0"
         );
         assertEquals(
-            "userTime proves the parse threw rather than failing to match: a"
-                + " non-matching value would have left the block running and"
-                + " applied stats.json's 77.0 here",
             8.0,
             statDouble(stats, "userTime"),
-            0.0001
+            0.0001,
+            "userTime proves the parse threw rather than failing to match: a"
+                + " non-matching value would have left the block running and"
+                + " applied stats.json's 77.0 here"
         );
         assertNull(
-            "hostname is applied last, so it is only null if the block aborted",
-            statString(stats, "hostname")
+            statString(stats, "hostname"),
+            "hostname is applied last, so it is only null if the block aborted"
         );
     }
 
@@ -311,6 +340,8 @@ public class LocalJobMonitorTests {
                 "{\"cpuTime\": ., \"hostname\": \"node7\"}"},
             {"a doubled dot reaches Double.parseDouble",
                 "{\"cpuTime\": 1..2, \"hostname\": \"node7\"}"},
+            {"a dangling exponent reaches Double.parseDouble",
+                "{\"cpuTime\": 1e, \"hostname\": \"node7\"}"},
             {"a value past Long range reaches Long.parseLong",
                 "{\"maxResidentSetSize\": 99999999999999999999,"
                     + " \"hostname\": \"node7\"}"},
@@ -325,20 +356,20 @@ public class LocalJobMonitorTests {
             Object stats = parseRunSolverStats(outputDir(varOut, watcherOut, c[1]));
 
             assertNull(
-                why + ": the block must abort, leaving hostname unapplied",
-                statString(stats, "hostname")
+                statString(stats, "hostname"),
+                why + ": the block must abort, leaving hostname unapplied"
             );
             assertEquals(
-                why + ": cpuTime must keep var.out's measurement rather than 0",
                 41.25,
                 statDouble(stats, "cpuTime"),
-                0.0001
+                0.0001,
+                why + ": cpuTime must keep var.out's measurement rather than 0"
             );
             assertEquals(
-                why + ": maxResidentSetSize must keep watcher.out's measurement"
-                    + " rather than 0",
                 4096L,
-                statLong(stats, "maxResidentSetSize")
+                statLong(stats, "maxResidentSetSize"),
+                why + ": maxResidentSetSize must keep watcher.out's measurement"
+                    + " rather than 0"
             );
         }
     }
@@ -355,24 +386,24 @@ public class LocalJobMonitorTests {
     @Test
     public void truncatedStatusFileIsNotReadableRatherThanAnError() throws Exception {
         assertNull(
-            "a half-written status.json must not resolve to a status",
-            readStatusFile(dirContaining("{\"status\": 7, \"stageNum"), 1)
+            readStatusFile(dirContaining("{\"status\": 7, \"stageNum"), 1),
+            "a half-written status.json must not resolve to a status"
         );
     }
 
     @Test
     public void statusFileWithoutTheStatusFieldIsNotReadable() throws Exception {
         assertNull(
-            "a status.json lacking its status field must not resolve to a status",
-            readStatusFile(dirContaining("{\"stageNumber\": 1}"), 2)
+            readStatusFile(dirContaining("{\"stageNumber\": 1}"), 2),
+            "a status.json lacking its status field must not resolve to a status"
         );
     }
 
     @Test
     public void nonObjectStatusFileIsNotReadable() throws Exception {
         assertNull(
-            "content that is not a JSON object must not resolve to a status",
-            readStatusFile(dirContaining("not json at all"), 3)
+            readStatusFile(dirContaining("not json at all"), 3),
+            "content that is not a JSON object must not resolve to a status"
         );
     }
 
@@ -381,11 +412,25 @@ public class LocalJobMonitorTests {
         // The inverse error matters as much: this must not start returning null for
         // files that are perfectly good.
         Object ss = readStatusFile(dirContaining("{\"status\": 7, \"stageNumber\": 2}"), 4);
-        assertNotNull("a complete status.json must still parse", ss);
+        assertNotNull(ss, "a complete status.json must still parse");
 
         Field stage = ss.getClass().getDeclaredField("stageNumber");
         stage.setAccessible(true);
         assertEquals(2, stage.getInt(ss));
+    }
+
+    @Test
+    public void aStatusFileThatDisappearsDoesNotBecomeStageOneRunscriptError() throws Exception {
+        Path empty = Files.createTempDirectory("ljm-absent-status");
+        empty.toFile().deleteOnExit();
+
+        try {
+            readStatusFile(empty, 5);
+            fail("an absent status file has no stage or solver result to record");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            assertTrue(e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException,
+                "expected an evidence refusal, got " + e.getCause());
+        }
     }
 
     // ------------------------------------------------------------------
@@ -400,10 +445,10 @@ public class LocalJobMonitorTests {
         monitor.clearPairTracking(98);
 
         assertFalse(
+            pairs().containsKey(98),
             "one removal must clear the directory, the processed status and the"
                 + " parse-failure count together -- they used to be three facts that"
-                + " could be left half-cleared",
-            pairs().containsKey(98)
+                + " could be left half-cleared"
         );
     }
 
@@ -432,9 +477,9 @@ public class LocalJobMonitorTests {
         long second = generationOf(42);
 
         assertTrue(
+            second > first,
             "a rerun must be distinguishable from the run it replaces; without a"
-                + " strictly increasing token nothing tells run N from run N+1",
-            second > first
+                + " strictly increasing token nothing tells run N from run N+1"
         );
         assertEquals("/tmp/run-2", logDirOf(42));
     }
@@ -453,10 +498,10 @@ public class LocalJobMonitorTests {
         monitor.registerJob("/tmp/run-n-plus-1", 42);
 
         assertFalse(
-            "a poll belonging to the superseded run must not retire the new run",
-            retire(42, runN)
+            retire(42, runN),
+            "a poll belonging to the superseded run must not retire the new run"
         );
-        assertTrue("the rerun must still be tracked", pairs().containsKey(42));
+        assertTrue(pairs().containsKey(42), "the rerun must still be tracked");
         assertEquals("/tmp/run-n-plus-1", logDirOf(42));
     }
 
@@ -469,7 +514,7 @@ public class LocalJobMonitorTests {
         monitor.registerJob("/tmp/run-n", 43);
         Object runN = stateFor(43);
 
-        assertTrue("an uncontested terminal result must retire the pair", retire(43, runN));
+        assertTrue(retire(43, runN), "an uncontested terminal result must retire the pair");
         assertFalse(pairs().containsKey(43));
     }
 
@@ -481,13 +526,13 @@ public class LocalJobMonitorTests {
     public void isCurrentGoesFalseOnceARerunLands() throws Exception {
         monitor.registerJob("/tmp/run-n", 44);
         Object runN = stateFor(44);
-        assertTrue("the run's own generation must be current before any rerun",
-            isCurrent(44, runN));
+        assertTrue(isCurrent(44, runN),
+            "the run's own generation must be current before any rerun");
 
         monitor.registerJob("/tmp/run-n-plus-1", 44);
 
-        assertFalse("run N must not be allowed to write after run N+1 has started",
-            isCurrent(44, runN));
+        assertFalse(isCurrent(44, runN),
+            "run N must not be allowed to write after run N+1 has started");
     }
 
     @Test
@@ -502,16 +547,225 @@ public class LocalJobMonitorTests {
         Object runNext = stateFor(45);
 
         assertEquals(
-            "a rerun starts its own unreadable-file budget; a count carried over could"
-                + " fail the new run on its first bad read",
             0,
-            ((Integer) field(runNext, "parseFailures")).intValue()
+            ((Integer) field(runNext, "parseFailures")).intValue(),
+            "a rerun starts its own unreadable-file budget; a count carried over could"
+                + " fail the new run on its first bad read"
         );
         assertEquals(
-            "a failure reported by the superseded run must not be counted against"
-                + " the new one",
             -1,
-            recordParseFailure(45, runN)
+            recordParseFailure(45, runN),
+            "a failure reported by the superseded run must not be counted against"
+                + " the new one"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // What a pair-level status is allowed to be.
+    //
+    // status.json is written by the job script into a directory the job can write. The protocol
+    // has it carry STATUS_RUNNING while a stage is in flight and a terminal execution result
+    // once one finishes -- which is exactly the job script's emission set. Anything else did not
+    // come from the protocol.
+    //
+    // STATUS_PROCESSING(22) is the one with teeth: a pair left at 22 is selected by the periodic
+    // post-processing task, which sets it to STATUS_COMPLETE. ContainerJobMonitor already
+    // guarded its own pair-level write against this; this path did not.
+    //
+    // The guard runs before any database call, so a refusal is an InvalidSnapshotException and
+    // anything that gets past it fails later for want of a database. That difference is what
+    // these assert on -- no database is needed to tell "refused" from "accepted".
+    // ------------------------------------------------------------------
+
+    private void updateDatabase(int pairId, StatusCode status, int stageNumber) throws Throwable {
+        for (Method m : LocalJobMonitor.class.getDeclaredMethods()) {
+            if (m.getName().equals("updateDatabase") && m.getParameterCount() == 4) {
+                m.setAccessible(true);
+                try {
+                    m.invoke(monitor, pairId, status, stageNumber, (Integer) null);
+                } catch (java.lang.reflect.InvocationTargetException e) {
+                    throw e.getCause();
+                }
+                return;
+            }
+        }
+        throw new AssertionError("no such method: updateDatabase");
+    }
+
+    private boolean isRefused(StatusCode status) throws Throwable {
+        try {
+            updateDatabase(50, status, 1);
+            return false;
+        } catch (StageStatusSnapshots.InvalidSnapshotException refused) {
+            assertTrue(refused.getMessage().contains(status.toString()),
+                    "the refusal must name the status: " + refused.getMessage());
+            return true;
+        } catch (Throwable anythingElse) {
+            // Got past the guard and failed further in, for want of a database.
+            return false;
+        }
+    }
+
+    /**
+     * The whole enum, so a status added later cannot quietly become recordable. Enumerated
+     * against the authoritative predicate rather than against a list written out here, which
+     * would only prove this test and the guard were written by the same hand.
+     */
+    @Test
+    public void onlyRunningOrATerminalResultCanBeRecordedAsAPairStatus() throws Throwable {
+        for (StatusCode code : StatusCode.values()) {
+            boolean allowed = code == StatusCode.STATUS_RUNNING || code.isTerminalExecutionResult();
+            assertEquals(!allowed, isRefused(code), code + " (" + code.getVal() + ")");
+        }
+    }
+
+    /** Named individually, so a regression says which state leaked rather than only that one did. */
+    @Test
+    public void theThreeStatesThatMeanWorkIsStillOwedAreRefusedAsAPairStatus() throws Throwable {
+        assertTrue(isRefused(StatusCode.STATUS_PROCESSING_RESULTS),
+                "19 STATUS_PROCESSING_RESULTS");
+        assertTrue(isRefused(StatusCode.STATUS_PAUSED), "20 STATUS_PAUSED");
+        assertTrue(isRefused(StatusCode.STATUS_PROCESSING),
+                "22 STATUS_PROCESSING -- the one post-processing promotes to COMPLETE");
+    }
+
+    /** The terminal error statuses 23-26 are results a pair may legitimately be left holding. */
+    @Test
+    public void theTerminalErrorStatusesAreStillRecordable() throws Throwable {
+        for (StatusCode code : new StatusCode[]{
+                StatusCode.STATUS_NOT_REACHED,              // 23
+                StatusCode.ERROR_BENCH_DEPENDENCY_MISSING,  // 24
+                StatusCode.ERROR_PRE_PROCESSOR,             // 25
+                StatusCode.ERROR_POST_PROCESSOR}) {         // 26
+            assertFalse(isRefused(code), code + " is a result and must remain recordable");
+        }
+    }
+
+    /** And the progress status, which is how a pair is marked running at all. */
+    @Test
+    public void runningIsStillRecordableBecauseThatIsHowAPairIsMarkedRunning() throws Throwable {
+        assertFalse(isRefused(StatusCode.STATUS_RUNNING));
+    }
+
+    /** A refusal must happen before anything is written, including stage history. */
+    @Test
+    public void aRefusedStatusReachesNoDatabaseCallAtAll() throws Throwable {
+        try {
+            updateDatabase(50, StatusCode.STATUS_PROCESSING, 1);
+            fail("STATUS_PROCESSING must be refused");
+        } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+            for (StackTraceElement f : expected.getStackTrace()) {
+                assertFalse(f.getClassName().contains("JobPairs"), "the refusal must precede any JobPairs call, but the stack shows "
+                                + f);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // A stage that is still running must not strand the pair.
+    //
+    // status.json exists from the first moment of a run -- sendNode writes STATUS_RUNNING into
+    // it -- so the poll loop calls into ingestion against a pair that has not finished. The
+    // stage's own snapshot legitimately reads STATUS_RUNNING at that point. Validating it threw
+    // InvalidSnapshotException, which IngestionOutcome classifies as BLOCKED, and BLOCKED is
+    // permanent: the pair was never re-read, even though it went on to finish cleanly a second
+    // later and its evidence became consistent.
+    //
+    // These assert on the throw rather than on a flag because the throw IS the mechanism: it is
+    // the only thing that reaches recordIngestionFailure and sets ingestionBlocked.
+    // ------------------------------------------------------------------
+
+    private void ingestEarlierStageStatuses(
+        int pairId, Object state, Path outputDir, int terminalStage) throws Exception {
+        for (Method m : LocalJobMonitor.class.getDeclaredMethods()) {
+            if (m.getName().equals("ingestEarlierStageStatuses")) {
+                m.setAccessible(true);
+                try {
+                    m.invoke(monitor, pairId, state, outputDir, terminalStage);
+                } catch (java.lang.reflect.InvocationTargetException e) {
+                    throw (Exception) e.getCause();
+                }
+                return;
+            }
+        }
+        throw new AssertionError("no such method: ingestEarlierStageStatuses");
+    }
+
+    private Path dirWithStageSnapshot(int pairId, int stage, int status) throws Exception {
+        Path dir = Files.createTempDirectory("ljm-stage");
+        dir.toFile().deleteOnExit();
+        Path snapshots = dir.resolve("stage-status");
+        Files.createDirectories(snapshots);
+        Files.writeString(
+            snapshots.resolve(stage + ".json"),
+            "{\"pairId\":" + pairId + ",\"status\":" + status
+                + ",\"stageNumber\":" + stage + ",\"timestamp\":1788988692}\n");
+        return dir;
+    }
+
+    @Test
+    public void aStageStillRunningDoesNotBlockIngestion() throws Exception {
+        // 4 is STATUS_RUNNING, which the stage's snapshot holds from the moment it starts.
+        // status.json names that same stage: sendNode's sendStatus defaults to stage 0, but the
+        // sendStageStatus on the next line rewrites status.json with the real stage number.
+        Path dir = dirWithStageSnapshot(46, 1, 4);
+        monitor.registerJob(dir.toString(), 46);
+
+        // Single-stage pair, currently in stage 1. Nothing is behind it, and its own snapshot
+        // must not be judged. Before the bound this threw, and the throw was permanent.
+        ingestEarlierStageStatuses(46, stateFor(46), dir, 1);
+    }
+
+    /**
+     * A stage number below 1 names no stage. It arrives here routinely -- every pair-level error
+     * path takes {@code sendStatus}'s default of 0 -- and must not be read as "no stage is in
+     * flight", which would skip the whole directory and let the caller record a result for a
+     * pair whose history it had just declined to read.
+     *
+     * <p>What such a pair leaves behind, though, is a stage that never finished: its snapshot
+     * reads RUNNING and always will. Refusing the pair for that -- which this test used to
+     * require -- held every pair that died mid-stage for intervention, permanently. So an
+     * unfinished stage is skipped, while the directory is still read and every stage that DID
+     * finish is still ingested, which is the property this case exists to protect.
+     */
+    @Test
+    public void aStageNumberBelowOneStillReadsTheStagesThatFinished() throws Exception {
+        Path dir = dirWithStageSnapshot(49, 1, StatusCode.STATUS_COMPLETE.getVal());
+        Files.writeString(
+            dir.resolve("stage-status").resolve("2.json"),
+            "{\"pairId\":49,\"status\":4,\"stageNumber\":2,\"timestamp\":1788988692}\n");
+        monitor.registerJob(dir.toString(), 49);
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.setEarlierStageStatuses(
+                    Mockito.eq(49), Mockito.anyMap()))
+                .thenReturn(StageStatusBatchResult.APPLIED);
+
+            ingestEarlierStageStatuses(49, stateFor(49), dir, 0);
+
+            jobPairs.verify(() -> JobPairs.setEarlierStageStatuses(
+                49, java.util.Map.of(1, StatusCode.STATUS_COMPLETE.getVal())));
+        }
+    }
+
+    /**
+     * The control. Once the pair has moved past a stage, that stage's status is final, and a
+     * non-terminal one is still a refusal -- otherwise the fix would have opened the
+     * status-laundering path the snapshot rules exist to close.
+     */
+    @Test
+    public void aStageThePairMovedPastIsStillValidated() throws Exception {
+        // 22 is STATUS_PROCESSING, the value the periodic post-processor promotes to COMPLETE.
+        Path dir = dirWithStageSnapshot(48, 1, 22);
+        monitor.registerJob(dir.toString(), 48);
+
+        try {
+            ingestEarlierStageStatuses(48, stateFor(48), dir, 2);
+            fail("a non-terminal status on a stage the pair has passed must be refused");
+        } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+            assertTrue(
+                expected.getMessage().contains("carries status 22"),
+                "wrong refusal: " + expected.getMessage());
+        }
     }
 }

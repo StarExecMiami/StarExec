@@ -1,3 +1,5 @@
+@use "../global/mixins" as m;
+
 #new_website input {
 	width: 30%;
 }
@@ -28,11 +30,7 @@ table tr td:first-child {
 	width: 160px;
 }
 
-@media only screen and (max-width: 767px) {
-	fieldset {
-		width: 85%;
-	}
-
+@include m.mobile {
 	#solverDetails tr > *:first-child {
 		width: 33.33%;
 	}

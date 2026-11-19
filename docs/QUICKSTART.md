@@ -104,6 +104,11 @@ You should see:
      make start
      ```
 
+     This starts the development profile (`ENV=dev`) with its default
+     credentials. For production, create the Podman production values file and
+     deploy with `ENV=prod` as described in
+     [the Deployment Guide](DEPLOYMENT.md#method-2-podman--makefile-recommended-for-production).
+
 7. Access the application:
      - URL: `http://localhost:7827/starexec`
      - Default credentials: `admin:admin`
@@ -183,11 +188,14 @@ See [Troubleshooting Guide](TROUBLESHOOTING.md#podman-issues) for more help.
    helm repo update
    ```
 
-2. Install StarExec:
+2. Install StarExec (the chart refuses to render without credentials — use an
+   existing secret or set the development credentials explicitly):
    ```bash
    helm install starexec starexec/starexec \
      --create-namespace \
-     -n starexec
+     -n starexec \
+     --set postgres.password="$(openssl rand -base64 32)" \
+     --set postgres.rootPassword="$(openssl rand -base64 32)"
    ```
 
 3. Wait for deployment:
@@ -208,12 +216,16 @@ Create a `values.yaml` file:
 
 ```yaml
 postgres:
+  # Development/testing only. Production must use existingSecret instead.
+  allowInsecureDevCredentials: true
   password: "your-secure-password"
+  rootPassword: "your-secure-root-password"
   
 resources:
-  limits:
-    memory: 4Gi
-    cpu: 2
+  app:
+    limits:
+      memory: 4Gi
+      cpu: 2
 ```
 
 Install with custom values:
@@ -283,7 +295,7 @@ make stop                      # Undeploy
 make status                    # Check status
 make logs                      # View logs
 make volumes-backup ENV=dev    # Backup data
-make reset                     # Complete cleanup
+make reset                     # Delete all data and the image
 ```
 
 ### Kubernetes (Helm)
@@ -291,8 +303,8 @@ make reset                     # Complete cleanup
 ```bash
 helm list -n starexec                    # List releases
 helm upgrade starexec starexec/starexec  # Upgrade
-helm uninstall starexec -n starexec      # Remove
-kubectl logs -n starexec -l app=starexec # View logs
+helm uninstall starexec -n starexec      # Remove (keeps the PVCs and their data)
+kubectl logs -n starexec -l app.kubernetes.io/name=starexec # View logs
 ```
 
 ## Getting Help

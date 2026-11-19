@@ -42,6 +42,19 @@ public class Reports {
 	}
 
 	/**
+	 * As above, on a connection the caller owns, so the counter commits with whatever it is
+	 * counting rather than on a connection of its own.
+	 *
+	 * @throws SQLException so a failed counter fails its caller's transaction. Reporting an
+	 * event that did not happen is a silent accounting error, which is the kind these
+	 * counters exist to avoid.
+	 */
+	public static void addToEventOccurrencesNotRelatedToQueue(String eventName, int occurrences, Connection con)
+			throws SQLException {
+		addToEventOccurrences(eventName, occurrences, null, con);
+	}
+
+	/**
 	 * Add occurrences to an event related to a queue
 	 *
 	 * @param eventName   the name of the event.
@@ -49,6 +62,12 @@ public class Reports {
 	 * @param queueName   the name of the queue related to the event.
 	 * @return True on success and false on error
 	 */
+	/** As {@link #addToEventOccurrencesForQueue(String, int, String)}, on a borrowed connection. */
+	public static void addToEventOccurrencesForQueue(
+			String eventName, int occurrences, String queueName, Connection con) throws SQLException {
+		addToEventOccurrences(eventName, occurrences, queueName, con);
+	}
+
 	public static boolean addToEventOccurrencesForQueue(String eventName, int occurrences, String queueName) {
 		return addToEventOccurrences(eventName, occurrences, queueName);
 	}
@@ -202,10 +221,23 @@ public class Reports {
 	 */
 	private static boolean addToEventOccurrences(String eventName, int occurrences, String queueName) {
 		Connection con = null;
-		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
+			addToEventOccurrences(eventName, occurrences, queueName, con);
+			return true;
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+		} finally {
+			Common.safeClose(con);
+		}
+		return false;
+	}
 
+	/** The statement itself, on whichever connection the caller supplies. */
+	private static void addToEventOccurrences(
+			String eventName, int occurrences, String queueName, Connection con) throws SQLException {
+		PreparedStatement ps = null;
+		try {
 			if (queueName == null) {
 				ps = con.prepareStatement("CALL starexec.AddToEventOccurrencesNotRelatedToQueue(?, ?)");
 			} else {
@@ -218,14 +250,9 @@ public class Reports {
 			ps.execute();
 			log.debug("Added " + occurrences + " occurrences to " + eventName +
 					(queueName == null ? "" : " for queue " + queueName) + ".");
-			return true;
-		} catch (Exception e) {
-			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(con);
 			Common.safeClose(ps);
 		}
-		return false;
 	}
 
 	/**

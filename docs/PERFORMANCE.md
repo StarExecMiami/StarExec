@@ -20,11 +20,13 @@ This guide covers:
 
 | Parameter | Default | Tuning Goal |
 |-----------|---------|-------------|
-| `STAREXEC_LOCAL_CONCURRENCY` | 4 | Match CPU cores (up to 16) |
+| `STAREXEC_LOCAL_CONCURRENCY` | `min(4, JVM available processors)`, lowered to the distinct physical-core count | Select this many distinct physical cores from the online portion of process affinity; use `STAREXEC_LOCAL_CORE_LIST` to choose exact CPUs |
+| `STAREXEC_LOCAL_CORE_LIST` | unset | One online, allowed logical CPU per physical core; its validated length sets LocalBackend concurrency |
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` | 5 | Keep queue 50-100 deep |
 | `STAREXEC_CONTAINER_POLL_INTERVAL_MS` | 5000 | Lower for latency, higher for scale |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 4096 | Match solver requirements |
-| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | 1 | 1 for single-threaded, more for parallel |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048 | Podman cgroup memory ceiling; above the largest job memory limit, which it caps |
+| `STAREXEC_CPU_PARTITION_COUNT` | `auto` | `N > 1` creates topology-aware partitions; `auto` leaves a single-NUMA host unpinned |
+| `STAREXEC_CONTAINER_CPU_QUOTA_CORES` | 0 | Optional CFS cap for unpartitioned containers; not a substitute for affinity |
 
 ### Live Log Streaming Parameters (SSE)
 
@@ -43,7 +45,7 @@ This guide covers:
 |--------|--------|----------|
 | CPU utilization | 70-90% | > 95% (overloaded) |
 | Memory utilization | 60-80% | > 90% (risk OOM) |
-| Queue depth | 50-100 | > 500 (backlog) |
+| Queue depth | 50-100 | 200-500 | > 500 |
 | Job timeout rate | < 1% | > 5% (timeout too low) |
 | Database response | < 50ms | > 200ms (bottleneck) |
 
@@ -58,10 +60,14 @@ When live log streaming is enabled, protect benchmark throughput with these goal
 | Non-stream API p95 latency | < +20% vs baseline | > +50% vs baseline |
 | Benchmark pair throughput | >= 95% of baseline | < 90% of baseline |
 
-**Overhead model (rough):**
+**Overhead model (rough), for streams that have caught up with their logs:**
 - File polls/sec ≈ `activeStreams / (POLL_INTERVAL_MS / 1000)`
-- Status DB QPS ≈ `activeStreams / (STATUS_POLL_INTERVAL_MS / 1000)`
-- Max stream egress ≈ `activeStreams × READ_CHUNK_BYTES / (POLL_INTERVAL_MS / 1000)`
+- Status DB QPS ≈ `runningPairStreams / (STATUS_POLL_INTERVAL_MS / 1000)`; a finished pair's status is read once
+- Stream egress ≈ the rate at which the streamed logs grow
+
+A stream more than 32 chunks behind its log, such as one that starts at byte 0 of a long log, sends 32
+chunks of `READ_CHUNK_BYTES` per poll and polls again at once, so it sends as fast as its client reads
+until it has caught up. Each stream worker thread (4 to 16, by CPU count) sends one chunk at a time.
 
 ---
 
@@ -86,9 +92,9 @@ When live log streaming is enabled, protect benchmark throughput with these goal
 | 4 | 4 | 24 | 576 |
 | 8 | 8 | 48 | 1,152 |
 | 16 | 16 | 96 | 2,304 |
-| 32 | 16 | 96 | 2,304 |
+| 32 | 32 | 192 | 4,608 |
 
-*Note: Local backend maxes out at 16 concurrent jobs*
+*Note: concurrency is whatever `STAREXEC_LOCAL_CONCURRENCY` or the validated `STAREXEC_LOCAL_CORE_LIST` yields. Both modes lease only CPUs in the intersection of `Cpus_allowed_list` and the sysfs online mask, permit at most one lease per sibling group, and fail closed when required sysfs data is unreadable. This prevents LocalBackend jobs from sharing a core but does not reserve unused siblings from other host workloads.*
 
 #### Podman Backend
 
@@ -132,10 +138,21 @@ When live log streaming is enabled, protect benchmark throughput with these goal
 # Check CPU cores
 nproc
 
-# Set concurrency (rule: cores - 2 for system overhead)
-export STAREXEC_LOCAL_CONCURRENCY=$(( $(nproc) - 2 ))
+# Inspect both physical-core identity and this process's allowed CPU set first.
+lscpu -e=CPU,CORE,SOCKET,ONLINE
+awk '/^Cpus_allowed_list:/ { print $2 }' /proc/self/status
+cat /sys/devices/system/cpu/online
 
-# For memory-bound solvers, reduce further
+# For benchmark fidelity, set one allowed logical CPU per physical core.
+# LocalBackend validates the list at startup and derives concurrency from it.
+# This is an example; replace the IDs with those measured on this host.
+export STAREXEC_LOCAL_CORE_LIST="2,4,6,8"
+
+# Alternatively, use a count only after removing the explicit core list. The
+# backend selects one allowed CPU per sysfs sibling group and fails startup if
+# the topology cannot prove enough distinct physical cores. Use host cpusets or
+# cgroups as well when unrelated workloads must be excluded from sibling CPUs.
+unset STAREXEC_LOCAL_CORE_LIST
 export STAREXEC_LOCAL_CONCURRENCY=$(( $(nproc) / 2 ))
 ```
 
@@ -200,49 +217,69 @@ export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096
 # MEMORY_NEEDED = NUM_JOB_PAIRS_AT_A_TIME × CONTAINER_DEFAULT_MEMORY_MB
 # Example: 5 × 4096 = 20GB
 
-# CPU per container
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
+# Example: a 16-physical-core host running one single-threaded solver per partition
+export STAREXEC_CPU_PARTITION_COUNT=16
 
-# For parallel solvers
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=4
+# Example: the same host running four-core parallel solvers
+export STAREXEC_CPU_PARTITION_COUNT=4
 ```
 
+An explicit `STAREXEC_CPU_PARTITION_COUNT` greater than one creates cpusets and
+controls solver placement. It uses every online CPU, so publication runs that
+reserve operating-system or application cores should use explicit cpusets.
+Verify the host topology as described in
+[CPU partition scheduling](cpu-partition-scheduling.md). If the host remains
+unpartitioned, `STAREXEC_CONTAINER_CPU_QUOTA_CORES` can bound CFS bandwidth, but
+it provides no affinity and cannot make timing measurements reproducible.
+
+CPU-time and wallclock budgets are queue/job properties. The removed
+`STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` and
+`STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` variables were overwritten by the
+generated job script and never changed the effective budgets.
+
 ### Resource Limit Profiles
+
+These profiles set the container memory limit, the batch size and the CPU partition count,
+which is what decides a pair's cores (the width of its partition). They do not set CPU
+time or wallclock time: those budgets come from the queue and the job. Earlier versions of
+these profiles set `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` (described as a core count) and
+`STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT`; those lines never changed the solver's
+limits. The partition counts below assume a 16-physical-core host.
 
 #### Lightweight Solvers (SMT QF_BV)
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=2048
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=300
+export STAREXEC_CPU_PARTITION_COUNT=16 # Example: 16 physical cores, one per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=8
+# Configure 300s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 #### Standard Solvers (SAT)
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=600
+export STAREXEC_CPU_PARTITION_COUNT=16 # Example: 16 physical cores, one per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5
+# Configure 600s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 #### Heavy Solvers (QF_NIA, LIA)
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=2
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=1200
+export STAREXEC_CPU_PARTITION_COUNT=8 # Example: 16 physical cores, two per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=4
+# Configure 1200s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 #### Parallel Solvers (CaDiCaL, Lingeling)
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=16384
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=8
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=3600
+export STAREXEC_CPU_PARTITION_COUNT=2 # Example: 16 physical cores, eight per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=2
+# Configure 3600s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 ---
@@ -251,14 +288,10 @@ export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=2
 
 ### Connection Pool Tuning
 
-```yaml
-# Helm values
-datasource:
-  maximumPoolSize: 20      # Max connections
-  minimumIdle: 5           # Min idle connections
-  connectionTimeout: 30000 # Connection timeout (ms)
-  idleTimeout: 600000      # Idle connection timeout (ms)
-```
+The connection pool is the Tomcat JDBC pool configured in
+`starexec-app/src/main/webapp/META-INF/context.xml` (`maxActive=20`,
+`maxIdle=10` by default). It is not a Helm value; change it in that resource
+and redeploy.
 
 **Sizing guide:**
 
@@ -314,15 +347,10 @@ FROM pg_stat_user_tables
 WHERE seq_scan > 1000 AND seq_tup_read / seq_scan > 1000
 ORDER BY seq_tup_read DESC;
 
--- Add common indexes
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_job_pairs_status 
-ON job_pairs(status_code);
-
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_job_pairs_job_id 
-ON job_pairs(job_id);
-
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_status_created 
-ON jobs(status_code, created);
+-- The hot-path indexes (including idx_job_pairs_status and
+-- idx_job_pairs_job_id) are created by Flyway migration V0026. Do not create
+-- them manually. Use the diagnostic query above to find candidates for new
+-- indexes and add them through a new migration.
 ```
 
 ### Query Optimization
@@ -453,7 +481,7 @@ blockdev --setra 4096 /dev/sda
 
 | Metric | Healthy | Warning | Critical |
 |--------|---------|---------|----------|
-| Queue depth | 50-100 | 200-500 | > 1000 |
+| Queue depth | 50-100 | 200-500 | > 500 |
 | Job completion rate | Stable | Declining | Zero |
 | Error rate | < 1% | 1-5% | > 10% |
 | Response time | < 500ms | 500ms-2s | > 5s |

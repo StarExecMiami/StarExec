@@ -1,9 +1,9 @@
 package org.starexec.test.junit.jobs;
 
 
-import org.junit.Assert;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.jobs.LoadBalanceMonitor;
 import org.starexec.constants.R;
 
@@ -13,7 +13,7 @@ import java.util.Map;
 public class LoadBalanceMonitorTests {
 	private LoadBalanceMonitor monitor = null;
 
-	@Before
+	@BeforeEach
 	public void setup() {
 		monitor = new LoadBalanceMonitor();
 	}
@@ -23,8 +23,8 @@ public class LoadBalanceMonitorTests {
 		Map<Integer, Long> users = new HashMap<>();
 		users.put(1, 0L);
 		monitor.setUsers(users);
-		Assert.assertEquals(0, (long)monitor.getLoad(1));
-		Assert.assertEquals(0, (long)monitor.getMin());
+		Assertions.assertEquals(0, (long)monitor.getLoad(1));
+		Assertions.assertEquals(0, (long)monitor.getMin());
 	}
 
 	@Test
@@ -34,7 +34,7 @@ public class LoadBalanceMonitorTests {
 		monitor.setUsers(users);
 		monitor.changeLoad(1, 1);
 		monitor.setUsers(users);
-		Assert.assertEquals(1, (long)monitor.getLoad(1));
+		Assertions.assertEquals(1, (long)monitor.getLoad(1));
 	}
 
 	@Test
@@ -46,8 +46,8 @@ public class LoadBalanceMonitorTests {
 		monitor.setUsers(new HashMap<>());
 
 		// user is still there, just inactive
-		Assert.assertEquals(12, (long)monitor.getLoad(1));
-		Assert.assertNull(monitor.getMin());
+		Assertions.assertEquals(12, (long)monitor.getLoad(1));
+		Assertions.assertNull(monitor.getMin());
 	}
 
 	@Test
@@ -57,11 +57,11 @@ public class LoadBalanceMonitorTests {
 		users.put(2, 0L);
 		monitor.setUsers(users);
 		monitor.changeLoad(1, 3);
-		Assert.assertEquals(0, (long)monitor.getMin());
+		Assertions.assertEquals(0, (long)monitor.getMin());
 		users.remove(2);
 		monitor.setUsers(users);
 
-		Assert.assertEquals(3, (long)monitor.getMin());
+		Assertions.assertEquals(3, (long)monitor.getMin());
 	}
 
 	@Test
@@ -70,12 +70,12 @@ public class LoadBalanceMonitorTests {
 		users.put(1, 0L);
 		monitor.setUsers(users);
 		monitor.changeLoad(1, 6);
-		Assert.assertEquals(6, (long)monitor.getLoad(1));
-		Assert.assertEquals(6, (long)monitor.getMin());
+		Assertions.assertEquals(6, (long)monitor.getLoad(1));
+		Assertions.assertEquals(6, (long)monitor.getMin());
 
 		monitor.changeLoad(1, 7);
-		Assert.assertEquals(13, (long)monitor.getLoad(1));
-		Assert.assertEquals(13, (long)monitor.getMin());
+		Assertions.assertEquals(13, (long)monitor.getLoad(1));
+		Assertions.assertEquals(13, (long)monitor.getMin());
 	}
 
 	@Test
@@ -85,14 +85,14 @@ public class LoadBalanceMonitorTests {
 		users.put(2, 0L);
 		monitor.setUsers(users);
 		monitor.changeLoad(1, 6);
-		Assert.assertEquals(6, (long)monitor.getLoad(1));
-		Assert.assertEquals(0, (long)monitor.getLoad(2));
-		Assert.assertEquals(0, (long)monitor.getMin());
+		Assertions.assertEquals(6, (long)monitor.getLoad(1));
+		Assertions.assertEquals(0, (long)monitor.getLoad(2));
+		Assertions.assertEquals(0, (long)monitor.getMin());
 
 		monitor.changeLoad(2, 7);
-		Assert.assertEquals(6, (long)monitor.getLoad(1));
-		Assert.assertEquals(7, (long)monitor.getLoad(2));
-		Assert.assertEquals(6, (long)monitor.getMin());
+		Assertions.assertEquals(6, (long)monitor.getLoad(1));
+		Assertions.assertEquals(7, (long)monitor.getLoad(2));
+		Assertions.assertEquals(6, (long)monitor.getMin());
 	}
 
 	@Test
@@ -105,9 +105,9 @@ public class LoadBalanceMonitorTests {
 		monitor.setUsers(users);
 
 		for (Integer i : users.keySet()) {
-			Assert.assertEquals(3, (long)monitor.getLoad(i));
+			Assertions.assertEquals(3, (long)monitor.getLoad(i));
 		}
-		Assert.assertEquals(3, (long)monitor.getMin());
+		Assertions.assertEquals(3, (long)monitor.getMin());
 	}
 
 	@Test
@@ -122,10 +122,10 @@ public class LoadBalanceMonitorTests {
 		users.put(3, 6L);
 		monitor.setUsers(users);
 		for (Integer i : users.keySet()) {
-			Assert.assertEquals(6, (long)monitor.getLoad(i));
+			Assertions.assertEquals(6, (long)monitor.getLoad(i));
 		}
-		Assert.assertEquals(5, (long)monitor.getLoad(4));
-		Assert.assertEquals(6, (long)monitor.getMin());
+		Assertions.assertEquals(5, (long)monitor.getLoad(4));
+		Assertions.assertEquals(6, (long)monitor.getMin());
 	}
 
 	@Test
@@ -141,9 +141,9 @@ public class LoadBalanceMonitorTests {
 		users.put(2, 3L);
 		monitor.setUsers(users);
 		for (Integer i : users.keySet()) {
-			Assert.assertEquals(2, (long)monitor.getLoad(i));
+			Assertions.assertEquals(2, (long)monitor.getLoad(i));
 		}
-		Assert.assertEquals(2, (long)monitor.getMin());
+		Assertions.assertEquals(2, (long)monitor.getMin());
 	}
 
 	@Test
@@ -151,9 +151,9 @@ public class LoadBalanceMonitorTests {
 		Map<Integer, Long> users = new HashMap<>();
 		users.put(1, 0L);
 		monitor.setUsers(users);
-		Assert.assertFalse(monitor.skipUser(1));
+		Assertions.assertFalse(monitor.skipUser(1));
 		monitor.changeLoad(1, 3000);
-		Assert.assertFalse(monitor.skipUser(1));
+		Assertions.assertFalse(monitor.skipUser(1));
 	}
 
 	@Test
@@ -163,11 +163,11 @@ public class LoadBalanceMonitorTests {
 		users.put(2, 0L);
 		monitor.setUsers(users);
 		monitor.changeLoad(1, 1);
-		Assert.assertFalse(monitor.skipUser(1));
-		Assert.assertFalse(monitor.skipUser(2));
+		Assertions.assertFalse(monitor.skipUser(1));
+		Assertions.assertFalse(monitor.skipUser(2));
 		monitor.changeLoad(1, R.LOAD_DIFFERENCE_THRESHOLD + 10);
-		Assert.assertTrue(monitor.skipUser(1));
-		Assert.assertFalse(monitor.skipUser(2));
+		Assertions.assertTrue(monitor.skipUser(1));
+		Assertions.assertFalse(monitor.skipUser(2));
 	}
 
 	@Test
@@ -178,9 +178,9 @@ public class LoadBalanceMonitorTests {
 		monitor.changeLoad(1, 5);
 		users.put(2, 0L);
 		monitor.setUsers(users);
-		Assert.assertEquals(5, (long)monitor.getLoad(1));
-		Assert.assertEquals(5, (long)monitor.getLoad(2));
-		Assert.assertEquals(5, (long)monitor.getMin());
+		Assertions.assertEquals(5, (long)monitor.getLoad(1));
+		Assertions.assertEquals(5, (long)monitor.getLoad(2));
+		Assertions.assertEquals(5, (long)monitor.getMin());
 	}
 
 	@Test
@@ -192,7 +192,7 @@ public class LoadBalanceMonitorTests {
 		users.remove(1);
 		monitor.setUsers(users);
 		monitor.changeLoad(2, 10);
-		Assert.assertEquals(10, (long)monitor.getMin());
+		Assertions.assertEquals(10, (long)monitor.getMin());
 	}
 
 	@Test
@@ -225,8 +225,8 @@ public class LoadBalanceMonitorTests {
 		Long userTwoLoad = monitor.getLoad(userTwoId);
 		userTwoLoad = userTwoLoad == null ? 0L : userTwoLoad;
 
-		Assert.assertEquals(noLoad, monitor.getMin());
-		Assert.assertEquals(twentyFourHours, userOneLoad);
-		Assert.assertEquals(noLoad, userTwoLoad);
+		Assertions.assertEquals(noLoad, monitor.getMin());
+		Assertions.assertEquals(twentyFourHours, userOneLoad);
+		Assertions.assertEquals(noLoad, userTwoLoad);
 	}
 }

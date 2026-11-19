@@ -279,7 +279,7 @@ tagdir="/WEB-INF/tags" %>
 
           <div class="funding-links">
             <a
-              href="http://www.fastlane.nsf.gov/servlet/showaward?award=1058748"
+              href="https://www.nsf.gov/awardsearch/show-award/?AWD_ID=1058748"
               class="funding-card"
               target="_blank"
               rel="noopener noreferrer external"
@@ -289,7 +289,7 @@ tagdir="/WEB-INF/tags" %>
             </a>
 
             <a
-              href="http://www.fastlane.nsf.gov/servlet/showaward?award=1058925"
+              href="https://www.nsf.gov/awardsearch/show-award/?AWD_ID=1058925"
               class="funding-card"
               target="_blank"
               rel="noopener noreferrer external"
@@ -299,7 +299,7 @@ tagdir="/WEB-INF/tags" %>
             </a>
 
             <a
-              href="http://www.fastlane.nsf.gov/servlet/showaward?award=1729603"
+              href="https://www.nsf.gov/awardsearch/show-award/?AWD_ID=1729603"
               class="funding-card"
               target="_blank"
               rel="noopener noreferrer external"
@@ -309,7 +309,7 @@ tagdir="/WEB-INF/tags" %>
             </a>
 
             <a
-              href="http://www.fastlane.nsf.gov/servlet/showaward?award=1730419"
+              href="https://www.nsf.gov/awardsearch/show-award/?AWD_ID=1730419"
               class="funding-card"
               target="_blank"
               rel="noopener noreferrer external"

@@ -1,7 +1,7 @@
 package org.starexec.test.integration;
 
 import org.apache.commons.io.FileUtils;
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.data.database.Communities;
 import org.starexec.data.to.Solver;
 import org.starexec.data.to.Space;
@@ -25,9 +25,9 @@ public class UtilTests extends TestSequence{
 	public void URLTest() {
 		String random=TestUtil.getRandomSpaceName();
 		String url=Util.url(random);
-		Assert.assertNotNull(url);
-		Assert.assertTrue(url.startsWith("http"));
-		Assert.assertTrue(url.endsWith(random));
+		Assertions.assertNotNull(url);
+		Assertions.assertTrue(url.startsWith("http"));
+		Assertions.assertTrue(url.endsWith(random));
 	}
 	
 	@StarexecTest 
@@ -37,10 +37,10 @@ public class UtilTests extends TestSequence{
 		files.add(new File(s2.getPath()));
 		
 		File sandbox=Util.copyFilesToNewSandbox(files);
-		Assert.assertTrue(sandbox.exists());
+		Assertions.assertTrue(sandbox.exists());
 		for (File f : files) {
 			File sandboxFile=new File(sandbox,f.getName());
-			Assert.assertTrue(sandboxFile.exists());
+			Assertions.assertTrue(sandboxFile.exists());
 		}
 		FileUtils.deleteQuietly(sandbox);
 	}

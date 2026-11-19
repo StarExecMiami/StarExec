@@ -576,19 +576,14 @@ td.jobMatrixCell {
   }
 }
 
-// External link indicator via CSS (replaces <img>)
-.extLink {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  margin-left: s.$spacing-2xs;
-  vertical-align: middle;
+// Dim the shared link icon until hover (icon itself lives in global/_common).
+.ext-link-icon {
   opacity: 0.5;
 
   @include m.transition-safe(opacity 0.15s ease);
 }
 
-a:hover .extLink {
+a:hover .ext-link-icon {
   opacity: 0.8;
 }
 
@@ -606,22 +601,6 @@ a:hover .extLink {
 }
 
 // =============================================================================
-// WRAPPER & LAYOUT OVERRIDES
-// =============================================================================
-
-#wrapper {
-  width: 100%;
-}
-
-// =============================================================================
-// SCREEN READER UTILITY
-// =============================================================================
-
-.sr-only {
-  @include m.sr-only;
-}
-
-// =============================================================================
 // FOCUS RING — Global for this page
 // =============================================================================
 
@@ -631,7 +610,7 @@ input:focus-visible {
   @include m.focus-ring;
 }
 
-@media (width <= 1024px) {
+@include m.tablet-down {
   .matrixControls {
     justify-content: flex-start;
   }
@@ -646,7 +625,7 @@ input:focus-visible {
   }
 }
 
-@media (width <= 768px) {
+@include m.mobile {
   .matrixControls {
     align-items: stretch;
     gap: s.$spacing-xs;

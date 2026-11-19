@@ -9,6 +9,7 @@ on:
       - "Dockerfile"
       - "docker/migrations.sh"
       - "pom.xml"
+      - ".github/scripts/mvn_retry.py"
       - ".github/workflows/integration-test.yml"
   push:
     branches: [UMprod, dev, containerised]
@@ -18,6 +19,8 @@ on:
       - "Dockerfile"
       - "docker/migrations.sh"
       - "pom.xml"
+      - ".github/scripts/mvn_retry.py"
+      - ".github/workflows/integration-test.yml"
   workflow_dispatch:
 
 concurrency:
@@ -44,12 +47,33 @@ jobs:
         with:
           java-version: "17"
           distribution: "temurin"
-          cache: maven
+
+      - name: Cache Maven repository (verify-migrations)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-verify-migrations-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-verify-migrations-
+            ${{ runner.os }}-m2-
 
       - name: Build application WAR
         run: |
           cd starexec-app
-          mvn clean package -DskipTests -B -q
+          python3 ../.github/scripts/mvn_retry.py -- mvn clean package -DskipTests -B --no-transfer-progress
+
+      - name: Verify runtime config excluded from WAR
+        run: |
+          WAR_FILE="starexec-app/target/starexec.war"
+          WAR_ENTRIES=$(mktemp)
+          trap 'rm -f "$WAR_ENTRIES"' EXIT
+          unzip -Z1 "$WAR_FILE" > "$WAR_ENTRIES"
+
+          if grep -Fxq "WEB-INF/classes/flyway.conf" "$WAR_ENTRIES"; then
+            echo "❌ FAILED: Runtime Flyway config was packaged in the WAR"
+            exit 1
+          fi
+          echo "✅ PASSED: Runtime Flyway config excluded from WAR"
 
       - name: Verify migration files in source
         run: |
@@ -118,6 +142,16 @@ jobs:
             echo "✓ Image ci-test-latest found" || \
             { echo "✗ Image not found"; docker images | grep starexec; exit 1; }
           echo "Verification passed"
+
+      - name: Verify runtime config excluded from Docker image
+        run: |
+          IMAGE="ghcr.io/starexecmiami/starexec:${{ github.sha }}"
+          if ! docker run --rm --user 0 --entrypoint sh "$IMAGE" -eu -c \
+            'test ! -e "$CATALINA_HOME/webapps/starexec/WEB-INF/classes/flyway.conf"'; then
+            echo "❌ FAILED: Runtime Flyway config was packaged in the Docker image"
+            exit 1
+          fi
+          echo "✅ PASSED: Runtime Flyway config excluded from Docker image"
 
       - name: Start PostgreSQL service
         env:

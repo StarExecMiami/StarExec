@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?><tns:Jobs xmlns:tns="https://stardev.cs.uiowa.edu/starexec_aguo2/public/batchJobSchema.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://stardev.cs.uiowa.edu/starexec_aguo2/public/batchJobSchema.xsd batchJobSchema.xsd">
+<?xml version="1.0" encoding="UTF-8"?><tns:Jobs xmlns:tns="https://www.starexec.org/starexec/public/batchJobSchema.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://www.starexec.org/starexec/public/batchJobSchema.xsd batchJobSchema.xsd">
 
 <SolverPipeline name="pipeline">
   <PipelineStage config-id="6"></PipelineStage>

@@ -36,6 +36,7 @@ public class BatchUtil {
 	/**
 	 * Will generate an xml file for a space hierarchy.
 	 *
+	 * @param directory The directory to write the file into (a private temporary directory)
 	 * @param space The space for which we want an xml representation.
 	 * @param userId the id of the user making the request
 	 * @param includeAttributes whether or not to include benchmark attributes
@@ -44,15 +45,16 @@ public class BatchUtil {
 	 * @throws Exception
 	 * @author Benton McCune
 	 */
-	public File generateXMLfile(Space space, int userId, boolean includeAttributes, boolean updates, int upid) throws
-			Exception {
+	public File generateXMLfile(
+			File directory, Space space, int userId, boolean includeAttributes, boolean updates, int upid
+	) throws Exception {
 		log.debug("Generating XML for Space = " + space.getId());
 
 		doc = XMLUtil.generateNewDocument();
 		Element rootSpace = generateSpacesXML(space, userId, includeAttributes, updates, upid);
 		doc.appendChild(rootSpace);
 
-		return XMLUtil.writeDocumentToFile(space.getName() + ".xml", doc);
+		return XMLUtil.writeDocumentToFile(directory, space.getName() + ".xml", doc);
 	}
 
 	/**
@@ -69,10 +71,7 @@ public class BatchUtil {
 		log.debug("Generating Space XML for space " + space.getId());
 		Element spacesElement = null;
 
-		spacesElement = doc.createElementNS(Util.url("public/batchSpaceSchema.xsd"), "tns:Spaces");
-		spacesElement.setAttribute("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance");
-
-		spacesElement.setAttribute("xsi:schemaLocation", Util.url("public/batchSpaceSchema.xsd batchSpaceSchema.xsd"));
+		spacesElement = XMLUtil.createSpacesRoot(doc);
 
 		Element rootSpaceElement = generateSpaceXML(space, userId, includeAttributes, updates, upid);
 		spacesElement.appendChild(rootSpaceElement);

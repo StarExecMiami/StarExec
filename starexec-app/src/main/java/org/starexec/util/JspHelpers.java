@@ -32,6 +32,30 @@ public class JspHelpers {
 		throw new UnsupportedOperationException("You may not create an instance of JspHelpers.");
 	}
 
+	/**
+	 * The root the job page builds its links on.
+	 *
+	 * <p>Relative on the live page, so the browser resolves it against the origin it used,
+	 * through any number of proxies, as every other page does with {@code starexecRoot}. Only
+	 * the offline copy {@code DoJobPage} saves needs an absolute root, because its buttons lead
+	 * back to the live server; that one comes from configuration, the address {@code DoJobPage}
+	 * itself fetched the page from.
+	 *
+	 * <p>Never from {@code X-Forwarded-Host} or {@code X-Forwarded-Proto}. Every proxy in a
+	 * chain appends its value, so behind two they read
+	 * "quokka.acorn.miami.edu, quokka.acorn.miami.edu" and "https, https", and the job page
+	 * pasted them into every link it opens: matrix view, attributes, solver comparison, panel
+	 * view, downloads and each pair's details. A client can also set them, which made the
+	 * host in those links the client's choice.
+	 *
+	 * @param request        the job page request
+	 * @param isLocalJobPage whether this render is the offline copy
+	 * @return the context root ending in "/", absolute only for the offline copy
+	 */
+	public static String jobPageRoot(HttpServletRequest request, boolean isLocalJobPage) {
+		return isLocalJobPage ? Util.url("") : request.getContextPath() + "/";
+	}
+
 	public static void handleJobPage(HttpServletRequest request, HttpServletResponse response)
 			throws IOException, SQLException {
 		String localJobPageParameter = request.getParameter(Web.LOCAL_JOB_PAGE_PARAMETER);
@@ -204,27 +228,7 @@ public class JspHelpers {
 				request.setAttribute("buildJob", j.isBuildJob());
 				request.setAttribute("isHighPriority", j.isHighPriority());
 
-				String starexecUrl;
-				String forwardedHost = request.getHeader("X-Forwarded-Host");
-				if (forwardedHost != null) {
-					// When behind a proxy or in Docker/Podman
-					String scheme = request.getHeader("X-Forwarded-Proto");
-					if (scheme == null) {
-						scheme = R.STAREXEC_URL_PREFIX;
-					}
-					starexecUrl = String.format("%s://%s/%s/", scheme, forwardedHost, R.STAREXEC_APPNAME);
-				} else {
-					// Direct access - include port if non-standard
-					String port = "";
-					boolean isHttp = R.STAREXEC_URL_PREFIX.equalsIgnoreCase("http");
-					boolean isHttps = R.STAREXEC_URL_PREFIX.equalsIgnoreCase("https");
-					if ((isHttp && R.PROXY_PORT != 80) || (isHttps && R.PROXY_PORT != 443)) {
-						port = ":" + R.PROXY_PORT;
-					}
-					starexecUrl = String.format("%s://%s%s/%s/", R.STAREXEC_URL_PREFIX, R.STAREXEC_SERVERNAME, port,
-							R.STAREXEC_APPNAME);
-				}
-				request.setAttribute("starexecUrl", starexecUrl);
+				request.setAttribute("starexecUrl", jobPageRoot(request, isLocalJobPage));
 			} else {
 				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
 						"The details for this job could not be obtained");

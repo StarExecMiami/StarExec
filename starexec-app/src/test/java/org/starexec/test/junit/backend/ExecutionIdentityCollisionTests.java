@@ -1,8 +1,8 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
@@ -21,6 +21,8 @@ import io.fabric8.kubernetes.client.dsl.NonNamespaceOperation;
 import io.fabric8.kubernetes.client.dsl.PodResource;
 import io.fabric8.kubernetes.client.dsl.ScalableResource;
 import io.fabric8.kubernetes.client.dsl.V1BatchAPIGroupDSL;
+import org.junit.jupiter.api.Test;
+
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -28,7 +30,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.junit.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.ExecutionRef;
@@ -94,6 +95,7 @@ public class ExecutionIdentityCollisionTests {
     @Test
     @SuppressWarnings("unchecked")
     public void historicalCancellationDoesNotSuppressTheCurrentExecution() throws Exception {
+        java.nio.file.Path output = terminalOutput(StatusCode.STATUS_COMPLETE);
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
         setField(backend, "namespace", NAMESPACE);
         givenSafeCluster(backend);
@@ -103,6 +105,8 @@ public class ExecutionIdentityCollisionTests {
 
         // Execution B: current, dispatched after the counter came back round.
         trackExecutionB(backend);
+        ((Map<Integer, java.nio.file.Path>) getField(backend, "execIdToOutputDir"))
+            .put(EXEC_ID, output);
 
         KubernetesJobMonitor.JobCompletionCallback callback =
             instantiateCompletionCallback(backend);
@@ -133,14 +137,12 @@ public class ExecutionIdentityCollisionTests {
             // The running transition must reach the database for B's pair.
             jobPairs.verify(() -> JobPairs.trySetPairRunning(PAIR_B));
 
-            // And so must the terminal one. Asserting the write is attempted, not that the
-            // whole callback returned true: the steps after it read artifacts off disk,
-            // which this test deliberately does not stage.
+            // And so must the evidenced terminal one.
             jobPairs.verify(() ->
                 JobPairs.setPairStatusPreciseResult(
                     Mockito.eq(PAIR_B),
-                    Mockito.anyInt(),
-                    Mockito.anyInt(),
+                    Mockito.eq(1),
+                    Mockito.eq(StatusCode.STATUS_COMPLETE.getVal()),
                     Mockito.anyInt(),
                     Mockito.anyBoolean()
                 )
@@ -224,15 +226,15 @@ public class ExecutionIdentityCollisionTests {
 
         assertTrue(view.isAvailable());
         assertEquals(
-            "B's own pod has not been scheduled; A's Running pod must not answer for it",
             PodPhaseView.Phase.PENDING,
-            view.phaseFor(executionB())
+            view.phaseFor(executionB()),
+            "B's own pod has not been scheduled; A's Running pod must not answer for it"
         );
         assertEquals(PodPhaseView.Phase.RUNNING, view.phaseFor(executionA()));
         assertEquals(
-            "a bare id names two Jobs here, so it has no answer",
             PodPhaseView.Phase.UNKNOWN,
-            view.phaseFor(EXEC_ID)
+            view.phaseFor(EXEC_ID),
+            "a bare id names two Jobs here, so it has no answer"
         );
     }
 
@@ -254,9 +256,9 @@ public class ExecutionIdentityCollisionTests {
         assertTrue(view.isAvailable());
         assertEquals(PodPhaseView.Phase.RUNNING, view.phaseFor(executionA()));
         assertEquals(
-            "one Job, so the bare id still answers",
             PodPhaseView.Phase.RUNNING,
-            view.phaseFor(EXEC_ID)
+            view.phaseFor(EXEC_ID),
+            "one Job, so the bare id still answers"
         );
     }
 
@@ -282,8 +284,8 @@ public class ExecutionIdentityCollisionTests {
 
         try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
             assertTrue(
-                "a stale callback is handled, not retried forever",
-                callback.onJobComplete(executionA())
+                callback.onJobComplete(executionA()),
+                "a stale callback is handled, not retried forever"
             );
             jobPairs.verifyNoInteractions();
         }
@@ -315,8 +317,8 @@ public class ExecutionIdentityCollisionTests {
 
         try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
             assertTrue(
-                "a superseded execution is finished with, not retried forever",
-                callback.onJobComplete(executionA())
+                callback.onJobComplete(executionA()),
+                "a superseded execution is finished with, not retried forever"
             );
 
             // Nothing at all: not B's pair, and not A's own either. The status, stats and
@@ -349,7 +351,7 @@ public class ExecutionIdentityCollisionTests {
         }
 
         Map<Integer, String> names = (Map<Integer, String>) getField(backend, "execIdToJobName");
-        assertEquals("B still holds its tracking", JOB_B, names.get(EXEC_ID));
+        assertEquals(JOB_B, names.get(EXEC_ID), "B still holds its tracking");
     }
 
     /** A terminal callback delivered twice for one Job is handled once by the monitor. */
@@ -436,16 +438,17 @@ public class ExecutionIdentityCollisionTests {
     }
 
     /**
-     * An execution StarExec is not tracking still gets its result applied.
+     * An execution StarExec is not tracking remains unresolved without owned output.
      *
      * <p>The supersession guard refuses when the id has been handed to <em>another</em>
      * execution. Absent tracking is not that: the shutdown drain and startup reconciliation
-     * both reach terminal Jobs with nothing tracked, and refusing those would lose results
-     * this backend exists to collect.
+     * both reach terminal Jobs with nothing tracked. The Job label can identify a pair, but
+     * it cannot establish ownership of an output directory or supply a scientific result.
      */
     @Test
     @SuppressWarnings("unchecked")
-    public void anUntrackedExecutionIsStillPublished() throws Exception {
+    public void anUntrackedExecutionWithUnknownOutputOwnershipRemainsUnresolved()
+            throws Exception {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
         setField(backend, "namespace", NAMESPACE);
         givenSafeCluster(backend);
@@ -471,17 +474,19 @@ public class ExecutionIdentityCollisionTests {
                 .thenReturn(PairStatusResult.APPLIED);
             jobPairs.when(() -> JobPairs.setEndTime(PAIR_B)).thenReturn(true);
 
-            callback.onJobComplete(executionB());
+            assertTrue(callback.onJobComplete(executionB()));
 
-            // The pair came from B's own Job label, read from the cluster.
+            // The pair came from B's own Job label, but no terminal evidence was owned.
+            jobPairs.verify(() -> JobPairs.getPairStatusLookup(PAIR_B));
             jobPairs.verify(() ->
                 JobPairs.setPairStatusPreciseResult(
-                    Mockito.eq(PAIR_B),
+                    Mockito.anyInt(),
                     Mockito.anyInt(),
                     Mockito.anyInt(),
                     Mockito.anyInt(),
                     Mockito.anyBoolean()
-                )
+                ),
+                Mockito.never()
             );
         }
     }
@@ -497,8 +502,8 @@ public class ExecutionIdentityCollisionTests {
      * result.
      *
      * <p>Here execution A owns nothing, while a directory holding a status.json is
-     * registered under the shared execution id. A's completion must record the caller's
-     * default, not the status sitting in that directory.
+     * registered under the shared execution id. A's completion must neither read that
+     * directory nor manufacture a default result in its place.
      */
     @Test
     @SuppressWarnings("unchecked")
@@ -539,23 +544,15 @@ public class ExecutionIdentityCollisionTests {
                     .thenReturn(PairStatusResult.APPLIED);
                 jobPairs.when(() -> JobPairs.setEndTime(PAIR_B)).thenReturn(true);
 
-                callback.onJobComplete(executionA());
+                assertTrue(callback.onJobComplete(executionA()));
 
-                // The caller's default, and stage 1 — neither read from that directory.
-                jobPairs.verify(() ->
-                    JobPairs.setPairStatusPreciseResult(
-                        Mockito.eq(PAIR_B),
-                        Mockito.eq(1),
-                        Mockito.eq(StatusCode.STATUS_COMPLETE.getVal()),
-                        Mockito.anyInt(),
-                        Mockito.anyBoolean()
-                    )
-                );
+                // Unknown ownership is unresolved: neither the foreign evidence nor a
+                // caller default may become this pair's result.
                 jobPairs.verify(() ->
                     JobPairs.setPairStatusPreciseResult(
                         Mockito.anyInt(),
                         Mockito.anyInt(),
-                        Mockito.eq(StatusCode.EXCEED_CPU.getVal()),
+                        Mockito.anyInt(),
                         Mockito.anyInt(),
                         Mockito.anyBoolean()
                     ),
@@ -571,6 +568,80 @@ public class ExecutionIdentityCollisionTests {
         }
     }
 
+    /** Ownership lost after reading evidence still forbids the terminal pair write. */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void ownershipIsRecheckedAtTheTerminalWriteBoundary() throws Exception {
+        java.nio.file.Path output = java.nio.file.Files.createTempDirectory("exec-identity-");
+        java.nio.file.Path snapshots = java.nio.file.Files.createDirectory(
+            output.resolve("stage-status")
+        );
+        java.nio.file.Files.writeString(
+            output.resolve("status.json"),
+            "{\"status\": " + StatusCode.STATUS_COMPLETE.getVal()
+                + ", \"stageNumber\": 2}"
+        );
+        java.nio.file.Files.writeString(
+            snapshots.resolve("1.json"),
+            "{\"pairId\": " + PAIR_B + ", \"stageNumber\": 1, \"status\": "
+                + StatusCode.STATUS_COMPLETE.getVal() + "}"
+        );
+
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", NAMESPACE);
+        givenSafeCluster(backend);
+        trackExecutionB(backend);
+        ((Map<Integer, java.nio.file.Path>) getField(backend, "execIdToOutputDir"))
+            .put(EXEC_ID, output);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+        Map<Integer, Integer> earlier = Map.of(1, StatusCode.STATUS_COMPLETE.getVal());
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            jobPairs
+                .when(() -> JobPairs.getPairStatusLookup(PAIR_B))
+                .thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+            jobPairs
+                .when(() -> JobPairs.setEarlierStageStatuses(PAIR_B, earlier))
+                .thenAnswer(invocation -> {
+                    // Deterministically model a rerun taking the execution id after the
+                    // evidence was read but before the terminal result is persisted.
+                    ((Map<Integer, String>) getField(backend, "execIdToJobName"))
+                        .put(EXEC_ID, JOB_A);
+                    return org.starexec.data.database.StageStatusBatchResult.APPLIED;
+                });
+            jobPairs
+                .when(() ->
+                    JobPairs.setPairStatusPreciseResult(
+                        Mockito.anyInt(),
+                        Mockito.anyInt(),
+                        Mockito.anyInt(),
+                        Mockito.anyInt(),
+                        Mockito.anyBoolean()
+                    )
+                )
+                .thenReturn(PairStatusResult.APPLIED);
+
+            boolean handled = callback.onJobComplete(executionB());
+            jobPairs.verify(() -> JobPairs.setEarlierStageStatuses(PAIR_B, earlier));
+            assertFalse(
+                handled,
+                "ownership lost during ingestion must leave the terminal result unresolved"
+            );
+            jobPairs.verify(() ->
+                JobPairs.setPairStatusPreciseResult(
+                    Mockito.anyInt(),
+                    Mockito.anyInt(),
+                    Mockito.anyInt(),
+                    Mockito.anyInt(),
+                    Mockito.anyBoolean()
+                ),
+                Mockito.never()
+            );
+        }
+    }
+
     // =====================================================================
     // Fixtures
     // =====================================================================
@@ -581,6 +652,18 @@ public class ExecutionIdentityCollisionTests {
 
     private static ExecutionRef executionB() {
         return new ExecutionRef(EXEC_ID, JOB_B, UID_B);
+    }
+
+    private static java.nio.file.Path terminalOutput(StatusCode status) throws Exception {
+        java.nio.file.Path output = java.nio.file.Files.createTempDirectory("exec-identity-");
+        java.nio.file.Path statusFile = output.resolve("status.json");
+        output.toFile().deleteOnExit();
+        statusFile.toFile().deleteOnExit();
+        java.nio.file.Files.writeString(
+            statusFile,
+            "{\"status\": " + status.getVal() + ", \"stageNumber\": 1}"
+        );
+        return output;
     }
 
     /** Tracking exactly as a successful submission of B would have left it. */

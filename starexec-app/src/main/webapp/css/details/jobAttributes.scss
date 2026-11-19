@@ -3,10 +3,6 @@
 @use "../global/typography" as t;
 @use "../global/mixins" as m;
 
-#wrapper {
-  width: 100%;
-}
-
 // Keep explorer compact and aligned with other detail pages
 #explorer {
   margin-right: s.$spacing-md;
@@ -99,7 +95,7 @@ td {
   background-color: c.$foreground-color;
 }
 
-@media (width <= 1024px) {
+@include m.tablet-down {
   #explorer {
     width: 100%;
     float: none;
@@ -116,7 +112,7 @@ td {
   }
 }
 
-@media (width <= 768px) {
+@include m.mobile {
   .attributesControls {
     flex-direction: column;
     align-items: flex-start;

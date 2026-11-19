@@ -1,9 +1,10 @@
 package org.starexec.test.junit.database;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.starexec.backend.Backend;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
@@ -11,21 +12,36 @@ import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.to.JobPair;
 import org.starexec.data.to.Status.StatusCode;
+import org.starexec.data.to.tuples.AttributesTableData;
+import org.starexec.data.to.tuples.TimePair;
+import org.apache.commons.lang3.tuple.Triple;
 import org.starexec.test.util.DatabaseTestSupport;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Properties;
+import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Caller-level tests for the automatic-rerun protocol, against the real SQL.
@@ -46,15 +62,39 @@ public class JobsRerunProtocolSqlTest extends Common {
 
 	/** A pair whose end_time is this recent is inside the rerun window. */
 	private static final String RECENT_END_TIME = "NOW() - INTERVAL '10 minutes'";
+	private static final String LOCK_ORDER_PROBE_PREFIX = "probe_job_lock_order_";
+	private static final long CONCURRENCY_TIMEOUT_SECONDS = 30L;
 
 	private int jobId;
 	private int pairId;
+	private int fixtureUserId;
+	private long fixtureUserDiskSize;
+	private boolean restoreFixtureUserDiskSize;
 	private Backend originalBackend;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobsRerunProtocolSqlTest");
 		Common.initialize();
+	}
+
+	@AfterAll
+	public static void noLockOrderProbeObjectsSurvive() throws SQLException {
+		if (!DatabaseTestSupport.isDatabaseConfigured()) {
+			return;
+		}
+		try (Connection con = Common.getConnection()) {
+			assertEquals(0, selectInt(con, "SELECT count(*) FROM pg_trigger WHERE left(tgname, length('"
+							+ LOCK_ORDER_PROBE_PREFIX + "trg_')) = '"
+							+ LOCK_ORDER_PROBE_PREFIX + "trg_'"),
+					"the rerun lock-order trigger must never outlive its test");
+			assertEquals(0, selectInt(con, "SELECT count(*) FROM pg_proc p"
+							+ " JOIN pg_namespace n ON n.oid = p.pronamespace"
+							+ " WHERE n.nspname = 'starexec' AND left(p.proname, length('"
+							+ LOCK_ORDER_PROBE_PREFIX + "fn_')) = '"
+							+ LOCK_ORDER_PROBE_PREFIX + "fn_'"),
+					"the rerun lock-order function must never outlive its test");
+		}
 	}
 
 	/**
@@ -86,9 +126,9 @@ public class JobsRerunProtocolSqlTest extends Common {
 	/** The state a fixture-owned connection must be in before it returns to the pool. */
 	private static void assertConnectionReturnedClean(Connection con, String operation)
 			throws SQLException {
-		assertTrue(operation + " must explicitly finish its transaction and restore"
-				+ " autoCommit before the connection goes back to the pool",
-				con.getAutoCommit());
+		assertTrue(con.getAutoCommit(),
+				operation + " must explicitly finish its transaction and restore"
+				+ " autoCommit before the connection goes back to the pool");
 	}
 
 	/** Rows created only by makeTheFixturePairVisibleToGetPairsSimple; 0 when unused. */
@@ -96,19 +136,31 @@ public class JobsRerunProtocolSqlTest extends Common {
 	private int visibilityBenchId;
 	private int visibilitySolverId;
 	private int visibilityConfigId;
+	/** The node attempt 2's measurements are recorded against; 0 when unused. */
+	private int resultsNodeId;
+	/** Trigger/function used only to stop a rerun after its job row has been updated. */
+	private String lockOrderProbeTrigger;
+	private String lockOrderProbeFunction;
 
-	@Before
+	@BeforeEach
 	public void createFixture() throws SQLException {
 		originalBackend = R.BACKEND;
+		fixtureUserId = 0;
+		fixtureUserDiskSize = 0L;
+		restoreFixtureUserDiskSize = false;
+		lockOrderProbeTrigger = null;
+		lockOrderProbeFunction = null;
 		try (Connection con = Common.getConnection()) {
 			requireCleanPooledConnection(con, "createFixture");
 			con.setAutoCommit(false);
 			boolean transactionFinished = false;
 			try {
-				int userId = selectInt(con, "SELECT min(id) FROM starexec.users");
+				fixtureUserId = selectInt(con, "SELECT min(id) FROM starexec.users");
+				fixtureUserDiskSize = selectLong(con,
+						"SELECT disk_size FROM starexec.users WHERE id = " + fixtureUserId);
 				jobId = selectInt(con,
 						"INSERT INTO starexec.jobs (user_id, name, total_pairs, disk_size) " +
-								"VALUES (" + userId + ", 'rerun-protocol-test', 1, 0) RETURNING id");
+								"VALUES (" + fixtureUserId + ", 'rerun-protocol-test', 1, 0) RETURNING id");
 				pairId = selectInt(con,
 						"INSERT INTO starexec.job_pairs (job_id, sge_id, status_code, start_time, end_time, primary_jobpair_data) " +
 								"VALUES (" + jobId + ", 987654, " + StatusCode.ERROR_RUNSCRIPT.getVal() +
@@ -141,12 +193,43 @@ public class JobsRerunProtocolSqlTest extends Common {
 		}
 	}
 
-	@After
+	@AfterEach
 	public void dropFixture() throws SQLException {
 		R.BACKEND = originalBackend;
-		if (jobId == 0) {
-			return;
+		SQLException cleanupFailure = null;
+		try {
+			dropLockOrderProbe();
+		} catch (SQLException failure) {
+			cleanupFailure = failure;
 		}
+		if (jobId != 0) {
+			try {
+				deleteFixtureRows();
+			} catch (SQLException failure) {
+				if (cleanupFailure == null) {
+					cleanupFailure = failure;
+				} else {
+					cleanupFailure.addSuppressed(failure);
+				}
+			}
+		}
+		if (restoreFixtureUserDiskSize && fixtureUserId != 0) {
+			try {
+				restoreFixtureUserDiskSize();
+			} catch (SQLException failure) {
+				if (cleanupFailure == null) {
+					cleanupFailure = failure;
+				} else {
+					cleanupFailure.addSuppressed(failure);
+				}
+			}
+		}
+		if (cleanupFailure != null) {
+			throw cleanupFailure;
+		}
+	}
+
+	private void deleteFixtureRows() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			requireCleanPooledConnection(con, "dropFixture");
 			con.setAutoCommit(false);
@@ -157,6 +240,13 @@ public class JobsRerunProtocolSqlTest extends Common {
 				// Only makeTheFixturePairVisibleToGetPairsSimple creates these, and until now
 				// nothing removed them; each run leaked one space, benchmark, solver and
 				// configuration. Order is child-first and each delete is a no-op when unused.
+				if (resultsNodeId != 0) {
+					try (PreparedStatement ps = con.prepareStatement(
+							"DELETE FROM starexec.nodes WHERE id = ?")) {
+						ps.setInt(1, resultsNodeId);
+						ps.executeUpdate();
+					}
+				}
 				if (visibilityConfigId != 0) {
 					exec(con, "DELETE FROM starexec.configurations WHERE id = " + visibilityConfigId);
 				}
@@ -189,6 +279,18 @@ public class JobsRerunProtocolSqlTest extends Common {
 		}
 	}
 
+	private void restoreFixtureUserDiskSize() throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			requireCleanPooledConnection(con, "restoreFixtureUserDiskSize");
+			try (PreparedStatement ps = con.prepareStatement(
+					"UPDATE starexec.users SET disk_size = ? WHERE id = ?")) {
+				ps.setLong(1, fixtureUserDiskSize);
+				ps.setInt(2, fixtureUserId);
+				assertEquals(1, ps.executeUpdate(), "the disk accounting fixture user still exists");
+			}
+		}
+	}
+
 	// ------------------------------------------------------------------
 	// the automatic path
 	// ------------------------------------------------------------------
@@ -197,14 +299,14 @@ public class JobsRerunProtocolSqlTest extends Common {
 	public void automaticRerunResetsAndConsumesTheAllowanceInOneTransaction() throws SQLException {
 		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
 
-		assertEquals("a confirmed-safe execution should complete the rerun",
-				Jobs.RerunOutcome.COMPLETED, Jobs.rerunPairAutomatic(pairId));
+		assertEquals(Jobs.RerunOutcome.COMPLETED,
+				Jobs.rerunPairAutomatic(pairId), "a confirmed-safe execution should complete the rerun");
 
-		assertEquals("the pair should be back at PENDING_SUBMIT",
-				StatusCode.STATUS_PENDING_SUBMIT.getVal(), statusOf(pairId));
-		assertNull("a pair awaiting a new attempt has no end_time", endTimeOf(pairId));
-		assertEquals("the automatic allowance should be recorded by the same transaction",
-				1, tombstoneCount(pairId));
+		assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(),
+				statusOf(pairId), "the pair should be back at PENDING_SUBMIT");
+		assertNull(endTimeOf(pairId), "a pair awaiting a new attempt has no end_time");
+		assertEquals(1,
+				tombstoneCount(pairId), "the automatic allowance should be recorded by the same transaction");
 	}
 
 	@Test
@@ -218,11 +320,11 @@ public class JobsRerunProtocolSqlTest extends Common {
 		exec("UPDATE starexec.job_pairs SET status_code = " + StatusCode.ERROR_RUNSCRIPT.getVal() +
 				", end_time = " + RECENT_END_TIME + " WHERE id = " + pairId);
 
-		assertEquals("the allowance was already spent, so this must be refused",
-				Jobs.RerunOutcome.ALREADY_CONSUMED, Jobs.rerunPairAutomatic(pairId));
-		assertEquals("no second reset may happen",
-				StatusCode.ERROR_RUNSCRIPT.getVal(), statusOf(pairId));
-		assertEquals("no duplicate acknowledgment", 1, tombstoneCount(pairId));
+		assertEquals(Jobs.RerunOutcome.ALREADY_CONSUMED,
+				Jobs.rerunPairAutomatic(pairId), "the allowance was already spent, so this must be refused");
+		assertEquals(StatusCode.ERROR_RUNSCRIPT.getVal(),
+				statusOf(pairId), "no second reset may happen");
+		assertEquals(1, tombstoneCount(pairId), "no duplicate acknowledgment");
 	}
 
 	// ------------------------------------------------------------------
@@ -233,18 +335,18 @@ public class JobsRerunProtocolSqlTest extends Common {
 	public void unprovenExecutionWritesNothingAndLeavesThePairSelectable() throws SQLException {
 		R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
 
-		assertEquals("an unproven execution must not authorize a replacement",
-				Jobs.RerunOutcome.DEFERRED_UNPROVEN_EXECUTION, Jobs.rerunPairAutomatic(pairId));
+		assertEquals(Jobs.RerunOutcome.DEFERRED_UNPROVEN_EXECUTION,
+				Jobs.rerunPairAutomatic(pairId), "an unproven execution must not authorize a replacement");
 
-		assertEquals("the pair keeps its failed status",
-				StatusCode.ERROR_RUNSCRIPT.getVal(), statusOf(pairId));
-		assertNotNull("and keeps the end_time that makes it selectable", endTimeOf(pairId));
-		assertEquals("no allowance may be spent on an attempt that never happened",
-				0, tombstoneCount(pairId));
+		assertEquals(StatusCode.ERROR_RUNSCRIPT.getVal(),
+				statusOf(pairId), "the pair keeps its failed status");
+		assertNotNull(endTimeOf(pairId), "and keeps the end_time that makes it selectable");
+		assertEquals(0,
+				tombstoneCount(pairId), "no allowance may be spent on an attempt that never happened");
 
 		// The retry owner is this durable state and nothing else — no JVM record is needed,
 		// so the pair survives a restart as a candidate.
-		assertTrue("the next sweep must select it again", selectedBySweep(pairId));
+		assertTrue(selectedBySweep(pairId), "the next sweep must select it again");
 	}
 
 	@Test
@@ -256,8 +358,8 @@ public class JobsRerunProtocolSqlTest extends Common {
 		Backend backend = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
 		R.BACKEND = backend;
 
-		assertEquals("an unidentifiable execution must defer",
-				Jobs.RerunOutcome.DEFERRED_UNPROVEN_EXECUTION, Jobs.rerunPairAutomatic(pairId));
+		assertEquals(Jobs.RerunOutcome.DEFERRED_UNPROVEN_EXECUTION,
+				Jobs.rerunPairAutomatic(pairId), "an unidentifiable execution must defer");
 		org.mockito.Mockito.verify(backend, org.mockito.Mockito.never())
 				.killPairConfirmed(org.mockito.ArgumentMatchers.anyInt());
 		assertEquals(StatusCode.ERROR_RUNSCRIPT.getVal(), statusOf(pairId));
@@ -272,12 +374,12 @@ public class JobsRerunProtocolSqlTest extends Common {
 	public void manualRerunResetsWithoutConsumingTheAutomaticAllowance() throws SQLException {
 		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
 
-		assertTrue("the manual entry point should report success", Jobs.rerunPair(pairId));
+		assertTrue(Jobs.rerunPair(pairId), "the manual entry point should report success");
 
-		assertEquals("a manual rerun still resets the pair",
-				StatusCode.STATUS_PENDING_SUBMIT.getVal(), statusOf(pairId));
-		assertEquals("but it must NOT spend the pair's automatic rerun allowance",
-				0, tombstoneCount(pairId));
+		assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(),
+				statusOf(pairId), "a manual rerun still resets the pair");
+		assertEquals(0,
+				tombstoneCount(pairId), "but it must NOT spend the pair's automatic rerun allowance");
 	}
 
 	@Test
@@ -289,10 +391,10 @@ public class JobsRerunProtocolSqlTest extends Common {
 		exec("UPDATE starexec.job_pairs SET status_code = " + StatusCode.ERROR_RUNSCRIPT.getVal() +
 				", sge_id = 987655, end_time = " + RECENT_END_TIME + " WHERE id = " + pairId);
 
-		assertTrue("a manual rerun must not have made the pair invisible to the sweep",
-				selectedBySweep(pairId));
-		assertEquals("and the automatic rerun is still available to it",
-				Jobs.RerunOutcome.COMPLETED, Jobs.rerunPairAutomatic(pairId));
+		assertTrue(selectedBySweep(pairId),
+				"a manual rerun must not have made the pair invisible to the sweep");
+		assertEquals(Jobs.RerunOutcome.COMPLETED,
+				Jobs.rerunPairAutomatic(pairId), "and the automatic rerun is still available to it");
 		assertEquals(1, tombstoneCount(pairId));
 	}
 
@@ -309,15 +411,15 @@ public class JobsRerunProtocolSqlTest extends Common {
 		// terminating -- and the pair was reset anyway.
 		R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
 
-		assertFalse("an unproven execution must not authorize a manual replacement",
-				Jobs.rerunPair(pairId));
+		assertFalse(Jobs.rerunPair(pairId),
+				"an unproven execution must not authorize a manual replacement");
 
-		assertEquals("the pair must keep its failed status",
-				StatusCode.ERROR_RUNSCRIPT.getVal(), statusOf(pairId));
-		assertNotNull("and keep the end_time that keeps it visible",
-				endTimeOf(pairId));
-		assertEquals("a withheld manual rerun spends no automatic allowance",
-				0, tombstoneCount(pairId));
+		assertEquals(StatusCode.ERROR_RUNSCRIPT.getVal(),
+				statusOf(pairId), "the pair must keep its failed status");
+		assertNotNull(endTimeOf(pairId),
+				"and keep the end_time that keeps it visible");
+		assertEquals(0,
+				tombstoneCount(pairId), "a withheld manual rerun spends no automatic allowance");
 	}
 
 	@Test
@@ -332,14 +434,215 @@ public class JobsRerunProtocolSqlTest extends Common {
 		org.mockito.Mockito.verify(backend).killPairConfirmed(987654);
 	}
 
+	// ------------------------------------------------------------------
+	// #188: shared job/user disk accounting must use the rerun lock order
+	// ------------------------------------------------------------------
+
+	@Test
+	public void statsForOnePairWaitsOnJobBeforeUserWhileAnotherPairIsRerun() throws Exception {
+		int statsPairId = insertPair(987656, StatusCode.ERROR_RUNSCRIPT.getVal());
+		seedLockOrderDiskTotals(statsPairId);
+		String nodeName = resultsNodeName();
+		long barrierKey = UUID.randomUUID().getMostSignificantBits();
+		String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+		String applicationPrefix = "se188_" + suffix;
+		String rerunApplicationName = applicationPrefix + "_rerun";
+		String statsApplicationName = applicationPrefix + "_stats";
+		installLockOrderProbe(barrierKey, suffix);
+
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		Connection gateConnection = null;
+		boolean gateHeld = false;
+		Future<?> rerun = null;
+		Future<?> stats = null;
+		AtomicInteger rerunPid = new AtomicInteger();
+		AtomicInteger statsPid = new AtomicInteger();
+		try {
+			gateConnection = Common.getConnection();
+			requireCleanPooledConnection(gateConnection, "lock-order advisory gate");
+			gateConnection.setAutoCommit(true);
+			advisoryLock(gateConnection, barrierKey);
+			gateHeld = true;
+
+			rerun = executor.submit((Callable<Void>) () -> {
+				runProbeTransaction(rerunApplicationName, rerunPid, con -> {
+					try (PreparedStatement lockPair = con.prepareStatement(
+							"SELECT id FROM starexec.job_pairs WHERE id = ? FOR UPDATE")) {
+						lockPair.setInt(1, pairId);
+						try (ResultSet rs = lockPair.executeQuery()) {
+							assertTrue(rs.next(), "the rerun caller locks its pair before invoking the core");
+						}
+					}
+					try (PreparedStatement ps = con.prepareStatement(
+							"SELECT starexec.RerunJobPairsBatchCore(ARRAY[?]::INT[])")) {
+						ps.setInt(1, pairId);
+						ps.execute();
+					}
+				});
+				return null;
+			});
+			try (Connection observer = Common.getConnection()) {
+				awaitAdvisoryWait(observer, rerunApplicationName, rerun);
+			}
+
+			stats = executor.submit((Callable<Void>) () -> {
+				runProbeTransaction(statsApplicationName, statsPid, con -> {
+					try (PreparedStatement ps = con.prepareStatement(
+							"CALL starexec.UpdatePairRunSolverStats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+						ps.setInt(1, statsPairId);
+						ps.setString(2, nodeName);
+						ps.setDouble(3, 12.0);
+						ps.setDouble(4, 10.0);
+						ps.setDouble(5, 8.0);
+						ps.setDouble(6, 2.0);
+						ps.setDouble(7, 256.0);
+						ps.setLong(8, 128L);
+						ps.setInt(9, 1);
+						ps.setLong(10, 3072L);
+						ps.execute();
+					}
+				});
+				return null;
+			});
+			try (Connection observer = Common.getConnection()) {
+				awaitBlockedBy(observer, statsApplicationName, rerunPid.get(), stats);
+			}
+			assertTrue(statsPid.get() > 0,
+					"the stats worker reached PostgreSQL before its lock wait");
+
+			assertUserRowCanBeLockedNowait();
+			releaseAdvisoryLock(gateConnection, barrierKey);
+			gateHeld = false;
+			awaitSuccessful(rerun, "RerunJobPairsBatchCore");
+			awaitSuccessful(stats, "UpdatePairRunSolverStats");
+
+			assertEquals(3072L,
+					diskSizeOfJob(jobId), "the rerun reclaimed its pair and stats added only the other pair's delta");
+			assertEquals(3072L,
+					diskSizeOfUser(fixtureUserId), "the user total changed by the same net delta");
+			assertEquals(0L, stageDiskSize(pairId, 1), "the rerun reclaimed its stage's bytes");
+			assertEquals(3072L, stageDiskSize(statsPairId, 1),
+					"the stats write replaced the stage amount");
+		} finally {
+			try {
+				if (gateConnection != null) {
+					try {
+						if (gateHeld) {
+							releaseAdvisoryLock(gateConnection, barrierKey);
+						}
+					} finally {
+						try (Statement s = gateConnection.createStatement()) {
+							s.execute("SELECT pg_advisory_unlock_all()");
+						} finally {
+							gateConnection.close();
+						}
+					}
+				}
+			} finally {
+				executor.shutdown();
+				awaitTaskForCleanup(rerun);
+				awaitTaskForCleanup(stats);
+				if (!executor.awaitTermination(CONCURRENCY_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+					executor.shutdownNow();
+					assertTrue(executor.awaitTermination(CONCURRENCY_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+							"the lock-order workers must terminate before probe cleanup");
+				}
+			}
+		}
+	}
+
+	private void seedLockOrderDiskTotals(int statsPairId) throws SQLException {
+		assertEquals(jobId, selectInt("SELECT job_id FROM starexec.job_pairs WHERE id = " + statsPairId),
+				"both pairs share the fixture job");
+		assertEquals(fixtureUserId, selectInt("SELECT user_id FROM starexec.jobs WHERE id = " + jobId),
+				"the job is owned by the fixture user");
+		restoreFixtureUserDiskSize = true;
+		try (Connection con = Common.getConnection()) {
+			requireCleanPooledConnection(con, "seedLockOrderDiskTotals");
+			con.setAutoCommit(false);
+			boolean transactionFinished = false;
+			try {
+				try (PreparedStatement ps = con.prepareStatement(
+						"UPDATE starexec.jobpair_stage_data SET disk_size = 2048"
+								+ " WHERE jobpair_id = ? AND stage_number = 1")) {
+					ps.setInt(1, statsPairId);
+					assertEquals(1, ps.executeUpdate());
+				}
+				try (PreparedStatement ps = con.prepareStatement(
+						"UPDATE starexec.jobs SET disk_size = 6144 WHERE id = ?")) {
+					ps.setInt(1, jobId);
+					assertEquals(1, ps.executeUpdate());
+				}
+				try (PreparedStatement ps = con.prepareStatement(
+						"UPDATE starexec.users SET disk_size = ? WHERE id = ?")) {
+					// An absolute value, not one relative to the shared user's current total: the
+					// rerun clamps users.disk_size at 0 (GREATEST), so a user left negative by
+					// another suite would make the expected net delta below unreachable.
+					// @After restores fixtureUserDiskSize.
+					ps.setLong(1, 6144L);
+					ps.setInt(2, fixtureUserId);
+					assertEquals(1, ps.executeUpdate());
+				}
+				con.commit();
+				transactionFinished = true;
+			} catch (Throwable primary) {
+				try {
+					con.rollback();
+					transactionFinished = true;
+				} catch (SQLException rollbackFailure) {
+					primary.addSuppressed(rollbackFailure);
+				}
+				throw primary;
+			} finally {
+				if (transactionFinished) {
+					con.setAutoCommit(true);
+				}
+			}
+			assertConnectionReturnedClean(con, "seedLockOrderDiskTotals");
+		}
+	}
+
+	private void installLockOrderProbe(long barrierKey, String suffix) throws SQLException {
+		lockOrderProbeTrigger = LOCK_ORDER_PROBE_PREFIX + "trg_" + suffix;
+		lockOrderProbeFunction = LOCK_ORDER_PROBE_PREFIX + "fn_" + suffix;
+		String function = "CREATE FUNCTION starexec." + lockOrderProbeFunction
+				+ "() RETURNS trigger AS $$ BEGIN IF NEW.id = " + jobId
+				+ " THEN PERFORM pg_advisory_xact_lock(" + barrierKey + "); END IF;"
+				+ " RETURN NEW; END; $$ LANGUAGE plpgsql";
+		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
+			requireCleanPooledConnection(con, "installLockOrderProbe");
+			s.execute(function);
+			s.execute("CREATE TRIGGER " + lockOrderProbeTrigger
+					+ " AFTER UPDATE OF disk_size ON starexec.jobs FOR EACH ROW"
+					+ " EXECUTE FUNCTION starexec." + lockOrderProbeFunction + "()");
+		}
+	}
+
+	private void dropLockOrderProbe() throws SQLException {
+		if (lockOrderProbeTrigger == null && lockOrderProbeFunction == null) {
+			return;
+		}
+		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
+			requireCleanPooledConnection(con, "dropLockOrderProbe");
+			if (lockOrderProbeTrigger != null) {
+				s.execute("DROP TRIGGER IF EXISTS " + lockOrderProbeTrigger + " ON starexec.jobs");
+			}
+			if (lockOrderProbeFunction != null) {
+				s.execute("DROP FUNCTION IF EXISTS starexec." + lockOrderProbeFunction + "()");
+			}
+		}
+		lockOrderProbeTrigger = null;
+		lockOrderProbeFunction = null;
+	}
+
 	@Test
 	public void manualRerunOfAPairWithNoExecutionIdIsWithheld() throws SQLException {
 		exec("UPDATE starexec.job_pairs SET sge_id = NULL WHERE id = " + pairId);
 		Backend backend = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
 		R.BACKEND = backend;
 
-		assertFalse("execution 0 must never be invented for a NULL sge_id",
-				Jobs.rerunPair(pairId));
+		assertFalse(Jobs.rerunPair(pairId),
+				"execution 0 must never be invented for a NULL sge_id");
 		org.mockito.Mockito.verify(backend, org.mockito.Mockito.never())
 				.killPairConfirmed(org.mockito.ArgumentMatchers.anyInt());
 		assertEquals(StatusCode.ERROR_RUNSCRIPT.getVal(), statusOf(pairId));
@@ -361,16 +664,16 @@ public class JobsRerunProtocolSqlTest extends Common {
 		batch.add(JobPairs.getPair(safePairId));
 		batch.add(JobPairs.getPair(pairId));
 
-		assertEquals("one unproven pair must neither block the proven one nor be reset itself",
-				Jobs.ManualRerunOutcome.PARTIALLY_WITHHELD,
-				Jobs.rerunPairsBatch(batch, jobId));
+		assertEquals(Jobs.ManualRerunOutcome.PARTIALLY_WITHHELD,
+				Jobs.rerunPairsBatch(batch, jobId),
+				"one unproven pair must neither block the proven one nor be reset itself");
 
-		assertEquals("the confirmed-safe pair resets",
-				StatusCode.STATUS_PENDING_SUBMIT.getVal(), statusOf(safePairId));
-		assertEquals("the unproven pair does not",
-				StatusCode.ERROR_RUNSCRIPT.getVal(), statusOf(pairId));
-		assertEquals("a manual rerun spends no allowance on either pair",
-				0, tombstoneCount(safePairId) + tombstoneCount(pairId));
+		assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(),
+				statusOf(safePairId), "the confirmed-safe pair resets");
+		assertEquals(StatusCode.ERROR_RUNSCRIPT.getVal(),
+				statusOf(pairId), "the unproven pair does not");
+		assertEquals(0,
+				tombstoneCount(safePairId) + tombstoneCount(pairId), "a manual rerun spends no allowance on either pair");
 	}
 
 	/** Adds a second pair to the fixture job so batch behaviour can be observed. */
@@ -430,20 +733,20 @@ public class JobsRerunProtocolSqlTest extends Common {
 		makeTheFixturePairVisibleToGetPairsSimple();
 
 		assertFalse(
+				Jobs.getPairsSimple(jobId).isEmpty(),
 				"precondition: the pair must be visible to getPairsSimple, otherwise this test"
-						+ " would pass without exercising the gate at all",
-				Jobs.getPairsSimple(jobId).isEmpty());
+						+ " would pass without exercising the gate at all");
 		assertEquals(
-				"precondition: that projection genuinely cannot see sge_id",
-				-1, Jobs.getPairsSimple(jobId).get(0).getBackendExecId());
+				-1,
+				Jobs.getPairsSimple(jobId).get(0).getBackendExecId(), "precondition: that projection genuinely cannot see sge_id");
 
 		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
 
-		assertTrue("a job whose executions are confirmed stopped must actually reset",
-				Jobs.setAllPairsToPending(jobId));
+		assertTrue(Jobs.setAllPairsToPending(jobId),
+				"a job whose executions are confirmed stopped must actually reset");
 		assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), statusOf(pairId));
-		assertEquals("and this manual path still spends no automatic allowance",
-				0, tombstoneCount(pairId));
+		assertEquals(0,
+				tombstoneCount(pairId), "and this manual path still spends no automatic allowance");
 	}
 
 	@Test
@@ -452,14 +755,14 @@ public class JobsRerunProtocolSqlTest extends Common {
 		// Same preconditions as its sibling: without them a null getPairsSimple would make
 		// setAllPairsToPending return false for the wrong reason and every assertion below
 		// would still hold.
-		assertFalse("precondition: the pair must be visible to getPairsSimple",
-				Jobs.getPairsSimple(jobId).isEmpty());
-		assertEquals("precondition: that projection cannot see sge_id",
-				-1, Jobs.getPairsSimple(jobId).get(0).getBackendExecId());
+		assertFalse(Jobs.getPairsSimple(jobId).isEmpty(),
+				"precondition: the pair must be visible to getPairsSimple");
+		assertEquals(-1,
+				Jobs.getPairsSimple(jobId).get(0).getBackendExecId(), "precondition: that projection cannot see sge_id");
 		R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
 
-		assertFalse("hydrating the id must not weaken the gate",
-				Jobs.setAllPairsToPending(jobId));
+		assertFalse(Jobs.setAllPairsToPending(jobId),
+				"hydrating the id must not weaken the gate");
 		assertEquals(StatusCode.ERROR_RUNSCRIPT.getVal(), statusOf(pairId));
 		assertEquals(0, tombstoneCount(pairId));
 	}
@@ -536,8 +839,8 @@ public class JobsRerunProtocolSqlTest extends Common {
 		Backend backend = backendReturning(Backend.KillOutcome.UNPROVEN);
 		R.BACKEND = backend;
 
-		assertTrue("a pair that never reached the backend must remain rerunnable",
-				Jobs.rerunPair(pairId));
+		assertTrue(Jobs.rerunPair(pairId),
+				"a pair that never reached the backend must remain rerunnable");
 		assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), statusOf(pairId));
 		org.mockito.Mockito.verify(backend, org.mockito.Mockito.never())
 				.killPairConfirmed(org.mockito.ArgumentMatchers.anyInt());
@@ -553,8 +856,8 @@ public class JobsRerunProtocolSqlTest extends Common {
 				StatusCode.ERROR_SUBMIT_FAIL.getVal() + " WHERE id = " + pairId);
 		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
 
-		assertFalse("a lost execution id is not evidence that nothing ran",
-				Jobs.rerunPair(pairId));
+		assertFalse(Jobs.rerunPair(pairId),
+				"a lost execution id is not evidence that nothing ran");
 		assertEquals(StatusCode.ERROR_SUBMIT_FAIL.getVal(), statusOf(pairId));
 	}
 
@@ -579,11 +882,11 @@ public class JobsRerunProtocolSqlTest extends Common {
 				});
 		R.BACKEND = backend;
 
-		assertFalse("the gate proved the OLD execution stopped; that proof does not transfer",
-				Jobs.rerunPair(pairId));
-		assertEquals("the pair must be left with its new execution untouched",
-				StatusCode.STATUS_RUNNING.getVal(), statusOf(pairId));
-		assertEquals("and no allowance may be spent", 0, tombstoneCount(pairId));
+		assertFalse(Jobs.rerunPair(pairId),
+				"the gate proved the OLD execution stopped; that proof does not transfer");
+		assertEquals(StatusCode.STATUS_RUNNING.getVal(),
+				statusOf(pairId), "the pair must be left with its new execution untouched");
+		assertEquals(0, tombstoneCount(pairId), "and no allowance may be spent");
 	}
 
 	// ------------------------------------------------------------------
@@ -599,20 +902,20 @@ public class JobsRerunProtocolSqlTest extends Common {
 	public void setPairsToPendingCompletesWhenEveryIdentityStillMatches() throws SQLException {
 		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
 
-		assertTrue("nothing withheld and nothing dropped under the lock is a complete reset",
-				Jobs.setPairsToPending(jobId, StatusCode.ERROR_RUNSCRIPT.getVal()));
+		assertTrue(Jobs.setPairsToPending(jobId, StatusCode.ERROR_RUNSCRIPT.getVal()),
+				"nothing withheld and nothing dropped under the lock is a complete reset");
 		assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), statusOf(pairId));
-		assertEquals("and this manual path still spends no automatic allowance",
-				0, tombstoneCount(pairId));
+		assertEquals(0,
+				tombstoneCount(pairId), "and this manual path still spends no automatic allowance");
 	}
 
 	@Test
 	public void setPairsToPendingReportsIncompleteWhenTheDatabaseRefusesTheReset()
 			throws SQLException {
-		assertEquals("precondition: the row starts on the execution the gate will be asked about",
-				987654, execIdOf(pairId));
-		assertEquals("precondition: and at the status the caller selects on",
-				StatusCode.ERROR_RUNSCRIPT.getVal(), statusOf(pairId));
+		assertEquals(987654,
+				execIdOf(pairId), "precondition: the row starts on the execution the gate will be asked about");
+		assertEquals(StatusCode.ERROR_RUNSCRIPT.getVal(),
+				statusOf(pairId), "precondition: and at the status the caller selects on");
 
 		// The concurrent actor lands while the gate is talking to the backend: the pair is
 		// reset and re-dispatched, so a DIFFERENT execution owns it by the time the checked
@@ -627,16 +930,16 @@ public class JobsRerunProtocolSqlTest extends Common {
 				});
 		R.BACKEND = backend;
 
-		assertFalse("the database reset nothing, so this operation did not complete",
-				Jobs.setPairsToPending(jobId, StatusCode.ERROR_RUNSCRIPT.getVal()));
+		assertFalse(Jobs.setPairsToPending(jobId, StatusCode.ERROR_RUNSCRIPT.getVal()),
+				"the database reset nothing, so this operation did not complete");
 
 		// Non-vacuity: the gate WAS consulted and it answered CONFIRMED_SAFE, so nothing was
 		// withheld on the Java side. The only thing left that can make this false is the
 		// count the checked function returned.
 		org.mockito.Mockito.verify(backend).killPairConfirmed(987654);
-		assertEquals("the pair keeps its new execution", 424242, execIdOf(pairId));
-		assertEquals("and is left exactly as the concurrent actor put it",
-				StatusCode.STATUS_RUNNING.getVal(), statusOf(pairId));
+		assertEquals(424242, execIdOf(pairId), "the pair keeps its new execution");
+		assertEquals(StatusCode.STATUS_RUNNING.getVal(),
+				statusOf(pairId), "and is left exactly as the concurrent actor put it");
 		assertEquals(0, tombstoneCount(pairId));
 	}
 
@@ -661,18 +964,18 @@ public class JobsRerunProtocolSqlTest extends Common {
 				.thenReturn(Backend.KillOutcome.CONFIRMED_SAFE);
 		R.BACKEND = backend;
 
-		assertFalse("one pair of two was reset, so the operation is incomplete",
-				Jobs.setPairsToPending(jobId, StatusCode.ERROR_RUNSCRIPT.getVal()));
+		assertFalse(Jobs.setPairsToPending(jobId, StatusCode.ERROR_RUNSCRIPT.getVal()),
+				"one pair of two was reset, so the operation is incomplete");
 
 		// A resetting is what proves the checked function ran and that the Java gate
 		// withheld nothing: a withheld batch never reaches the SQL at all.
-		assertEquals("the pair whose identity is unchanged resets",
-				StatusCode.STATUS_PENDING_SUBMIT.getVal(), statusOf(safePairId));
-		assertEquals("the re-dispatched pair does not",
-				StatusCode.STATUS_RUNNING.getVal(), statusOf(pairId));
-		assertEquals("and keeps the execution that owns it now", 424242, execIdOf(pairId));
-		assertEquals("a manual rerun spends no allowance on either pair",
-				0, tombstoneCount(safePairId) + tombstoneCount(pairId));
+		assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(),
+				statusOf(safePairId), "the pair whose identity is unchanged resets");
+		assertEquals(StatusCode.STATUS_RUNNING.getVal(),
+				statusOf(pairId), "the re-dispatched pair does not");
+		assertEquals(424242, execIdOf(pairId), "and keeps the execution that owns it now");
+		assertEquals(0,
+				tombstoneCount(safePairId) + tombstoneCount(pairId), "a manual rerun spends no allowance on either pair");
 	}
 
 	// ------------------------------------------------------------------
@@ -684,17 +987,17 @@ public class JobsRerunProtocolSqlTest extends Common {
 			throws Exception {
 		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
 		JobPair pair = JobPairs.getPair(pairId);
-		assertEquals("precondition: the row really carries this execution",
-				987654, pair.getBackendExecId());
+		assertEquals(987654,
+				pair.getBackendExecId(), "precondition: the row really carries this execution");
 
 		// The identity the caller proved safe is not the one on the row, so the checked
 		// function returns 0. An exception is not the only way this can fail to happen.
 		pair.setBackendExecId(999999);
 
-		assertFalse("a reset the database refused must not be reported as done",
-				invokeSinglePairFallback(pair));
-		assertEquals("and the pair is untouched",
-				StatusCode.ERROR_RUNSCRIPT.getVal(), statusOf(pairId));
+		assertFalse(invokeSinglePairFallback(pair),
+				"a reset the database refused must not be reported as done");
+		assertEquals(StatusCode.ERROR_RUNSCRIPT.getVal(),
+				statusOf(pairId), "and the pair is untouched");
 		assertEquals(987654, execIdOf(pairId));
 		assertEquals(0, tombstoneCount(pairId));
 	}
@@ -705,11 +1008,11 @@ public class JobsRerunProtocolSqlTest extends Common {
 		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
 		JobPair pair = JobPairs.getPair(pairId);
 
-		assertTrue("a reset the database committed must be reported as done",
-				invokeSinglePairFallback(pair));
+		assertTrue(invokeSinglePairFallback(pair),
+				"a reset the database committed must be reported as done");
 		assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), statusOf(pairId));
-		assertEquals("and the fallback is still the manual path",
-				0, tombstoneCount(pairId));
+		assertEquals(0,
+				tombstoneCount(pairId), "and the fallback is still the manual path");
 	}
 
 	/**
@@ -727,6 +1030,325 @@ public class JobsRerunProtocolSqlTest extends Common {
 	}
 
 	// ------------------------------------------------------------------
+	// #183: a rerun must not keep the previous attempt's stage results
+	// ------------------------------------------------------------------
+
+	/** Attempt 1's measurements: cpu, wallclock, max_vmem, max_res_set, user, system. */
+	private static final List<Double> STAGE_1_MEASUREMENTS =
+			Arrays.asList(90.0, 100.0, 1000.0, 11.0, 80.0, 10.0);
+	private static final List<Double> STAGE_2_MEASUREMENTS =
+			Arrays.asList(40.0, 50.0, 500.0, 7.0, 30.0, 5.0);
+
+	@Test
+	public void aManualRerunClearsEveryStagesResults() throws SQLException {
+		recordAFirstAttemptOnTwoStages(pairId);
+		int attempt = attemptOf(pairId);
+		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+
+		assertTrue(Jobs.rerunPair(pairId));
+
+		assertResultsCleared(pairId, attempt);
+	}
+
+	@Test
+	public void anAutomaticRerunClearsEveryStagesResults() throws SQLException {
+		recordAFirstAttemptOnTwoStages(pairId);
+		int attempt = attemptOf(pairId);
+		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+
+		assertEquals(Jobs.RerunOutcome.COMPLETED, Jobs.rerunPairAutomatic(pairId));
+
+		assertResultsCleared(pairId, attempt);
+	}
+
+	@Test
+	public void aRerunByStatusClearsEveryStagesResults() throws SQLException {
+		recordAFirstAttemptOnTwoStages(pairId);
+		int attempt = attemptOf(pairId);
+		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+
+		assertTrue(Jobs.setPairsToPending(jobId, StatusCode.ERROR_RUNSCRIPT.getVal()));
+
+		assertResultsCleared(pairId, attempt);
+	}
+
+	/**
+	 * The user-visible defect. The second attempt stops in stage 1, so it records nothing for
+	 * stage 2 -- and stage 2 must then show nothing, not the first attempt's result and
+	 * measurements. The job's attribute summaries count attempt 2 alone.
+	 */
+	@Test
+	public void aSecondAttemptThatStopsInStageOneShowsNothingOfTheFirstAttemptsStageTwo()
+			throws SQLException {
+		recordAFirstAttemptOnTwoStages(pairId);
+		makeTheFixturePairVisibleToGetPairsSimple();
+		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+		assertTrue(Jobs.rerunPair(pairId));
+
+		// Attempt 2, through the writers the monitors use: stage 1's result and measurements,
+		// then a terminal status at stage 1 that leaves stage 2 not reached.
+		Properties stageOne = new Properties();
+		stageOne.setProperty("starexec-result", "Satisfiable");
+		assertTrue(JobPairs.addJobPairAttributes(pairId, 1, stageOne));
+		assertTrue(JobPairs.updateRunSolverStats(
+				pairId, resultsNodeName(), 300.0, 200.0, 150.0, 50.0, 4000.0, 30L, 1, 1024L));
+		assertEquals(org.starexec.data.database.PairStatusResult.APPLIED,
+				JobPairs.setPairStatusPreciseResult(pairId, 1, StatusCode.EXCEED_RUNTIME.getVal(),
+						StatusCode.STATUS_NOT_REACHED.getVal(), false));
+
+		assertEquals("Satisfiable",
+				attributeOf(pairId, 1, "starexec-result"), "stage 1 holds attempt 2's result alone");
+		assertEquals(1, attributeCount(pairId, 1));
+		assertEquals(Arrays.asList(200.0, 300.0, 4000.0, 30.0, 150.0, 50.0),
+				measurementsOf(pairId, 1));
+		assertEquals(0,
+				attributeCount(pairId, 2), "stage 2 was not reached, so it has no attributes");
+		assertEquals(Arrays.asList(null, null, null, null, null, null),
+				measurementsOf(pairId, 2), "and no measurements");
+
+		List<AttributesTableData> table = Jobs.getJobAttributesTable(visibilitySpaceId);
+		assertNotNull(table);
+		assertEquals(1,
+				table.size(), "the attributes table has attempt 2's one result: " + describe(table));
+		assertEquals("Satisfiable", table.get(0).attrValue);
+		assertEquals(Integer.valueOf(1), table.get(0).attrCount);
+		assertEquals(300.0, table.get(0).wallclockSum, 0.0);
+		assertEquals(200.0, table.get(0).cpuSum, 0.0);
+
+		List<Triple<String, Integer, TimePair>> totals =
+				Jobs.getJobAttributeTotals(visibilitySpaceId);
+		// Row set only: GetSumOfJobAttributes fans each attribute out over every stage row, so
+		// its count and sums are wrong for any multi-stage pair (#186).
+		assertEquals(1,
+				totals.size(), "the attribute totals hold attempt 2's result alone: " + describeTotals(totals));
+		assertEquals("Satisfiable", totals.get(0).getLeft());
+	}
+
+	/**
+	 * The control. A pair the checked reset drops under the lock -- re-dispatched while the
+	 * gate ran -- keeps its results, while the pair reset in the same call is reset. Without
+	 * it, a reset that cleared every pair of the batch would pass the tests above.
+	 */
+	@Test
+	public void aPairTheResetDropsKeepsItsResults() throws SQLException {
+		final int safeExecId = 333333;
+		int safePairId = insertPair(safeExecId, StatusCode.ERROR_RUNSCRIPT.getVal());
+		recordAFirstAttemptOnTwoStages(pairId);
+		recordAFirstAttemptOnTwoStages(safePairId);
+
+		Backend backend = org.mockito.Mockito.mock(Backend.class);
+		org.mockito.Mockito
+				.when(backend.killPairConfirmed(987654))
+				.thenAnswer(invocation -> {
+					redispatch(pairId, 424242);
+					return Backend.KillOutcome.CONFIRMED_SAFE;
+				});
+		org.mockito.Mockito
+				.when(backend.killPairConfirmed(safeExecId))
+				.thenReturn(Backend.KillOutcome.CONFIRMED_SAFE);
+		R.BACKEND = backend;
+
+		assertFalse(Jobs.setPairsToPending(jobId, StatusCode.ERROR_RUNSCRIPT.getVal()));
+
+		assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(),
+				statusOf(safePairId), "precondition: the same call did reset the other pair");
+		assertEquals(StatusCode.STATUS_RUNNING.getVal(),
+				statusOf(pairId), "the dropped pair keeps its execution");
+		assertEquals(2, attributeCount(pairId, 1), "and its attributes");
+		assertEquals(2, attributeCount(pairId, 2));
+		assertEquals(STAGE_1_MEASUREMENTS, measurementsOf(pairId, 1), "and its measurements");
+		assertEquals(STAGE_2_MEASUREMENTS, measurementsOf(pairId, 2));
+	}
+
+	/**
+	 * What a finished first attempt left behind on a two-stage pair: stage 2's row, both
+	 * stages' measurements and two attributes per stage.
+	 */
+	private void recordAFirstAttemptOnTwoStages(int id) throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			try (PreparedStatement ps = con.prepareStatement(
+					"INSERT INTO starexec.jobpair_stage_data" +
+							" (jobpair_id, stage_number, status_code, disk_size) VALUES (?, 2, ?, 2048)")) {
+				ps.setInt(1, id);
+				ps.setInt(2, StatusCode.STATUS_NOT_REACHED.getVal());
+				ps.executeUpdate();
+			}
+			setMeasurements(con, id, 1, STAGE_1_MEASUREMENTS);
+			setMeasurements(con, id, 2, STAGE_2_MEASUREMENTS);
+			addAttribute(con, id, 1, "starexec-result", "Theorem");
+			addAttribute(con, id, 1, "SZSStatus", "THM");
+			addAttribute(con, id, 2, "starexec-result", "Unknown");
+			addAttribute(con, id, 2, "SZSOutput", "None");
+		}
+		assertEquals(4, attributeCount(id, 1)
+				+ attributeCount(id, 2), "precondition: attempt 1's attributes are there");
+		assertEquals(STAGE_2_MEASUREMENTS, measurementsOf(id, 2),
+				"precondition: and its measurements");
+	}
+
+	/** A concurrent actor re-dispatching the pair onto a new execution. */
+	private static void redispatch(int id, int execId) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"UPDATE starexec.job_pairs SET sge_id = ?, status_code = ? WHERE id = ?")) {
+			ps.setInt(1, execId);
+			ps.setInt(2, StatusCode.STATUS_RUNNING.getVal());
+			ps.setInt(3, id);
+			assertEquals(1, ps.executeUpdate());
+		}
+	}
+
+	private static void setMeasurements(Connection con, int id, int stage, List<Double> m)
+			throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(
+				"UPDATE starexec.jobpair_stage_data SET cpu = ?, wallclock = ?, max_vmem = ?," +
+						" max_res_set = ?, user_time = ?, system_time = ?" +
+						" WHERE jobpair_id = ? AND stage_number = ?")) {
+			for (int i = 0; i < 6; i++) {
+				ps.setDouble(i + 1, m.get(i));
+			}
+			ps.setInt(7, id);
+			ps.setInt(8, stage);
+			assertEquals(1, ps.executeUpdate());
+		}
+	}
+
+	private static void addAttribute(Connection con, int id, int stage, String key, String value)
+			throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(
+				"INSERT INTO starexec.job_attributes (pair_id, attr_key, attr_value, job_id, stage_number)" +
+						" SELECT ?, ?, ?, job_id, ? FROM starexec.job_pairs WHERE id = ?")) {
+			ps.setInt(1, id);
+			ps.setString(2, key);
+			ps.setString(3, value);
+			ps.setInt(4, stage);
+			ps.setInt(5, id);
+			assertEquals(1, ps.executeUpdate());
+		}
+	}
+
+	/** Everything the first attempt recorded is gone, and the pair is a fresh attempt. */
+	private void assertResultsCleared(int id, int attemptBefore) throws SQLException {
+		assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(),
+				statusOf(id), "the pair is back at PENDING_SUBMIT");
+		assertEquals(attemptBefore + 1, attemptOf(id), "as its next attempt");
+		for (int stage = 1; stage <= 2; stage++) {
+			assertEquals(0,
+					attributeCount(id, stage), "stage " + stage + " keeps no attribute of the previous attempt");
+			assertEquals(Arrays.asList(null, null, null, null, null, null),
+					measurementsOf(id, stage), "stage " + stage + " keeps no measurement of the previous attempt");
+			try (Connection con = Common.getConnection();
+					PreparedStatement ps = con.prepareStatement(
+							"SELECT disk_size, status_code FROM starexec.jobpair_stage_data" +
+									" WHERE jobpair_id = ? AND stage_number = ?")) {
+				ps.setInt(1, id);
+				ps.setInt(2, stage);
+				try (ResultSet rs = ps.executeQuery()) {
+					assertTrue(rs.next());
+					assertEquals(0L, rs.getLong(1), "stage " + stage + " disk");
+					assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(),
+							rs.getInt(2), "stage " + stage + " status");
+				}
+			}
+		}
+	}
+
+	/** cpu, wallclock, max_vmem, max_res_set, user_time, system_time; null where NULL. */
+	private static List<Double> measurementsOf(int id, int stage) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"SELECT cpu, wallclock, max_vmem, max_res_set, user_time, system_time" +
+								" FROM starexec.jobpair_stage_data WHERE jobpair_id = ? AND stage_number = ?")) {
+			ps.setInt(1, id);
+			ps.setInt(2, stage);
+			try (ResultSet rs = ps.executeQuery()) {
+				assertTrue(rs.next(), "pair " + id + " has a stage " + stage);
+				List<Double> values = new ArrayList<>();
+				for (int i = 1; i <= 6; i++) {
+					double v = rs.getDouble(i);
+					values.add(rs.wasNull() ? null : v);
+				}
+				return values;
+			}
+		}
+	}
+
+	private static int attributeCount(int id, int stage) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"SELECT count(*) FROM starexec.job_attributes WHERE pair_id = ? AND stage_number = ?")) {
+			ps.setInt(1, id);
+			ps.setInt(2, stage);
+			try (ResultSet rs = ps.executeQuery()) {
+				rs.next();
+				return rs.getInt(1);
+			}
+		}
+	}
+
+	private static String attributeOf(int id, int stage, String key) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"SELECT attr_value FROM starexec.job_attributes" +
+								" WHERE pair_id = ? AND stage_number = ? AND attr_key = ?")) {
+			ps.setInt(1, id);
+			ps.setInt(2, stage);
+			ps.setString(3, key);
+			try (ResultSet rs = ps.executeQuery()) {
+				return rs.next() ? rs.getString(1) : null;
+			}
+		}
+	}
+
+	private static int attemptOf(int id) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id = ?")) {
+			ps.setInt(1, id);
+			try (ResultSet rs = ps.executeQuery()) {
+				assertTrue(rs.next(), "pair " + id + " has an attempt row");
+				return rs.getInt(1);
+			}
+		}
+	}
+
+	/** A node UpdatePairRunSolverStats can resolve, created once per test and removed after. */
+	private String resultsNodeName() throws SQLException {
+		String name = "rerun-results-" + pairId;
+		if (resultsNodeId == 0) {
+			try (Connection con = Common.getConnection();
+					PreparedStatement ps = con.prepareStatement(
+							"INSERT INTO starexec.nodes (name, status) VALUES (?, 'ACTIVE') RETURNING id")) {
+				ps.setString(1, name);
+				try (ResultSet rs = ps.executeQuery()) {
+					rs.next();
+					resultsNodeId = rs.getInt(1);
+				}
+			}
+		}
+		return name;
+	}
+
+	private static String describe(List<AttributesTableData> table) {
+		StringBuilder b = new StringBuilder();
+		for (AttributesTableData row : table) {
+			b.append('[').append(row.attrValue).append(", ").append(row.attrCount).append(", ")
+					.append(row.wallclockSum).append(", ").append(row.cpuSum).append(']');
+		}
+		return b.toString();
+	}
+
+	private static String describeTotals(List<Triple<String, Integer, TimePair>> totals) {
+		StringBuilder b = new StringBuilder();
+		for (Triple<String, Integer, TimePair> row : totals) {
+			b.append('[').append(row.getLeft()).append(", ").append(row.getMiddle()).append(", ")
+					.append(row.getRight().getWallclock()).append(", ")
+					.append(row.getRight().getCpu()).append(']');
+		}
+		return b.toString();
+	}
+
+	// ------------------------------------------------------------------
 	// helpers
 	// ------------------------------------------------------------------
 
@@ -741,6 +1363,217 @@ public class JobsRerunProtocolSqlTest extends Common {
 				.when(backend.killPairConfirmed(org.mockito.ArgumentMatchers.anyInt()))
 				.thenReturn(outcome);
 		return backend;
+	}
+
+	@FunctionalInterface
+	private interface ProbeTransaction {
+		void run(Connection con) throws Exception;
+	}
+
+	private static void runProbeTransaction(String applicationName, AtomicInteger backendPid,
+			ProbeTransaction body) throws Exception {
+		try (Connection con = Common.getConnection()) {
+			requireCleanPooledConnection(con, "runProbeTransaction");
+			con.setAutoCommit(false);
+			boolean transactionFinished = false;
+			Throwable failure = null;
+			try {
+				try (PreparedStatement ps = con.prepareStatement(
+						"SELECT set_config('application_name', ?, true)")) {
+					ps.setString(1, applicationName);
+					ps.executeQuery().close();
+				}
+				try (PreparedStatement ps = con.prepareStatement(
+						"SELECT set_config('statement_timeout', '30s', true)")) {
+					ps.executeQuery().close();
+				}
+				backendPid.set(selectInt(con, "SELECT pg_backend_pid()"));
+				body.run(con);
+				con.commit();
+				transactionFinished = true;
+			} catch (Throwable primary) {
+				failure = primary;
+				try {
+					con.rollback();
+					transactionFinished = true;
+				} catch (SQLException rollbackFailure) {
+					primary.addSuppressed(rollbackFailure);
+				}
+			} finally {
+				if (transactionFinished) {
+					try {
+						con.setAutoCommit(true);
+					} catch (SQLException resetFailure) {
+						if (failure == null) {
+							failure = resetFailure;
+						} else {
+							failure.addSuppressed(resetFailure);
+						}
+					}
+				}
+			}
+			if (failure != null) {
+				rethrow(failure);
+			}
+			assertConnectionReturnedClean(con, "runProbeTransaction");
+		}
+	}
+
+	private static void rethrow(Throwable failure) throws Exception {
+		if (failure instanceof Exception) {
+			throw (Exception) failure;
+		}
+		if (failure instanceof Error) {
+			throw (Error) failure;
+		}
+		throw new AssertionError(failure);
+	}
+
+	private static void awaitAdvisoryWait(Connection observer, String applicationName,
+			Future<?> worker) throws Exception {
+		awaitDatabaseCondition(observer, applicationName, -1, worker, true);
+	}
+
+	private static void awaitBlockedBy(Connection observer, String applicationName,
+			int blockerPid, Future<?> worker) throws Exception {
+		assertTrue(blockerPid > 0,
+				"the rerun backend pid must be known before checking the stats wait");
+		awaitDatabaseCondition(observer, applicationName, blockerPid, worker, false);
+	}
+
+	private static void awaitDatabaseCondition(Connection observer, String applicationName,
+			int blockerPid, Future<?> worker, boolean advisoryWait) throws Exception {
+		String sql = advisoryWait
+				? "SELECT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.application_name = ?"
+						+ " AND a.wait_event_type = 'Lock' AND a.wait_event = 'advisory')"
+				: "SELECT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.application_name = ?"
+						+ " AND a.wait_event_type = 'Lock'"
+						+ " AND ? = ANY(pg_blocking_pids(a.pid)))";
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10L);
+		try (PreparedStatement ps = observer.prepareStatement(sql)) {
+			while (System.nanoTime() < deadline) {
+				ps.setString(1, applicationName);
+				if (!advisoryWait) {
+					ps.setInt(2, blockerPid);
+				}
+				try (ResultSet rs = ps.executeQuery()) {
+					assertTrue(rs.next());
+					if (rs.getBoolean(1)) {
+						return;
+					}
+				}
+				if (worker.isDone()) {
+					try {
+						worker.get();
+						fail(applicationName + " completed before reaching its expected lock wait");
+					} catch (ExecutionException failure) {
+						throw new AssertionError(applicationName + " failed before reaching its lock wait",
+								failure.getCause());
+					}
+				}
+				Thread.sleep(20L);
+			}
+		}
+		throw new AssertionError("timed out waiting for " + applicationName
+				+ (advisoryWait ? " to reach the job-update barrier" : " to wait on the rerun backend"));
+	}
+
+	private void assertUserRowCanBeLockedNowait() throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			requireCleanPooledConnection(con, "assertUserRowCanBeLockedNowait");
+			con.setAutoCommit(false);
+			boolean transactionFinished = false;
+			try {
+				try (PreparedStatement ps = con.prepareStatement(
+						"SELECT id FROM starexec.users WHERE id = ? FOR UPDATE NOWAIT")) {
+					ps.setInt(1, fixtureUserId);
+					try (ResultSet rs = ps.executeQuery()) {
+						assertTrue(rs.next(), "the fixture user remains present");
+					}
+				} catch (SQLException lockFailure) {
+					if ("55P03".equals(lockFailure.getSQLState())) {
+						throw new AssertionError("stats took the users row before waiting on jobs",
+								lockFailure);
+					}
+					throw lockFailure;
+				}
+				con.rollback();
+				transactionFinished = true;
+			} catch (Throwable primary) {
+				try {
+					con.rollback();
+					transactionFinished = true;
+				} catch (SQLException rollbackFailure) {
+					primary.addSuppressed(rollbackFailure);
+				}
+				if (primary instanceof SQLException) {
+					throw (SQLException) primary;
+				}
+				if (primary instanceof Error) {
+					throw (Error) primary;
+				}
+				throw new AssertionError(primary);
+			} finally {
+				if (transactionFinished) {
+					con.setAutoCommit(true);
+				}
+			}
+			assertConnectionReturnedClean(con, "assertUserRowCanBeLockedNowait");
+		}
+	}
+
+	private static void advisoryLock(Connection con, long key) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT pg_advisory_lock(?)")) {
+			ps.setLong(1, key);
+			ps.executeQuery().close();
+		}
+	}
+
+	private static void releaseAdvisoryLock(Connection con, long key) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT pg_advisory_unlock(?)")) {
+			ps.setLong(1, key);
+			try (ResultSet rs = ps.executeQuery()) {
+				assertTrue(rs.next());
+				assertTrue(rs.getBoolean(1), "the test advisory gate was held by its controller");
+			}
+		}
+	}
+
+	private static void awaitSuccessful(Future<?> worker, String operation) throws Exception {
+		try {
+			worker.get(CONCURRENCY_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+		} catch (ExecutionException failure) {
+			assertFalse(containsSqlState(failure.getCause(), "40P01"),
+					operation + " must not deadlock with PostgreSQL SQLSTATE 40P01");
+			throw new AssertionError(operation + " failed", failure.getCause());
+		} catch (TimeoutException timeout) {
+			throw new AssertionError(operation + " did not finish after the barrier was released", timeout);
+		}
+	}
+
+	private static void awaitTaskForCleanup(Future<?> worker) throws InterruptedException {
+		if (worker == null) {
+			return;
+		}
+		try {
+			worker.get(CONCURRENCY_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+		} catch (ExecutionException | TimeoutException ignored) {
+			// The main assertion reports operation errors; this wait exists to release all
+			// connections and row locks before @After drops the injected trigger.
+		}
+	}
+
+	private static boolean containsSqlState(Throwable failure, String sqlState) {
+		for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+			if (cause instanceof SQLException) {
+				for (SQLException sql = (SQLException) cause; sql != null; sql = sql.getNextException()) {
+					if (sqlState.equals(sql.getSQLState())) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
 	}
 
 	private boolean selectedBySweep(int id) throws SQLException {
@@ -780,12 +1613,40 @@ public class JobsRerunProtocolSqlTest extends Common {
 		}
 	}
 
+	private long diskSizeOfJob(int id) throws SQLException {
+		return selectLong("SELECT disk_size FROM starexec.jobs WHERE id = " + id);
+	}
+
+	private long diskSizeOfUser(int id) throws SQLException {
+		return selectLong("SELECT disk_size FROM starexec.users WHERE id = " + id);
+	}
+
+	private long stageDiskSize(int pair, int stage) throws SQLException {
+		return selectLong("SELECT disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id = "
+				+ pair + " AND stage_number = " + stage);
+	}
+
+	private long selectLong(String sql) throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			return selectLong(con, sql);
+		}
+	}
+
 	private static int selectInt(Connection con, String sql) throws SQLException {
 		try (PreparedStatement ps = con.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
 			if (!rs.next()) {
 				throw new IllegalStateException("Query returned no rows: " + sql);
 			}
 			return rs.getInt(1);
+		}
+	}
+
+	private static long selectLong(Connection con, String sql) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
+			if (!rs.next()) {
+				throw new IllegalStateException("Query returned no rows: " + sql);
+			}
+			return rs.getLong(1);
 		}
 	}
 

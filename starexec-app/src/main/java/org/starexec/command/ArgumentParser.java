@@ -882,7 +882,8 @@ class ArgumentParser {
 		}
 		Integer settingId = null;
 		if (commandParams.containsKey(C.PARAM_SETTING)) {
-			settingId = Integer.parseInt(C.PARAM_SETTING);
+			// The value given, not the parameter's name: parsing "set" failed every upload with set=.
+			settingId = Integer.parseInt(commandParams.get(C.PARAM_SETTING));
 		}
 		Integer type = C.DEFAULT_SOLVER_TYPE;
 		if (commandParams.containsKey(C.PARAM_TYPE)) {

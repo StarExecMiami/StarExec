@@ -4,16 +4,18 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Jobs;
+import org.starexec.data.database.Processors;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.BenchmarkSecurity;
 import org.starexec.data.security.JobSecurity;
+import org.starexec.data.security.ProcessorSecurity;
 import org.starexec.data.security.SpaceSecurity;
 import org.starexec.data.security.UserSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
@@ -38,16 +40,45 @@ import java.util.List;
 import java.util.Optional;
 import java.util.TreeMap;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RESTServicesTest {
 
 	private static final Gson gson = new GsonBuilder()
 			.setDateFormat("yyyy-MM-dd'T'HH:mm:ss")
 			.create();
+
+	@Test
+	public void editProcessorRejectsANonNumericTimeLimitBeforeWriting() {
+		final int processorId = 42;
+		final int userId = 7;
+		Processor processor = new Processor();
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Mockito.when(request.getParameter("name")).thenReturn(processor.getName());
+		Mockito.when(request.getParameter("desc")).thenReturn(processor.getDescription());
+		Mockito.when(request.getParameter("timelimit")).thenReturn("not-a-number");
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<ProcessorSecurity> processorSecurity = Mockito.mockStatic(ProcessorSecurity.class);
+			 MockedStatic<Processors> processors = Mockito.mockStatic(Processors.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(userId);
+			processors.when(() -> Processors.get(processorId)).thenReturn(processor);
+			processorSecurity.when(() -> ProcessorSecurity.canUserEditProcessor(
+					processorId, userId, processor.getName(), processor.getDescription()))
+					.thenReturn(new ValidatorStatusCode(true));
+
+			String response = new RESTServices().editProcessor(processorId, request);
+			ValidatorStatusCode status = gson.fromJson(response, ValidatorStatusCode.class);
+
+			assertFalse(status.isSuccess());
+			processors.verify(() -> Processors.updateName(Mockito.anyInt(), Mockito.anyString()), Mockito.never());
+			processors.verify(() -> Processors.updateDescription(Mockito.anyInt(), Mockito.anyString()), Mockito.never());
+			processors.verify(() -> Processors.updateTimeLimit(Mockito.anyInt(), Mockito.anyInt()), Mockito.never());
+		}
+	}
 
 	@Test
 	public void editJobDescriptionEndpointKeepsDescriptionOutOfThePath() throws Exception {
@@ -406,13 +437,64 @@ public class RESTServicesTest {
 
 			assertFalse(status.isSuccess());
 			String msg = status.getMessage();
-			assertTrue("the blocking space names must survive", msg.contains("alice_smith"));
-			assertTrue("the blocking space ids must survive", msg.contains("id=85"));
-			assertTrue("the blocking space ids must survive", msg.contains("id=91"));
-			assertFalse("a typed blocker must not be reported as a missing user",
-					"User not found.".equals(msg));
-			assertFalse("a typed blocker must not fall through to the generic category",
-					msg.startsWith("Unable to delete user."));
+			assertTrue(msg.contains("alice_smith"), "the blocking space names must survive");
+			assertTrue(msg.contains("id=85"), "the blocking space ids must survive");
+			assertTrue(msg.contains("id=91"), "the blocking space ids must survive");
+			assertFalse("User not found.".equals(msg),
+					"a typed blocker must not be reported as a missing user");
+			assertFalse(msg.startsWith("Unable to delete user."),
+					"a typed blocker must not fall through to the generic category");
+		}
+	}
+
+	@Test
+	public void deleteUserExplainsWhenAnOwnedExecutionCannotBeRetired() throws Exception {
+		final int userToDelete = 99;
+		final int adminId = 1;
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		UserDeletionBlockedException blocked = new UserDeletionBlockedException(
+				UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+				"backend-private-detail-must-not-reach-the-client",
+				java.util.Collections.emptyList(),
+				java.util.Collections.emptyList());
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+				 MockedStatic<UserSecurity> userSecurity = Mockito.mockStatic(UserSecurity.class);
+				 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(adminId);
+			userSecurity.when(() -> UserSecurity.canDeleteUser(userToDelete, adminId))
+					.thenReturn(new ValidatorStatusCode(true));
+			users.when(() -> Users.deleteUser(userToDelete)).thenThrow(blocked);
+
+			String response = new RESTServices().deleteUser(userToDelete, request);
+			ValidatorStatusCode status = gson.fromJson(response, ValidatorStatusCode.class);
+
+			assertFalse(status.isSuccess());
+			assertTrue(status.getMessage().contains("active jobs could not be safely stopped and retired"));
+			assertTrue(status.getMessage().contains("retry the deletion"));
+			assertFalse(status.getMessage().contains("backend-private-detail"));
+		}
+	}
+
+	@Test
+	public void deleteUserExplainsRetainedSolverStorageWithoutExposingItsCause() throws Exception {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		UserDeletionBlockedException blocked = new UserDeletionBlockedException(
+				UserDeletionBlockedException.SOLVER_STORAGE_IN_USE,
+				"private-storage-path-and-sql-detail", null, null,
+				new java.sql.SQLException("private-driver-detail", "55006"));
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+				MockedStatic<UserSecurity> userSecurity = Mockito.mockStatic(UserSecurity.class);
+				MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(1);
+			userSecurity.when(() -> UserSecurity.canDeleteUser(99, 1)).thenReturn(new ValidatorStatusCode(true));
+			users.when(() -> Users.deleteUser(99)).thenThrow(blocked);
+			ValidatorStatusCode status = gson.fromJson(new RESTServices().deleteUser(99, request), ValidatorStatusCode.class);
+			assertFalse(status.isSuccess());
+			assertTrue(status.getMessage().contains("solver files or build records are still retained or in use"));
+			assertTrue(status.getMessage().contains("retry"));
+			assertFalse(status.getMessage().contains("private"));
+			assertFalse(status.getMessage().contains("55006"));
 		}
 	}
 
@@ -446,14 +528,14 @@ public class RESTServicesTest {
 
 			assertFalse(status.isSuccess());
 			String msg = status.getMessage();
-			assertEquals("unexpected failures must map to the stable generic category",
-					"Unable to delete user. The failure has been logged for an administrator.", msg);
-			assertFalse("SQL text must not reach the client", msg.contains("DELETE FROM"));
-			assertFalse("table names must not reach the client", msg.contains("secret_table"));
-			assertFalse("constraint names must not reach the client", msg.contains("zzz"));
-			assertFalse("SQLSTATE must not reach the client", msg.contains("23502"));
-			assertFalse("must not be classified as a missing user",
-					"User not found.".equals(msg));
+			assertEquals("Unable to delete user. The failure has been logged for an administrator.",
+					msg, "unexpected failures must map to the stable generic category");
+			assertFalse(msg.contains("DELETE FROM"), "SQL text must not reach the client");
+			assertFalse(msg.contains("secret_table"), "table names must not reach the client");
+			assertFalse(msg.contains("zzz"), "constraint names must not reach the client");
+			assertFalse(msg.contains("23502"), "SQLSTATE must not reach the client");
+			assertFalse("User not found.".equals(msg),
+					"must not be classified as a missing user");
 		}
 	}
 }

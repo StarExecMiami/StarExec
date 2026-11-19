@@ -1,6 +1,6 @@
 $(document).ready(function() {
 	// Hide loading images by default
-	$('legend img').hide();
+	$('legend .loading-spinner').hide();
 
 	$('.popoutLink').button({
 		icons: {
@@ -91,7 +91,6 @@ function makeAnonymousLinkPost(
 
 				$('#dialog-show-anonymous-link').dialog({
 					width: 750,
-					height: 200,
 				});
 			} else {
 				parseReturnCode(returnCode);

@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/lib/cli-output.sh"
+
 # Check cgroup controller delegation for Podman rootless mode
 # This script verifies that required cgroup controllers are available and properly delegated
 # Usage: check-cgroup-delegation.sh [--fix]
@@ -14,22 +17,21 @@ REQUIRED_CONTROLLERS="cpuset cpu io memory pids"
 USER_ID=$(id -u)
 
 if [ "$FIX_MODE" = true ]; then
-    echo "Checking and fixing cgroup controller delegation for Podman rootless mode..."
+    ui_info "Checking and fixing cgroup controller delegation for Podman rootless mode..."
 else
-    echo "Checking cgroup controller delegation for Podman rootless mode..."
+    ui_info "Checking cgroup controller delegation for Podman rootless mode..."
 fi
 
 # Check if we're running on a system with systemd and cgroups v2
 if [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
-    echo "⚠️  cgroups v2 not detected. This system may not support proper cgroup delegation."
-    echo "   Podman rootless mode may not work correctly."
+    ui_warn "cgroups v2 not detected. This system may not support proper cgroup delegation."
+    ui_info "  Podman rootless mode may not work correctly."
     exit 1
 fi
 
 # Check root cgroup controllers
-echo -n "  Checking root cgroup.controllers: "
 ROOT_CONTROLLERS=$(cat /sys/fs/cgroup/cgroup.controllers)
-echo "$ROOT_CONTROLLERS"
+ui_detail "Root cgroup.controllers: $ROOT_CONTROLLERS"
 
 MISSING_CONTROLLERS=""
 for controller in $REQUIRED_CONTROLLERS; do
@@ -39,27 +41,26 @@ for controller in $REQUIRED_CONTROLLERS; do
 done
 
 if [ -n "$MISSING_CONTROLLERS" ]; then
-    echo "❌ Missing required controllers in root cgroup:$MISSING_CONTROLLERS"
-    echo "   This indicates a system configuration issue."
-    echo "   Required controllers: $REQUIRED_CONTROLLERS"
+    ui_error "Missing required controllers in root cgroup:$MISSING_CONTROLLERS"
+    ui_info "  This indicates a system configuration issue."
+    ui_info "  Required controllers: $REQUIRED_CONTROLLERS"
     exit 1
 fi
 
-echo "✓ All required controllers available in root cgroup"
+ui_detail "All required controllers available in root cgroup"
 
 # Check user slice delegation
 USER_SLICE_CGROUP="/sys/fs/cgroup/user.slice/user-${USER_ID}.slice"
 if [ ! -d "$USER_SLICE_CGROUP" ]; then
-    echo "⚠️  User slice cgroup not found: $USER_SLICE_CGROUP"
-    echo "   This may indicate systemd user service is not running."
-    echo "   Try: systemctl --user start"
+    ui_warn "User slice cgroup not found: $USER_SLICE_CGROUP"
+    ui_info "  This may indicate systemd user service is not running."
+    ui_info "  Try: systemctl --user start"
     exit 1
 fi
 
-echo -n "  Checking user slice cgroup.subtree_control: "
 if [ -f "$USER_SLICE_CGROUP/cgroup.subtree_control" ]; then
     SUBTREE_CONTROL=$(cat "$USER_SLICE_CGROUP/cgroup.subtree_control")
-    echo "$SUBTREE_CONTROL"
+    ui_detail "User slice cgroup.subtree_control: $SUBTREE_CONTROL"
 
     MISSING_DELEGATION=""
     for controller in $REQUIRED_CONTROLLERS; do
@@ -69,48 +70,39 @@ if [ -f "$USER_SLICE_CGROUP/cgroup.subtree_control" ]; then
     done
 
     if [ -n "$MISSING_DELEGATION" ]; then
-        echo "❌ Missing controller delegation in user slice:$MISSING_DELEGATION"
+        ui_error "Missing controller delegation in user slice:$MISSING_DELEGATION"
 
         if [ "$FIX_MODE" = true ]; then
-            echo ""
-            echo "🔧 Attempting to fix automatically..."
+            ui_info "Attempting to fix automatically..."
 
             # Check if we have sudo access
             if ! sudo -n true 2>/dev/null; then
-                echo "❌ Cannot fix automatically: sudo access required but not available"
-                echo "   Please run the manual fix commands shown below."
+                ui_error "Cannot fix automatically: sudo access required but not available"
+                ui_info "  Please run the manual fix commands shown below."
                 exit 1
             fi
 
             # ⚠️ WARNING: Restarting user@UID.service terminates the current
             # login session. Confirm before proceeding.
-            echo ""
-            echo "╔══════════════════════════════════════════════════════════════╗"
-            echo "║  ⚠️  WARNING: Restarting user@${USER_ID}.service            ║"
-            echo "║                                                              ║"
-            echo "║  This WILL terminate your current login session.             ║"
-            echo "║  All running applications will be killed immediately.        ║"
-            echo "║                                                              ║"
-            echo "║  After the restart you MUST log in again.                    ║"
-            echo "║  Then run: podman system migrate                             ║"
-            echo "╚══════════════════════════════════════════════════════════════╝"
-            echo ""
+            ui_warn "Restarting user@${USER_ID}.service will terminate your current login session."
+            ui_warn "All running applications will be killed immediately."
+            ui_info "  After the restart you must log in again."
+            ui_info "  Then run: podman system migrate"
             if [ -t 0 ]; then
-                printf "Type 'yes' to proceed, anything else to cancel: "
+                printf '%s' "Type 'yes' to proceed, anything else to cancel: " >&2
                 read -r REPLY
                 if [ "$REPLY" != "yes" ]; then
-                    echo "Cancelled."
+                    ui_info "Cancelled."
                     exit 1
                 fi
-                echo ""
+                ui_info ""
             else
-                echo "Non-interactive environment — proceeding as --fix was"
-                echo "explicitly requested. Ensure no critical work is running."
-                echo ""
+                ui_warn "Non-interactive environment; proceeding as --fix was explicitly requested."
+                ui_info "  Ensure no critical work is running."
             fi
 
             # Create the drop-in configuration
-            echo "   Creating systemd drop-in configuration..."
+            ui_info "Creating systemd drop-in configuration..."
             sudo mkdir -p "/etc/systemd/system/user@${USER_ID}.service.d"
 
             sudo tee "/etc/systemd/system/user@${USER_ID}.service.d/delegate.conf" > /dev/null <<EOF
@@ -122,48 +114,41 @@ IOAccounting=yes
 TasksAccounting=yes
 EOF
 
-            echo "   Reloading systemd configuration..."
+            ui_info "Reloading systemd configuration..."
             sudo systemctl daemon-reload
 
-            echo "   Restarting user service..."
+            ui_info "Restarting user service..."
             sudo systemctl restart "user@${USER_ID}.service"
 
-            echo "✓ Configuration applied. You may need to restart your user session."
-            echo "  Run: systemctl --user daemon-reload"
-            echo ""
-            echo "Re-running check to verify fix..."
+            ui_success "Configuration applied."
+            ui_info "  Run: systemctl --user daemon-reload"
+            ui_info "Re-running check to verify fix..."
             exec "$0"  # Re-run the script to verify
         else
-            echo ""
-            echo "🔧 Manual fix required. Run with --fix to apply automatically:"
-            echo "   $0 --fix"
-            echo ""
-            echo "Or apply manually:"
-            echo ""
-            echo "   sudo mkdir -p /etc/systemd/system/user@${USER_ID}.service.d"
-            echo "   sudo tee /etc/systemd/system/user@${USER_ID}.service.d/delegate.conf > /dev/null <<EOF"
-            echo "   [Service]"
-            echo "   Delegate=cpu cpuset io memory pids"
-            echo "   MemoryAccounting=yes"
-            echo "   CPUAccounting=yes"
-            echo "   IOAccounting=yes"
-            echo "   TasksAccounting=yes"
-            echo "   EOF"
-            echo ""
-            echo "   sudo systemctl daemon-reload"
-            echo "   sudo systemctl restart user@${USER_ID}.service"
-            echo ""
-            echo "   Then restart your user session or run: systemctl --user daemon-reload"
+            ui_info "  Manual fix required. Run with --fix to apply automatically: $0 --fix"
+            ui_info "  Or apply manually:"
+            ui_info "  sudo mkdir -p /etc/systemd/system/user@${USER_ID}.service.d"
+            ui_info "  sudo tee /etc/systemd/system/user@${USER_ID}.service.d/delegate.conf > /dev/null <<EOF"
+            ui_info "  [Service]"
+            ui_info "  Delegate=cpu cpuset io memory pids"
+            ui_info "  MemoryAccounting=yes"
+            ui_info "  CPUAccounting=yes"
+            ui_info "  IOAccounting=yes"
+            ui_info "  TasksAccounting=yes"
+            ui_info "  EOF"
+            ui_info "  sudo systemctl daemon-reload"
+            ui_info "  sudo systemctl restart user@${USER_ID}.service"
+            ui_info "  Then restart your user session or run: systemctl --user daemon-reload"
             exit 1
         fi
     fi
 
-    echo "✓ All required controllers properly delegated to user slice"
+    ui_detail "All required controllers properly delegated to user slice"
 else
-    echo "❌ cgroup.subtree_control file not found in user slice"
-    echo "   This indicates cgroups v2 delegation is not working."
+    ui_error "cgroup.subtree_control file not found in user slice"
+    ui_info "  This indicates cgroups v2 delegation is not working."
     exit 1
 fi
 
-echo "✓ Cgroup controller delegation check passed"
+ui_success "Cgroup controller delegation check passed"
 exit 0

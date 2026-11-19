@@ -3,6 +3,8 @@ package org.starexec.jobs;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.starexec.backend.Backend;
+import org.starexec.backend.BuildExecutionContext;
 import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.DB;
@@ -27,14 +29,15 @@ import org.starexec.util.Timer;
 import org.starexec.util.Util;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 
 /**
  * Handles all SGE interactions for job submission and maintenance
@@ -47,6 +50,23 @@ public abstract class JobManager {
 	private static String mainTemplate = null; // initialized below
 
 	private static ConcurrentHashMap<Integer, LoadBalanceMonitor> queueToMonitor = new ConcurrentHashMap<>();
+
+	/** The conditions that keep a queue from dispatching, so each is reported when it starts, not on every pass. */
+	private static final QueueConditions queueConditions = new QueueConditions();
+
+	/** Ends every report of a condition that lasts, so an operator knows when to expect the next one. */
+	private static final String REPEATED = " Reported again every "
+			+ TimeUnit.MILLISECONDS.toHours(QueueConditions.REPEAT_MILLIS)
+			+ " hours while it lasts, and at INFO when it ends.";
+
+	/**
+	 * " (first seen N minutes ago)" for a condition reported again, nothing for one that starts.
+	 * "First seen", not "for N minutes": the dispatcher looks only on its passes, and a deferral
+	 * only while pairs wait.
+	 */
+	private static String lasting(long minutes) {
+		return minutes > 0 ? " (first seen " + minutes + " minutes ago)" : "";
+	}
 
 	/**
 	 * Returns the string representation of the LoadBalanceMonitor for the given
@@ -118,6 +138,14 @@ public abstract class JobManager {
 				int queueSize = Queues.getSizeOfQueue(qId);
 				log.debug("trying to submit on queue " + qId + " with " + nodeCount + " nodes and " + queueSize +
 						" pairs");
+				if (nodeCount > 0) {
+					long withoutNodes = queueConditions.end(qId, QueueConditions.Kind.NO_NODES,
+							System.currentTimeMillis());
+					if (withoutNodes >= 0) {
+						log.info("checkPendingJobs", "Queue " + qname + " has nodes again; it was first seen without"
+								+ " nodes " + withoutNodes + " minute(s) ago");
+					}
+				}
 				if (queueSize < R.NODE_MULTIPLIER * nodeCount) {
 					List<Job> joblist;
 					if (devJobsOnly) {
@@ -149,7 +177,7 @@ public abstract class JobManager {
 					// Nothing else reports this either. Queue-level warnings live in
 					// submitJobs, which is never reached from here, so a queue with no
 					// nodes simply stopped dispatching in silence.
-					logQueueHasNoNodes(qname, queueSize);
+					logQueueHasNoNodes(q, queueSize, System.currentTimeMillis());
 				} else {
 					log.info("Not adding more job pairs to queue " + qname + ", which has " + queueSize +
 							" pairs enqueued.");
@@ -379,31 +407,87 @@ public abstract class JobManager {
 	 * its runsolver measurements, because {@code UpdatePairRunSolverStats} resolves the
 	 * node by name and raises when it is missing. Pointing at it here saves an operator
 	 * from staring at a queue that mysteriously never moves.
+	 *
+	 * <p>Each cause is reported when it starts and again every
+	 * {@link QueueConditions#REPEAT_MILLIS} while it lasts, not on every pass:
+	 * {@code checkPendingJobs} logs the end, once, when the queue has nodes again.
 	 */
-	private static void logQueueHasNoNodes(String qname, int queueSize) {
+	static void logQueueHasNoNodes(Queue q, int queueSize, long now) {
+		String qname = q.getName();
 		boolean backendThinksItCanRun;
 		try {
 			backendThinksItCanRun = R.BACKEND.isQueueDispatchable(qname);
 		} catch (Exception e) {
 			// Never let a diagnostic break dispatch for the other queues.
-			log.warn("logQueueHasNoNodes", "Could not ask the backend about queue " + qname, e);
+			long minutes = queueConditions.report(q.getId(), QueueConditions.Kind.NO_NODES, "no answer", now);
+			if (minutes >= 0) {
+				log.warn("logQueueHasNoNodes",
+						"Could not ask the backend about queue " + qname + lasting(minutes) + "." + REPEATED, e);
+			}
 			return;
 		}
 
+		long minutes = queueConditions.report(q.getId(), QueueConditions.Kind.NO_NODES,
+				backendThinksItCanRun ? "backend accepts work" : "backend refuses work", now);
+		if (minutes < 0) {
+			return;
+		}
+		String waiting = pairsWaiting(q.getId(), queueSize);
 		if (backendThinksItCanRun) {
 			log.error("logQueueHasNoNodes",
-					"Queue " + qname + " has " + queueSize + " pair(s) waiting and no nodes" +
-					" associated with it, yet the backend reports it can accept work. StarExec's" +
-					" node table and the cluster disagree: most likely a node exists in the" +
-					" cluster but was never registered here, so associating it fails every" +
+					"Queue " + qname + " has no nodes associated with it" + lasting(minutes) + " (" +
+					waiting + "), yet the backend reports it can accept" +
+					" work. StarExec's node table and the cluster disagree: most likely a node exists" +
+					" in the cluster but was never registered here, so associating it fails every" +
 					" cycle. Pairs finishing on such a node also lose their recorded" +
-					" measurements. No pairs will be dispatched to this queue until it is fixed.");
+					" measurements. No pairs will be dispatched to this queue until it is fixed." +
+					REPEATED);
 		} else {
 			log.warn("logQueueHasNoNodes",
-					"Queue " + qname + " has " + queueSize + " pair(s) waiting and no nodes" +
-					" available; the backend confirms it cannot accept work. No pairs will be" +
-					" dispatched to this queue until a node is attached or comes back.");
+					"Queue " + qname + " has no nodes available" + lasting(minutes) + " (" + waiting +
+					"); the backend confirms it cannot accept work. No" +
+					" pairs will be dispatched to this queue until a node is attached or comes back." +
+					REPEATED);
 		}
+	}
+
+	/**
+	 * What waits for a queue that has no nodes, for its line:
+	 * {@code "<n> pair(s) waiting to be submitted, <m> enqueued"}. {@code enqueued} is the count
+	 * checkPendingJobs reads for its full-queue check, which only counts pairs already enqueued;
+	 * a queue with no nodes never enqueues one, so the pairs that wait for it are the pending
+	 * ones, counted here, only when a line is due.
+	 */
+	private static String pairsWaiting(int queueId, int enqueued) {
+		int pending = Queues.countPendingPairs(queueId);
+		return (pending < 0 ? "an unknown number of pairs" : pending + " pair(s)") +
+				" waiting to be submitted, " + enqueued + " enqueued";
+	}
+
+	/**
+	 * Whether the backend can take pairs from queue {@code q} on this pass. A refusal is
+	 * reported when it starts and again every {@link QueueConditions#REPEAT_MILLIS} while it
+	 * lasts, and its end once at INFO: on every pass, a backend that stayed unable to run
+	 * anything wrote an error_logs row every 20 seconds.
+	 */
+	static boolean queueAcceptsWork(Queue q, long now) {
+		final String methodName = "submitJobs";
+		if (R.BACKEND.isQueueDispatchable(q.getName())) {
+			// The backend is asked only while pairs wait, so this counts from the first
+			// refusal seen, not from when the backend recovered.
+			long minutes = queueConditions.end(q.getId(), QueueConditions.Kind.CANNOT_ACCEPT_WORK, now);
+			if (minutes >= 0) {
+				log.info(methodName, "Queue " + q.getName() + " accepts work again; it was first seen refusing work "
+						+ minutes + " minute(s) ago");
+			}
+			return true;
+		}
+		long minutes = queueConditions.report(q.getId(), QueueConditions.Kind.CANNOT_ACCEPT_WORK, "refused", now);
+		if (minutes >= 0) {
+			log.warn(methodName, "Queue " + q.getName() + " cannot accept work at the moment" + lasting(minutes) +
+					"; deferring its pairs to a later pass rather than failing them." + REPEATED);
+		}
+		return false;
 	}
 
 	public static void submitJobs(final List<Job> joblist, final Queue q, int queueSize, final int nodeCount) {
@@ -426,9 +510,7 @@ public abstract class JobManager {
 			//
 			// A permanently unroutable queue is a different case and is still rejected at
 			// submission: it will not fix itself and should be visible.
-			if (!R.BACKEND.isQueueDispatchable(q.getName())) {
-				log.warn(methodName, "Queue " + q.getName() + " cannot accept work at the" +
-						" moment; deferring its pairs to a later pass rather than failing them");
+			if (!queueAcceptsWork(q, System.currentTimeMillis())) {
 				return;
 			}
 
@@ -474,6 +556,7 @@ public abstract class JobManager {
 			// happen
 			final int maxLoops = 500;
 			int curLoops = 0;
+			scheduling:
 			while (!schedule.isEmpty()) {
 
 				curLoops++;
@@ -504,9 +587,8 @@ public abstract class JobManager {
 				while (it.hasNext()) {
 					SchedulingState s = it.next();
 
-					if (!s.pairIter.hasNext()) {
-						// we will remove this SchedulingState from the schedule, since it is out of job
-						// pairs
+					if (s.deferred || !s.pairIter.hasNext()) {
+						// Remove exhausted jobs and jobs deferred for this scheduling pass.
 						it.remove();
 						continue;
 					}
@@ -515,8 +597,8 @@ public abstract class JobManager {
 					if (!s.job.isHighPriority() && userToHighPriorityStates.containsKey(currentStateUserId)) {
 						List<SchedulingState> highPriorityStates = userToHighPriorityStates.get(currentStateUserId);
 
-						// Filter out all of the high priority states that have no more job pairs.
-						highPriorityStates = highPriorityStates.stream().filter(state -> state.pairIter.hasNext())
+						// Deferred high-priority jobs must not displace runnable ordinary work.
+							highPriorityStates = highPriorityStates.stream().filter(state -> !state.deferred && state.pairIter.hasNext())
 								.collect(Collectors.toList());
 
 						// Replace the high priority states with the filtered ones.
@@ -588,6 +670,10 @@ public abstract class JobManager {
 							continue;
 						}
 
+						// COALESCE(sge_id, 0) as loaded, before the claim: the identity a deferred
+						// submission is returned to PENDING_SUBMIT against (a rerun pair keeps its
+						// previous execution id, so this is not always 0).
+						final int execIdAtClaim = pair.getBackendExecId();
 						JobPairs.ConditionalPairUpdateResult claimResult = JobPairs.tryMarkPendingPairEnqueued(
 								pair.getId());
 						if (claimResult == JobPairs.ConditionalPairUpdateResult.STALE) {
@@ -636,18 +722,38 @@ public abstract class JobManager {
 						i++;
 						log.trace("About to submit pair " + pair.getId());
 
+						boolean preparingBuild = s.job.isBuildJob();
 						try {
+							BuildExecutionContext build = null;
+							if (s.job.isBuildJob() && R.BACKEND.requiresLeasedBuildStaging()) {
+								if (!R.BACKEND.supportsBuildStaging()) {
+									throw new SubmissionDeferredException("Backend cannot accept dedicated build staging");
+								}
+								try {
+									build = ExecutionStorageLeases.prepareRegistered(pair.getId(),List.of(
+											Path.of(R.STAREXEC_DATA_DIR),Path.of(EnvironmentConfig.getJobOutputDirectory()),
+											Path.of(EnvironmentConfig.getJobLogDirectory())));
+									if (build == null) throw new SubmissionDeferredException("Dedicated build context is unavailable");
+								} catch (SQLException | IOException unavailable) {
+									log.warn("Dedicated build preparation unavailable for pair " + pair.getId(), unavailable);
+									throw new SubmissionDeferredException("Dedicated build preparation unavailable; pair stays queued");
+									}
+							} else {
+								requireLegacyBuildDispatch(s.job, pair);
+							}
+							preparingBuild = false;
 							// Write the script that will run this individual pair
 							final String scriptPath = JobManager.writeJobScript(s.jobTemplate, s.job, pair, q);
 							log.trace("About to get the log path from the database...");
 							final String logPath = JobPairs.getLogFilePath(pair);
 							log.trace("Just got the log path from the database.");
-							final File file = new File(logPath);
-							file.getParentFile().mkdirs();
-
-							if (file.exists()) {
-								log.debug("Deleting old log file for " + pair.getId());
-								file.delete();
+							if (build == null) {
+								final File file = new File(logPath);
+								file.getParentFile().mkdirs();
+								if (file.exists()) {
+									log.debug("Deleting old log file for " + pair.getId());
+									file.delete();
+								}
 							}
 							// Submit to the grid engine
 
@@ -658,8 +764,10 @@ public abstract class JobManager {
 							// is an inert comment to a backend that places work itself, so
 							// such a backend had no way to learn which queue a pair
 							// belonged to and could run it anywhere.
-							int execId = R.BACKEND.submitScript(
-									pair.getId(), scriptPath, R.BACKEND_WORKING_DIR, logPath, q.getName());
+							int execId = build == null ? R.BACKEND.submitScript(
+									pair.getId(), scriptPath, R.BACKEND_WORKING_DIR, logPath, q.getName())
+									: R.BACKEND.submitScript(pair.getId(),scriptPath,R.BACKEND_WORKING_DIR,
+											logPath,q.getName(),build);
 
 							log.trace("Just submitted pair " + pair.getId());
 
@@ -671,16 +779,17 @@ public abstract class JobManager {
 								);
 								queueSize++;
 							} else {
+								if (build != null) {
+									// Managed admission owns the durable binding; a late update could overwrite a rerun.
+									queueSize++;
+									continue;
+								}
 								JobPairs.ConditionalPairUpdateResult execUpdateResult = JobPairs.tryUpdateBackendExecId(
 										pair.getId(), execId);
 								if (execUpdateResult == JobPairs.ConditionalPairUpdateResult.UPDATED) {
 									queueSize++;
 								} else if (execUpdateResult == JobPairs.ConditionalPairUpdateResult.STALE) {
-									cleanupSubmittedBackendWork(
-											pair.getId(),
-											execId,
-											"the pair is no longer submit-eligible after backend submission"
-									);
+									settleStaleSubmission(pair.getId(), execIdAtClaim, execId);
 								} else {
 									cleanupSubmittedBackendWork(
 											pair.getId(),
@@ -705,10 +814,34 @@ public abstract class JobManager {
 							// per pair per scheduling pass, for a condition that resolves
 							// itself. This exception is unchecked, so this ordering is the
 							// entire guarantee.
-							log.debug(
+							//
+							// Staying queued means going back to PENDING_SUBMIT: the pair was
+							// claimed to ENQUEUED above, and an ENQUEUED pair with no execution
+							// is never selected again yet still counts toward queueSize, so left
+							// there it strands, fills the queue, and is finally errored by
+							// FIND_BROKEN_JOB_PAIRS. The backend is at capacity (or its create
+							// failed with nothing left behind), so every later pair in this pass
+							// would be deferred too: end the pass instead of claiming and
+							// returning each of them.
+							monitor.changeLoad(s.job.getUserId(), -s.job.getWallclockTimeout());
+							JobPairs.ConditionalPairUpdateResult returned =
+									JobPairs.tryReturnDeferredPairToPending(pair.getId(), execIdAtClaim);
+							if (returned == JobPairs.ConditionalPairUpdateResult.ERROR) {
+								log.error("submitJobs", "could not return deferred pair " + pair.getId() +
+										" to PENDING_SUBMIT; it stays ENQUEUED without an execution");
+							}
+							if (preparingBuild && returned != JobPairs.ConditionalPairUpdateResult.ERROR) {
+								// Build storage and recovery can be unavailable while ordinary jobs remain runnable.
+								s.deferred = true;
+								log.info("submitJobs", "deferring build job " + s.job.getId() + " for this pass: " + e.getMessage());
+								break;
+							}
+							log.info(
 									"submitJobs",
-									"deferring pair " + pair.getId() + ": " + e.getMessage()
+									"deferring pair " + pair.getId() + " (" + returned + "): " + e.getMessage() +
+											"; ending this pass on queue " + q.getName()
 							);
+							break scheduling;
 						} catch (BenchmarkDependencyMissingException e) {
 							log.error("submitJobs", "ERROR_BENCHMARK for pair: " + pair.getId(), e);
 							setStatusForExistingPair(
@@ -736,6 +869,26 @@ public abstract class JobManager {
 
 	} // end submitJobs()
 
+	/** A registry read is a replay guard, never permission to launch a managed execution. */
+	private static void requireLegacyBuildDispatch(Job job, JobPair pair) {
+		if (!job.isBuildJob()) return;
+		try {
+			var artifact = SolverBuildArtifacts.findCurrent(pair.getId()).orElse(null);
+			if (artifact != null && (artifact.executionToken() != null || artifact.stagingPath() != null
+					|| artifact.engineIdentity() != null || artifact.stoppedAt() != null
+					|| artifact.storageRoot() != null || artifact.solverPath() != null
+					|| !"PLANNED".equals(artifact.state()))) {
+				throw new SubmissionDeferredException("Registered build requires managed dispatch or recovery");
+			}
+			if (SolverBuildArtifacts.hasManagedHistory(pair.getId())) {
+				throw new SubmissionDeferredException("Earlier managed build attempt requires reconciliation");
+			}
+		} catch (SQLException unavailable) {
+			log.warn("Build registry unavailable before dispatch of pair " + pair.getId(), unavailable);
+			throw new SubmissionDeferredException("Build registry unavailable; pair stays queued");
+		}
+	}
+
 	private static void cleanupSubmittedBackendWork(int pairId, int execId, String reason) {
 		log.warn(
 				"Cleaning up backend work for pair " +
@@ -753,6 +906,49 @@ public abstract class JobManager {
 			R.BACKEND.clearPairTracking(pairId);
 		} catch (Exception clearException) {
 			log.warn("Failed to clear backend tracking for pair " + pairId, clearException);
+		}
+	}
+
+	/**
+	 * Stops the execution of a pair that stopped being submit-eligible while the backend was
+	 * starting it -- its job was killed, deleted or paused in between -- and records what became
+	 * of the pair.
+	 *
+	 * <p>The stop goes through {@link Backend#killPairConfirmed}, whose default still kills,
+	 * because the answer decides the pair's fate: {@link JobPairs#settleStaleSubmission} settles
+	 * the pair only after a confirmed stop, and otherwise records the execution id so that
+	 * {@code Jobs.kill} can confirm the stop later. Backend tracking is retired only after a
+	 * confirmed stop, as {@code Jobs.kill} does: an execution that may still be running stays
+	 * visible to its monitor and to the backend's concurrency accounting.
+	 *
+	 * <p>On Kubernetes the confirmation can wait up to STAREXEC_K8S_KILL_CONFIRM_SECONDS. That
+	 * holds up this pass, but only for a pair whose job changed during its own submission: a
+	 * pause, kill or deletion catches at most the one pair in flight.
+	 */
+	private static void settleStaleSubmission(int pairId, int execIdAtClaim, int execId) {
+		log.warn("Stopping execution " + execId + " of pair " + pairId +
+				" because the pair is no longer submit-eligible after backend submission");
+		boolean stopped = false;
+		try {
+			stopped = R.BACKEND.killPairConfirmed(execId) == Backend.KillOutcome.CONFIRMED_SAFE;
+		} catch (Exception e) {
+			log.warn("Stopping execution " + execId + " of pair " + pairId + " threw; treating the stop as unproven", e);
+		}
+		if (stopped) {
+			try {
+				R.BACKEND.clearPairTracking(pairId);
+			} catch (Exception e) {
+				log.warn("Failed to clear backend tracking for pair " + pairId, e);
+			}
+		}
+		JobPairs.StaleSubmissionOutcome outcome =
+				JobPairs.settleStaleSubmission(pairId, execIdAtClaim, execId, stopped);
+		if (outcome == JobPairs.StaleSubmissionOutcome.ERROR) {
+			log.error("submitJobs", "could not settle pair " + pairId + " after its submission went stale;" +
+					" it stays ENQUEUED without the id of execution " + execId);
+		} else {
+			log.info("submitJobs", "pair " + pairId + ": execution " + execId +
+					(stopped ? " confirmed stopped" : " not confirmed stopped") + "; " + outcome);
 		}
 	}
 
@@ -1042,7 +1238,7 @@ public abstract class JobManager {
 					}
 				}
 				replacements.put("$$BENCH_SAVE_PATH$$", benchDirPath);
-			} catch (FileNotFoundException e) {
+			} catch (IOException e) {
 				log.error("Could not get unique benchmark directory.", e);
 			}
 		} else {
@@ -1466,11 +1662,18 @@ public abstract class JobManager {
 	public static int addBuildJob(Integer solverId, Integer spaceId) {
 		Solver s = Solvers.get(solverId);
 		log.info("Adding build job for solver " + s.getName() + " in space: " + spaceId);
-		Queue q = Queues.getAllQ();
+		// A queue the solver's owner can use and that is scheduled, rather than all.q whatever its
+		// state; the build job's limits are that queue's (#204).
+		int queueId = Queues.getQueueForSystemJob(s.getUserId());
+		if (queueId < 0) {
+			log.error("No active queue is available to user " + s.getUserId() + " for the build job of solver "
+					+ solverId);
+			return -1;
+		}
+		Queue q = Queues.get(queueId);
 		Job j = JobManager.setupJob(s.getUserId(),
 				s.getName() + " Build",
-				s.getName() + " Build Job", -1, -1, R.DEFAULT_QUEUE_ID, // This is the same queue referenced
-				// by variable q
+				s.getName() + " Build Job", -1, -1, queueId,
 				0, q.getCpuTimeout(), q
 						.getWallTimeout(),
 				R.DEFAULT_PAIR_VMEM, false, 15, SaveResultsOption.SAVE, R.DEFAULT_BENCHMARKING_FRAMEWORK);
@@ -1492,8 +1695,13 @@ public abstract class JobManager {
 		stage.setNoOp(false);
 		stage.setSolver(s);
 		stage.setConfiguration(c);
-		int bench = UploadBenchmark
-				.addBenchmarkFromText("dummy benchmark", "starexec_build", s.getUserId(), R.NO_TYPE_PROC_ID, true);
+		// SolverBuildRecorder finds the build job's helper benchmark by this name.
+		Integer bench = UploadBenchmark.addBenchmarkFromText("dummy benchmark", R.SOLVER_BUILD_SCRIPT, s.getUserId(),
+				R.NO_TYPE_PROC_ID, true);
+		if (bench == null || bench <= 0) {
+			Solvers.setSolverBuildStatus(s, SolverBuildStatusCode.BUILD_FAILED.getVal());
+			return -1;
+		}
 		pair.addStage(stage);
 		pair.setBench(Benchmarks.get(bench)); // This hard coded value should be changed before feature is used.
 		pair.setSpace(Spaces.get(spaceId));
@@ -1685,6 +1893,7 @@ public abstract class JobManager {
 		final Job job;
 		final String jobTemplate;
 		final Iterator<JobPair> pairIter;
+		boolean deferred;
 
 		SchedulingState(Job _job, String _jobTemplate, Iterator<JobPair> _pairIter) {
 			job = _job;

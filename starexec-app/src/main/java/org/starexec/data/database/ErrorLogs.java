@@ -9,7 +9,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -153,8 +152,28 @@ public class ErrorLogs {
 		}
 	}
 
-	public static void deleteAll() throws SQLException {
-		deleteBefore(Timestamp.from(Instant.now()));
+	/**
+	 * Deletes the given error logs, in one statement. A log added since they were read is not deleted.
+	 *
+	 * @param logs the logs to delete.
+	 * @throws SQLException on database error.
+	 */
+	public static void delete(final List<ErrorLog> logs) throws SQLException {
+		if (logs.isEmpty()) {
+			return;
+		}
+		final Integer[] ids = logs.stream().map(ErrorLog::getId).toArray(Integer[]::new);
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("DELETE FROM starexec.error_logs WHERE id = ANY(?)");
+			ps.setArray(1, con.createArrayOf("integer", ids));
+			ps.executeUpdate();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**

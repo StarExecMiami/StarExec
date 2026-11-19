@@ -1,6 +1,6 @@
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.database.PairsRerun;
@@ -21,26 +21,26 @@ public class PairsRerunTests extends TestSequence {
     @StarexecTest
     private void MarkPairAsRerunTest() {
         JobPair jobPair = job.getJobPairs().get(0);
-        Assert.assertNotNull( "Job pair was null so job was not setup correctly.", jobPair);
+        Assertions.assertNotNull( jobPair, "Job pair was null so job was not setup correctly.");
         try {
             PairsRerun.markPairAsRerun(jobPair.getId());
-            Assert.assertTrue((PairsRerun.hasPairBeenRerun(jobPair.getId())));
+            Assertions.assertTrue((PairsRerun.hasPairBeenRerun(jobPair.getId())));
 
             // Cleanup...
             PairsRerun.unmarkPairAsRerun(jobPair.getId());
         } catch (SQLException e) {
-            Assert.fail("Test threw SQLException: "+ Util.getStackTrace(e));
+            Assertions.fail("Test threw SQLException: "+ Util.getStackTrace(e));
         }
     }
 
     @StarexecTest
     private void PairNotRerunTest() {
         JobPair jobPair = job.getJobPairs().get(0);
-        Assert.assertNotNull( "Job pair was null so job was not setup correctly.", jobPair);
+        Assertions.assertNotNull( jobPair, "Job pair was null so job was not setup correctly.");
         try {
-            Assert.assertFalse((PairsRerun.hasPairBeenRerun(jobPair.getId())));
+            Assertions.assertFalse((PairsRerun.hasPairBeenRerun(jobPair.getId())));
         } catch (SQLException e) {
-            Assert.fail("Test threw SQLException: "+ Util.getStackTrace(e));
+            Assertions.fail("Test threw SQLException: "+ Util.getStackTrace(e));
         }
     }
 
@@ -66,7 +66,7 @@ public class PairsRerunTests extends TestSequence {
         solverIds.add(solver.getId());
 
         job=loader.loadJobIntoDatabase(space.getId(), user.getId(), -1, postProc.getId(), solverIds, benchmarkIds,cpuTimeout,wallclockTimeout,gbMemory);
-        Assert.assertNotNull(Jobs.get(job.getId()));
+        Assertions.assertNotNull(Jobs.get(job.getId()));
     }
 
     @Override

@@ -2,6 +2,7 @@ package org.starexec.servlets;
 
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.fileupload2.javax.JavaxServletFileUpload;
+import org.starexec.backend.storage.PrivateUploadStage;
 import org.starexec.constants.R;
 import org.starexec.data.database.Permissions;
 import org.starexec.data.security.ValidatorStatusCode;
@@ -21,10 +22,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 
@@ -43,7 +41,6 @@ public class UploadJobXML extends HttpServlet {
 
 	private static final StarLogger log = StarLogger.getLogger(UploadJobXML.class);
 	private static final String UPLOAD_FILE = "f";
-	private static final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 	private static final String SPACE_ID = R.SPACE;
 
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
@@ -89,20 +86,43 @@ public class UploadJobXML extends HttpServlet {
 				if (result != null) {
 					//send back new ids to the user
 					log.info(method, "Sending back new job ids to user.");
-					response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(result)));
+					response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(result)));
 					response.sendRedirect(Util.docRoot("secure/explore/spaces.jsp"));
 				} else {
-					response.sendError(HttpServletResponse.SC_BAD_REQUEST,
-					                   "Failed to upload Job XML:\n" + jobUtil.getErrorMessage()
-					);
+					// Not every failure is the request's fault. A database failure answered
+					// with 400 tells the user to fix a document that is already correct, and
+					// an authorization failure answered the same way hides what went wrong.
+					switch (jobUtil.getFailureKind()) {
+						case PERMISSION:
+							response.sendError(HttpServletResponse.SC_FORBIDDEN,
+							                   jobUtil.getErrorMessage());
+							break;
+						case INTERNAL:
+							// The message is for the log. It can carry SQL text, a stored
+							// routine signature or a server path, none of which the client
+							// gets to see.
+							log.error(method, "Job XML upload failed internally for user "
+									+ userId + ": " + jobUtil.getErrorMessage());
+							response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+							                   "The job could not be created. No jobs were"
+							                   + " created; please try again or contact an"
+							                   + " administrator.");
+							break;
+						default:
+							response.sendError(HttpServletResponse.SC_BAD_REQUEST,
+							                   "Failed to upload Job XML:\n" + jobUtil.getErrorMessage());
+					}
 				}
 			} else {
 				// Got a non multi-part request, invalid
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST);
 			}
 		} catch (Exception e) {
-			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+			// The exception message can carry SQL text or a server path; it belongs in the log.
 			log.error("Caught Exception in UploadJobXML.doPost", e);
+			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+			                   "The job could not be created. Please try again or contact an"
+			                   + " administrator.");
 		}
 	}
 
@@ -122,23 +142,18 @@ public class UploadJobXML extends HttpServlet {
 			throws StarExecException {
 		final String method = "handleXMLFile";
 		log.entry(method);
-		try {
+		try (PrivateUploadStage stage = PrivateUploadStage.configured()) {
 			log.info(method, "Handling Upload of XML File from user with id=" + userId);
 			PartWrapper item = (PartWrapper) form.get(UploadJobXML.UPLOAD_FILE);
-			// Don't need to keep file long - just using download directory
-
-			File uniqueDir = new File(R.getBatchSpaceXMLDir(), "Job" + userId);
-			uniqueDir = new File(uniqueDir, "TEMP_JOB_XML_FOLDER_");
-			uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
-
-			uniqueDir.mkdirs();
-			//Process the archive file and extract
-
-			File archiveFile = new File(uniqueDir, FilenameUtils.getName(item.getName()));
-			new File(archiveFile.getParent()).mkdir();
+			File archiveFile = stage.archivePath(FilenameUtils.getName(item.getName())).toFile();
 			item.write(archiveFile);
-			ArchiveUtil.extractArchive(archiveFile.getAbsolutePath());
-			archiveFile.delete();
+			File uniqueDir;
+			try {
+				uniqueDir = stage.extractArchive().toFile();
+			} catch (PrivateUploadStage.InvalidArchiveException refused) {
+				jobUtil.setErrorMessage(ArchiveUtil.NOT_EXTRACTED);
+				return null;
+			}
 
 			//Typically there will just be 1 file, but might as well allow more
 

@@ -100,7 +100,7 @@
 	padding: 15px;
 }
 
-@media only screen and (max-width: 767px) {
+@include mobile {
 	#explorer {
 		width: 100%;
 		float: none;
@@ -115,10 +115,6 @@
 		float: none;
 		margin: auto;
 		border-left: initial;
-	}
-
-	#detailField {
-		width: 90%;
 	}
 
 	#details {

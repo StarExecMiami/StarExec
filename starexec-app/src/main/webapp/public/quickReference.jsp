@@ -20,7 +20,7 @@
 					</p>
 					
 					<div class="header-actions">
-						<a href="http://wiki.uiowa.edu/display/stardev/User+Guide" 
+						<a href="${starexecRoot}/public/StarExecUserGuide.pdf" 
 							class="btn btn--secondary"
 							target="_blank"
 							rel="noopener noreferrer">

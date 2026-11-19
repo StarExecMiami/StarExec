@@ -1,0 +1,17 @@
+// =============================================================================
+// LOADING SPINNER
+// =============================================================================
+// Usage:
+//   <span class="loading-spinner" role="status"><span class="sr-only">Loading</span></span>
+// Styles come from the loading-spinner mixin in global/_helper.scss.
+// =============================================================================
+
+@keyframes loading-spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-spinner {
+  @include loading-spinner;
+}

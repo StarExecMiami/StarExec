@@ -10,7 +10,7 @@ import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.TestUtil;
 import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
-import org.testng.Assert;
+import org.junit.jupiter.api.Assertions;
 
 import java.awt.*;
 import java.io.File;
@@ -37,23 +37,23 @@ public class StatisticsTests extends TestSequence {
 	private void makeSpaceOverviewTest() {
 		String filepath = Statistics.makeSpaceOverviewChart(spaceOverviewPairs, false, false, 1, PrimitivesToAnonymize.NONE);
 		File f = new File(new File(R.STAREXEC_ROOT).getParent(), filepath);
-		Assert.assertTrue(f.exists());
+		Assertions.assertTrue(f.exists());
 	}
 	@StarexecTest
 	private void makeSolverComparisonTest() {
 		String filepath = Statistics.makeSolverComparisonChart(spaceOverviewPairs, spaceOverviewPairs, job.getPrimarySpace(), 
 				100, Color.BLACK, 1, PrimitivesToAnonymize.NONE).get(0);
 		File f = new File(new File(R.STAREXEC_ROOT).getParent(), filepath);
-		Assert.assertTrue(f.exists());
+		Assertions.assertTrue(f.exists());
 	}
 	
 	@StarexecTest
 	private void getJobPairOverviewTest() {
 		HashMap<String, String> stats = Statistics.getJobPairOverview(job.getId());
-		Assert.assertEquals(String.valueOf(job.getJobPairs().size()), stats.get("totalPairs"));
-		Assert.assertEquals(String.valueOf(job.getJobPairs().size()), stats.get("completePairs"));
-		Assert.assertEquals("0", stats.get("pendingPairs"));
-		Assert.assertEquals("0", stats.get("errorPairs"));
+		Assertions.assertEquals(String.valueOf(job.getJobPairs().size()), stats.get("totalPairs"));
+		Assertions.assertEquals(String.valueOf(job.getJobPairs().size()), stats.get("completePairs"));
+		Assertions.assertEquals("0", stats.get("pendingPairs"));
+		Assertions.assertEquals("0", stats.get("errorPairs"));
 
 	}
 
@@ -62,17 +62,17 @@ public class StatisticsTests extends TestSequence {
 		Job pausedJob = loader.loadJobIntoDatabase(space.getId(), owner.getId(), solver.getId(), benchmarkIds);
 		try {
 			for (JobPair pair : pausedJob.getJobPairs()) {
-				Assert.assertTrue(
+				Assertions.assertTrue(
 						JobPairs.setStatusForPairAndStages(pair.getId(), StatusCode.STATUS_PENDING_SUBMIT.getVal())
 				);
 			}
-			Assert.assertTrue(Jobs.pause(pausedJob.getId()));
+			Assertions.assertTrue(Jobs.pause(pausedJob.getId()));
 
 			HashMap<String, String> stats = Statistics.getJobPairOverview(pausedJob.getId());
-			Assert.assertEquals(String.valueOf(pausedJob.getJobPairs().size()), stats.get("totalPairs"));
-			Assert.assertEquals("0", stats.get("completePairs"));
-			Assert.assertEquals(String.valueOf(pausedJob.getJobPairs().size()), stats.get("pendingPairs"));
-			Assert.assertEquals("0", stats.get("errorPairs"));
+			Assertions.assertEquals(String.valueOf(pausedJob.getJobPairs().size()), stats.get("totalPairs"));
+			Assertions.assertEquals("0", stats.get("completePairs"));
+			Assertions.assertEquals(String.valueOf(pausedJob.getJobPairs().size()), stats.get("pendingPairs"));
+			Assertions.assertEquals("0", stats.get("errorPairs"));
 		} finally {
 			Jobs.deleteAndRemove(pausedJob.getId());
 		}

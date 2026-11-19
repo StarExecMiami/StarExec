@@ -1,0 +1,10 @@
+{
+  "exceptions": [
+    {
+      "id": "GHSA-vfj7-8cjw-p6xm",
+      "package": "braces",
+      "reason": "CVE-2026-93687: stack exhaustion on deeply nested brace patterns. No patched release exists (3.0.3 is the latest and is affected). braces reaches us only through build tooling (sass -> chokidar, stylelint -> micromatch) that expands this repository's own glob patterns; it is never shipped. Even stylelint 17.16.0 still depends on it.",
+      "review_by": "2026-12-31"
+    }
+  ]
+}

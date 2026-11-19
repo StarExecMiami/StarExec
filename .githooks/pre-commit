@@ -1,0 +1,17 @@
+#!/bin/sh
+# Rejects staged local agent/worktree directories and secret files (see scripts/git_hygiene_guard.py).
+# Enable with: scripts/install-git-hooks.sh
+command -v python3 >/dev/null 2>&1 || {
+    echo "warning: python3 not found; skipping the pre-commit hygiene check" >&2
+    exit 0
+}
+script=$(dirname "$0")/../scripts/git_hygiene_guard.py
+if [ ! -f "$script" ]; then
+    root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+    script=$root/scripts/git_hygiene_guard.py
+fi
+[ -f "$script" ] || {
+    echo "warning: scripts/git_hygiene_guard.py not found; skipping the pre-commit hygiene check" >&2
+    exit 0
+}
+exec python3 "$script" pre-commit

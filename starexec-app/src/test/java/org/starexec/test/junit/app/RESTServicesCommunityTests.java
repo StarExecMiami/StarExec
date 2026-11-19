@@ -1,7 +1,7 @@
 package org.starexec.test.junit.app;
 
 import com.google.gson.Gson;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.app.RESTServices;
@@ -19,7 +19,7 @@ import org.starexec.util.Util;
 
 import javax.servlet.http.HttpServletRequest;
 
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -50,7 +50,7 @@ public class RESTServicesCommunityTests {
 			String resultJson = services.editCommunityDetails("desc", spaceId, request);
 			ValidatorStatusCode result = gson.fromJson(resultJson, ValidatorStatusCode.class);
 
-			assertTrue("Expected desc attribute to succeed after normalization", result.isSuccess());
+			assertTrue(result.isSuccess(), "Expected desc attribute to succeed after normalization");
 
 			spaceSecurityMock.verify(() -> SpaceSecurity.canUpdateSettings(spaceId, "description", newDescription, userId));
 			spacesMock.verify(() -> Spaces.updateDescription(spaceId, newDescription));
@@ -81,7 +81,7 @@ public class RESTServicesCommunityTests {
 			String resultJson = services.editCommunityDetails("desc", spaceId, request);
 			ValidatorStatusCode result = gson.fromJson(resultJson, ValidatorStatusCode.class);
 
-			assertTrue("Expected an empty description to remain valid", result.isSuccess());
+			assertTrue(result.isSuccess(), "Expected an empty description to remain valid");
 			spacesMock.verify(() -> Spaces.updateDescription(spaceId, emptyDescription));
 		}
 	}
@@ -122,7 +122,7 @@ public class RESTServicesCommunityTests {
 			String response = services.makeLeader(spaceId, request);
 			ValidatorStatusCode result = gson.fromJson(response, ValidatorStatusCode.class);
 
-			assertTrue("Expected admin self-promotion to succeed even when cached permissions report leader", result.isSuccess());
+			assertTrue(result.isSuccess(), "Expected admin self-promotion to succeed even when cached permissions report leader");
 		}
 	}
 }

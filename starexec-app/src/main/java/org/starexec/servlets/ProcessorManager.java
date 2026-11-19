@@ -7,6 +7,7 @@ import org.starexec.util.PartWrapper;
 import org.starexec.data.database.Processors;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.Processor;
+import org.starexec.data.to.Permission;
 import org.starexec.data.to.enums.ProcessorType;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.logger.StarLogger;
@@ -22,9 +23,6 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URL;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.HashMap;
 
 /**
@@ -32,12 +30,12 @@ import java.util.HashMap;
  *
  * @author Tyler Jensen
  */
-@MultipartConfig(fileSizeThreshold = 1024 * 1024, maxFileSize = 512L * 1024L * 1024L, maxRequestSize = 512L * 1024L * 1024L)
+@MultipartConfig(fileSizeThreshold = 1024 * 1024, maxFileSize = ProcessorManager.MAX_ARCHIVE_BYTES, maxRequestSize = ProcessorManager.MAX_ARCHIVE_BYTES)
 public class ProcessorManager extends HttpServlet {
 	private static final StarLogger log = StarLogger.getLogger(ProcessorManager.class);
 
-	// The unique date stamped file name format (for saving processor files)
-	private static final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
+	/** Largest processor archive, whether sent through the form or fetched from a URL. */
+	static final long MAX_ARCHIVE_BYTES = 512L * 1024L * 1024L;
 
 	// Request attributes
 	private static final String PROCESSOR_NAME = "name";
@@ -107,7 +105,8 @@ public class ProcessorManager extends HttpServlet {
 			}
 			// Make sure this user has the ability to add type to the space
 			int community = Integer.parseInt((String) form.get(OWNING_COMMUNITY));
-			if (!SessionUtil.getPermission(request, community).isLeader()) {
+			Permission permission = SessionUtil.getPermission(request, community);
+			if (permission == null || !permission.isLeader()) {
 				response.sendError(
 						HttpServletResponse.SC_FORBIDDEN, "Only community leaders can add types to their communities");
 
@@ -119,7 +118,7 @@ public class ProcessorManager extends HttpServlet {
 
 			// Redirect based on the results of the addition
 			if (result != null) {
-				response.addCookie(new Cookie("New_ID", String.valueOf(result.getId())));
+				response.addCookie(Util.createIdCookie("New_ID", String.valueOf(result.getId())));
 				response.sendRedirect(Util.docRoot("secure/edit/community.jsp?cid=" + result.getCommunityId()));
 			} else {
 				response.sendError(
@@ -227,15 +226,12 @@ public class ProcessorManager extends HttpServlet {
 				processorFile.write(archiveFile);
 			} else {
 				processorUrl = URI.create((String) form.get(PROCESSOR_URL)).toURL();
-				String name;
-				try {
-					name = processorUrl.toString().substring(processorUrl.toString().lastIndexOf('/'));
-				} catch (Exception e) {
-					// if something goes wrong just make the name directory-friendly and continue.
-					name = processorUrl.toString().replace('/', '-');
+				String name = Util.archiveNameFromUrl(processorUrl);
+				if (name == null) {
+					throw new StarExecException(Util.ARCHIVE_NAME_REQUIRED);
 				}
 				archiveFile = new File(uniqueDir, name);
-				if (!Util.copyFileFromURLUsingProxy(processorUrl, archiveFile)) {
+				if (!Util.copyFileFromURLUsingProxy(processorUrl, archiveFile, MAX_ARCHIVE_BYTES)) {
 					throw new StarExecException("Unable to copy file from URL");
 				}
 			}
@@ -304,12 +300,20 @@ public class ProcessorManager extends HttpServlet {
 	 *         directories are created as needed)
 	 */
 	public static File getProcessorDirectory(int communityId, String procName) {
-		File uniqueDir = new File(R.getProcessorDir(), "" + communityId);
 		// use the date to make sure the directory is unique
-		uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
-		uniqueDir = new File(uniqueDir, procName);
+		File uniqueDir = processorDirectory(
+				new File(R.getProcessorDir()), communityId, Util.pathDate(), procName);
 		uniqueDir.mkdirs();
 		return uniqueDir;
+	}
+
+	/**
+	 * Where a processor's files go: processorRoot/communityId/date/procName, with procName
+	 * refused unless it stays directly inside the date directory. Creates nothing.
+	 */
+	public static File processorDirectory(File processorRoot, int communityId, String date, String procName) {
+		File dateDir = new File(new File(processorRoot, "" + communityId), date);
+		return Util.childWithin(dateDir, procName);
 	}
 
 	/**
@@ -339,6 +343,13 @@ public class ProcessorManager extends HttpServlet {
 				fileName = ((PartWrapper) form.get(PROCESSOR_FILE)).getName();
 			} else {
 				fileName = (String) form.get(PROCESSOR_URL);
+				if (!Util.isDownloadableUrl(fileName)) {
+					return new ValidatorStatusCode(false, Util.DOWNLOADABLE_URL_REQUIRED);
+				}
+				fileName = Util.archiveNameFromUrl(fileName);
+				if (fileName == null) {
+					return new ValidatorStatusCode(false, Util.ARCHIVE_NAME_REQUIRED);
+				}
 			}
 
 			log.debug(method + " - Name of processor file=" + fileName);

@@ -77,11 +77,17 @@ public class Validator {
 	 * Validates an email address and checks if it is in proper email address format
 	 *
 	 * @param email the email address to validate
-	 * @return true iff the email address is less than DB.EMAIL_LEN characters,
+	 * @return true iff the email address is at most DB.EMAIL_LEN characters,
 	 * not null or the empty string, and is in email address format
 	 */
 	public static boolean isValidEmail(String email) {
-		return email != null && patternEmail.matcher(email).matches();
+		// The length bound is what this method already promised and did not enforce. It
+		// matters because users.email is VARCHAR(64): an address that passes validation and
+		// then exceeds the column does not produce a validation message, it produces a
+		// 22001 at the INSERT, after the user has filled in the form.
+		return email != null
+				&& email.length() <= DB.EMAIL_LEN
+				&& patternEmail.matcher(email).matches();
 	}
 
 	/**
@@ -150,7 +156,17 @@ public class Validator {
 		return
 			(name != null)
 			&& patternPrimName.matcher(name).matches()
+			&& !isOnlyDots(name)
 			&& (name.length() <= maxLength);
+	}
+
+	/**
+	 * Names become directory names on disk, and "." and ".." there mean the directory itself
+	 * and its parent. Longer runs of dots are ordinary names on Linux, but are refused too so
+	 * that the rule is one rule: no primitive needs a name made only of dots.
+	 */
+	private static boolean isOnlyDots(String name) {
+		return !name.isEmpty() && name.chars().allMatch(c -> c == '.');
 	}
 
 	/**
@@ -187,7 +203,7 @@ public class Validator {
 				}
 			}
 		}
-		return patternSpaceName.matcher(name).matches();
+		return patternSpaceName.matcher(name).matches() && !isOnlyDots(name);
 	}
 
 	/**

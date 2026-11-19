@@ -1,16 +1,11 @@
 @use "../global/colors" as c;
 @use "../global/typography" as t;
 @use "../global/spacing" as s;
+@use "../global/mixins" as m;
 
 fieldset {
 	width: 75%;
 	margin: s.$spacing-xl auto 0 auto;
-}
-
-@media only screen and (max-width: 767px) {
-	fieldset {
-		width: 95%;
-	}
 }
 
 fieldset table {
@@ -76,7 +71,7 @@ label.error {
 	font-weight: t.$font-weight-semibold;
 }
 
-@media only screen and (max-width: 767px) {
+@include m.mobile {
 	.form-actions {
 		text-align: center;
 	}

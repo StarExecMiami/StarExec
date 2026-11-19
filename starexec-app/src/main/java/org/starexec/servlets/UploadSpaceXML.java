@@ -2,6 +2,7 @@ package org.starexec.servlets;
 
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.fileupload2.javax.JavaxServletFileUpload;
+import org.starexec.backend.storage.PrivateUploadStage;
 import org.starexec.constants.R;
 import org.starexec.data.database.Permissions;
 import org.starexec.data.database.Uploads;
@@ -18,11 +19,9 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Allows for the uploading of space hierarchies represented in xml. Files can come in .zip, .tar, or .tar.gz format.
@@ -38,7 +37,6 @@ import java.util.List;
 public class UploadSpaceXML extends HttpServlet {
 
 	private static final StarLogger log = StarLogger.getLogger(UploadSpaceXML.class);
-	private final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 	private static final String SPACE_ID = R.SPACE;
 	private static final String UPLOAD_FILE = "f";
 
@@ -104,51 +102,75 @@ public class UploadSpaceXML extends HttpServlet {
 			final int userId, final int spaceId, final HashMap<String, Object> form, final BatchUtil batchUtil,
 			final int statusId
 	) {
+		PrivateUploadStage stage = null;
+		boolean handedOff = false;
+		boolean requestFailed = false;
+		// Set by whichever deletes the directory: the task once it starts, or else the request. Deleting it
+		// twice could remove a directory that another upload has claimed under the same name since.
+		final AtomicBoolean cleanupClaimed = new AtomicBoolean();
 		try {
 			log.debug("Handling Upload of XML File from User " + userId);
 			PartWrapper item = (PartWrapper) form.get(UploadSpaceXML.UPLOAD_FILE);
-			// Don't need to keep file long - just using download directory
-			File uniqueDir = new File(R.getBatchSpaceXMLDir(), "" + userId);
-			uniqueDir = new File(uniqueDir, "TEMP_XML_FOLDER_");
-			uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
-
-			uniqueDir.mkdirs();
-
-			//Process the archive file and extract
-
-			File archiveFile = new File(uniqueDir, FilenameUtils.getName(item.getName()));
-			new File(archiveFile.getParent()).mkdir();
+			stage = PrivateUploadStage.configured();
+			File archiveFile = stage.archivePath(FilenameUtils.getName(item.getName())).toFile();
 			item.write(archiveFile);
-			final String archivePath = uniqueDir.getCanonicalPath();
+			final PrivateUploadStage owned = stage;
 			Util.threadPoolExecute(() -> {
-				try {
-					ArchiveUtil.extractArchive(archiveFile.getAbsolutePath());
-					archiveFile.delete();
+				if (!cleanupClaimed.compareAndSet(false, true)) {
+					return; // the request has given this upload up and deleted its directory
+				}
+				try (owned) {
+					File archiveLocation;
+					try {
+						archiveLocation = owned.extractArchive().toFile();
+					} catch (PrivateUploadStage.InvalidArchiveException refused) {
+						archiveLocation = null;
+					}
 					Uploads.XMLFileUploadComplete(statusId);
-//create new file reference for inside the scope of the Runnable, same as uniqueDir:
-					File archiveLocation = new File(archivePath);
-					//Typically there will just be 1 file, but might as well allow more
-					for (File file : archiveLocation.listFiles()) {
-						if (!file.isFile()) {
-							Uploads.setXMLErrorMessage(
-									statusId, "The file '" + file.getName() +
-											"' is not a regular file.  Only regular files containing space XML are " +
-											"allowed in the uploaded archive.");
-						} else {
-							List<Integer> current = batchUtil.createSpacesFromFile(file, userId, spaceId, statusId);
-							if (current == null) {
-								Uploads.setXMLErrorMessage(statusId, batchUtil.getErrorMessage());
+					if (archiveLocation == null) {
+						Uploads.setXMLErrorMessage(statusId, ArchiveUtil.NOT_EXTRACTED);
+					} else {
+						//Typically there will just be 1 file, but might as well allow more
+						for (File file : archiveLocation.listFiles()) {
+							if (!file.isFile()) {
+								Uploads.setXMLErrorMessage(
+										statusId, "The file '" + file.getName() +
+												"' is not a regular file.  Only regular files containing space XML are " +
+												"allowed in the uploaded archive.");
+							} else {
+								List<Integer> current = batchUtil.createSpacesFromFile(file, userId, spaceId, statusId);
+								if (current == null) {
+									Uploads.setXMLErrorMessage(statusId, batchUtil.getErrorMessage());
+								}
 							}
 						}
 					}
 				} catch (Exception e) {
 					log.error(Util.getStackTrace(e));
-					Uploads.setBenchmarkErrorMessage(statusId, e.getMessage());
+					Uploads.setXMLErrorMessage(statusId, "The XML upload could not be processed. Please try again or contact an administrator.");
 				}
 				Uploads.XMLEverythingComplete(statusId);
 			});
+			handedOff = true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
+			requestFailed = true;
+		} finally {
+			// Once the task is handed off or has started, the task deletes the directory. It can start in this
+			// thread, when the pool's queue is full, and throw before handedOff is set.
+			if (!handedOff && cleanupClaimed.compareAndSet(false, true)) {
+				if (stage != null) {
+					try {
+						stage.close();
+					} catch (IOException cleanupFailure) {
+						log.error("Could not clean up XML upload staging", cleanupFailure);
+					}
+				}
+				if (requestFailed) {
+					Uploads.setXMLErrorMessage(statusId, "The XML upload could not be prepared or queued. Please try again or contact an administrator.");
+					Uploads.XMLEverythingComplete(statusId);
+				}
+			}
 		}
 	}
 

@@ -1,8 +1,8 @@
 package org.starexec.test.junit.security;
 
-import org.junit.After;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.starexec.app.SessionFilter;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
@@ -21,8 +21,8 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.UUID;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -49,13 +49,13 @@ public class StaleSessionProcessorRevocationTest extends Common {
 	private Integer communityId;
 	private Integer userId;
 
-	@BeforeClass
+	@BeforeAll
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("StaleSessionProcessorRevocationTest");
 		Common.initialize();
 	}
 
-	@After
+	@AfterEach
 	public void cleanUp() throws Exception {
 		try (Connection con = Common.getConnection(); Statement st = con.createStatement()) {
 			st.execute("DELETE FROM starexec.processors WHERE name LIKE 'ssrev_" + TAG + "_%'");
@@ -154,8 +154,8 @@ public class StaleSessionProcessorRevocationTest extends Common {
 		new SessionFilter().doFilter(request, mock(HttpServletResponse.class), before);
 		System.out.println("SSREV|pre.chainInvocations|" + before.calls);
 		System.out.println("SSREV|pre.processorRowsCommitted|" + processorRows());
-		assertEquals("fixture check: a live user must be served", 1, before.calls);
-		assertEquals("fixture check: the servlet double must really write", 1, processorRows());
+		assertEquals(1, before.calls, "fixture check: a live user must be served");
+		assertEquals(1, processorRows(), "fixture check: the servlet double must really write");
 
 		// The account is deleted. The session object is untouched and still holds
 		// the user, exactly as a logged-in browser would.
@@ -170,8 +170,8 @@ public class StaleSessionProcessorRevocationTest extends Common {
 		System.out.println("SSREV|post.processorRowsCommitted|" + (rowsAfter - rowsAtDeletion));
 		System.out.println("SSREV|post.sessionInvalidated|" + session.invalidated);
 
-		assertEquals("the deleted user must not reach the servlet", 0, after.calls);
-		assertEquals("no state change may commit after deletion", rowsAtDeletion, rowsAfter);
-		assertTrue("the stale session must be invalidated", session.invalidated);
+		assertEquals(0, after.calls, "the deleted user must not reach the servlet");
+		assertEquals(rowsAtDeletion, rowsAfter, "no state change may commit after deletion");
+		assertTrue(session.invalidated, "the stale session must be invalidated");
 	}
 }

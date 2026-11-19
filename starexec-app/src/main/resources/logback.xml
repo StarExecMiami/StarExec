@@ -7,15 +7,26 @@
   <property name="APP_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{40} - %msg%n%ex{short}"/>
   <property name="APP_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{40} - %msg%n%rEx%n"/>
 
+  <!-- The image sets STAREXEC_LOG_DIR=/var/log/starexec and creates that directory for the
+       starexec user, and the documentation points operators there. Resolved at runtime, so a
+       deployment can move the file without rebuilding the WAR. The previous build-time path,
+       /usr/local/tomcat/logs, does not exist in the image (Tomcat lives in /opt/tomcat), so
+       the file was never written and every start logged a FileNotFoundException. -->
+  <property scope="context" name="STAREXEC_LOG_FILE" value="${STAREXEC_LOG_DIR:-/var/log/starexec}/starexec.log"/>
+
+  <!-- Bounded by size as well as age: the file sits in the container's writable layer, and
+       org.starexec logs at DEBUG below, so a day-only rotation had no ceiling on disk use. -->
   <appender name="STAREXEC" class="ch.qos.logback.core.rolling.RollingFileAppender">
     <Append>true</Append>
-    <File>@STAREXEC_LOG@</File>
+    <File>${STAREXEC_LOG_FILE}</File>
     <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
       <pattern>${APP_PATTERN}</pattern>
     </encoder>
-    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-      <fileNamePattern>@STAREXEC_LOG@.%d</fileNamePattern>
+    <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+      <fileNamePattern>${STAREXEC_LOG_FILE}.%d.%i</fileNamePattern>
+      <maxFileSize>100MB</maxFileSize>
       <maxHistory>14</maxHistory>
+      <totalSizeCap>1GB</totalSizeCap>
     </rollingPolicy>
   </appender>
 

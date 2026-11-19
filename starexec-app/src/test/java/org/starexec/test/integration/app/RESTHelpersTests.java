@@ -1,7 +1,7 @@
 package org.starexec.test.integration.app;
 
 import com.google.gson.JsonObject;
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.app.RESTHelpers;
 import org.starexec.constants.R;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
@@ -83,9 +83,9 @@ public class RESTHelpersTests extends TestSequence {
 	}
 	
 	private void validateJsonObjectCounts(JsonObject o, int totalRecords, int totalRecordsAfterQuery, int pageSize) {
-		Assert.assertEquals(totalRecords,o.get(TOTAL_RECORDS).getAsInt());
-		Assert.assertEquals(totalRecordsAfterQuery,o.get(TOTAL_RECORDS_AFTER_QUERY).getAsInt());
-		Assert.assertEquals(pageSize,o.get(DATA).getAsJsonArray().size());
+		Assertions.assertEquals(totalRecords,o.get(TOTAL_RECORDS).getAsInt());
+		Assertions.assertEquals(totalRecordsAfterQuery,o.get(TOTAL_RECORDS_AFTER_QUERY).getAsInt());
+		Assertions.assertEquals(pageSize,o.get(DATA).getAsJsonArray().size());
 	}
 	
 	@StarexecTest

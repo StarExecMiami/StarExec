@@ -189,7 +189,14 @@ public class R {
     public static final String LONG_PATTERN = "^\\-?\\d+$";
     public static final String USER_NAME_PATTERN = "^[A-Za-z\\-\\s']{2," + DB.USER_FIRST_LEN + "}$";
     public static final String INSTITUTION_PATTERN = "^[\\w\\-\\s']{2," + DB.INSTITUTION_LEN + "}$";
-    public static final String EMAIL_PATTERN = "^[\\w.%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,4}$";
+    /**
+     * The top-level domain is bounded at 63 because that is the maximum length of a DNS
+     * label (RFC 1035 section 2.3.4), not at an arbitrary smaller number. It was 4, which
+     * rejected every address on a long TLD -- .technology, .university, .education,
+     * .engineering -- and those are ordinary in academic use. Nothing else about the
+     * expression changed.
+     */
+    public static final String EMAIL_PATTERN = "^[\\w.%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}$";
     public static final String URL_PATTERN = "https?://.\\S+{2," + DB.URL_LEN + "}";
     public static final String PRIMITIVE_NAME_PATTERN = "^[\\w\\-\\. \\+\\^=,!?:$%#@]+$";
     public static final String SPACE_NAME_PATTERN = "^[\\w\\-\\. \\+\\^=,!?:$%#@]{1," + DB.SPACE_NAME_LEN + "}$";
@@ -468,6 +475,10 @@ public class R {
     public static final int PAIR_ENQUEUE_TIME_THRESHOLD = 1440;
 
     public static final int TIME_BETWEEN_SENDING_ERROR_LOGS = 1; // in days
+
+    // How long (in days) the error log report keeps a line that no one has received. Mail servers give
+    // up on an undeliverable message after 4 to 5 days (RFC 5321, section 4.5.4.1).
+    public static final int DAYS_TO_KEEP_UNSENT_ERROR_LOGS = 5;
 
     public static final int NO_TYPE_PROC_ID = 1;
 

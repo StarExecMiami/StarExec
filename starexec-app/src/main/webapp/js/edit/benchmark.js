@@ -76,7 +76,6 @@ function attachButtonActions() {
 		$('#dialog-confirm-delete').dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					log('user confirmed benchmark deletion.');

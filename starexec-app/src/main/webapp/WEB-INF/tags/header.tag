@@ -5,10 +5,10 @@
 	<div id="starexecLogoWrapper">
 		<c:choose>
 		<c:when test="${!isLocalJobPage}">
-			<a href="${starexecRoot}/secure/index.jsp"><img src="${starexecRoot}/images/starlogo.png" alt="StarExec Logo"></a>
+			<a href="${starexecRoot}/secure/index.jsp"><img src="${starexecRoot}/images/starlogo.svg" alt="StarExec" width="293" height="70"></a>
 		</c:when>
 		<c:otherwise>
-			<img src="${starexecRoot}/images/starlogo.png" alt="StarExec Logo">
+			<img src="${starexecRoot}/images/starlogo.svg" alt="StarExec" width="293" height="70">
 		</c:otherwise>
 		</c:choose> 
 		
@@ -27,7 +27,6 @@
 								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/job.jsp">Jobs</a></li>
 								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/jobpairErrors.jsp">JobPair Errors</a></li>
 								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/community.jsp">Communities</a></li>
-								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/testing.jsp">Testing</a></li>
 								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/analytics.jsp">Analytics</a></li>
 								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/starexec.jsp">StarExec</a></li>
 							</ul>

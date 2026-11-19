@@ -39,7 +39,7 @@
 				<div id="mainHeaderWrapper">
 					<h1 style="width:100%; word-wrap:break-word;" id="mainTemplateHeader">${title}</h1>
 				</div>
-				<img alt="loading" src="${starexecRoot}/images/loader.gif" id="loader">
+				<div id="loader" class="loading-spinner" role="status"><span class="sr-only">Loading</span></div>
 				<jsp:doBody/>
 			</div>
 			<star:footer />

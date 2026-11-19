@@ -1,17 +1,21 @@
 package org.starexec.test.junit.backend;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.fabric8.kubernetes.api.model.ContainerStateBuilder;
 import io.fabric8.kubernetes.api.model.ContainerStatusBuilder;
+import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.PodConditionBuilder;
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.List;
-import org.junit.Test;
+import org.starexec.backend.ExecutionRef;
 import org.starexec.backend.PodPhaseView;
 
 /**
@@ -284,13 +288,13 @@ public class PodPhaseViewTests {
             List.of(podWithRawExecId("orphan-a", null, "Running")), EXEC_ID_LABEL
         );
 
-        assertTrue("it has no execution identity", view.execIds().isEmpty());
-        assertEquals("but it must not vanish", 1, view.unidentifiedPods().size());
+        assertTrue(view.execIds().isEmpty(), "it has no execution identity");
+        assertEquals(1, view.unidentifiedPods().size(), "but it must not vanish");
         assertEquals(1, view.unsafeUnidentifiedPods().size());
         assertEquals("orphan-a", view.unsafeUnidentifiedPods().get(0).name());
         assertEquals(
-            "the operator needs the node to find it",
-            "node-a", view.unsafeUnidentifiedPods().get(0).nodeName()
+            "node-a",
+            view.unsafeUnidentifiedPods().get(0).nodeName(), "the operator needs the node to find it"
         );
     }
 
@@ -303,8 +307,8 @@ public class PodPhaseViewTests {
         assertTrue(view.execIds().isEmpty());
         assertEquals(1, view.unsafeUnidentifiedPods().size());
         assertEquals(
-            "the raw value is reported rather than guessed at",
-            "12a", view.unsafeUnidentifiedPods().get(0).rawExecIdLabel()
+            "12a",
+            view.unsafeUnidentifiedPods().get(0).rawExecIdLabel(), "the raw value is reported rather than guessed at"
         );
     }
 
@@ -326,8 +330,8 @@ public class PodPhaseViewTests {
 
         assertEquals(1, view.unidentifiedPods().size());
         assertTrue(
-            "a Succeeded pod has no running container, so it holds nothing",
-            view.unsafeUnidentifiedPods().isEmpty()
+            view.unsafeUnidentifiedPods().isEmpty(),
+            "a Succeeded pod has no running container, so it holds nothing"
         );
     }
 
@@ -339,5 +343,114 @@ public class PodPhaseViewTests {
 
         assertTrue(view.unidentifiedPods().isEmpty());
         assertEquals(PodPhaseView.Phase.RUNNING, view.phaseFor(EXEC_ID));
+    }
+
+    // ------------------------------------------------------------------
+    // The node a running pod is on, which the backend records for the pair
+    // ------------------------------------------------------------------
+
+    private static final String JOB_UID = "uid-job-77";
+
+    private static ExecutionRef executionOf(String jobUid) {
+        return new ExecutionRef(EXEC_ID, "job-" + EXEC_ID, jobUid);
+    }
+
+    /** A pod of the Job {@code ownerUid}, as the Job controller creates it, on {@code nodeName}. */
+    private Pod podOf(String ownerUid, String phase, String nodeName, String createdAt) {
+        PodBuilder builder = new PodBuilder()
+            .withNewMetadata()
+            .withName("pod-" + ownerUid + "-" + phase)
+            .withCreationTimestamp(createdAt)
+            .addToLabels(EXEC_ID_LABEL, String.valueOf(EXEC_ID))
+            .withOwnerReferences(
+                new OwnerReferenceBuilder()
+                    .withApiVersion("batch/v1")
+                    .withKind("Job")
+                    .withName("job-" + EXEC_ID)
+                    .withUid(ownerUid)
+                    .withController(true)
+                    .build()
+            )
+            .endMetadata()
+            .withNewStatus()
+            .withPhase(phase)
+            .endStatus();
+        if (nodeName != null) {
+            builder.withNewSpec().withNodeName(nodeName).endSpec();
+        }
+        return builder.build();
+    }
+
+    @Test
+    public void aRunningPodNamesItsNode() {
+        PodPhaseView view = PodPhaseView.of(
+            List.of(podOf(JOB_UID, "Running", "node-a", "2026-08-15T12:00:00Z")), EXEC_ID_LABEL
+        );
+
+        assertEquals("node-a", view.nodeNameFor(executionOf(JOB_UID)));
+    }
+
+    /** Bound to a node is not running on it: the image pull can still fail there. */
+    @Test
+    public void aPendingPodBoundToANodeNamesNoNode() {
+        PodPhaseView view = PodPhaseView.of(
+            List.of(podOf(JOB_UID, "Pending", "node-a", "2026-08-15T12:00:00Z")), EXEC_ID_LABEL
+        );
+
+        assertEquals(PodPhaseView.Phase.PENDING, view.phaseFor(executionOf(JOB_UID)));
+        assertNull(view.nodeNameFor(executionOf(JOB_UID)));
+    }
+
+    @Test
+    public void aFinishedPodNamesNoNode() {
+        PodPhaseView view = PodPhaseView.of(
+            List.of(podOf(JOB_UID, "Succeeded", "node-a", "2026-08-15T12:00:00Z")), EXEC_ID_LABEL
+        );
+
+        assertNull(view.nodeNameFor(executionOf(JOB_UID)));
+    }
+
+    /** The exec id restarts in every application lifetime: another Job's pod answers for nothing. */
+    @Test
+    public void anotherJobsPodUnderTheSameExecIdNamesNoNodeForThisOne() {
+        PodPhaseView view = PodPhaseView.of(
+            List.of(podOf("uid-of-another-job", "Running", "node-b", "2026-08-15T12:00:00Z")),
+            EXEC_ID_LABEL
+        );
+
+        assertNull(view.nodeNameFor(executionOf(JOB_UID)));
+        assertEquals("node-b", view.nodeNameFor(executionOf("uid-of-another-job")));
+    }
+
+    @Test
+    public void aRunningPodThatReportsNoNodeNamesNone() {
+        PodPhaseView noSpec = PodPhaseView.of(
+            List.of(podOf(JOB_UID, "Running", null, "2026-08-15T12:00:00Z")), EXEC_ID_LABEL
+        );
+        PodPhaseView blank = PodPhaseView.of(
+            List.of(podOf(JOB_UID, "Running", "  ", "2026-08-15T12:00:00Z")), EXEC_ID_LABEL
+        );
+
+        assertNull(noSpec.nodeNameFor(executionOf(JOB_UID)));
+        assertNull(blank.nodeNameFor(executionOf(JOB_UID)));
+    }
+
+    @Test
+    public void anUnavailableViewNamesNoNode() {
+        assertNull(PodPhaseView.unavailable().nodeNameFor(executionOf(JOB_UID)));
+    }
+
+    /** Two pods of one Job: the running one answers, whichever is newer. */
+    @Test
+    public void theRunningPodOfAJobNamesTheNode() {
+        PodPhaseView view = PodPhaseView.of(
+            List.of(
+                podOf(JOB_UID, "Running", "node-a", "2026-08-15T12:00:00Z"),
+                podOf(JOB_UID, "Pending", "node-b", "2026-08-15T12:05:00Z")
+            ),
+            EXEC_ID_LABEL
+        );
+
+        assertEquals("node-a", view.nodeNameFor(executionOf(JOB_UID)));
     }
 }

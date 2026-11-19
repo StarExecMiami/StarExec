@@ -1,8 +1,8 @@
 package org.starexec.test.junit.command;
 
 import org.apache.http.Header;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.starexec.command.HTMLParser;
 
 import java.util.HashMap;
@@ -26,10 +26,10 @@ public class HTMLParserTests {
 		headers[0] = getMockHeader("a", "b");
 		headers[1] = h;
 		headers[2] = getMockHeader("c", "d");
-		Assert.assertEquals("fake cookie", HTMLParser.extractCookie(headers, "first"));
-		Assert.assertEquals("another cookie", HTMLParser.extractCookie(headers, "second"));
-		Assert.assertNull(HTMLParser.extractCookie(headers, "third"));
-		Assert.assertNull(HTMLParser.extractCookie(null, "first"));
+		Assertions.assertEquals("fake cookie", HTMLParser.extractCookie(headers, "first"));
+		Assertions.assertEquals("another cookie", HTMLParser.extractCookie(headers, "second"));
+		Assertions.assertNull(HTMLParser.extractCookie(headers, "third"));
+		Assertions.assertNull(HTMLParser.extractCookie(null, "first"));
 	}
 
 	@Test
@@ -39,10 +39,10 @@ public class HTMLParserTests {
 		headers[0] = getMockHeader("a", "b");
 		headers[1] = h;
 		headers[2] = getMockHeader("c", "d");
-		Assert.assertArrayEquals(new String[] { "a", "b", "c" }, HTMLParser.extractMultipartCookie(headers, "first"));
-		Assert.assertArrayEquals(new String[] { "d" }, HTMLParser.extractMultipartCookie(headers, "second"));
-		Assert.assertArrayEquals(null, HTMLParser.extractMultipartCookie(headers, "third"));
-		Assert.assertArrayEquals(null, HTMLParser.extractMultipartCookie(null, "first"));
+		Assertions.assertArrayEquals(new String[] { "a", "b", "c" }, HTMLParser.extractMultipartCookie(headers, "first"));
+		Assertions.assertArrayEquals(new String[] { "d" }, HTMLParser.extractMultipartCookie(headers, "second"));
+		Assertions.assertArrayEquals(null, HTMLParser.extractMultipartCookie(headers, "third"));
+		Assertions.assertArrayEquals(null, HTMLParser.extractMultipartCookie(null, "first"));
 	}
 
 	@Test
@@ -50,32 +50,32 @@ public class HTMLParserTests {
 		HashMap<String, String> params = new HashMap<>();
 		String baseURL = "http://www.test.com/";
 
-		Assert.assertEquals(baseURL, HTMLParser.URLEncode(baseURL, params));
+		Assertions.assertEquals(baseURL, HTMLParser.URLEncode(baseURL, params));
 		params.put("name", "value");
-		Assert.assertEquals(baseURL + "?name=value", HTMLParser.URLEncode(baseURL, params));
+		Assertions.assertEquals(baseURL + "?name=value", HTMLParser.URLEncode(baseURL, params));
 		params.put("next", "param");
 		String url = HTMLParser.URLEncode(baseURL, params);
-		Assert.assertTrue(url.contains("name=value") && url.contains("next=param"));
-		Assert.assertTrue(url.contains("&name") ^ url.contains("&next"));
+		Assertions.assertTrue(url.contains("name=value") && url.contains("next=param"));
+		Assertions.assertTrue(url.contains("&name") ^ url.contains("&next"));
 	}
 
 	@Test
 	public void testExtractNameFromJson() {
-		Assert.assertNull(HTMLParser.extractNameFromJson("", "spaces"));
-		Assert.assertNull(HTMLParser.extractNameFromJson("", "solvers"));
+		Assertions.assertNull(HTMLParser.extractNameFromJson("", "spaces"));
+		Assertions.assertNull(HTMLParser.extractNameFromJson("", "solvers"));
 
-		Assert.assertEquals("SPACE", HTMLParser.extractNameFromJson("<a onclick=\"openSpace()\">SPACE</a>", "spaces"));
-		Assert.assertEquals("SOLVER", HTMLParser.extractNameFromJson("<a target=\"_blank\">SOLVER</a>", "solvers"));
+		Assertions.assertEquals("SPACE", HTMLParser.extractNameFromJson("<a onclick=\"openSpace()\">SPACE</a>", "spaces"));
+		Assertions.assertEquals("SOLVER", HTMLParser.extractNameFromJson("<a target=\"_blank\">SOLVER</a>", "solvers"));
 	}
 
 	@Test
 	public void testExtractIDFromJson() {
-		Assert.assertNull(HTMLParser.extractIDFromJson(""));
-		Assert.assertNull(HTMLParser.extractIDFromJson(null));
-		Assert.assertNull(HTMLParser.extractIDFromJson("< name=one >"));
-		Assert.assertNull(HTMLParser.extractIDFromJson("<value=\"1\">< type=\"hidden\" >"));
+		Assertions.assertNull(HTMLParser.extractIDFromJson(""));
+		Assertions.assertNull(HTMLParser.extractIDFromJson(null));
+		Assertions.assertNull(HTMLParser.extractIDFromJson("< name=one >"));
+		Assertions.assertNull(HTMLParser.extractIDFromJson("<value=\"1\">< type=\"hidden\" >"));
 
-		Assert.assertEquals(3,
+		Assertions.assertEquals(3,
 				(int) HTMLParser.extractIDFromJson("<input value=\"1\"><input value=\"3\"type=\"hidden\" >"));
 	}
 }

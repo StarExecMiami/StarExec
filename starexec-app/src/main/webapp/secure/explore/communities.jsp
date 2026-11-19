@@ -41,7 +41,7 @@
 	<span id="userId" value="${userId}" hidden></span>
 	<div id="explorer">
 		<h3>Official</h3>
-		<ul id="exploreList">
+		<ul id="exploreList" class="community-tree">
 		</ul>
 	</div>
 
@@ -83,7 +83,8 @@
 		</fieldset>
 
 		<c:if test="${!hideCommunityRequests}">
-			<fieldset id="communityField">
+			<%-- Hidden until communities.js finds the user leads the selected community. --%>
+			<fieldset id="communityField" hidden>
 				<legend class="expd" id="communityExpd"><span class="list-count"></span> pending
 					community requests
 				</legend>

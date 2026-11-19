@@ -6,8 +6,6 @@ import static java.util.Objects.nonNull;
 import java.awt.*;
 import java.io.*;
 import java.lang.reflect.Field;
-import java.net.InetSocketAddress;
-import java.net.Proxy;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
@@ -15,12 +13,18 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.AccessDeniedException;
+import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.text.DecimalFormat;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -38,6 +42,7 @@ import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.Part;
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.io.LineIterator;
 import org.apache.commons.io.filefilter.FileFilterUtils;
 import org.apache.commons.io.filefilter.IOFileFilter;
@@ -56,6 +61,8 @@ import org.starexec.logger.StarLogger;
 public class Util {
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    // Immutable and thread-safe, unlike SimpleDateFormat, so every request thread can share it.
+    private static final DateTimeFormatter PATH_DATE = DateTimeFormatter.ofPattern(R.PATH_DATE_FORMAT);
     private static final Pattern UNSAFE_SHELL_META_CHARS = Pattern.compile(
         "[;|&><`\\r\\n]"
     );
@@ -893,16 +900,31 @@ public class Util {
         }
     }
 
+    /**
+     * Builds a process from an argv array. No shell is involved.
+     *
+     * <p>A one-element array is refused rather than run. It used to be rewritten as
+     * {@code /bin/sh -c <element>}, which quietly moved the call onto the shell path --
+     * reached through the overloads documented as tokenized, and bypassing the
+     * {@link #ensureShellCommandIsSafe(String)} check that guards the shell path's own
+     * entry points. A caller who chose {@code String[]} to avoid a shell got one anyway,
+     * unvalidated.
+     *
+     * <p>Refusing is preferred over routing it through that check: a one-element array
+     * means the caller has a command line as text, and any splitting this method invented
+     * would be guessing at their intent. They should use the tokenized form, or the
+     * deprecated {@code String} overload if a shell is genuinely wanted.
+     */
     private static ProcessBuilder buildProcess(String[] command) {
         if (command == null || command.length == 0) {
             throw new IllegalArgumentException("Command cannot be empty");
         }
         if (command.length == 1) {
-            String os = System.getProperty("os.name").toLowerCase();
-            if (os.contains("win")) {
-                return new ProcessBuilder("cmd.exe", "/c", command[0]);
-            }
-            return new ProcessBuilder("/bin/sh", "-c", command[0]);
+            throw new IllegalArgumentException(
+                "A single-element command array is not a shell command line. Pass the " +
+                    "program and each argument as separate elements, or use the " +
+                    "deprecated String overload if a shell is required."
+            );
         }
         return new ProcessBuilder(command);
     }
@@ -1047,12 +1069,18 @@ public class Util {
      * @return A string containing a comma-separated list of the given numbers
      */
     public static String makeCommaSeparatedList(List<Integer> nums) {
+        // Built by joining rather than by appending a comma to each element and deleting the
+        // last one: that deleted a character an empty list never wrote, so it threw
+        // StringIndexOutOfBoundsException instead of returning the empty list's own
+        // representation, the empty string. Every caller puts the result in a New_ID cookie,
+        // where "nothing" is a meaningful answer and an exception is not.
         StringBuilder sb = new StringBuilder();
-        nums.forEach(id -> {
+        for (Integer id : nums) {
+            if (sb.length() > 0) {
+                sb.append(",");
+            }
             sb.append(id);
-            sb.append(",");
-        });
-        sb.deleteCharAt(sb.length() - 1);
+        }
         return sb.toString();
     }
 
@@ -1688,6 +1716,10 @@ public class Util {
         if (file == null || !file.exists()) {
             return;
         }
+        if (Files.isSymbolicLink(file.toPath())
+                || file.isFile() && ((Number) Files.getAttribute(file.toPath(), "unix:nlink", LinkOption.NOFOLLOW_LINKS)).longValue() > 1) {
+            return;
+        }
         chmodSinglePath(file, permission);
         if (file.isDirectory()) {
             File[] children = file.listFiles();
@@ -1777,6 +1809,77 @@ public class Util {
             FileUtils.deleteQuietly(sandbox);
         }
         return sandbox2;
+    }
+
+    /**
+     * The current local time as a directory name, in {@link R#PATH_DATE_FORMAT}: the time to the
+     * millisecond. Uploads and copies name the directories they create with it. The hour runs
+     * from 01 to 24, so 00:05:09.017 on 18 October 2026 is 20261018-24.05.09.017.
+     *
+     * @return the directory name for the current time
+     */
+    public static String pathDate() {
+        return pathDate(LocalDateTime.now());
+    }
+
+    /** {@link #pathDate()} for the given time. */
+    static String pathDate(LocalDateTime time) {
+        return PATH_DATE.format(time);
+    }
+
+    /**
+     * Deletes the parents of dir, nearest first, while they are empty and strictly inside root.
+     * Only an empty directory can be deleted this way, so nothing else is ever removed. An upload
+     * whose user was deleted meanwhile uses it to remove the directories it created again above
+     * its own (#275).
+     *
+     * @param root the directory to stop below; it is never deleted
+     * @param dir the path whose parents are deleted; it is not deleted itself
+     */
+    public static void deleteEmptyParents(Path root, Path dir) {
+        for (Path parent = dir.getParent();
+             parent != null && parent.startsWith(root) && !parent.equals(root);
+             parent = parent.getParent()) {
+            try {
+                Files.delete(parent);
+            } catch (NoSuchFileException e) {
+                // Already gone; the one above may still be empty.
+            } catch (DirectoryNotEmptyException e) {
+                return;
+            } catch (IOException e) {
+                log.warn("Could not delete the empty directory " + parent, e);
+                return;
+            }
+        }
+    }
+
+    /** How many suffixed names {@link #claimNewDirectory} tries after the one it was given. */
+    public static final int MAX_DIRECTORY_SUFFIX = 100;
+
+    /**
+     * Creates a new, empty directory that belongs to one upload or copy, creating its parents as
+     * needed. A directory that already exists is never reused: then dir-1, dir-2, ... are tried.
+     * These directories are named by the time to the millisecond, so two uploads by one user can be
+     * given the same name. Sharing it would mix their files, and the first to clean up would delete
+     * the other's.
+     *
+     * @param dir the directory to create
+     * @return the directory created: dir, or dir with a suffix
+     * @throws IOException if no directory could be created
+     */
+    public static File claimNewDirectory(File dir) throws IOException {
+        Files.createDirectories(dir.toPath().getParent());
+        for (int suffix = 0; ; suffix++) {
+            File candidate = suffix == 0 ? dir : new File(dir.getPath() + "-" + suffix);
+            try {
+                Files.createDirectory(candidate.toPath());
+                return candidate;
+            } catch (FileAlreadyExistsException e) {
+                if (suffix == MAX_DIRECTORY_SUFFIX) {
+                    throw e;
+                }
+            }
+        }
     }
 
     /**
@@ -1920,33 +2023,164 @@ public class Util {
         return cookieStringBuilder.toString();
     }
 
+    /** The largest archive a URL download accepts, whatever the caller's own limit. */
+    public static final long ARCHIVE_DOWNLOAD_MAX_BYTES = ArchiveUrlDownloader.MAX_BYTES;
+
     /**
-     * Attempts to copy the file at the end of the given URL to the given file,
-     * using a proxy
+     * Attempts to copy the file at the end of the given http or https URL to the
+     * given file. Any other scheme is refused before a connection is opened.
      *
-     * @param url
-     * @param archiveFile
+     * <p>The connection is direct: StarExec's own public address and port
+     * ({@code R.PROXY_ADDRESS}, {@code R.PROXY_PORT}) are not an outbound proxy.
+     * The JVM's default proxy selector still applies, so an operator who needs
+     * one sets {@code -Dhttp.proxyHost} / {@code -Dhttps.proxyHost}. Only public
+     * destinations are contacted, on the named URL and on each redirect; see
+     * {@code ArchiveUrlDownloader} for the policy. A configured outbound proxy
+     * must enforce the same destination policy, and the target host is still
+     * resolved locally. Only a 2xx response is copied.
+     *
+     * @param url         the URL to download
+     * @param archiveFile the file to write
      * @return True on success and false otherwise
      */
     public static boolean copyFileFromURLUsingProxy(URL url, File archiveFile) {
-        final String methodName = "copyFileFromURLUsingProxy";
-        try {
-            Proxy proxy = new Proxy(
-                Proxy.Type.HTTP,
-                new InetSocketAddress(R.PROXY_ADDRESS, R.PROXY_PORT)
-            );
-            URLConnection connection = url.openConnection(proxy);
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
-            FileUtils.copyInputStreamToFile(
-                connection.getInputStream(),
-                archiveFile
-            );
-            return true;
-        } catch (Exception e) {
-            log.error(methodName, e.getMessage(), e);
+        return ArchiveUrlDownloader.download(
+            url,
+            archiveFile,
+            ArchiveUrlDownloader.Policy.standard()
+        );
+    }
+
+    /**
+     * Like {@link #copyFileFromURLUsingProxy(URL, File)}, refusing an archive
+     * larger than the caller accepts.
+     *
+     * @param url         the URL to download
+     * @param archiveFile the file to write
+     * @param maxBytes    the largest archive the caller accepts
+     * @return True on success and false otherwise
+     */
+    public static boolean copyFileFromURLUsingProxy(
+        URL url,
+        File archiveFile,
+        long maxBytes
+    ) {
+        return ArchiveUrlDownloader.download(
+            url,
+            archiveFile,
+            ArchiveUrlDownloader.Policy.standard(maxBytes)
+        );
+    }
+
+    /** Why an archive URL that names no archive file is refused; shown to the user. */
+    public static final String ARCHIVE_NAME_REQUIRED =
+        "Archive URLs must end in an archive file name, such as solver.zip";
+
+    /**
+     * The file name an archive fetched from a URL is saved under: the last
+     * segment of the URL's path, as written, so percent-escapes stay literal.
+     * The query and fragment are never part of it.
+     *
+     * @param url the archive URL, may be null
+     * @return the name, or null when the path ends in a directory, "." or "..",
+     *     or the segment is not a plain file name
+     */
+    public static String archiveNameFromUrl(URL url) {
+        if (url == null) {
+            return null;
         }
-        return false;
+        String path = url.getPath();
+        String name = path.substring(path.lastIndexOf('/') + 1);
+        if (name.isEmpty() || ".".equals(name) || "..".equals(name)) {
+            return null;
+        }
+        try {
+            return name.equals(FilenameUtils.getName(name)) ? name : null;
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /**
+     * The file name for an archive URL a user submitted.
+     *
+     * @param url the URL as submitted, may be null
+     * @return the name, or null when the URL does not parse or names no archive
+     * @see #archiveNameFromUrl(URL)
+     */
+    public static String archiveNameFromUrl(String url) {
+        if (url == null) {
+            return null;
+        }
+        try {
+            return archiveNameFromUrl(URI.create(url).toURL());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Why a user-supplied archive URL is refused; shown to the user. */
+    public static final String DOWNLOADABLE_URL_REQUIRED =
+        "Archive URLs must be valid http or https URLs";
+
+    /**
+     * Whether a URL string a user supplied parses and may be downloaded.
+     *
+     * @param url the URL as submitted, may be null
+     * @return true when it parses and its scheme is http or https
+     * @see #isDownloadableUrl(URL)
+     */
+    public static boolean isDownloadableUrl(String url) {
+        if (url == null) {
+            return false;
+        }
+        try {
+            return isDownloadableUrl(URI.create(url).toURL());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether a URL a user supplied may be downloaded: only http and https.
+     *
+     * @param url the URL to check, may be null
+     * @return true when the scheme is http or https, case-insensitively
+     */
+    public static boolean isDownloadableUrl(URL url) {
+        if (url == null) {
+            return false;
+        }
+        String scheme = url.getProtocol();
+        return "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
+    }
+
+    /**
+     * The directory {@code name} directly inside {@code parent}, refusing a name that would
+     * resolve anywhere else. "." resolves to the parent itself and ".." to its parent, so a
+     * user-chosen name used as a path component must be checked where the path is built, not
+     * only where the name is validated: names already stored before that validation existed
+     * still reach here. The name must be exactly the one component it resolves to, so that the
+     * result is the path that was checked: {@link java.nio.file.Path#resolve} takes an absolute
+     * name as it is, but {@code new File(parent, name)} appends it to the parent.
+     *
+     * @param parent the directory the result must be directly inside
+     * @param name the path component, typically a user-chosen primitive name
+     * @return {@code new File(parent, name)}, unchanged in form
+     * @throws IllegalArgumentException when the name is not one component that resolves to a
+     *         direct child
+     */
+    public static File childWithin(File parent, String name) {
+        java.nio.file.Path base = parent.toPath().toAbsolutePath().normalize();
+        java.nio.file.Path child = base.resolve(name).normalize();
+        // Comparing the name itself, not only a path built from it, is also what lets CodeQL's
+        // java/path-injection query see this guard.
+        if (!base.equals(child.getParent()) || !child.getFileName().toString().equals(name)) {
+            throw new IllegalArgumentException(
+                "name [" + name + "] does not stay directly inside " + base
+            );
+        }
+        return new File(parent, name);
     }
 
     /**
@@ -2004,7 +2238,35 @@ public class Util {
      * @return A new Cookie with the encoded value and security attributes
      */
     public static Cookie createEncodedCookie(String name, String value) {
-        Cookie cookie = new Cookie(name, encodeCookieValue(value));
+        return withSecurityAttributes(new Cookie(name, encodeCookieValue(value)));
+    }
+
+    /**
+     * Creates a cookie carrying an id or a comma-separated list of ids, encoded and with the
+     * same security attributes as {@link #createEncodedCookie(String, String)}.
+     *
+     * <p>RFC 6265 does not allow a comma in a cookie value, and Tomcat's cookie processor throws
+     * when such a cookie is added. Copying several items called this after the copy, so the
+     * user got a server error for a copy that had happened. A single id encodes to itself, so
+     * StarexecCommand releases from before the encoding still read it; the client decodes the
+     * value ({@code HTMLParser.extractCookie}) before it splits a list on commas.
+     *
+     * @param name  The cookie name
+     * @param value An id, or ids separated by commas
+     * @return A new Cookie with the encoded value and the security attributes applied
+     */
+    public static Cookie createIdCookie(String name, String value) {
+        return createEncodedCookie(name, value);
+    }
+
+    /**
+     * Applies the attributes every cookie this application sets should carry: HttpOnly, the
+     * application's path, and Secure when the deployment is served over HTTPS.
+     *
+     * @param cookie The cookie to configure
+     * @return The same cookie, configured
+     */
+    private static Cookie withSecurityAttributes(Cookie cookie) {
         cookie.setHttpOnly(true);
         cookie.setPath("/" + R.STAREXEC_APPNAME);
         // Enable secure flag when running over HTTPS

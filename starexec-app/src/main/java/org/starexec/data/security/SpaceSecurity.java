@@ -998,6 +998,37 @@ public class SpaceSecurity {
 	}
 
 	/**
+	 * Checks to see whether one user may read another user's permissions in a space. Guests are refused. The
+	 * requester must be able to see the space, and must either be the user in question, hold admin read privileges,
+	 * or lead the space.
+	 *
+	 * @param spaceId The ID of the space in question
+	 * @param userIdBeingViewed The ID of the user whose permissions would be read
+	 * @param requestUserId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code otherwise
+	 */
+	public static ValidatorStatusCode canViewUserPermissions(int spaceId, int userIdBeingViewed, int requestUserId) {
+		if (Users.isPublicUser(requestUserId)) {
+			return new ValidatorStatusCode(false, "You must be logged in to view permissions");
+		}
+		if (GeneralSecurity.hasAdminReadPrivileges(requestUserId)) {
+			return new ValidatorStatusCode(true);
+		}
+		ValidatorStatusCode canSee = canUserSeeSpace(spaceId, requestUserId);
+		if (!canSee.isSuccess()) {
+			return canSee;
+		}
+		if (userIdBeingViewed == requestUserId) {
+			return new ValidatorStatusCode(true);
+		}
+		Permission requesterPerm = Permissions.get(requestUserId, spaceId);
+		if (requesterPerm != null && requesterPerm.isLeader()) {
+			return new ValidatorStatusCode(true);
+		}
+		return new ValidatorStatusCode(false, "You do not have permission to view permissions here");
+	}
+
+	/**
 	 * Checks to see whether the permissions of one user in a particular space can be updated by another user
 	 *
 	 * @param spaceId The ID of the space in question

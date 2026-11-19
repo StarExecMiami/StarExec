@@ -34,7 +34,6 @@ function initUI() {
 						$('#dialog-confirm-add-delete').dialog({
 							modal: true,
 							width: 500,
-							height: 300,
 							buttons: {
 								'cancel': function() {
 									$(this).dialog('close');
@@ -48,7 +47,6 @@ function initUI() {
 						$('#dialog-confirm-add-delete').dialog({
 							modal: true,
 							width: 500,
-							height: 300,
 							buttons: {
 								'close': function() {
 									$(this).dialog('close');
@@ -63,7 +61,6 @@ function initUI() {
 						$('#dialog-confirm-add-delete').dialog({
 							modal: true,
 							width: 500,
-							height: 300,
 							buttons: {
 								'continue': function() {
 									createDialog(

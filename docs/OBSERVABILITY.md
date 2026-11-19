@@ -53,10 +53,10 @@ SELECT 1;
 
 ```bash
 # Application logs
-kubectl logs -n starexec -l app=starexec -f
+kubectl logs -n starexec -l app.kubernetes.io/name=starexec -f
 
 # Database logs
-kubectl logs -n starexec -l app=postgres -f
+kubectl logs -n starexec -l app.kubernetes.io/name=starexec -c postgres -f
 
 # All pods
 kubectl logs -n starexec --all-containers -f
@@ -165,23 +165,42 @@ make logs-app | grep -E "(DEBUG|ERROR|WARN)"
 
 ### Common Debug Scenarios
 
-#### Job Stuck in ENQUEUED
+#### Job Not Making Progress (pairs stuck before running)
+
+StarExec reports a job that has stopped making progress: no pair of it has started or finished for longer than
+its wallclock limit plus 10 minutes, and for at least 30 minutes. Paused, killed and deleted jobs are not
+reported. The report is one WARN line, written to the app log and to the `error_logs` table, and repeated every
+6 hours while the job stays stuck. It names the likely cause, for example:
 
 ```bash
-# Check backend status
-make logs-app | grep -i backend
+make logs-app | grep "has made no progress"
+# Job 42 (my-job) has made no progress for 1440 minutes (35 pending, 0 enqueued, 0 running, 0 awaiting result processing): its queue 'default' is INACTIVE, so its pending pairs cannot be dispatched
+# Job 7 (sweep) has made no progress for 45 minutes (24 pending, 0 enqueued, 0 running, 0 awaiting result processing): the backend is not accepting work on queue 'container.q'; the dispatcher's line for it ('Queue container.q cannot accept work at the moment', or 'Queue container.q has no nodes available' while it has no nodes) says since when, and the backend's own lines before it say why
+```
 
-# Verify backend initialized
-make logs-app | grep "Backend initialized"
+For pending pairs on an `ACTIVE` queue, the report asks the backend whether that queue can take work. A backend
+that did not start leaves its queue `ACTIVE`, so the queue's status alone does not tell the two apart. When the
+backend cannot answer, the report says to check that the queue has nodes the backend can use.
 
-# Check job submission
+```bash
+# Check that the backend started (the line depends on the backend)
+make logs-app | grep -E "LocalBackend initialized|KubernetesNativeBackend initialized|ContainerJobMonitor started"
+
+# Podman backend only: one line per submitted pair
 make logs-app | grep "Submitting job"
 
-# Query database
+# Query database: pairs not running yet (1 = pending submission, 2 = enqueued) and their queue
 make db-shell
-SELECT id, status_code, created FROM job_pairs 
-WHERE status_code = 1 ORDER BY created DESC LIMIT 10;
+SELECT p.id, p.job_id, p.status_code, p.queuesub_time, q.name AS queue, q.status AS queue_status
+FROM starexec.job_pairs p
+JOIN starexec.jobs j ON j.id = p.job_id
+LEFT JOIN starexec.queues q ON q.id = j.queue_id
+WHERE p.status_code IN (1, 2)
+ORDER BY p.id
+LIMIT 20;
 ```
+
+A pending pair (code 1) is never dispatched while its job's queue is not `ACTIVE`, or no longer exists.
 
 #### Job Stuck in RUNNING
 
@@ -326,7 +345,7 @@ podman stats --no-stream starexec-app starexec-postgres
 # Helm values for health probes
 livenessProbe:
   httpGet:
-    path: /starexec/
+    path: /starexec/public/health/liveness
     port: 8080
   initialDelaySeconds: 60
   periodSeconds: 30
@@ -334,7 +353,7 @@ livenessProbe:
 
 readinessProbe:
   httpGet:
-    path: /starexec/
+    path: /starexec/public/health/readiness
     port: 8080
   initialDelaySeconds: 30
   periodSeconds: 10
@@ -383,12 +402,9 @@ exit 0
 
 ### Built-in Metrics
 
-Query via the `getStats()` method on backends:
-
-```bash
-# View backend statistics (if exposed via API)
-curl -b cookies.txt http://localhost:7827/starexec/services/admin/backend-stats
-```
+Query via the `getStats()` method on backends. These statistics are internal to
+the application and are not currently exposed over HTTP (there is no
+`/services/admin/backend-stats` endpoint).
 
 LocalBackend stats:
 - `activeJobs`: Currently running + queued
@@ -511,16 +527,35 @@ cat /starexec/output/$JOB_ID/*/stats.json
 
 ### Job Pair Status Codes
 
-| Code | Status | Description |
-|------|--------|-------------|
-| 1 | PENDING | Waiting in queue |
-| 2 | RUNNING | Currently executing |
-| 3 | PAUSED | Paused by user |
-| 4 | CANCELLED | Cancelled by user |
-| 5 | TIMEOUT | Exceeded time limit |
-| 6 | ERROR | Execution error |
-| 7 | COMPLETE | Successfully completed |
-| 8 | KILLED | Killed by system |
+From `Status.StatusCode` in `starexec-app/src/main/java/org/starexec/data/to/Status.java`. Codes 3, 5 and 6 are
+not used. "Complete" is how job statistics count the pair.
+
+| Code | Name | Shown as | Meaning | Complete |
+|------|------|----------|---------|----------|
+| 0 | STATUS_UNKNOWN | unknown | Not set | no |
+| 1 | STATUS_PENDING_SUBMIT | pending submission | In the database, not yet submitted to the backend | no |
+| 2 | STATUS_ENQUEUED | enqueued | Submitted, waiting for an execution host | no |
+| 4 | STATUS_RUNNING | running | Running | no |
+| 7 | STATUS_COMPLETE | complete | Finished and its results recorded | yes |
+| 8 | ERROR_SGE_REJECT | rejected | The backend rejected the submission | no |
+| 9 | ERROR_SUBMIT_FAIL | submit failed | Submitting it to the backend failed | no |
+| 10 | ERROR_RESULTS | results error | Ran, but its statistics or attributes could not be read | no |
+| 11 | ERROR_RUNSCRIPT | run script error | No valid run script | no |
+| 12 | ERROR_BENCHMARK | benchmark error | Benchmark not found | no |
+| 13 | ERROR_DISK_QUOTA_EXCEEDED | environment error | Its execution environment could not be set up | no |
+| 14 | EXCEED_RUNTIME | timeout (wallclock) | Exceeded its wallclock limit | yes |
+| 15 | EXCEED_CPU | timeout (cpu) | Exceeded its CPU time limit | yes |
+| 16 | EXCEED_FILE_WRITE | file write exceeded | Exceeded its file write limit | yes |
+| 17 | EXCEED_MEM | memout | Exceeded its virtual memory limit | yes |
+| 18 | ERROR_GENERAL | error | An unknown error somewhere in the execution pipeline | no |
+| 19 | STATUS_PROCESSING_RESULTS | processing results | Its results are being processed | no |
+| 20 | STATUS_PAUSED | paused | Its job was paused before it finished | no |
+| 21 | STATUS_KILLED | killed | Its job was killed before it finished | no |
+| 22 | STATUS_PROCESSING | awaiting processing | Waiting for a new post-processor run | no |
+| 23 | STATUS_NOT_REACHED | stage not reached | An earlier stage failed | no |
+| 24 | ERROR_BENCH_DEPENDENCY_MISSING | benchmark dependency missing | A benchmark dependency is missing | no |
+| 25 | ERROR_PRE_PROCESSOR | pre-processor error | The pre-processor failed, so the solver did not run | yes |
+| 26 | ERROR_POST_PROCESSOR | post-processor error | The post-processor failed | yes |
 
 ### Container Lifecycle
 

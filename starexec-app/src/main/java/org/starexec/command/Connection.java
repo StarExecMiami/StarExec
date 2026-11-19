@@ -3,6 +3,7 @@ package org.starexec.command;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.apache.commons.compress.utils.IOUtils;
@@ -251,7 +252,9 @@ public class Connection {
 			HttpPost post = new HttpPost(postUrl);
 			MultipartEntityBuilder entity = MultipartEntityBuilder.create();
 			logAddTextBody(entity, R.SPACE, spaceID.toString());
-			logAddTextBody(entity, "localOrUrlOrGit", upMethod);
+			// The name the server reads (UploadBenchmark.FILE_LOC). Sent as "localOrUrlOrGit" since
+			// 2020, so the server rejected every upload with "Please select a file source".
+			logAddTextBody(entity, "localOrURLOrGit", upMethod);
 
 			// it is ok to set URL even if we don't need it
 			logAddTextBody(entity, "url", url);
@@ -292,7 +295,17 @@ public class Connection {
 
 			int returnCode = response.getStatusLine().getStatusCode();
 
-			if (returnCode == HttpServletResponse.SC_FOUND) {
+			if (returnCode == HttpServletResponse.SC_ACCEPTED) {
+				// A server that processes uploads in the background answers at once with the id of
+				// the upload job, whose progress viewuploadstatus reports.
+				int id = uploadJobIdOf(JsonHandler.getJsonObject(response));
+				if (id > 0) {
+					return id;
+				}
+				lastError = "The server accepted the upload but did not name its upload job";
+				return Status.ERROR_INTERNAL;
+			} else if (returnCode == HttpServletResponse.SC_FOUND) {
+				// An older server redirects to the upload's status page, with its id in New_ID.
 				int id = CommandValidator.getIdOrMinusOne(HTMLParser.extractCookie(response.getAllHeaders(), "New_ID"));
 				if (id > 0) {
 					return id;
@@ -314,6 +327,53 @@ public class Connection {
 		} finally {
 			safeCloseResponse(response);
 		}
+	}
+
+	/**
+	 * The upload job id in the server's answer to an accepted upload, {"jobId": N, ...}.
+	 *
+	 * @return The id, or -1 if the answer names none
+	 */
+	static int uploadJobIdOf(JsonObject accepted) {
+		if (accepted == null || !accepted.has("jobId") || !accepted.get("jobId").isJsonPrimitive()) {
+			return -1;
+		}
+		try {
+			long id = accepted.get("jobId").getAsLong();
+			return id > 0 && id <= Integer.MAX_VALUE ? (int) id : -1;
+		} catch (NumberFormatException e) {
+			return -1;
+		}
+	}
+
+	/**
+	 * Describes an upload job as the server reports it at services/uploads/jobs/{jobId}: its status,
+	 * benchmarks processed out of those found, spaces created, and the error, if there is one.
+	 */
+	static String describeUploadJob(JsonObject job) {
+		StringBuilder text = new StringBuilder("status: ").append(field(job, "status"))
+				.append(" | benchmarks: ").append(field(job, "totalFilesProcessed"))
+				.append(" / ").append(field(job, "totalFilesFound"))
+				.append(" | spaces created: ").append(field(job, "totalSpacesCreated"));
+		String error = field(job, "errorMessage");
+		if (!error.isEmpty()) {
+			text.append(" | ").append(error);
+		}
+		return text.toString();
+	}
+
+	private static JsonObject parseObject(String body) {
+		try {
+			JsonElement parsed = JsonParser.parseString(body);
+			return parsed.isJsonObject() ? parsed.getAsJsonObject() : null;
+		} catch (RuntimeException e) {
+			return null;
+		}
+	}
+
+	private static String field(JsonObject obj, String name) {
+		JsonElement value = obj.get(name);
+		return value == null || value.isJsonNull() ? "" : value.getAsString();
 	}
 
 	public void logAddTextBody(MultipartEntityBuilder entity, String name, String text) {
@@ -551,7 +611,7 @@ public class Connection {
 			response = executeGetOrPost(post);
 
 			int code = response.getStatusLine().getStatusCode();
-			// if space, gives 200 code. if job, gives 302
+			// Both answer an accepted upload with a redirect; a job XML names the new jobs in New_ID.
 			if (code != HttpServletResponse.SC_OK && code != HttpServletResponse.SC_FOUND) {
 				setLastError(HTMLParser.extractCookie(response.getAllHeaders(), C.STATUS_MESSAGE_COOKIE));
 				ids.add(Status.ERROR_SERVER);
@@ -559,6 +619,23 @@ public class Connection {
 			}
 
 			String[] newIds = HTMLParser.extractMultipartCookie(response.getAllHeaders(), "New_ID");
+			if (newIds == null) {
+				// A space XML upload is processed in the background: the server redirects to its
+				// status page, XMLuploadStatus.jsp?id=N, and names no new space yet. That id is
+				// what there is to report. Reading the missing cookie threw, and an upload that
+				// had been accepted was reported as an internal error. Any other answer without
+				// New_ID created nothing: the login page, or a redirect to it, after the session
+				// expired.
+				int statusId = isJobXML ? 0 : xmlUploadStatusIdOf(response.getFirstHeader("Location"));
+				if (statusId > 0) {
+					ids.add(statusId);
+				} else {
+					setLastError("The server did not accept the upload; the session may have expired."
+							+ " Log in again and retry.");
+					ids.add(Status.ERROR_SERVER);
+				}
+				return ids;
+			}
 			for (String s : newIds) {
 				ids.add(Integer.parseInt(s));
 			}
@@ -570,6 +647,20 @@ public class Connection {
 			safeCloseResponse(response);
 		}
 
+	}
+
+	/**
+	 * The id of an accepted space XML upload, from the redirect to its status page.
+	 *
+	 * @return The id, or 0 when the answer is not that redirect
+	 */
+	static int xmlUploadStatusIdOf(Header location) {
+		if (location == null) {
+			return 0;
+		}
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("XMLuploadStatus\\.jsp\\?id=(\\d+)")
+				.matcher(location.getValue());
+		return m.find() ? Integer.parseInt(m.group(1)) : 0;
 	}
 
 	/**
@@ -653,7 +744,8 @@ public class Connection {
 			logAddTextBody(entity, "runTestJob", runTestJob.toString());
 			logAddTextBody(entity, "type", type.toString());
 			if (settingId != null) {
-				logAddTextBody(entity, "setting", settingId.toString());
+				// The name UploadSolver reads; sent as "setting", the profile was dropped.
+				logAddTextBody(entity, "settingId", settingId.toString());
 
 			}
 			post.setEntity(entity.build());
@@ -987,9 +1079,16 @@ public class Connection {
 			post = (HttpPost) setHeaders(post);
 			response = executeGetOrPost(post);
 
-			// we should get back an HTTP OK if we're allowed to change the visibility
 			if (response.getStatusLine().getStatusCode() != HttpServletResponse.SC_OK) {
 				return Status.ERROR_BAD_PARENT_SPACE;
+			}
+			// The server answers 200 whether or not it changed anything, with success=false when it
+			// refused: no permission, or a database error. Taking the 200 alone as success reported
+			// every refusal as done.
+			JsonObject answer = JsonHandler.getJsonObject(response);
+			if (answer != null && answer.has("success") && !answer.get("success").getAsBoolean()) {
+				setLastError(JsonHandler.getMessageOfResponse(answer));
+				return Status.ERROR_SERVER;
 			}
 			return 0;
 		} catch (Exception e) {
@@ -2391,19 +2490,48 @@ public class Connection {
 	}
 
 	/**
-	 * Gets the status of a benchmark archive upload given the ID of the upload
-	 * status.
+	 * Gets the status of a benchmark archive upload given the ID pushbenchmarks returned.
 	 *
 	 * @param statusId The upload ID to use
 	 * @return A human-readable string containing details of the benchmark
-	 * upload in the following format benchmarks: {validated} / {failed
-	 * validation} / {total} | spaces: {completed} / {total} {error
-	 * message if exists} {"upload complete" if finished} Null is
-	 * returned if there was an error, and this Connection's error
-	 * message will have been set
+	 * upload. For an upload job: status: {status} | benchmarks: {processed} /
+	 * {found} | spaces created: {n} {| error message if exists}. From an older
+	 * server: benchmarks: {validated} / {failed validation} / {total} |
+	 * spaces: {completed} / {total} {error message if exists} {"upload
+	 * complete" if finished}. Null is returned if there was an error, and
+	 * this Connection's error message will have been set
 	 */
 	public String getBenchmarkUploadStatus(Integer statusId) {
+		// The id pushbenchmarks returns is an upload job's on a server that processes uploads in the
+		// background, so ask for that first. Such a server answers the route even for a job this
+		// user cannot see, with 200 and "not available" (RESTException.NOT_FOUND); only an older
+		// server, which has no such route, answers 404. Fall back to its upload statuses on a 404
+		// alone: they are numbered separately from upload jobs, so asking them about this id on a
+		// newer server could describe an unrelated upload.
 		HttpResponse response = null;
+		try {
+			HttpGet get = new HttpGet(baseURL + C.URL_GET_UPLOAD_JOB_STATUS.replace("{jobId}", statusId.toString()));
+			get = (HttpGet) setHeaders(get);
+			response = executeGetOrPost(get);
+			int code = response.getStatusLine().getStatusCode();
+			if (code != HttpServletResponse.SC_NOT_FOUND) {
+				String body = response.getEntity() == null ? "" : EntityUtils.toString(response.getEntity());
+				JsonObject job = code == HttpServletResponse.SC_OK ? parseObject(body) : null;
+				if (job != null && job.has("status")) {
+					return describeUploadJob(job);
+				}
+				setLastError(code == HttpServletResponse.SC_OK && "not available".equals(body.trim())
+						? "No upload job " + statusId + " is visible to you"
+						: "Unexpected answer (HTTP " + code + ") about upload job " + statusId);
+				return null;
+			}
+		} catch (Exception e) {
+			setLastError("Internal error getting benchmark upload details");
+			return null;
+		} finally {
+			safeCloseResponse(response);
+		}
+		response = null;
 		try {
 
 			String URL = baseURL + C.URL_GET_BENCH_UPLOAD_STATUS;

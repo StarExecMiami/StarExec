@@ -1,0 +1,538 @@
+package org.starexec.data.database;
+
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.List;
+import java.util.ArrayList;
+import java.io.IOException;
+import org.starexec.backend.BuildExecutionContext;
+import org.starexec.jobs.SolverBuildStaging;
+import org.starexec.data.to.SolverBuildStopReceipt;
+
+/** Registry access for trusted build dispatch, engine observation and publication. */
+public final class SolverBuildArtifacts {
+    public record Artifact(long id, int pairId, int attemptNo, int solverId, Integer liveSolverId,
+                           int ownerId, long generation, String sourcePath, String stagingPath,
+                           String storageRoot, String solverPath, UUID executionToken,
+                           String engineIdentity, Instant stoppedAt, String state) { }
+
+    private SolverBuildArtifacts() { }
+
+    public record StoredStopReceipt(SolverBuildStopReceipt receipt, Instant recordedAt) { }
+
+    public record OutputManifest(String payload, String sha256, long byteSize) { }
+
+    public record Helper(int benchmarkId, int ownerId, String path, long byteSize, UUID token, Instant finishedAt) { }
+
+    public static Optional<Helper> findHelper(Connection connection, int benchmark) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT owner_id,path,byte_size,cleanup_token,cleanup_finished_at FROM starexec.solver_build_helpers WHERE benchmark_id=?")) {
+            statement.setInt(1, benchmark);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return Optional.empty();
+                Timestamp finished = result.getTimestamp(5);
+                return Optional.of(new Helper(benchmark, result.getInt(1), result.getString(2), result.getLong(3),
+                        result.getObject(4, UUID.class), finished == null ? null : finished.toInstant()));
+            }
+        }
+    }
+
+    public static boolean claimHelperCleanup(Connection connection, int benchmark, UUID token) throws SQLException {
+        return call(connection, "SELECT starexec.claim_solver_build_helper_cleanup(?,?)", benchmark, token);
+    }
+
+    /** Trusted callers must confirm the captured file absent before requesting settlement. */
+    public static boolean finishHelperCleanup(Connection connection, int benchmark, UUID token) throws SQLException {
+        return call(connection, "SELECT starexec.finish_solver_build_helper_cleanup(?,?)", benchmark, token);
+    }
+
+    public record Cleanup(long artifactId, int pairId, int attemptNo, UUID executionToken,
+                          String sourcePath, String stagingPath, String storageRoot, UUID token,
+                          String removedSourcePath, long solverBytes, Instant finishedAt) { }
+
+    /** The caller commits this durable claim before removing any registered files. */
+    public static boolean claimCleanup(Connection connection, long artifact, UUID token) throws SQLException {
+        return call(connection, "SELECT starexec.claim_solver_build_cleanup(?,?)", artifact, token);
+    }
+
+    public static Optional<Cleanup> findCleanup(Connection connection, long artifact) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT origin_pair_id,attempt_no,execution_token,source_path,staging_path,storage_root,"
+                + "cleanup_token,cleanup_source_path,cleanup_solver_bytes,cleanup_finished_at"
+                + " FROM starexec.solver_build_artifacts WHERE id=?")) {
+            statement.setLong(1, artifact);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return Optional.empty();
+                Timestamp finished = result.getTimestamp(10);
+                return Optional.of(new Cleanup(artifact, result.getInt(1), result.getInt(2),
+                        result.getObject(3, UUID.class), result.getString(4), result.getString(5), result.getString(6),
+                        result.getObject(7, UUID.class), result.getString(8), result.getLong(9),
+                        finished == null ? null : finished.toInstant()));
+            }
+        }
+    }
+
+    /** Call only after every captured filesystem path is positively confirmed absent. */
+    public static boolean finishCleanup(Connection connection, long artifact, UUID token) throws SQLException {
+        return call(connection, "SELECT starexec.finish_solver_build_cleanup(?,?)", artifact, token);
+    }
+
+    /** Reserves immutable output without authorizing publication or replacing an earlier destination. */
+    public static boolean reserveOutput(Connection connection, BuildExecutionContext build, String engine,
+                                         String receiptDigest, Path root, long maxBytes) throws SQLException {
+        if (!connection.getAutoCommit()) throw new SQLException("Output byte reservation must own its transaction");
+        try {
+            return Common.runTransactional(connection, transaction -> {
+                if (!reserveStorageBytes(transaction, build, "OUTPUT", root, maxBytes)
+                        || !reserveOutputPath(transaction, build, engine, receiptDigest, root)) {
+                    throw new StorageReservationRefused();
+                }
+                return true;
+            });
+        } catch (StorageReservationRefused refused) {
+            if (refused.getSuppressed().length != 0) throw refused;
+            return false;
+        }
+    }
+
+    /** The caller commits the reservation before enabling any writes to the registered path. */
+    public static boolean reserveStorageBytes(Connection connection, BuildExecutionContext build, String kind,
+                                               Path path, long maxBytes) throws SQLException {
+        if (connection.getAutoCommit()) throw new SQLException("Byte reservation requires an explicit transaction");
+        if (path == null || maxBytes < 0) throw new IllegalArgumentException("Invalid build storage budget");
+        return call(connection, "SELECT starexec.reserve_solver_build_storage_bytes(?,?,?,?,?)",
+                build.artifactId(), build.token(), kind, path.toString(), maxBytes);
+    }
+
+    private static final class StorageReservationRefused extends SQLException {
+        private static final long serialVersionUID = 1L;
+        private StorageReservationRefused() { super("Build storage reservation was refused"); }
+    }
+
+    private static boolean reserveOutputPath(Connection connection, BuildExecutionContext build, String engine,
+                                              String receiptDigest, Path root) throws SQLException {
+        String sql = "UPDATE starexec.solver_build_artifacts SET state='STAGED',storage_root=?,artifact_path=?"
+                + " WHERE id=? AND origin_pair_id=? AND attempt_no=? AND execution_token=?"
+                + " AND engine_identity=? AND execution_stopped_at IS NOT NULL AND execution_stop_receipt_sha256=?"
+                + " AND state IN ('PLANNED','STAGED')"
+                + " AND (storage_root IS NULL AND artifact_path IS NULL OR storage_root=? AND artifact_path=?)";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, root.toString()); statement.setString(2, root.resolve("solver").toString());
+            statement.setLong(3, build.artifactId()); statement.setInt(4, build.pairId());
+            statement.setInt(5, build.attemptNo()); statement.setObject(6, build.token());
+            statement.setString(7, engine); statement.setString(8, receiptDigest);
+            statement.setString(9, root.toString()); statement.setString(10, root.resolve("solver").toString());
+            return statement.executeUpdate() == 1;
+        }
+    }
+
+    /** Conserves exact verified bytes; publication still performs the current-owner checks. */
+    public static boolean validateOutput(Connection connection, BuildExecutionContext build, String engine,
+                                          String receiptDigest, Path root, OutputManifest manifest) throws SQLException {
+        return storeVerifiedOutput(connection, build, engine, receiptDigest, root, manifest, "VALIDATED");
+    }
+
+    /** Freezes log bytes without making failed output eligible for solver publication. */
+    public static boolean validateFailureLogs(Connection connection, BuildExecutionContext build, String engine,
+                                               String receiptDigest, Path root, OutputManifest manifest) throws SQLException {
+        return storeVerifiedOutput(connection, build, engine, receiptDigest, root, manifest, "STAGED");
+    }
+
+    private static boolean storeVerifiedOutput(Connection connection, BuildExecutionContext build, String engine,
+                                                String receiptDigest, Path root, OutputManifest manifest, String state) throws SQLException {
+        if (!connection.getAutoCommit()) throw new SQLException("Output verification must own its transaction");
+        try {
+            return Common.runTransactional(connection, transaction -> {
+                // Keep the accounting owner ahead of the artifact in the lock order.
+                try (PreparedStatement lock = transaction.prepareStatement("SELECT id FROM starexec.users WHERE id="
+                        + "(SELECT origin_owner_id FROM starexec.solver_build_artifacts WHERE id=?) FOR UPDATE NOWAIT")) {
+                    lock.setLong(1, build.artifactId());
+                    try (ResultSet result = lock.executeQuery()) { if (!result.next()) throw new StorageReservationRefused(); }
+                }
+                if (!storeOutputManifest(transaction, build, engine, receiptDigest, root, manifest, state)
+                        || !call(transaction, "SELECT starexec.reconcile_solver_build_output_bytes(?)", build.artifactId())) {
+                    throw new StorageReservationRefused();
+                }
+                return true;
+            });
+        } catch (StorageReservationRefused refused) {
+            if (refused.getSuppressed().length != 0) throw refused;
+            return false;
+        }
+    }
+
+    private static boolean storeOutputManifest(Connection connection, BuildExecutionContext build, String engine,
+                                                String receiptDigest, Path root, OutputManifest manifest, String state) throws SQLException {
+        String sql = "UPDATE starexec.solver_build_artifacts SET state=?,byte_size=?,"
+                + "manifest_payload=?,manifest_sha256=?,validated_at=clock_timestamp()"
+                + " WHERE id=? AND origin_pair_id=? AND attempt_no=? AND execution_token=?"
+                + " AND engine_identity=? AND execution_stopped_at IS NOT NULL AND execution_stop_receipt_sha256=?"
+                + " AND state='STAGED' AND validated_at IS NULL AND storage_root=? AND artifact_path=?";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, state); statement.setLong(2, manifest.byteSize()); statement.setString(3, manifest.payload());
+            statement.setString(4, manifest.sha256()); statement.setLong(5, build.artifactId());
+            statement.setInt(6, build.pairId()); statement.setInt(7, build.attemptNo());
+            statement.setObject(8, build.token()); statement.setString(9, engine);
+            statement.setString(10, receiptDigest); statement.setString(11, root.toString());
+            statement.setString(12, root.resolve("solver").toString());
+            return statement.executeUpdate() == 1;
+        }
+    }
+
+    public static Optional<OutputManifest> findOutputManifest(Connection connection, long artifact) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT manifest_payload,manifest_sha256,byte_size"
+                + " FROM starexec.solver_build_artifacts WHERE id=? AND validated_at IS NOT NULL")) {
+            statement.setLong(1, artifact);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return Optional.empty();
+                return Optional.of(new OutputManifest(result.getString(1), result.getString(2), result.getLong(3)));
+            }
+        }
+    }
+
+    public static boolean publishOutput(Connection connection, long artifact) throws SQLException {
+        return call(connection, "SELECT starexec.publish_solver_build_output(?)", artifact);
+    }
+
+    public static boolean recordFailedOutput(Connection connection, BuildExecutionContext build, String engine,
+                                             String receiptDigest) throws SQLException {
+        return call(connection, "SELECT starexec.record_failed_solver_build_output(?,?,?,?)",
+                build.artifactId(), build.token(), engine, receiptDigest);
+    }
+
+    public static boolean recordCancelledLogs(Connection connection,BuildExecutionContext build,String engine,
+                                              String receiptDigest) throws SQLException {
+        return call(connection,"SELECT starexec.record_cancelled_solver_build_logs(?,?,?,?)",
+                build.artifactId(),build.token(),engine,receiptDigest);
+    }
+
+    public static Optional<StoredStopReceipt> findStopReceipt(int pairId, int attemptNo) throws SQLException {
+        try (Connection connection = Common.getConnection()) { return findStopReceipt(connection, pairId, attemptNo); }
+    }
+
+    public static Optional<StoredStopReceipt> findStopReceipt(Connection connection, int pairId, int attemptNo)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT execution_stop_receipt_payload,execution_stop_receipt_sha256,execution_stop_receipt_recorded_at"
+                + " FROM starexec.solver_build_artifacts WHERE origin_pair_id=? AND attempt_no=?")) {
+            statement.setInt(1, pairId); statement.setInt(2, attemptNo);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next() || result.getString(1) == null) return Optional.empty();
+                try {
+                    return Optional.of(new StoredStopReceipt(SolverBuildStopReceipt.restored(result.getString(1),
+                            result.getString(2)), result.getTimestamp(3).toInstant()));
+                } catch (IllegalArgumentException invalid) {
+                    throw new SQLException("Stored build stop receipt is invalid", invalid);
+                }
+            }
+        }
+    }
+
+    public static boolean recordStopReceipt(int pairId, int attemptNo, UUID token, String engine,
+                                            SolverBuildStopReceipt receipt) throws SQLException {
+        try (Connection connection = Common.getConnection()) {
+            return Common.runTransactional(connection,
+                    transaction -> recordStopReceipt(transaction, pairId, attemptNo, token, engine, receipt));
+        }
+    }
+
+    public static boolean recordStopReceipt(Connection connection, int pairId, int attemptNo, UUID token,
+                                            String engine, SolverBuildStopReceipt receipt) throws SQLException {
+        return call(connection, "SELECT starexec.record_solver_build_stop_receipt(?,?,?,?,?,?)",
+                pairId, attemptNo, token, engine, receipt.payload(), receipt.sha256());
+    }
+
+    /** Call only after the provider has fenced launch of an execution that never started. */
+    public static boolean recordUnstarted(int pairId, int attemptNo, UUID token, String engine,
+                                          SolverBuildStopReceipt receipt) throws SQLException {
+        try (Connection connection = Common.getConnection()) {
+            return Common.runTransactional(connection,
+                    transaction -> recordUnstarted(transaction, pairId, attemptNo, token, engine, receipt));
+        }
+    }
+
+    /** Atomically rejects the output and records non-execution; the caller owns the commit. */
+    public static boolean recordUnstarted(Connection connection, int pairId, int attemptNo, UUID token,
+                                          String engine, SolverBuildStopReceipt receipt) throws SQLException {
+        return call(connection, "SELECT starexec.record_solver_build_unstarted(?,?,?,?,?,?)",
+                pairId, attemptNo, token, engine, receipt.payload(), receipt.sha256());
+    }
+
+    /** Call only after the trusted observer establishes physical termination following cancellation. */
+    public static boolean recordCancelled(int pairId, int attemptNo, UUID token, String engine,
+                                          SolverBuildStopReceipt receipt) throws SQLException {
+        try (Connection connection = Common.getConnection()) {
+            return Common.runTransactional(connection,
+                    transaction -> recordCancelled(transaction, pairId, attemptNo, token, engine, receipt));
+        }
+    }
+
+    /** Rejects cancelled output and conserves its stop proof; the caller owns the commit. */
+    public static boolean recordCancelled(Connection connection, int pairId, int attemptNo, UUID token,
+                                          String engine, SolverBuildStopReceipt receipt) throws SQLException {
+        return call(connection, "SELECT starexec.record_solver_build_cancelled(?,?,?,?,?,?)",
+                pairId, attemptNo, token, engine, receipt.payload(), receipt.sha256());
+    }
+
+    public static BuildExecutionContext prepareStaging(int pairId, int attemptNo, Path parent)
+            throws SQLException, IOException {
+        try (Connection con = Common.getConnection()) {
+            return SolverBuildStaging.prepare(con, pairId, attemptNo, parent);
+        }
+    }
+
+    public static Optional<Artifact> find(int pairId, int attemptNo) throws SQLException {
+        try (Connection con = Common.getConnection()) { return find(con, pairId, attemptNo); }
+    }
+
+    /** The current attempt can change after this read; any mutation must fence it again. */
+    public static Optional<Artifact> findCurrent(int pairId) throws SQLException {
+        try (Connection connection = Common.getConnection()) { return findCurrent(connection, pairId); }
+    }
+
+    public static Optional<Artifact> findCurrent(Connection connection, int pairId) throws SQLException {
+        return find(connection, pairId, JobPairs.getCurrentAttemptNo(connection, pairId));
+    }
+
+    /** Compatibility preflight only; absence does not authorize a concurrent execution. */
+    public static boolean hasManagedHistory(int pairId) throws SQLException {
+        try (Connection connection = Common.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT EXISTS (SELECT 1 FROM starexec.solver_build_artifacts WHERE origin_pair_id=?"
+                     + " AND (execution_token IS NOT NULL OR staging_path IS NOT NULL OR engine_identity IS NOT NULL"
+                     + " OR execution_stopped_at IS NOT NULL OR storage_root IS NOT NULL OR artifact_path IS NOT NULL))")) {
+            statement.setInt(1, pairId);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) throw new SQLException("Build history observation is unavailable");
+                return result.getBoolean(1);
+            }
+        }
+    }
+
+    /** Historical lookup remains possible after the live pair or solver is deleted. */
+    public static Optional<Artifact> find(Connection con, int pairId, int attemptNo) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(
+                "SELECT * FROM starexec.solver_build_artifacts WHERE origin_pair_id=? AND attempt_no=?")) {
+            ps.setInt(1, pairId); ps.setInt(2, attemptNo);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return Optional.empty();
+                return Optional.of(artifact(rs));
+            }
+        }
+    }
+
+    static Artifact artifact(ResultSet rs) throws SQLException {
+        int solver=rs.getInt("solver_id");
+        Integer liveSolver=rs.wasNull()?null:solver;
+        Timestamp stopped=rs.getTimestamp("execution_stopped_at");
+        return new Artifact(rs.getLong("id"),rs.getInt("origin_pair_id"),rs.getInt("attempt_no"),
+                rs.getInt("origin_solver_id"),liveSolver,rs.getInt("origin_owner_id"),rs.getLong("build_generation"),
+                rs.getString("source_path"),rs.getString("staging_path"),rs.getString("storage_root"),
+                rs.getString("artifact_path"),rs.getObject("execution_token",UUID.class),rs.getString("engine_identity"),
+                stopped==null?null:stopped.toInstant(),rs.getString("state"));
+    }
+
+    /** Candidates only; output and cleanup authorization are rechecked under their existing locks. */
+    public static List<Artifact> stoppedLeasedBuilds() throws SQLException {
+        try (Connection connection=Common.getConnection();var query=connection.prepareStatement(
+                "SELECT a.* FROM starexec.solver_build_artifacts a"
+                +" JOIN starexec.solver_build_storage_leases l ON l.artifact_id=a.id"
+                +" WHERE l.released_at IS NULL AND a.execution_token=l.execution_token"
+                +" AND a.execution_stopped_at IS NOT NULL AND a.execution_stop_receipt_payload IS NOT NULL"
+                +" ORDER BY a.id")) {
+            List<Artifact> artifacts=new ArrayList<>();
+            try (var rows=query.executeQuery()) { while (rows.next()) artifacts.add(artifact(rows)); }
+            return List.copyOf(artifacts);
+        }
+    }
+
+    /** Cancellation history survives staging settlement and a lost provider-removal response. */
+    public static List<Artifact> refusedPodmanCreations() throws SQLException {
+        try (Connection connection=Common.getConnection();var query=connection.prepareStatement(
+                "SELECT * FROM starexec.solver_build_artifacts WHERE state IN ('REJECTED','DELETED')"
+                +" AND execution_stopped_at IS NOT NULL AND engine_identity LIKE 'podman:%'"
+                +" AND execution_stop_receipt_payload::jsonb->'facts'->>'reason' IN ('admission_refused','creation_unacknowledged') ORDER BY id")) {
+            List<Artifact> artifacts=new ArrayList<>();
+            try (var rows=query.executeQuery()) { while (rows.next()) artifacts.add(artifact(rows)); }
+            return List.copyOf(artifacts);
+        }
+    }
+
+    /** Call only after exact provider absence and a safe execution census; no payload ever started. */
+    public static JobPairs.NeverStartedRetryResult retryRefusedPodmanCreation(BuildExecutionContext build,
+            int execution,String container,SolverBuildStopReceipt receipt) throws SQLException {
+        try (Connection connection=Common.getConnection()) {
+            return retryRefusedPodmanCreation(connection,build,execution,container,receipt);
+        }
+    }
+
+    /** Reuses the bounded retry lifecycle while fencing the immutable non-execution and current attempt. */
+    public static JobPairs.NeverStartedRetryResult retryRefusedPodmanCreation(Connection connection,
+            BuildExecutionContext build,int execution,String container,SolverBuildStopReceipt receipt) throws SQLException {
+        if (!ExecutionStorageLeases.isRefusedPodmanCreation(build,execution,container,receipt)) {
+            throw new SQLException("Refused build retry requires exact non-execution facts");
+        }
+        return Common.runTransactional(connection,transaction->{
+            int job;
+            try (var lock=transaction.prepareStatement("SELECT j.id FROM starexec.jobs j"
+                    +" JOIN starexec.job_pairs p ON p.job_id=j.id WHERE p.id=? AND j.buildjob"
+                    +" AND j.deleted IS NOT TRUE AND j.killed IS NOT TRUE FOR UPDATE OF j NOWAIT")) {
+                lock.setInt(1,build.pairId());
+                try (var rows=lock.executeQuery()) {
+                    if (!rows.next()) return JobPairs.NeverStartedRetryResult.STALE;
+                    job=rows.getInt(1);
+                }
+            }
+            int status;
+            try (var lock=transaction.prepareStatement("SELECT status_code,job_id FROM starexec.job_pairs WHERE id=? FOR UPDATE NOWAIT")) {
+                lock.setInt(1,build.pairId());
+                try (var rows=lock.executeQuery()) {
+                    if (!rows.next() || rows.getInt(2)!=job) return JobPairs.NeverStartedRetryResult.STALE;
+                    status=rows.getInt(1);
+                    if (status!=1 && status!=2) return JobPairs.NeverStartedRetryResult.STALE;
+                }
+            }
+            try (var lock=transaction.prepareStatement("SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=? FOR UPDATE NOWAIT")) {
+                lock.setInt(1,build.pairId());
+                try (var rows=lock.executeQuery()) {
+                    if (!rows.next() || rows.getInt(1)!=build.attemptNo()) return JobPairs.NeverStartedRetryResult.STALE;
+                }
+            }
+            var observed=find(transaction,build.pairId(),build.attemptNo()).orElseThrow(
+                    ()->new SQLException("Cancelled build history is unavailable"));
+            try (var lock=transaction.prepareStatement("SELECT id FROM starexec.users WHERE id=? FOR UPDATE NOWAIT")) {
+                lock.setInt(1,observed.ownerId());
+                try (var rows=lock.executeQuery()) { if (!rows.next()) throw new SQLException("Build owner is unavailable"); }
+            }
+            try (var lock=transaction.prepareStatement("SELECT deleted,recycled,user_id,path,build_generation FROM starexec.solvers WHERE id=? FOR UPDATE NOWAIT")) {
+                lock.setInt(1,observed.solverId());
+                try (var rows=lock.executeQuery()) {
+                    if (!rows.next() || rows.getBoolean(1) || rows.getBoolean(2) || rows.getInt(3)!=observed.ownerId()
+                            || !observed.sourcePath().equals(rows.getString(4)) || rows.getLong(5)!=observed.generation()) {
+                        return JobPairs.NeverStartedRetryResult.STALE;
+                    }
+                }
+            }
+            try (var lock=transaction.prepareStatement("SELECT a.id FROM starexec.solver_build_artifacts a"
+                    +" JOIN starexec.job_pairs p ON p.id=a.pair_id JOIN starexec.jobs j ON j.id=p.job_id"
+                    +" JOIN starexec.solvers s ON s.id=a.solver_id JOIN starexec.benchmarks b ON b.id=p.bench_id"
+                    +" WHERE a.id=? AND a.origin_pair_id=? AND a.pair_id=a.origin_pair_id AND a.attempt_no=? AND a.execution_token=?"
+                    +" AND a.source_path=? AND a.staging_path=? AND a.engine_identity=? AND a.state='REJECTED'"
+                    +" AND a.execution_stopped_at IS NOT NULL AND a.execution_stop_receipt_payload=? AND a.execution_stop_receipt_sha256=?"
+                    +" AND s.user_id=a.origin_owner_id AND j.user_id=a.origin_owner_id AND s.deleted IS NOT TRUE AND s.recycled IS NOT TRUE"
+                    +" AND s.path=a.source_path AND s.build_generation=a.build_generation AND s.build_status IN (0,3)"
+                    +" AND b.id=a.helper_benchmark_id AND b.deleted IS NOT TRUE"
+                    +" AND NOT EXISTS (SELECT 1 FROM starexec.solver_build_release_decisions d WHERE d.artifact_id=a.id)"
+                    +" AND NOT EXISTS (SELECT 1 FROM starexec.jobpair_stage_data sd WHERE sd.jobpair_id=p.id"
+                    +" AND (sd.status_code NOT IN (1,2) OR sd.disk_size IS DISTINCT FROM 0))"
+                    +" AND NOT EXISTS (SELECT 1 FROM starexec.jobs newer JOIN starexec.job_pairs np ON np.job_id=newer.id"
+                    +" JOIN starexec.jobpair_stage_data ns ON ns.jobpair_id=np.id AND ns.stage_number=np.primary_jobpair_data"
+                    +" WHERE newer.buildjob AND ns.solver_id=s.id AND newer.id>j.id) FOR UPDATE OF a NOWAIT")) {
+                Object[] values={build.artifactId(),build.pairId(),build.attemptNo(),build.token(),build.source().toString(),
+                        build.staging().toString(),"podman:"+execution+":"+container,receipt.payload(),receipt.sha256()};
+                for (int i=0;i<values.length;i++) lock.setObject(i+1,values[i]);
+                try (var rows=lock.executeQuery()) { if (!rows.next()) throw new SQLException("Cancelled build retry ownership changed"); }
+            }
+            boolean spent;
+            try (var marker=transaction.prepareStatement("SELECT pair_id FROM starexec.pairs_rerun WHERE pair_id=?")) {
+                marker.setInt(1,build.pairId());try (var rows=marker.executeQuery()) { spent=rows.next(); }
+            }
+            if (spent) {
+                try (var finish=transaction.prepareStatement("SELECT starexec.SetBrokenPairStatus(?,?,9)")) {
+                    finish.setInt(1,build.pairId());finish.setInt(2,status);Common.executeAndDrain(finish);
+                }
+                return JobPairs.NeverStartedRetryResult.FILED;
+            }
+            try (var retry=transaction.prepareStatement("SELECT starexec.RerunJobPairsBatchCore(ARRAY[?]::INTEGER[])")) {
+                retry.setInt(1,build.pairId());Common.executeAndDrain(retry);
+            }
+            try (var marker=transaction.prepareStatement("INSERT INTO starexec.pairs_rerun(pair_id) VALUES (?)")) {
+                marker.setInt(1,build.pairId());marker.executeUpdate();
+            }
+            return JobPairs.NeverStartedRetryResult.REQUEUED;
+        });
+    }
+
+    public static boolean prepare(int pairId, int attemptNo, UUID token, Path staging) throws SQLException {
+        try (Connection con = Common.getConnection()) { return prepare(con, pairId, attemptNo, token, staging); }
+    }
+
+    /** Allocating and protecting the directory is the dispatcher's responsibility. */
+    public static boolean prepare(Connection con, int pairId, int attemptNo, UUID token, Path staging) throws SQLException {
+        if (staging == null || !staging.isAbsolute() || staging.getParent() == null) {
+            throw new IllegalArgumentException("Build staging must be an absolute non-root directory");
+        }
+        return call(con, "SELECT starexec.prepare_solver_build_storage(?,?,?,?)",
+                pairId, attemptNo, token, staging.toString());
+    }
+
+    public static boolean bindExecution(int pairId, int attemptNo, UUID token, String engineIdentity) throws SQLException {
+        try (Connection con = Common.getConnection()) {
+            return bindExecution(con, pairId, attemptNo, token, engineIdentity);
+        }
+    }
+
+    /** Revalidates the prepared attempt and commits its engine identity before launch. */
+    public static boolean admitExecution(BuildExecutionContext build, String engineIdentity) throws SQLException {
+        try (Connection connection = Common.getConnection()) {
+            try {
+                return Common.runTransactional(connection, transaction -> {
+                    if (!admitExecution(transaction, build, engineIdentity)) throw new AdmissionRefused();
+                    return true;
+                });
+            } catch (AdmissionRefused refused) {
+                if (refused.getSuppressed().length != 0) throw refused;
+                return false;
+            }
+        }
+    }
+
+    /** Rolls back refused admission without hiding rollback or connection-restoration failures. */
+    private static final class AdmissionRefused extends SQLException {
+        private static final long serialVersionUID = 1L;
+
+        private AdmissionRefused() { super("Build execution admission was refused"); }
+    }
+
+    /** The caller must commit this transaction before starting the engine resource. */
+    public static boolean admitExecution(Connection connection, BuildExecutionContext build,
+                                         String engineIdentity) throws SQLException {
+        if (connection.getAutoCommit()) throw new SQLException("Build admission requires an explicit transaction");
+        return call(connection, "SELECT starexec.admit_solver_build_execution(?,?,?,?,?,?,?)",
+                build.artifactId(), build.pairId(), build.attemptNo(), build.token(),
+                build.source().toString(), build.staging().toString(), engineIdentity);
+    }
+
+    public static boolean bindExecution(Connection con, int pairId, int attemptNo, UUID token,
+                                        String engineIdentity) throws SQLException {
+        return call(con, "SELECT starexec.bind_solver_build_execution(?,?,?,?)",
+                pairId, attemptNo, token, engineIdentity);
+    }
+
+    /** Call only after observing the registered engine resource terminate, not from status.json. */
+    public static boolean recordStopped(int pairId, int attemptNo, UUID token, String engineIdentity) throws SQLException {
+        try (Connection con = Common.getConnection()) {
+            return recordStopped(con, pairId, attemptNo, token, engineIdentity);
+        }
+    }
+
+    public static boolean recordStopped(Connection con, int pairId, int attemptNo, UUID token,
+                                         String engineIdentity) throws SQLException {
+        return call(con, "SELECT starexec.record_solver_build_execution_stop(?,?,?,?)",
+                pairId, attemptNo, token, engineIdentity);
+    }
+
+    private static boolean call(Connection con, String sql, Object... values) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(sql)) {
+            for (int i = 0; i < values.length; i++) ps.setObject(i + 1, values[i]);
+            try (ResultSet rs = ps.executeQuery()) { return rs.next() && rs.getBoolean(1); }
+        }
+    }
+}

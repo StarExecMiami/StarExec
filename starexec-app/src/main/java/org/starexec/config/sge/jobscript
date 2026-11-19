@@ -82,8 +82,75 @@ fi
 # Path to Olivier Roussel's runSolver
 export RUNSOLVER_PATH='$$RUNSOLVER_PATH$$'
 
-# Include common functions and status codes
-. $SCRIPT_DIR/functions.bash
+# Ordinary private inputs keep their original read-only names; every write stays in the leased tree.
+if [ -n "${STAREXEC_JOB_PRIVATE_MOUNTS:-}" ]; then
+	if [[ "$STAREXEC_JOB_PRIVATE_MOUNTS" != "1" || "$CONTAINER_MODE" != "true" || "$BUILD_JOB" != "false" \
+		|| -n "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" || "${STAREXEC_FORCE_SANDBOX:-false}" != "false" \
+		|| "${STAREXEC_OUTPUT_DIR:-}" != /starexec/execution/monitor \
+		|| "${HOME:-}" != /starexec/execution/home || "${TMPDIR:-}" != /tmp ]]; then
+		printf '%s\n' 'Private ordinary paths require the matching container job protocol' >&2
+		exit 1
+	fi
+	if [[ "$HAS_DEPENDS" == 1 ]]; then
+		if [[ "${STAREXEC_JOB_DEPENDENCIES:-}" != /* || ! -f "$STAREXEC_JOB_DEPENDENCIES" \
+			|| -L "$STAREXEC_JOB_DEPENDENCIES" ]]; then
+			printf '%s\n' 'Private ordinary dependencies require their conserved read-only file' >&2
+			exit 1
+		fi
+	elif [[ "$HAS_DEPENDS" != 0 || -n "${STAREXEC_JOB_DEPENDENCIES:-}" ]]; then
+		printf '%s\n' 'Private ordinary dependency metadata differs' >&2
+		exit 1
+	fi
+	SHARED_DIR=/starexec/execution
+	WORKING_DIR_BASE=/starexec/execution/work
+	BENCH_SAVE_DIR=/starexec/execution/savedoutput
+	PAIR_OUTPUT_DIRECTORY=$(printf '%s' /starexec/execution/monitor | base64 -w0)
+fi
+
+# Private builds use only the provider's fixed input, control and reserved write paths.
+if [ -n "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" ]; then
+	if [[ "$STAREXEC_BUILD_PRIVATE_MOUNTS" != "1" || "$CONTAINER_MODE" != "true" || "$BUILD_JOB" != "true" ]]; then
+		printf '%s\n' 'Private build paths require the matching container build protocol' >&2
+		exit 1
+	fi
+	if [[ "${STAREXEC_BUILD_SOURCE_DIR:-}" != /starexec/inputs/source_src \
+		|| "${STAREXEC_BUILD_HELPER_FILE:-}" != /starexec/inputs/starexec_build \
+		|| "${STAREXEC_BUILD_CONTROL_DIR:-}" != /starexec/control \
+		|| "${STAREXEC_BUILD_WORK_DIR:-}" != /starexec/execution/work \
+		|| "${STAREXEC_OUTPUT_DIR:-}" != /starexec/execution/monitor \
+		|| "${HOME:-}" != /starexec/execution/home || "${TMPDIR:-}" != /tmp \
+		|| "${STAREXEC_BUILD_OUTPUT_DIR:-}" != "$(printf '%s' /starexec/execution | base64 -w0)" ]]; then
+		printf '%s\n' 'Private build paths differ from the reserved provider layout' >&2
+		exit 1
+	fi
+	SCRIPT_DIR="$STAREXEC_BUILD_CONTROL_DIR"
+	SCRIPT_PATH="$SCRIPT_DIR/jobscript"
+	SHARED_DIR=/starexec/execution
+	WORKING_DIR_BASE="$STAREXEC_BUILD_WORK_DIR"
+	BENCH_PATH=$(printf '%s' "$STAREXEC_BUILD_HELPER_FILE" | base64 -w0)
+	PAIR_OUTPUT_DIRECTORY=$(printf '%s' "$STAREXEC_OUTPUT_DIR" | base64 -w0)
+fi
+
+# Include common functions and status codes. The helper must declare its own capability.
+unset STAREXEC_BUILD_STAGING_PROTOCOL
+unset STAREXEC_BUILD_PRIVATE_PROTOCOL
+unset STAREXEC_JOB_PRIVATE_PROTOCOL
+. "$SCRIPT_DIR/functions.bash"
+
+if [ "$CONTAINER_MODE" = "true" ] && [ "$BUILD_JOB" = "true" ]; then
+	if [ "${STAREXEC_BUILD_STAGING_PROTOCOL:-}" != "1" ] || [ -z "${STAREXEC_BUILD_OUTPUT_DIR:-}" ]; then
+		printf '%s\n' 'Build helper and isolated output protocol are incompatible' >&2
+		exit 1
+	fi
+fi
+if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" && "${STAREXEC_BUILD_PRIVATE_PROTOCOL:-}" != "1" ]]; then
+	printf '%s\n' 'Build helper and private path protocol are incompatible' >&2
+	exit 1
+fi
+if [[ "${STAREXEC_JOB_PRIVATE_MOUNTS:-}" == "1" && "${STAREXEC_JOB_PRIVATE_PROTOCOL:-}" != "1" ]]; then
+	printf '%s\n' 'Ordinary helper and private path protocol are incompatible' >&2
+	exit 1
+fi
 
 
 # Array of secondary benchmarks starexec paths
@@ -149,6 +216,9 @@ NUM_STAGES=${#STAGE_NUMBERS[@]}
 # stuck in ENQUEUED status forever.
 NUM_BENCH_INPUTS=$(( ${#BENCH_INPUT_PATHS[@]} - 1 )) # we terminate the array with an empty string, so the number is the size-1
 
+if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" ]]; then
+	configurePrivateBuildStagePaths
+fi
 
 
 #==========================================================================
@@ -193,6 +263,11 @@ fi
 
 echo ""
 
+# The stage loop below owns STAGE_INDEX, but sendNode reads STAGE_NUMBERS[STAGE_INDEX]
+# from inside initSandbox, before the loop has run. Stage 0 is the first stage that will
+# run, which is what the pair's initial RUNNING status should name.
+STAGE_INDEX=0
+
 initSandbox
 initWorkspaceVariables
 cleanWorkspace 1
@@ -205,6 +280,11 @@ log "there are this many benchmark inputs $NUM_BENCH_INPUTS"
 decodePathArrays
 
 $$STAGE_DEPENDENCY_ARRAY$$
+if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" == "1" \
+	&& ( ${#STAGE_DEPENDENCIES[@]} != 1 || -n "${STAGE_DEPENDENCIES[0]:-}" ) ]]; then
+	printf '%s\n' 'Private build stage cannot consume unexported pipeline dependencies' >&2
+	exit 1
+fi
 fillDependArrays
 
 if ! checkIfBenchmarkDependenciesExists; then
@@ -237,6 +317,10 @@ fi
 log "the number of stages is $NUM_STAGES"
 
 for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
+	# The stage this iteration runs, named before anything that can fail. The setup below --
+	# checkCache, copyDependencies, verifyWorkspace, sandboxWorkspace -- prepares THIS stage, so
+	# a failure in it belongs to this stage and not to the pair (#145).
+	CURRENT_STAGE_NUMBER=${STAGE_NUMBERS[STAGE_INDEX]}
 	CURRENT_STAGE_MEMORY=$MAX_MEM   #start with the default max mem
 	CURRENT_STAGE_CPU=$STAREXEC_CPU_LIMIT
 	CURRENT_STAGE_WALLCLOCK=$STAREXEC_WALLCLOCK_LIMIT
@@ -298,6 +382,68 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	createDir "$OUT_DIR/output_files"
 	chmod g+w "$OUT_DIR/output_files"
 
+	#Give job pairs 2 extra minutes before we kill them.
+	JOB_PAIR_EXTRA_TIME=120
+
+	# B7: copyDependencies (pre-processor, below) and copyOutput (post-processor, later
+	# this stage) each run their own processor under
+	# `timeout --signal=SIGKILL $((LIMIT))m`, but LIMIT is reachable as 0 -- a nullable
+	# column, and 0 is an intentional "no limit" state the product already allows (#229)
+	# -- and `timeout ... 0m` enforces no bound at all. Neither phase was covered by the
+	# defensive killDeadlockedJobPair watchdog below, which used to start only after
+	# both had already run, so an unbounded pre/post-processor could wedge the job slot
+	# forever. Start the watchdog here instead, before either phase, and size its sleep
+	# to cover both: an unbounded (0) processor still gets the same ceiling an admin can
+	# set in the UI (edit/processor.jsp max="60"), so the slot is always eventually
+	# reclaimed without cutting short an ordinary bounded pre/post-processor run.
+	#
+	# This reclaim only actually reaches the processor in CONTAINER_MODE. There,
+	# initSandbox/sandboxWorkspace run everything -- pre-processor, solver, and
+	# post-processor alike -- as one user, the same one killDeadlockedJobPair's
+	# `killall --user $SANDBOX_PARAM` targets. Under legacy (non-container/SGE)
+	# execution, the solver is explicitly `sudo -u $SANDBOX_PARAM`'d but the pre/post
+	# processor invocations below are not, so a hung processor there runs as the
+	# jobscript's own user and this watchdog cannot reach it -- pre-existing, and out
+	# of scope for this fix; Local/Podman/Kubernetes (this project's active backends)
+	# always run CONTAINER_MODE=true.
+	PROCESSOR_FALLBACK_LIMIT_SECS=$((60 * 60))
+
+	PRE_PROCESSOR_BUDGET_SECS=0
+	if [ -n "${PRE_PROCESSOR_PATH:-}" ]; then
+		if ((PRE_PROCESSOR_TIME_LIMIT > 0)); then
+			PRE_PROCESSOR_BUDGET_SECS=$((PRE_PROCESSOR_TIME_LIMIT * 60))
+		else
+			PRE_PROCESSOR_BUDGET_SECS=$PROCESSOR_FALLBACK_LIMIT_SECS
+		fi
+	fi
+
+	POST_PROCESSOR_BUDGET_SECS=0
+	if [ -n "${POST_PROCESSOR_PATH:-}" ]; then
+		if ((POST_PROCESSOR_TIME_LIMIT > 0)); then
+			POST_PROCESSOR_BUDGET_SECS=$((POST_PROCESSOR_TIME_LIMIT * 60))
+		else
+			POST_PROCESSOR_BUDGET_SECS=$PROCESSOR_FALLBACK_LIMIT_SECS
+		fi
+	fi
+
+	STAGE_WATCHDOG_TIMEOUT=$((PRE_PROCESSOR_BUDGET_SECS + CURRENT_STAGE_WALLCLOCK + POST_PROCESSOR_BUDGET_SECS))
+
+	log "pre processor watchdog budget (s) : $PRE_PROCESSOR_BUDGET_SECS"
+	log "post processor watchdog budget (s) : $POST_PROCESSOR_BUDGET_SECS"
+	log "combined stage watchdog timeout (s) : $STAGE_WATCHDOG_TIMEOUT"
+
+	# this will be set to true below if the job pair gets deadlocked
+	echo "Calling killDeadlockedJobPair"
+
+	# The watchdog leaves this file behind when it fires, and the check after the solver reads
+	# it. Removed before each stage's watchdog is armed, so an earlier stage's record cannot
+	# be read as this one's; a failure here ends the pair rather than risking that.
+	rm -f "$(deadlockWatchdogFiredFile)"
+	killDeadlockedJobPair "$STAGE_WATCHDOG_TIMEOUT" "$JOB_PAIR_EXTRA_TIME" "$SANDBOX_PARAM" &
+	# Get the process of our defensive killDeadlockedJobPair function.
+	KILL_DEADLOCKED_JOB_PAIR_PID=$!
+	echo "KILL_DEADLOCKED_JOB_PAIR_PID = $KILL_DEADLOCKED_JOB_PAIR_PID"
+
 	checkCache
 	copyDependencies
 	verifyWorkspace
@@ -305,11 +451,6 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	log "listing contents of sandbox..."
 	ls -lR "$WORKING_DIR"
-
-	CURRENT_STAGE_NUMBER=${STAGE_NUMBERS[STAGE_INDEX]}
-
-	#Give job pairs 2 extra minutes before we kill them.
-	JOB_PAIR_EXTRA_TIME=120
 
 	log "doing stage index $STAGE_INDEX"
 	log "stage number : $CURRENT_STAGE_NUMBER"
@@ -337,14 +478,6 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	log "whoami: $(whoami)"
 
-	# this will be set to true in killDeadlockedJobPair if the job pair gets deadlocked
-	echo "Calling killDeadlockedJobPair"
-
-	killDeadlockedJobPair "$CURRENT_STAGE_WALLCLOCK" $JOB_PAIR_EXTRA_TIME $SANDBOX_PARAM &
-	# Get the process of our defensive killDeadlockedJobPair function.
-	KILL_DEADLOCKED_JOB_PAIR_PID=$!
-	echo "KILL_DEADLOCKED_JOB_PAIR_PID = $KILL_DEADLOCKED_JOB_PAIR_PID"
-
 	if ((RESULTS_INTERVAL > 0)); then
 		copyOutputIncrementally "$RESULTS_INTERVAL" "$STAREXEC_WALLCLOCK_LIMIT" "$CURRENT_STAGE_NUMBER" "$STDOUT_SAVE_OPTION" "$EXTRA_SAVE_OPTION" &
 		COPY_OUTPUT_INCREMENTALLY_PID=$!
@@ -362,6 +495,12 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	log "listing contents of the output directory"
 	ls -l "$OUT_DIR"
+
+	# The kernel's count of this pair's OOM kills, taken around the solver alone: the pre-processor has
+	# run by now, and the post-processor runs after the second count. runsolver enforces the stage's own
+	# memory limit; when the container's limit is lower, the kernel stops the solver first, and only this
+	# count shows it. Empty for pairs without a cgroup of their own.
+	OOM_KILLS_BEFORE_SOLVER=$(pairCgroupOomKills)
 
 	if [ "$BENCHMARKING_FRAMEWORK" == "$BENCHEXEC" ]; then
 		MEM_IN_BYTES=$(( CURRENT_STAGE_MEMORY * 1000000 ))
@@ -405,7 +544,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	fi		# If $WORKING_DIR/solver/bin/run_image.py exists, we use it instead of runsolver.
 		# Also, in this case, we're using the local backend, so this jobscript is actually running on the
 		# head node of starexec. (this run_image without k8s is likely buggy and should be considered deprecated.)
-		if [ -f "$WORKING_DIR/solver/bin/run_image.py" ]; then
+		if [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" != "1" ]] && [ -f "$WORKING_DIR/solver/bin/run_image.py" ]; then
 			# Run a theorem proving image: https://www.eprover.org/EVENTS/IWIL-2024/IWIL-24-Preproceedings.pdf
 			# get prover tag:
 			PROVER=$(cat "$WORKING_DIR/solver/bin/prover.txt")
@@ -428,7 +567,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 			log "Running run_image.py: $RUNIMAGE_CMD"
 			eval "$RUNIMAGE_CMD"
 
-		elif [ -f "$WORKING_DIR/solver/bin/run_image_k8s.py" ]; then
+		elif [[ "${STAREXEC_BUILD_PRIVATE_MOUNTS:-}" != "1" ]] && [ -f "$WORKING_DIR/solver/bin/run_image_k8s.py" ]; then
 			# Run a theorem proving image: https://www.eprover.org/EVENTS/IWIL-2024/IWIL-24-Preproceedings.pdf
 			# in kubernettes instead of podman remote. Assumes kubectl is working in the container.
 
@@ -493,6 +632,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		fi
 	fi
 
+	OOM_KILLS_AFTER_SOLVER=$(pairCgroupOomKills)
 
 	# move the working directory back to the top level sandbox
 	cd $WORKING_DIR
@@ -501,18 +641,24 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		kill $COPY_OUTPUT_INCREMENTALLY_PID 2>/dev/null || true
 	fi
 
-	# If runsolver finishes then stop the killDeadlockedJobPair function.
-	log "Runsolver finished. Killing the defensive killall function."
-	# BUG FIX: `kill` returns 1 when the process is already dead (deadlocked job case).
-	# With set -e that would abort before KILL_EXIT_STATUS=$? is reached. Use || to
-	# capture the exit code without triggering set -e.
-	KILL_EXIT_STATUS=0
-	kill $KILL_DEADLOCKED_JOB_PAIR_PID 2>/dev/null || KILL_EXIT_STATUS=$?
+	# B7: the watchdog started before this stage's pre-processor now also has to
+	# outlive this point, to cover the post-processor phase still ahead (copyOutput
+	# below) -- so it is not stopped here, only asked whether it has already fired.
+	# The real kill happens once this stage's post-processing is done
+	# (stopDeadlockWatchdog, right after the copyOutput call below), and again from
+	# exitJobscript as a safety net for every early-exit path in between.
+	#
+	# Whether it fired is read from the record it leaves before killing anything, not from
+	# whether it is still running. A watchdog gone without firing -- killed by the kernel or
+	# a stray signal, or ended by an error of its own -- used to be read as a deadlock, so
+	# the stage was recorded as a wall-clock timeout even when its solver had finished in time.
+	log "Runsolver finished. Checking whether the defensive killall function already fired."
 	JOB_PAIR_DEADLOCKED=false
-	if ((KILL_EXIT_STATUS != 0)); then
-		#killDeadlockedJobPair was dead so the job pair
-		log "Job pair was deadlocked (kill returned $KILL_EXIT_STATUS)."
+	if deadlockWatchdogFired; then
+		log "Job pair was deadlocked (killDeadlockedJobPair already ran)."
 		JOB_PAIR_DEADLOCKED=true
+	elif ! isOwnLiveChild "${KILL_DEADLOCKED_JOB_PAIR_PID:-}"; then
+		log "The deadlock watchdog ended without firing; this stage is judged on its own output."
 	fi
 
 	log "listing contents of the output directory recursively"
@@ -531,7 +677,10 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	if [[ "$BENCHMARKING_FRAMEWORK" == "$RUNSOLVER" ]] && [[ ! -s "$WATCHFILE" ]]; then
 		log "Runsolver watchfile could not be found. Terminating job pair."
-		copyOutput "$CURRENT_STAGE_NUMBER" "$STDOUT_SAVE_OPTION" "$EXTRA_SAVE_OPTION" "$BENCHMARKING_FRAMEWORK"
+		# Without the watchfile there are no statistics to read from it, and copyOutput reads it:
+		# under set -e that ended the pair before markRunscriptError below, as it did for the
+		# missing varfile above (#145).
+		copyOutputNoStats "$CURRENT_STAGE_NUMBER" "$STDOUT_SAVE_OPTION" "$EXTRA_SAVE_OPTION" "$BENCHMARKING_FRAMEWORK"
 		markRunscriptError "${STAGE_NUMBERS[STAGE_INDEX]}"
 		exit 0
 	fi
@@ -550,6 +699,9 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	# this also does post processing
 	copyOutput "$CURRENT_STAGE_NUMBER" "$STDOUT_SAVE_OPTION" "$EXTRA_SAVE_OPTION" "$BENCHMARKING_FRAMEWORK"
+	# B7: the post-processor above just ran under the watchdog started before this
+	# stage's pre-processor; this stage no longer needs it.
+	stopDeadlockWatchdog
 
 	if ((STDOUT_SAVE_OPTION == 3)); then
 		saveStdoutAsBenchmark
@@ -601,18 +753,27 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		elif (grep 'VSize exceeded' "$WATCHFILE" ) then
 			sendExceedMemStatus
 			ERROR_DETECTED=true
+		# Last, as BenchExec does: a limit runsolver enforced itself names the limit that ended the run.
+		elif oomKillsRose "$OOM_KILLS_BEFORE_SOLVER" "$OOM_KILLS_AFTER_SOLVER"; then
+			sendContainerOomStatus
+			ERROR_DETECTED=true
 		fi
 	fi
 
 	if [ "$ERROR_DETECTED" = false ] && ((DISK_QUOTA_EXCEEDED == 1)); then
 		log "Error: disk quota exceeded"
-		sendStatus "$ERROR_DISK_QUOTA_EXCEEDED"
-		sendStageStatus "$ERROR_DISK_QUOTA_EXCEEDED" "${STAGE_NUMBERS[STAGE_INDEX]}"
+		sendStageFailure "$ERROR_DISK_QUOTA_EXCEEDED" "${STAGE_NUMBERS[STAGE_INDEX]}"
 		ERROR_DETECTED=true
 	fi
 
 	# This appears to be the idiomatic Bash way to test if a value is false.
 	if [ "$ERROR_DETECTED" = false ]; then
+		# A build job's solver goes back before any status says the pair is complete: the server
+		# records the build from that status, and a monitor can end the pair once it reads it.
+		# A copy that fails ends the script here, and the pair with it, as ERROR_RUNSCRIPT.
+		if [ $BUILD_JOB == "true" ]; then
+			copySolverBack
+		fi
 		log "execution on $HOSTNAME complete"
 		sendStageStatus "$STATUS_COMPLETE" "${STAGE_NUMBERS[STAGE_INDEX]}"
 
@@ -636,8 +797,10 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		break
 	fi
 
-	if [ $BUILD_JOB == "true" ]; then
-		copySolverBack
+	# The last stage's completion is the pair's result, and a build job's solver is back: only
+	# cleanup follows, and a cleanup failure must not turn a finished pair into ERROR_RUNSCRIPT.
+	if ((STAGE_INDEX == NUM_STAGES - 1)); then
+		claimResult
 	fi
 
 	cleanForNextStage
@@ -645,6 +808,14 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	# update the path to the input to the output of the last stage
 	BENCH_PATH="$SAVED_OUTPUT_DIR/$CURRENT_STAGE_NUMBER"
 	OTHER_INPUT_PATH=$SAVED_OUTPUT_DIR"/"$CURRENT_STAGE_NUMBER"_output"
+
+	# This stage is over and the next has not begun. A failure in between belongs to the pair,
+	# not to the stage that just finished, so nothing may keep naming it (#145).
+	#
+	# This must stay BELOW the two assignments above: they read CURRENT_STAGE_NUMBER to point
+	# the next stage at this stage's output. Moving it up sends the next stage to
+	# $SAVED_OUTPUT_DIR/ instead.
+	CURRENT_STAGE_NUMBER=
 done
 
 setEndTime

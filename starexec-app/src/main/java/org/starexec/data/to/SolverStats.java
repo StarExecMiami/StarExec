@@ -11,11 +11,11 @@ import com.google.gson.annotations.Expose;
 public class SolverStats extends Identifiable {
 	@Expose private Solver solver = null;
 	@Expose private Configuration configuration = null;
-	@Expose private int completeJobPairs = 0; //pairs with any finished status except Starexec errors
+	@Expose private int completeJobPairs = 0; //pairs with any finished status except Starexec errors, including resource-outs (7, 14-17)
 	@Expose private int failedJobPairs = 0;   //Starexec error pairs
 	@Expose private int correctJobPairs = 0;  //7 status with result = expected
 	@Expose private int incorrectJobPairs = 0;//7 status with result != expected
-	@Expose private int incompleteJobPairs = 0;// any status indicating this pair is being worked on OR FAILED
+	@Expose private int incompleteJobPairs = 0;// any status indicating this pair is still being worked on or never ran (0-6, 19-23); failures count only as failed
 	@Expose private int resourceOutJobPairs = 0; //status 14-17
 	@Expose private int conflicts = 0;
 	@Expose private double wallTime = 0;

@@ -69,7 +69,7 @@
 <star:template title="StarExec-Result Attributes Summary"
                js="util/spaceTree, util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min, lib/dataTables.fixedColumns.min, details/jobAttributes"
                css="common/table, details/jobAttributes, common/dataTables.fixedColumns">
-	<span id="data" data-jobid="${jobId}" data-jobspaceid="${jobSpaceId}"/>
+	<span id="data" data-jobid="${jobId}" data-jobspaceid="${jobSpaceId}"></span>
 
 	<div id="explorer" class="jobDetails">
 		<h3>Spaces</h3>

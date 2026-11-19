@@ -24,7 +24,7 @@
 #   docker compose -f docker-compose.yml -f docker-compose.podman.yml up -d
 #
 # Environment Variables (see .env or export):
-#   STAREXEC_DB_PASSWORD    - Database password (default: starexec_dev_password)
+#   STAREXEC_DB_PASSWORD    - Database password (default: starexec_dev_password, development only)
 #   STAREXEC_VERSION        - Image version tag (default: latest)
 #   VOLUME_PREFIX           - Volume name prefix (default: starexec)
 #
@@ -50,8 +50,11 @@ services:
       LC_COLLATE: en_US.UTF-8
       LC_CTYPE: en_US.UTF-8
 
+    # Bound to loopback: the development default password must not be
+    # reachable from the network. CI and the application use the compose
+    # network, and local tooling still reaches it on 127.0.0.1:5432.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
 
     volumes:
       - postgres_data:/var/lib/postgresql/data

@@ -6,7 +6,7 @@ import org.starexec.data.to.Queue;
 import org.starexec.data.to.Report;
 import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
-import org.testng.Assert;
+import org.junit.jupiter.api.Assertions;
 
 import java.sql.SQLException;
 import java.util.List;
@@ -44,25 +44,25 @@ public class ReportsTests extends TestSequence {
 	
 	@StarexecTest
 	private void setEventOccurrencesNotRelatedToQueueTest() {
-		Assert.assertTrue(Reports.setEventOccurrencesNotRelatedToQueue(loginsEvent, 1));
-		Assert.assertEquals(1, getUniqueLoginsCount());
-		Assert.assertTrue(Reports.setEventOccurrencesNotRelatedToQueue(loginsEvent, 0));
+		Assertions.assertTrue(Reports.setEventOccurrencesNotRelatedToQueue(loginsEvent, 1));
+		Assertions.assertEquals(1, getUniqueLoginsCount());
+		Assertions.assertTrue(Reports.setEventOccurrencesNotRelatedToQueue(loginsEvent, 0));
 	}
 	@StarexecTest
 	private void addToEventOccurrencesNotRelatedToQueueTest() {
-		Assert.assertTrue(Reports.setEventOccurrencesNotRelatedToQueue(loginsEvent, 1));
-		Assert.assertTrue(Reports.addToEventOccurrencesNotRelatedToQueue(loginsEvent, 2));
-		Assert.assertEquals(3, getUniqueLoginsCount());
-		Assert.assertTrue(Reports.setEventOccurrencesNotRelatedToQueue(loginsEvent, 0));
+		Assertions.assertTrue(Reports.setEventOccurrencesNotRelatedToQueue(loginsEvent, 1));
+		Assertions.assertTrue(Reports.addToEventOccurrencesNotRelatedToQueue(loginsEvent, 2));
+		Assertions.assertEquals(3, getUniqueLoginsCount());
+		Assertions.assertTrue(Reports.setEventOccurrencesNotRelatedToQueue(loginsEvent, 0));
 	}
 	
 	@StarexecTest
 	private void addToEventOccurrencesRelatedToQueueTest() {
 		try {
-			Assert.assertTrue(Reports.addToEventOccurrencesForQueue(pairsEvent, 1, allQ.getName()));
-			Assert.assertTrue(Reports.addToEventOccurrencesForQueue(pairsEvent, 2, allQ.getName()));
-			Assert.assertEquals(pairsRun+3, getPairsRunCount());
-			Assert.assertTrue(Reports.addToEventOccurrencesForQueue(pairsEvent, -3, allQ.getName()));
+			Assertions.assertTrue(Reports.addToEventOccurrencesForQueue(pairsEvent, 1, allQ.getName()));
+			Assertions.assertTrue(Reports.addToEventOccurrencesForQueue(pairsEvent, 2, allQ.getName()));
+			Assertions.assertEquals(pairsRun+3, getPairsRunCount());
+			Assertions.assertTrue(Reports.addToEventOccurrencesForQueue(pairsEvent, -3, allQ.getName()));
 		} catch ( SQLException e ) {
 			log.error( "Caught SQLException: "+ e.getMessage(), e);
 		}

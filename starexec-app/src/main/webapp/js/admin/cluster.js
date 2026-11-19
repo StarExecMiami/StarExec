@@ -47,28 +47,16 @@ jQuery(function($) {
 			"valid_children": ["space"],
 			"types": {
 				"active_queue": {
-					"valid_children": ["enabled_node", "disabled_node"],
-					"icon": {
-						"image": starexecRoot + "images/jstree/on.png"
-					}
+					"valid_children": ["enabled_node", "disabled_node"]
 				},
 				"inactive_queue": {
-					"valid_children": ["enabled_node", "disabled_node"],
-					"icon": {
-						"image": starexecRoot + "images/jstree/off.png"
-					}
+					"valid_children": ["enabled_node", "disabled_node"]
 				},
 				"enabled_node": {
-					"valid_children": [],
-					"icon": {
-						"image": starexecRoot + "images/jstree/on.png"
-					}
+					"valid_children": []
 				},
 				"disabled_node": {
-					"valid_children": [],
-					"icon": {
-						"image": starexecRoot + "images/jstree/off.png"
-					}
+					"valid_children": []
 				}
 			}
 		},
@@ -133,7 +121,6 @@ jQuery(function($) {
 		$confirmRemove.dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					log('user confirmed giving global access.');
@@ -204,7 +191,6 @@ jQuery(function($) {
 		$confirmRemove.dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					log('user confirmed removing global access.');
@@ -235,7 +221,6 @@ jQuery(function($) {
 		$confirmRemove.dialog({
 			modal: true,
 			width: 380,
-			height: 165,
 			buttons: {
 				'OK': function() {
 					log('user confirmed queue removal.');

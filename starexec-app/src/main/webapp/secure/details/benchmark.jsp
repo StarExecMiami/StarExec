@@ -165,7 +165,7 @@
 
 	<c:if test="${downloadable}">
 		<fieldset id="fieldContents">
-			<legend><img alt="loading" src="${starexecRoot}/images/loader.gif">
+			<legend><span class="loading-spinner" role="status"><span class="sr-only">Loading</span></span>
 				contents
 			</legend>
 			<star:displayTextContents text="${content}" lang="${lang}"/>
@@ -184,7 +184,7 @@
 
 			<c:if test="${usr.id == user.id || hasAdminReadPrivileges}">
 				<a id="editLink"
-				   href="${starexecRoot}/secure/edit/benchmark.jsp?id=${bench.id}<c:if test="${not empty param.contextSpaceId}">&contextSpaceId=${param.contextSpaceId}</c:if>">edit</a>
+				   href="${starexecRoot}/secure/edit/benchmark.jsp?id=${bench.id}<c:if test="${not empty param.contextSpaceId}">&contextSpaceId=<c:out value="${param.contextSpaceId}"/></c:if>">edit</a>
 			</c:if>
 		</c:if>
 

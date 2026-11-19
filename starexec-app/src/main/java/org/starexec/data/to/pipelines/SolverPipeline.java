@@ -19,8 +19,16 @@ public class SolverPipeline extends Identifiable implements Nameable {
 	private String name;
 	private List<PipelineStage> stages = null;
 	private Timestamp uploadDate;
+	/**
+	 * The {@code pipeline_stages.stage_id} of the primary stage, and nothing else.
+	 *
+	 * <p>It used to double as that stage's 1-based ordinal before persistence, under accessors
+	 * named for the ordinal while the field was named for the id, and the two meanings were
+	 * written and read from different places. Which stage is primary before persistence is
+	 * {@link PipelineStage#isPrimary()}, on the stage itself; this is meaningful only once the
+	 * stages have ids, and is 0 until then.
+	 */
 	private int primaryStageId;
-			//what is the id of the primary stage? Before addition to the database, stores primary stage NUMBER
 
 	public SolverPipeline() {
 		stages = new ArrayList<>();
@@ -91,11 +99,11 @@ public class SolverPipeline extends Identifiable implements Nameable {
 		return false;
 	}
 
-	public int getPrimaryStageNumber() {
+	public int getPrimaryStageId() {
 		return primaryStageId;
 	}
 
-	public void setPrimaryStageNumber(int primaryStageId) {
+	public void setPrimaryStageId(int primaryStageId) {
 		this.primaryStageId = primaryStageId;
 	}
 }

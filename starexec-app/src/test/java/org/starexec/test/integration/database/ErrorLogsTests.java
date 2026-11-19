@@ -1,6 +1,6 @@
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.data.database.ErrorLogs;
 import org.starexec.data.to.ErrorLog;
 import org.starexec.logger.StarLevel;
@@ -69,9 +69,9 @@ public class ErrorLogsTests extends TestSequence {
             Optional<Integer> optSecondId = ErrorLogs.add("test", StarLevel.DEBUG);
             Optional<Integer> optThirdId = ErrorLogs.add("test", StarLevel.DEBUG);
 
-            Assert.assertTrue(optFirstId.isPresent());
-            Assert.assertTrue(optSecondId.isPresent());
-            Assert.assertTrue(optThirdId.isPresent());
+            Assertions.assertTrue(optFirstId.isPresent());
+            Assertions.assertTrue(optSecondId.isPresent());
+            Assertions.assertTrue(optThirdId.isPresent());
 
             int firstId = optFirstId.get();
             int secondId = optSecondId.get();
@@ -81,16 +81,16 @@ public class ErrorLogsTests extends TestSequence {
 
 
             // Check that logs we got contain all three logs we added.
-            Assert.assertTrue(logs.stream().anyMatch(l -> l.getId() == firstId));
-            Assert.assertTrue(logs.stream().anyMatch(l -> l.getId() == secondId));
-            Assert.assertTrue(logs.stream().anyMatch(l -> l.getId() == thirdId));
+            Assertions.assertTrue(logs.stream().anyMatch(l -> l.getId() == firstId));
+            Assertions.assertTrue(logs.stream().anyMatch(l -> l.getId() == secondId));
+            Assertions.assertTrue(logs.stream().anyMatch(l -> l.getId() == thirdId));
 
             ErrorLogs.deleteWithId(firstId);
             ErrorLogs.deleteWithId(secondId);
             ErrorLogs.deleteWithId(thirdId);
 
         } catch (SQLException e) {
-            Assert.fail("Caught SQLException:\n"+ Util.getStackTrace(e));
+            Assertions.fail("Caught SQLException:\n"+ Util.getStackTrace(e));
         }
     }
 
@@ -100,7 +100,7 @@ public class ErrorLogsTests extends TestSequence {
             int unlikelyId = 10000000;
             Optional<ErrorLog> optionalLog = ErrorLogs.getById(unlikelyId);
         } catch (SQLException e) {
-            Assert.fail("Caught SQLException:\n"+ Util.getStackTrace(e));
+            Assertions.fail("Caught SQLException:\n"+ Util.getStackTrace(e));
         }
     }
 
@@ -108,13 +108,13 @@ public class ErrorLogsTests extends TestSequence {
     private void deleteTest() {
         try {
             Optional<Integer> optId = ErrorLogs.add("test", StarLevel.DEBUG);
-            Assert.assertTrue(optId.isPresent()) ;
+            Assertions.assertTrue(optId.isPresent()) ;
             ErrorLogs.deleteWithId(optId.get());
             Optional<ErrorLog> log = ErrorLogs.getById(optId.get());
 
-            Assert.assertFalse("Error log was still in database after deletion.",log.isPresent());
+            Assertions.assertFalse(log.isPresent(),"Error log was still in database after deletion.");
         } catch (SQLException e) {
-            Assert.fail("Caught SQLException:\n"+ Util.getStackTrace(e));
+            Assertions.fail("Caught SQLException:\n"+ Util.getStackTrace(e));
         }
     }
 
@@ -124,16 +124,16 @@ public class ErrorLogsTests extends TestSequence {
             StarLevel level = StarLevel.DEBUG;
             String message = "test";
             Optional<Integer> id = ErrorLogs.add(message, level);
-            Assert.assertTrue(id.isPresent());
+            Assertions.assertTrue(id.isPresent());
             Optional<ErrorLog> optionalLog = ErrorLogs.getById(id.get());
-            Assert.assertTrue("Log did not exist in database.", optionalLog.isPresent());
+            Assertions.assertTrue(optionalLog.isPresent(), "Log did not exist in database.");
             ErrorLog log = optionalLog.get();
-            Assert.assertEquals(Integer.valueOf(log.getId()), id.get());
-            Assert.assertEquals(level, log.getLevel());
-            Assert.assertEquals(message, log.getMessage());
+            Assertions.assertEquals(Integer.valueOf(log.getId()), id.get());
+            Assertions.assertEquals(level, log.getLevel());
+            Assertions.assertEquals(message, log.getMessage());
             ErrorLogs.deleteWithId(id.get());
         } catch (SQLException e) {
-            Assert.fail("Caught SQLException:\n" + Util.getStackTrace(e));
+            Assertions.fail("Caught SQLException:\n" + Util.getStackTrace(e));
         }
     }
 }

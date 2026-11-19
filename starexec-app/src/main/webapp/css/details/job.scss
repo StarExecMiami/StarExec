@@ -234,7 +234,7 @@ table.panel {
 	width: 90px;
 }
 
-@media only screen and (max-width: 767px) {
+@include mobile {
 	#wrapper {
 		#explorer {
 			width: 100%;
@@ -242,8 +242,6 @@ table.panel {
 		}
 
 		fieldset {
-			width: 85%;
-
 			&.panelField {
 				max-width: 100%;
 				width: 100%;

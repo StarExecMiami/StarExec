@@ -103,6 +103,31 @@ function initUI() {
     }
   });
 
+  $("#removePicture").click(function () {
+    if (!confirm("Remove your profile picture? The default picture will be shown instead.")) {
+      return;
+    }
+    $.post(
+      $(this).data("remove-url"),
+      {},
+      function (validatorStatusCode) {
+        if (parseReturnCode(validatorStatusCode)) {
+          // Bust the browser cache so the default picture replaces the removed one.
+          // Both URLs: the thumbnail shown here and the full-size one the enlarge
+          // popup loads, or enlarging still shows the picture just removed.
+          var img = $("#showPicture");
+          var bust = "&t=" + Date.now();
+          img.attr("src", img.attr("src").split("&t=")[0] + bust);
+          var enlarge = img.attr("data-enlarge");
+          if (enlarge) {
+            img.attr("data-enlarge", enlarge.split("&t=")[0] + bust);
+          }
+        }
+      },
+      "json"
+    );
+  });
+
   $("#showPicture").on("keydown", function (event) {
     var uri = $(this).attr("data-enlarge") || $(this).attr("enlarge");
     if (uri && (event.key === "Enter" || event.key === " ")) {
@@ -164,7 +189,7 @@ function initUI() {
     $("#dialog-createSettingsProfile").dialog({
       modal: true,
       width: 380,
-      height: 165,
+      height: "auto",
       buttons: {
         create: function () {
           $(this).dialog("close");
@@ -275,7 +300,7 @@ function initUI() {
     $("#dialog-confirm-delete").dialog({
       modal: true,
       width: 380,
-      height: 200,
+      height: "auto",
       buttons: {
         yes: function () {
           $("#dialog-confirm-delete").dialog("close");
@@ -396,7 +421,7 @@ function attachWebsiteMonitor() {
     $("#dialog-confirm-delete").dialog({
       modal: true,
       width: 380,
-      height: 165,
+      height: "auto",
       buttons: {
         OK: function () {
           $("#dialog-confirm-delete").dialog("close");

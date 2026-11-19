@@ -1,10 +1,12 @@
 package org.starexec.test.junit.database;
 
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.starexec.constants.PaginationQueries;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
+import org.starexec.data.database.Spaces;
 import org.starexec.data.to.Benchmark;
 import org.starexec.data.to.Job;
 import org.starexec.data.to.JobPair;
@@ -13,6 +15,7 @@ import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
 import org.starexec.util.DataTablesQuery;
 
+import java.io.IOException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -22,16 +25,19 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 public class JobsSqlRegressionTest extends Common {
-	@BeforeClass
-	public static void requireDatabase() {
+	@BeforeAll
+	public static void requireDatabase() throws IOException {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobsSqlRegressionTest");
 		Common.initialize();
+		// The pair table's query is read from a file at startup (Starexec.java). Without this,
+		// GET_PAIRS_IN_SPACE_HIERARCHY_QUERY is still "", and getJobPairsForTableInJobSpaceHierarchy
+		// logs "Parameter not found: query" and returns null.
+		PaginationQueries.loadPaginationQueries();
 	}
 
 	@Test
@@ -39,10 +45,10 @@ public class JobsSqlRegressionTest extends Common {
 		withFixture(fixture -> {
 			Job matrixJob = Jobs.getJobForMatrix(fixture.jobId);
 
-			assertNotNull("Matrix job should load", matrixJob);
-			assertEquals("Loaded job id should match fixture", fixture.jobId, matrixJob.getId());
-			assertNotNull("Matrix job pairs should be populated", matrixJob.getJobPairs());
-			assertEquals("Matrix job should contain exactly one pair", 1, matrixJob.getJobPairs().size());
+			assertNotNull(matrixJob, "Matrix job should load");
+			assertEquals(fixture.jobId, matrixJob.getId(), "Loaded job id should match fixture");
+			assertNotNull(matrixJob.getJobPairs(), "Matrix job pairs should be populated");
+			assertEquals(1, matrixJob.getJobPairs().size(), "Matrix job should contain exactly one pair");
 
 			assertPairLoaded(matrixJob.getJobPairs().get(0), fixture, false);
 		});
@@ -53,8 +59,8 @@ public class JobsSqlRegressionTest extends Common {
 		withFixture(fixture -> {
 			List<JobPair> pairs = Jobs.getNewCompletedPairsDetailed(fixture.jobId, 0);
 
-			assertNotNull("Completed job pairs should load", pairs);
-			assertEquals("Completed query should return exactly one pair", 1, pairs.size());
+			assertNotNull(pairs, "Completed job pairs should load");
+			assertEquals(1, pairs.size(), "Completed query should return exactly one pair");
 
 			assertPairLoaded(pairs.get(0), fixture, true);
 		});
@@ -107,14 +113,14 @@ public class JobsSqlRegressionTest extends Common {
 		for (String pairType : Arrays.asList("solved", "wrong", "unknown")) {
 			int expectedCount = pairType.equals(expectedType) ? 1 : 0;
 			assertEquals(
-					"Count classification should match for pairType=" + pairType,
 					expectedCount,
 					Jobs.getCountOfJobPairsByConfigInJobSpaceHierarchy(
 							fixture.jobSpaceId,
 							fixture.configId,
 							pairType,
 							"",
-							stageNumber));
+							stageNumber),
+					"Count classification should match for pairType=" + pairType);
 
 			List<JobPair> pairs = Jobs.getJobPairsForTableInJobSpaceHierarchy(
 					fixture.jobSpaceId,
@@ -122,11 +128,11 @@ public class JobsSqlRegressionTest extends Common {
 					fixture.configId,
 					stageNumber,
 					pairType);
-			assertNotNull("Pagination query should return a non-null list", pairs);
+			assertNotNull(pairs, "Pagination query should return a non-null list");
 			assertEquals(
-					"Pagination classification should match for pairType=" + pairType,
 					expectedCount,
-					pairs.size());
+					pairs.size(),
+					"Pagination classification should match for pairType=" + pairType);
 		}
 	}
 
@@ -135,12 +141,18 @@ public class JobsSqlRegressionTest extends Common {
 	}
 
 	private void withFixture(SqlFixtureConsumer consumer) throws Exception {
+		// runTransactional hands the connection back in autocommit mode. Closing it with
+		// autocommit off returns it to the pool that way (Common.runTransactional's javadoc),
+		// and the next borrower's failed statement then leaves it in an aborted transaction.
 		Fixture fixture;
 		try (Connection con = Common.getConnection()) {
-			con.setAutoCommit(false);
-			fixture = createFixture(con);
-			con.commit();
+			fixture = Common.runTransactional(con, this::createFixture);
 		}
+		// Both classification queries select pairs through job_space_closure, and neither fills
+		// it. The application does that only when it compiles a job space's solver stats
+		// (Jobs.getJobPairsInJobSpaceHierarchy), which the job page does before it shows the
+		// per-type links to these queries. Without closure rows every count here is 0.
+		Spaces.updateJobSpaceClosureTable(fixture.jobSpaceId);
 
 		try {
 			consumer.accept(fixture);
@@ -405,22 +417,18 @@ public class JobsSqlRegressionTest extends Common {
 
 	private static void cleanupFixture(Fixture fixture) throws SQLException {
 		try (Connection con = Common.getConnection()) {
-			con.setAutoCommit(false);
-			try {
-				deleteById(con, "DELETE FROM job_pair_completion WHERE pair_id = ?", fixture.pairId);
-				deleteById(con, "DELETE FROM jobpair_stage_data WHERE jobpair_id = ?", fixture.pairId);
-				deleteById(con, "DELETE FROM job_pairs WHERE id = ?", fixture.pairId);
-				deleteById(con, "DELETE FROM job_spaces WHERE id = ?", fixture.jobSpaceId);
-				deleteById(con, "DELETE FROM jobs WHERE id = ?", fixture.jobId);
-				deleteById(con, "DELETE FROM configurations WHERE id = ?", fixture.configId);
-				deleteById(con, "DELETE FROM solvers WHERE id = ?", fixture.solverId);
-				deleteById(con, "DELETE FROM benchmarks WHERE id = ?", fixture.benchmarkId);
-				deleteById(con, "DELETE FROM nodes WHERE id = ?", fixture.nodeId);
-				con.commit();
-			} catch (SQLException e) {
-				con.rollback();
-				throw e;
-			}
+			Common.runTransactional(con, c -> {
+				deleteById(c, "DELETE FROM job_pair_completion WHERE pair_id = ?", fixture.pairId);
+				deleteById(c, "DELETE FROM jobpair_stage_data WHERE jobpair_id = ?", fixture.pairId);
+				deleteById(c, "DELETE FROM job_pairs WHERE id = ?", fixture.pairId);
+				deleteById(c, "DELETE FROM job_spaces WHERE id = ?", fixture.jobSpaceId);
+				deleteById(c, "DELETE FROM jobs WHERE id = ?", fixture.jobId);
+				deleteById(c, "DELETE FROM configurations WHERE id = ?", fixture.configId);
+				deleteById(c, "DELETE FROM solvers WHERE id = ?", fixture.solverId);
+				deleteById(c, "DELETE FROM benchmarks WHERE id = ?", fixture.benchmarkId);
+				deleteById(c, "DELETE FROM nodes WHERE id = ?", fixture.nodeId);
+				return null;
+			});
 		}
 	}
 
@@ -432,36 +440,36 @@ public class JobsSqlRegressionTest extends Common {
 	}
 
 	private static void assertPairLoaded(JobPair pair, Fixture fixture, boolean expectCompletionId) {
-		assertNotNull("Job pair should be present", pair);
-		assertEquals("Pair id should match fixture", fixture.pairId, pair.getId());
-		assertEquals("Pair job id should match fixture", fixture.jobId, pair.getJobId());
-		assertEquals("Pair status should round-trip through the detailed pair query",
-				StatusCode.STATUS_COMPLETE, pair.getStatus().getCode());
-		assertEquals("Pair job space id should match fixture", fixture.jobSpaceId, pair.getJobSpaceId());
-		assertFalse("Pair path should be populated", pair.getPath().isEmpty());
+		assertNotNull(pair, "Job pair should be present");
+		assertEquals(fixture.pairId, pair.getId(), "Pair id should match fixture");
+		assertEquals(fixture.jobId, pair.getJobId(), "Pair job id should match fixture");
+		assertEquals(StatusCode.STATUS_COMPLETE,
+				pair.getStatus().getCode(), "Pair status should round-trip through the detailed pair query");
+		assertEquals(fixture.jobSpaceId, pair.getJobSpaceId(), "Pair job space id should match fixture");
+		assertFalse(pair.getPath().isEmpty(), "Pair path should be populated");
 
 		if (expectCompletionId) {
-			assertEquals("Completion id should round-trip through the completed-pair query",
-					fixture.completionId, pair.getCompletionId());
+			assertEquals(fixture.completionId,
+					pair.getCompletionId(), "Completion id should round-trip through the completed-pair query");
 		}
 
-		assertNotNull("Primary stage should be present", pair.getPrimaryStage());
-		assertEquals("Primary stage number should match fixture", Integer.valueOf(1), pair.getPrimaryStage().getStageNumber());
-		assertNotNull("Primary stage solver should be present", pair.getPrimaryStage().getSolver());
+		assertNotNull(pair.getPrimaryStage(), "Primary stage should be present");
+		assertEquals(Integer.valueOf(1), pair.getPrimaryStage().getStageNumber(), "Primary stage number should match fixture");
+		assertNotNull(pair.getPrimaryStage().getSolver(), "Primary stage solver should be present");
 
 		Solver solver = pair.getPrimaryStage().getSolver();
-		assertEquals("Solver id should round-trip through the detailed pair query", fixture.solverId, solver.getId());
-		assertEquals("Solver name should round-trip through the detailed pair query", fixture.solverName, solver.getName());
+		assertEquals(fixture.solverId, solver.getId(), "Solver id should round-trip through the detailed pair query");
+		assertEquals(fixture.solverName, solver.getName(), "Solver name should round-trip through the detailed pair query");
 
-		assertEquals("Configuration id should round-trip through the detailed pair query", fixture.configId,
-				pair.getPrimaryStage().getConfiguration().getId());
-		assertEquals("Configuration name should round-trip through the detailed pair query", fixture.configName,
-				pair.getPrimaryStage().getConfiguration().getName());
+		assertEquals(fixture.configId, pair.getPrimaryStage().getConfiguration().getId(),
+				"Configuration id should round-trip through the detailed pair query");
+		assertEquals(fixture.configName, pair.getPrimaryStage().getConfiguration().getName(),
+				"Configuration name should round-trip through the detailed pair query");
 
 		Benchmark benchmark = pair.getBench();
-		assertNotNull("Benchmark should be present", benchmark);
-		assertEquals("Benchmark id should round-trip through the detailed pair query", fixture.benchmarkId, benchmark.getId());
-		assertEquals("Benchmark name should round-trip through the detailed pair query", fixture.benchmarkName, benchmark.getName());
+		assertNotNull(benchmark, "Benchmark should be present");
+		assertEquals(fixture.benchmarkId, benchmark.getId(), "Benchmark id should round-trip through the detailed pair query");
+		assertEquals(fixture.benchmarkName, benchmark.getName(), "Benchmark name should round-trip through the detailed pair query");
 	}
 
 	private static final class Fixture {

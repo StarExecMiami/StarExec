@@ -96,11 +96,25 @@
             <version>3.20.0</version>
         </dependency>
 
-        <!-- Kubernetes client for native Kubernetes backend -->
+        <!-- Kubernetes client for the native Kubernetes backend. 7.9.0 is built against
+             Jackson 2.21; 6.10 could not serialize objects the API
+             server returns under the Jackson pinned in the root pom. OkHttp stays the HTTP
+             client: 7.x defaults to Vert.x, which is excluded so only one is on the classpath. -->
         <dependency>
             <groupId>io.fabric8</groupId>
             <artifactId>kubernetes-client</artifactId>
-            <version>6.10.0</version>
+            <version>${fabric8.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.fabric8</groupId>
+                    <artifactId>kubernetes-httpclient-vertx</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>io.fabric8</groupId>
+            <artifactId>kubernetes-httpclient-okhttp</artifactId>
+            <version>${fabric8.version}</version>
         </dependency>
         <dependency>
             <groupId>commons-logging</groupId>
@@ -219,33 +233,27 @@
             <artifactId>junit-jupiter-engine</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- Vintage Engine for running JUnit 4 tests with JUnit 5 -->
         <dependency>
-            <groupId>org.junit.vintage</groupId>
-            <artifactId>junit-vintage-engine</artifactId>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- JUnit Platform for running tests -->
+        <!-- LegacyTestSequenceEngineTest runs the legacy engine through the launcher -->
         <dependency>
             <groupId>org.junit.platform</groupId>
-            <artifactId>junit-platform-suite-api</artifactId>
+            <artifactId>junit-platform-launcher</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.platform</groupId>
-            <artifactId>junit-platform-suite-engine</artifactId>
+            <artifactId>junit-platform-commons</artifactId>
+            <version>${junit-platform.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
             <version>5.23.0</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testng</groupId>
-            <artifactId>testng</artifactId>
-            <version>7.5</version>
             <scope>test</scope>
         </dependency>
         <!-- Awaitility for deterministic async test assertions (replaces Thread.sleep) -->
@@ -372,6 +380,9 @@
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
+                <excludes>
+                    <exclude>flyway.conf</exclude>
+                </excludes>
             </resource>
             <!-- Include SGE bash scripts and other non-Java files from src/main/java -->
             <resource>
@@ -487,8 +498,8 @@
                             <goal>install-node-and-npm</goal>
                         </goals>
                         <configuration>
-                            <nodeVersion>v18.19.0</nodeVersion>
-                            <npmVersion>9.8.1</npmVersion>
+                            <nodeVersion>v24.21.0</nodeVersion>
+                            <npmVersion>11.19.0</npmVersion>
                         </configuration>
                     </execution>
                     <execution>
@@ -632,6 +643,43 @@
     </build>
 
     <profiles>
+        <!--
+            Deterministic adapter for the pre-JUnit TestSequence suite.
+
+                mvn verify -Plegacy-test-sequences -pl starexec-app
+
+            This profile is deliberately opt-in. Its inventory preflight blocks
+            execution while any method remains UNVERIFIED, before a sequence is
+            instantiated or any database/fixture setup can run.
+        -->
+        <profile>
+            <id>legacy-test-sequences</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.2.5</version>
+                        <configuration>
+                            <includes>
+                                <include>**/LegacyTestSequenceSuite.java</include>
+                            </includes>
+                            <failIfNoTests>true</failIfNoTests>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>legacy-test-sequences</id>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
         <!--
             Integration tests that need a real PostgreSQL.
 

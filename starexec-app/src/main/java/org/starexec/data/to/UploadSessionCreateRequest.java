@@ -1,5 +1,7 @@
 package org.starexec.data.to;
 
+import java.util.List;
+
 /**
  * Request payload for creating a resumable benchmark upload session.
  */
@@ -13,6 +15,9 @@ public class UploadSessionCreateRequest {
     private boolean hasDependencies;
     private Integer depRootSpaceId;
     private boolean linked;
+    // The permission checkboxes checked on the upload form, by name (e.g. "addBench"). Absent when
+    // the page was loaded before the form sent them.
+    private List<String> spacePermissions;
 
     public String getFileName() {
         return fileName;
@@ -48,5 +53,9 @@ public class UploadSessionCreateRequest {
 
     public boolean isLinked() {
         return linked;
+    }
+
+    public List<String> getSpacePermissions() {
+        return spacePermissions;
     }
 }

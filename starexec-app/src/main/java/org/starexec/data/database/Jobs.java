@@ -28,6 +28,7 @@ import org.starexec.data.to.tuples.AttributesTableData;
 import org.starexec.data.to.tuples.TimePair;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.exceptions.StarExecException;
+import org.starexec.exceptions.UserDeletionBlockedException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
@@ -601,20 +602,53 @@ public class Jobs {
      * @return True if the operation was successful, false otherwise.
      */
     public static boolean add(Job job, int spaceId) {
-        Connection con = null;
+        try {
+            Common.inTransaction(con -> {
+                if (!add(job, spaceId, con)) {
+                    throw new SQLException("Could not create job '" + job.getName() + "'");
+                }
+                return true;
+            });
+        } catch (SQLException e) {
+            log.error("add", e);
+            return false;
+        }
+        createJobOutputDirectory(job.getId());
+        return true;
+    }
+
+    /**
+     * As {@link #add(Job, int)}, on a connection the caller owns.
+     *
+     * <p>Borrowed: this does not commit, roll back, close the connection or change its
+     * autoCommit setting, so a job created from XML commits with the pipelines it references
+     * and the pairs that make it runnable, or with none of them.
+     *
+     * <p>Previously the job row, its job spaces and its primary-space update were written
+     * outside any transaction, between two short ones, so a job survived the rollback of the
+     * pairs that were supposed to fill it -- the rollback below even said so. Holding one
+     * transaction across the whole thing does hold locks on the space tables for its
+     * duration, which is what the original arrangement was avoiding; committing a job that
+     * can never run is the worse of the two.
+     *
+     * <p>Creating the output directory is left to the caller, so that a filesystem artifact
+     * is not published for a job that is about to be rolled back.
+     *
+     * @param job     The job data to add to the database
+     * @param spaceId The space to associate the job with, or a non-positive value for none
+     * @param con     An open SQL connection, already in the caller's transaction
+     * @return True if the operation was successful, false otherwise
+     */
+    public static boolean add(Job job, int spaceId, Connection con) {
         PreparedStatement procedure = null;
         try {
             log.debug(
                 "starting to add a new job with pair count =  " +
                     job.getJobPairs().size()
             );
-            con = Common.getConnection();
 
             // gets the name of the root job space for this job
             String rootName = job.getRootSpaceName();
-            // start a transaction that encapsulates making new spaces for mirrored
-            // hierarchies
-            Common.beginTransaction(con);
             // get all the different space IDs for the places we need to created mirrors of
             // the job space heirarchy
             HashSet<Integer> uniqueSpaceIds = new HashSet<>();
@@ -647,10 +681,6 @@ public class Jobs {
                     i
                 );
             }
-            // we end the first transaction here so that we don't end up keeping a lock on
-            // the space tables
-            // for the entire duration of job creation
-            Common.endTransaction(con);
             // creates the job space hierarchy for the job and returns the ID of the top
             // level job space
 
@@ -665,20 +695,15 @@ public class Jobs {
                 createJobSpacesForPairs(job.getId(), job.getJobPairs(), con)
             );
             Jobs.updatePrimarySpace(job.getId(), job.getPrimarySpace(), con);
-            // NOTE: By opening the transaction here, we are leaving open the possibility
-            // that some spaces
-            // will be created even if job creation fails. However, this prevents the job
-            // space and the space
-            // tables from being locked for the entire transaction, which may take a long
-            // time.
-            Common.beginTransaction(con);
-            // record the job being added in the reports table
-            Reports.addToEventOccurrencesNotRelatedToQueue("jobs initiated", 1);
-            // record the job being added for the queue it was added to
+            // These counters are part of the same outcome as the job. Written on their own
+            // connections they committed whether or not the job did, so a rolled-back job
+            // still reported itself as initiated.
+            Reports.addToEventOccurrencesNotRelatedToQueue("jobs initiated", 1, con);
             Reports.addToEventOccurrencesForQueue(
                 "jobs initiated",
                 1,
-                job.getQueue().getName()
+                job.getQueue().getName(),
+                con
             );
 
             Analytics.JOB_CREATE.record(job.getUserId());
@@ -708,31 +733,31 @@ public class Jobs {
             // actually exist, leaving a job that can never finish or that looks complete
             // before it has run.
             if (!JobPairs.addJobPairs(con, job.getId(), job.getJobPairs())) {
-                log.error("add", "Failed to add job pairs for job " + job.getId()
-                        + "; rolling back. Note the job row itself was written before this"
-                        + " transaction opened and is not removed by this rollback.");
-                Common.doRollback(con);
+                log.error("add", "Failed to add job pairs for job " + job.getId());
                 return false;
             }
 
-            Common.endTransaction(con);
-            // Create the output directory for the job up front. This ensures that if a user
-            // tries to download output before any exists, they will get a correctly
-            // formatted
-            // zip containing an empty directory.
-            new File(Jobs.getDirectory(job.getId())).mkdirs();
             log.debug("job added successfully");
             Jobs.resume(job.getId(), con); // now that the job has been added, we can resume
             return true;
         } catch (Exception e) {
             log.error("add", e);
-            Common.doRollback(con);
         } finally {
-            Common.safeClose(con);
             Common.safeClose(procedure);
         }
 
         return false;
+    }
+
+    /**
+     * Creates a job's output directory, so that downloading output before any exists yields
+     * a correctly formed zip containing an empty directory.
+     *
+     * <p>Called after the transaction commits: a directory created for a job that then rolls
+     * back is an orphan nothing will ever clean up.
+     */
+    public static void createJobOutputDirectory(int jobId) {
+        new File(Jobs.getDirectory(jobId)).mkdirs();
     }
 
     /**
@@ -887,6 +912,20 @@ public class Jobs {
                     continue;
                 }
 
+                // A deleted job with pairs still in flight is delete()'s to finish, because
+                // delete() confirms every execution stopped before removing anything.
+                // Purging it here removed its directory and rows with no such check.
+                // Not isJobComplete: GetJobStatusDetail answers DELETED for every deleted
+                // job, so it would hold every one of them back.
+                if (hasPairsInFlight(jobId)) {
+                    log.info(
+                        "cleanOrphanedDeletedJobs",
+                        "Job " + jobId + " still has pairs in flight; leaving it to" +
+                            " retryRefusedDeletions."
+                    );
+                    continue;
+                }
+
                 File jobDir = new File(Jobs.getDirectory(jobId));
                 if (jobDir.exists()) {
                     log.warn(
@@ -1017,24 +1056,75 @@ public class Jobs {
     }
 
     /**
+     * Jobs whose deletion is running right now. The endpoints' deletion thread and
+     * {@link #retryRefusedDeletions()} can both reach the same job; two concurrent deletions
+     * would each try to record the same pair killed and delete the same rows.
+     */
+    private static final Set<Integer> DELETIONS_IN_PROGRESS =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
      * Deletes the job with the given id from disk, and sets the "deleted" column in
      * the database jobs table to true.
      *
      * @param jobId The ID of the job to delete
-     * @return True on success, false otherwise
+     * @return True on success, false otherwise (including while another deletion of the
+     *         same job is running)
      */
     public static boolean delete(int jobId) throws SQLException {
+        if (!DELETIONS_IN_PROGRESS.add(jobId)) {
+            log.info("delete: job " + jobId + " is already being deleted");
+            return false;
+        }
+        try {
+            return deleteOnce(jobId);
+        } finally {
+            DELETIONS_IN_PROGRESS.remove(jobId);
+        }
+    }
+
+    private static boolean deleteOnce(int jobId) throws SQLException {
         Connection con = null;
         PreparedStatement procedure = null;
 
         if (Jobs.isReadOnly(jobId)) return false;
 
         try {
+            List<Integer> previouslyKilledPairIds = getKilledPairIds(jobId);
+            if (previouslyKilledPairIds == null) {
+                return false;
+            }
             // we should kill jobs before deleting them so no additional pairs are run
             if (!Jobs.isJobComplete(jobId)) {
-                Jobs.kill(jobId);
+                try (Connection killCon = Common.getConnection()) {
+                    if (!killCon.getAutoCommit()) {
+                        throw new SQLException(
+                            "Cannot delete job using a pooled connection with an open transaction"
+                        );
+                    }
+                    if (!kill(jobId, killCon)) {
+                        log.warn(
+                            "delete: refusing to delete job " + jobId +
+                                " because every active pair was not confirmed stopped and retired"
+                        );
+                        return false;
+                    }
+                }
             }
-            Jobs.setDeletedColumn(jobId);
+            if (!clearTrackingForKilledPairs(previouslyKilledPairIds)) {
+                log.warn(
+                    "delete: refusing to delete job " + jobId +
+                        " because tracking for a confirmed-stopped pair could not be retired"
+                );
+                return false;
+            }
+            if (!Jobs.setDeletedColumn(jobId)) {
+                log.warn(
+                    "delete: refusing to delete job " + jobId +
+                        " because its deleted marker could not be stored"
+                );
+                return false;
+            }
             con = Common.getConnection();
 
             // Remove the jobs stats from the database.
@@ -1057,6 +1147,76 @@ public class Jobs {
         } finally {
             Common.safeClose(con);
             Common.safeClose(procedure);
+        }
+    }
+
+    /**
+     * Finishes deletions that {@link #delete(int)} refused.
+     *
+     * <p>The REST endpoints mark a job deleted at once and finish the deletion on another
+     * thread, after telling the user it is done. {@code delete} refuses while any pair cannot
+     * be confirmed stopped, and nothing tried again: the job stayed hidden with its pairs
+     * RUNNING until {@link #cleanOrphanedDeletedJobs()} purged it, without the stop check.
+     * This is the owner that comes back. A job qualifies while it is marked deleted and still
+     * has pairs in flight ({@link #hasPairsInFlight}); once {@code delete} has removed its
+     * pairs it no longer qualifies.
+     *
+     * @return how many deletions completed on this pass
+     */
+    public static int retryRefusedDeletions() {
+        List<Integer> pending = new ArrayList<>();
+        try (
+            Connection con = Common.getConnection();
+            PreparedStatement statement = con.prepareStatement(
+                "SELECT j.id FROM starexec.jobs j" +
+                    " WHERE j.deleted AND starexec.GetJobStatus(j.id) = 'incomplete'" +
+                    " ORDER BY j.id"
+            );
+            ResultSet results = statement.executeQuery()
+        ) {
+            while (results.next()) {
+                pending.add(results.getInt(1));
+            }
+        } catch (SQLException e) {
+            log.error("retryRefusedDeletions", e);
+            return 0;
+        }
+        int completed = 0;
+        for (int jobId : pending) {
+            try {
+                if (delete(jobId)) {
+                    completed++;
+                    log.info(
+                        "retryRefusedDeletions: deleted job " + jobId +
+                            ", whose earlier deletion had been refused"
+                    );
+                }
+            } catch (Exception e) {
+                log.warn("retryRefusedDeletions: job " + jobId, e);
+            }
+        }
+        return completed;
+    }
+
+    /**
+     * Whether any pair of the job is still in flight, by {@code GetJobStatus}'s definition
+     * (pending submit, enqueued, running, processing results, paused, processing). Unlike
+     * {@link #isJobComplete}, which goes through {@code GetJobStatusDetail}, it ignores the
+     * job's deleted and killed flags, which is the question a deleted job raises. Fails
+     * closed: an unreadable answer counts as in flight.
+     */
+    private static boolean hasPairsInFlight(int jobId) {
+        try (
+            Connection con = Common.getConnection();
+            PreparedStatement statement = con.prepareStatement("SELECT starexec.GetJobStatus(?)")
+        ) {
+            statement.setInt(1, jobId);
+            try (ResultSet results = statement.executeQuery()) {
+                return !results.next() || "incomplete".equals(results.getString(1));
+            }
+        } catch (SQLException e) {
+            log.error("hasPairsInFlight", e);
+            return true;
         }
     }
 
@@ -1508,28 +1668,13 @@ public class Jobs {
         final int spaceId = space.getId();
         Collection<SolverStats> stats;
 
-        stats = getCachedJobStatsInJobSpaceHierarchyIncludeDeletedConfigs(
-            spaceId,
-            stageNumber,
-            primitivesToAnonymize,
-            includeUnknown
-        );
-        if (stats != null && !stats.isEmpty()) {
-            StringBuilder sb = new StringBuilder();
-            for (SolverStats s : stats) {
-                sb.append(s.toString() + "\n");
-            }
-            log.debug("stats already cached in database:\n" + sb.toString());
-            return stats;
-        }
-
+        // Compiled from the pairs on every call; job_stats is neither read nor written (#202).
+        // The cache never held a row -- AddJobStats' ON CONFLICT target has matched no constraint
+        // since V0012 -- and making it work would serve stale counts: the expected result comes
+        // live from bench_attributes, and nothing invalidates job_stats when a benchmark is
+        // reprocessed, edited, cleared or deleted.
         int jobId = space.getJobId();
 
-        // we will cache the stats only if the job is complete
-        boolean isJobComplete = Jobs.isJobComplete(jobId);
-
-        // otherwise, we need to compile the stats
-        log.debug("stats not present in database -- compiling stats now");
         List<JobPair> pairs = getJobPairsInJobSpaceHierarchy(
             spaceId,
             primitivesToAnonymize
@@ -1542,10 +1687,6 @@ public class Jobs {
         stats = processPairsToSolverStats(jobId, pairs, includeUnknown);
         for (SolverStats s : stats) {
             s.setJobSpaceId(spaceId);
-        }
-
-        if (isJobComplete) {
-            saveStats(jobId, stats, includeUnknown);
         }
 
         // next, we simply filter down the stats to the ones for the given stage
@@ -2438,6 +2579,9 @@ public class Jobs {
         PreparedStatement stmt = null;
         ResultSet results = null;
         try {
+            // The count joins job_space_closure, which is filled on demand (#207).
+            Spaces.updateJobSpaceClosureTable(jobSpaceId);
+
             con = Common.getConnection();
             stmt = con.prepareStatement(
                 "SELECT CountJobPairsInJobSpaceHierarchyByType(?,?,?,?,?)"
@@ -3447,6 +3591,9 @@ public class Jobs {
         }
         int jobId = Spaces.getJobSpace(jobSpaceId).getJobId();
         try {
+            // The listing joins job_space_closure, which is filled on demand (#207).
+            Spaces.updateJobSpaceClosureTable(jobSpaceId);
+
             con = Common.getConnection();
 
             if (query.getSortColumn() == 7) {
@@ -4905,6 +5052,26 @@ public class Jobs {
     }
 
     /**
+     * Asks the backend to start stopping every execution of a batch before any of them is
+     * confirmed. The confirmations that follow then overlap instead of queueing: on Kubernetes
+     * each one waits for its pod to terminate, and requested together they terminate at once,
+     * so a batch costs one wait rather than one per pair. Best effort: a failure here only
+     * means that execution's stop starts when its confirmation does.
+     */
+    private static void requestStops(Collection<Integer> execIds) {
+        for (int execId : execIds) {
+            if (execId <= 0) {
+                continue;
+            }
+            try {
+                R.BACKEND.requestStop(execId);
+            } catch (Exception e) {
+                log.warn("requestStops: could not request the stop of execId=" + execId, e);
+            }
+        }
+    }
+
+    /**
      * Whether a pair's previous backend execution is provably incapable of running or
      * writing, and may therefore be replaced.
      *
@@ -5047,6 +5214,13 @@ public class Jobs {
         //    write. A pair already at PENDING_SUBMIT never had one.
         List<JobPair> resettable = new ArrayList<>();
         int withheld = 0;
+        List<Integer> toStop = new ArrayList<>();
+        for (JobPair p : pairs) {
+            if (p.getStatus().getCode().getVal() != StatusCode.STATUS_PENDING_SUBMIT.getVal()) {
+                toStop.add(p.getBackendExecId());
+            }
+        }
+        requestStops(toStop);
         for (JobPair p : pairs) {
             if (p.getStatus().getCode().getVal()
                     == StatusCode.STATUS_PENDING_SUBMIT.getVal()) {
@@ -5316,8 +5490,10 @@ public class Jobs {
      *
      * <p>Distinct from {@link #rerunPair(int)}, which is the manual/admin entry point, and
      * the distinction is load-bearing rather than cosmetic. The {@code pairs_rerun} table
-     * does not record "this pair was rerun" — its only production writer has ever been the
-     * automatic sweep, so it records "the automatic rerun allowance was consumed". Routing
+     * does not record "this pair was rerun" — its production writers are this sweep and the
+     * Kubernetes retry of a pod that never started ({@code starexec.RetryNeverStartedPair}),
+     * which spend the same allowance, so it records "the automatic rerun allowance was
+     * consumed". Routing
      * a human's rerun through this method would silently spend that allowance.
      *
      * <p>Two things happen here that the old two-statement sequence could not guarantee:
@@ -5621,6 +5797,13 @@ public class Jobs {
             List<Integer> pairIds = new ArrayList<>();
             List<Integer> expectedExecIds = new ArrayList<>();
             int withheld = 0;
+            if (needsKill) {
+                List<Integer> toStop = new ArrayList<>();
+                for (PairExecution pair : selected) {
+                    toStop.add(pair.execId);
+                }
+                requestStops(toStop);
+            }
             for (PairExecution pair : selected) {
                 if (!needsKill) {
                     pairIds.add(pair.pairId);
@@ -6017,6 +6200,7 @@ public class Jobs {
      *
      * @param jobId The id of the job to get pairs for
      * @return A list of job pair objects that are running.
+     * @throws IllegalStateException if running pairs could not be enumerated
      * @author Wyatt Kaiser
      */
     public static List<JobPair> getRunningPairs(int jobId) {
@@ -6027,11 +6211,13 @@ public class Jobs {
             return Jobs.getRunningPairs(con, jobId);
         } catch (Exception e) {
             log.error("getRunningPairs", "jobId: " + jobId, e);
+            throw new IllegalStateException(
+                "Could not enumerate running pairs for job " + jobId,
+                e
+            );
         } finally {
             Common.safeClose(con);
         }
-
-        return null;
     }
 
     /**
@@ -6502,13 +6688,25 @@ public class Jobs {
             // already walks both lists; this now matches it.
             List<JobPair> toStop = new ArrayList<>();
             List<JobPair> enqueued = Jobs.getEnqueuedPairs(jobId);
-            if (enqueued != null) {
-                toStop.addAll(enqueued);
+            if (enqueued == null) {
+                throw new SQLException(
+                    "Could not enumerate enqueued pairs for job " + jobId
+                );
             }
+            toStop.addAll(enqueued);
             List<JobPair> running = Jobs.getRunningPairs(jobId);
-            if (running != null) {
-                toStop.addAll(running);
+            if (running == null) {
+                throw new SQLException(
+                    "Could not enumerate running pairs for job " + jobId
+                );
             }
+            toStop.addAll(running);
+
+            List<Integer> execIds = new ArrayList<>();
+            for (JobPair jp : toStop) {
+                execIds.add(jp.getBackendExecId());
+            }
+            requestStops(execIds);
 
             int unproven = 0;
             for (JobPair jp : toStop) {
@@ -6525,6 +6723,16 @@ public class Jobs {
                 }
                 if (!JobPairs.killPairConfirmed(jp.getId(), jp.getBackendExecId())) {
                     unproven++;
+                    continue;
+                }
+                try {
+                    R.BACKEND.clearPairTracking(jp.getId());
+                } catch (Exception clearException) {
+                    log.warn(
+                        "kill: could not retire backend tracking for pairId=" + jp.getId(),
+                        clearException
+                    );
+                    unproven++;
                 }
             }
 
@@ -6532,7 +6740,7 @@ public class Jobs {
                 log.warn(
                     "kill: job " + jobId + " is marked killed, but " + unproven +
                         " of its " + toStop.size() + " in-flight pair(s) could not be" +
-                        " confirmed stopped and were left unchanged"
+                        " stopped and retired from backend tracking"
                 );
                 return false;
             }
@@ -6562,13 +6770,50 @@ public class Jobs {
         try {
             con = Common.getConnection();
             List<Job> usersJobs = Jobs.getByUserId(userId);
+            if (usersJobs == null) {
+                throw new StarExecDatabaseException(
+                    "Could not enumerate jobs owned by user with id=" + userId
+                );
+            }
             for (Job job : usersJobs) {
                 int jobId = job.getId();
+                List<Integer> previouslyKilledPairIds = getKilledPairIds(jobId);
+                if (previouslyKilledPairIds == null) {
+                    throw new UserDeletionBlockedException(
+                        UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+                        "Could not enumerate safely stopped pairs for job " + jobId +
+                            " before deleting user " + userId,
+                        null,
+                        null
+                    );
+                }
                 // Kill any jobs that are still running.
                 if (!Jobs.isJobComplete(jobId)) {
-                    Jobs.kill(jobId, con);
+                    if (!con.getAutoCommit()) {
+                        throw new StarExecDatabaseException(
+                            "Cannot kill user jobs using a pooled connection with an open transaction"
+                        );
+                    }
+                    if (!Jobs.kill(jobId, con)) {
+                        throw new UserDeletionBlockedException(
+                            UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+                            "Could not confirm that every active job pair was stopped and retired for user " + userId,
+                            null,
+                            null
+                        );
+                    }
+                }
+                if (!clearTrackingForKilledPairs(previouslyKilledPairIds)) {
+                    throw new UserDeletionBlockedException(
+                        UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+                        "Could not retire backend tracking for a confirmed-stopped pair in job " + jobId,
+                        null,
+                        null
+                    );
                 }
             }
+        } catch (UserDeletionBlockedException e) {
+            throw e;
         } catch (Exception e) {
             throw new StarExecDatabaseException(
                 "Database error while deleting all jobs owned by user with id=" +
@@ -6578,6 +6823,62 @@ public class Jobs {
         } finally {
             Common.safeClose(con);
         }
+    }
+
+    /**
+     * Loads pairs whose persisted KILLED status lets deletion retry backend cleanup
+     * without issuing another stop request. This query is deliberately independent of
+     * the job status: the job may read KILLED or COMPLETE.
+     *
+     * @return pair ids, or {@code null} if the query failed
+     */
+    private static List<Integer> getKilledPairIds(int jobId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        List<Integer> pairIds = new ArrayList<>();
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "SELECT id FROM starexec.job_pairs WHERE job_id = ? AND status_code = ? ORDER BY id"
+            );
+            ps.setInt(1, jobId);
+            ps.setInt(2, StatusCode.STATUS_KILLED.getVal());
+            rs = ps.executeQuery();
+            while (rs.next()) {
+                pairIds.add(rs.getInt("id"));
+            }
+        } catch (Exception e) {
+            log.error("getKilledPairIds: could not enumerate job " + jobId, e);
+            return null;
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return pairIds;
+    }
+
+    /**
+     * Retries backend cleanup for pairs whose persisted KILLED status proves there is
+     * no execution to stop. A failed cleanup must withhold deletion until a later retry
+     * succeeds.
+     *
+     * @return false if any backend cleanup failed
+     */
+    private static boolean clearTrackingForKilledPairs(List<Integer> pairIds) {
+        for (Integer pairId : pairIds) {
+            try {
+                R.BACKEND.clearPairTracking(pairId);
+            } catch (Exception e) {
+                log.warn(
+                    "clearTrackingForKilledPairs: could not retire tracking for pairId=" + pairId,
+                    e
+                );
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -6610,7 +6911,7 @@ public class Jobs {
      * @author Wyatt Kaiser
      */
 
-    protected static boolean pause(int jobId, Connection con) {
+    public static boolean pause(int jobId, Connection con) {
         log.info("Pausing job " + jobId);
         PreparedStatement procedure = null;
         try {
@@ -6694,10 +6995,38 @@ public class Jobs {
                 continue;
             }
 
+            // Only after a stop. An execution the backend did not stop may still finish,
+            // and its result must still reach the database.
+            if (killed) {
+                retireStoppedExecution(pairId);
+            }
+
             JobPairs.setStatusForPairAndStages(
                 pairId,
                 StatusCode.STATUS_PAUSED.getVal()
             );
+        }
+    }
+
+    /**
+     * Stops the backend from reporting on an execution that pause has just stopped, so that
+     * nothing writes over the PAUSED status that follows.
+     *
+     * <p>LocalJobMonitor polls a pair's status.json until it reads a terminal status. A killed
+     * run leaves behind the last status it wrote, usually RUNNING, so the monitor wrote RUNNING
+     * over PAUSED on its next poll and on every poll after it. The pair never read as paused,
+     * ResumeJob (which resumes only PAUSED pairs) passed it over, and it stayed RUNNING with no
+     * process behind it. {@link #kill} retires tracking for the same reason.
+     *
+     * <p>Called before PAUSED is written, so the only write it cannot prevent is one that a poll
+     * had already committed to before tracking was retired. A failure is logged and the pair is
+     * paused anyway: it has been stopped, and left RUNNING it would be stranded just the same.
+     */
+    private static void retireStoppedExecution(int pairId) {
+        try {
+            R.BACKEND.clearPairTracking(pairId);
+        } catch (Exception e) {
+            log.warn("pause: could not retire backend tracking for pairId=" + pairId, e);
         }
     }
 
@@ -6707,9 +7036,18 @@ public class Jobs {
      * @param userId
      */
     public static void pauseAllUserJobs(int userId) {
-        boolean success = true;
-        for (Integer i : Jobs.getRunningJobs(userId)) {
-            success = success && Jobs.pause(i);
+        // getRunningJobs and pause log their own failures at ERROR. This runs on every
+        // scheduling cycle while the user is over quota, so it adds context at INFO only.
+        List<Integer> jobIds = Jobs.getRunningJobs(userId);
+        if (jobIds == null) {
+            log.info("pauseAllUserJobs: could not list the running jobs of user " + userId);
+            return;
+        }
+        // Attempt every job: one failed pause must not leave the user's other jobs running.
+        for (Integer jobId : jobIds) {
+            if (!Jobs.pause(jobId)) {
+                log.info("pauseAllUserJobs: could not pause job " + jobId + " of user " + userId);
+            }
         }
     }
 
@@ -6969,10 +7307,17 @@ public class Jobs {
         // Mutually exclusive classification prevents double-counting:
         // pre/post-processor errors (25/26) are counted only as "failed",
         // not also as "incomplete" and "complete".
+        //
+        // A resource-out is the one deliberate overlap: it is also complete
+        // (StatCompleteness.COMPLETE), because SolverStats.getUnknown()
+        // subtracts resource-outs from complete and the solved column divides
+        // by complete. Counting it only as a resource-out made unknown
+        // negative (#198).
         if (statusCode.failed()) {
             stats.incrementFailedJobPairs();
         } else if (statusCode.resource()) {
             stats.incrementResourceOutPairs();
+            stats.incrementCompleteJobPairs();
         } else if (statusCode.incomplete()) {
             stats.incrementIncompleteJobPairs();
         } else if (statusCode.statComplete()) {
@@ -7089,8 +7434,11 @@ public class Jobs {
                             stats.put(key, newSolver);
                         }
 
-                        // update stats info for entry that current job-pair belongs to
+                        // update stats info for entry that current job-pair belongs to. The primary
+                        // row counts its stage too: 5254caa34 did, and 8e017c292 lost the call,
+                        // leaving every Primary row at zero (#206).
                         curSolver = stats.get(key);
+                        addStageToSolverStats(curSolver, stage, includeUnknown);
                     }
                 }
             }
@@ -7255,9 +7603,12 @@ public class Jobs {
                 }
                 jp.setBench(bench);
 
-                jp.setCompletionId(
-                    ResultSetUtils.getInt(results, "completion_id")
-                );
+                // NULL for a pair that has not finished: only finished pairs have a completion.
+                // Unboxing it threw and emptied the whole space's summary (#206).
+                Integer completionId = ResultSetUtils.getInt(results, "completion_id");
+                if (completionId != null) {
+                    jp.setCompletionId(completionId);
+                }
 
                 if (includeSingleStage) {
                     // If we are here, we are populating exactly 1 stage for purposes of filling up
@@ -8011,10 +8362,14 @@ public class Jobs {
     public static boolean deleteOrphanedJobs(int userId) {
         List<Integer> ids = getOrphanedJobs(userId);
         try {
+            // A refused deletion (a pair not confirmed stopped) used to be reported as success.
+            boolean allDeleted = true;
             for (Integer id : ids) {
-                Jobs.delete(id);
+                if (!Jobs.delete(id)) {
+                    allDeleted = false;
+                }
             }
-            return true;
+            return allDeleted;
         } catch (Exception e) {
             log.error("deleteOrphanedJobs", e);
         }
@@ -8129,9 +8484,17 @@ public class Jobs {
             // since getPairsInBackend() was called
             if (!backendIDs.contains(p.getBackendExecId())) {
                 if (Jobs.get(p.getJobId()).isBuildJob()) {
-                    Solver s = p.getPrimarySolver();
-                    int status = SolverBuildStatusCode.BUILD_FAILED.getVal();
-                    Solvers.setSolverBuildStatus(s, status);
+                    // getPairsInBackend() loads no stages, so p has no primary solver; the
+                    // single-pair read does.
+                    JobPair withStage = JobPairs.getPair(p.getId());
+                    Solver s = withStage == null ? null : withStage.getPrimarySolver();
+                    if (s == null) {
+                        log.warn("setBrokenPairsToErrorStatus",
+                            "no primary solver for broken build pair " + p.getId());
+                    } else {
+                        int status = SolverBuildStatusCode.BUILD_FAILED.getVal();
+                        Solvers.setSolverBuildStatus(s, status);
+                    }
                 }
                 JobPairs.setBrokenPairStatus(p);
             }

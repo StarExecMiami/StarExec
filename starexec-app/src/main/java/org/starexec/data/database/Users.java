@@ -13,6 +13,7 @@ import org.starexec.data.to.Solver;
 import org.starexec.data.to.Benchmark;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.exceptions.StarExecSecurityException;
+import org.starexec.exceptions.UserDeletionBlockedException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.*;
 
@@ -315,6 +316,22 @@ public class Users {
 			users.add(u);
 		}
 		return users;
+	}
+
+	/**
+	 * Whether a user with this id exists, that is, has not been deleted.
+	 *
+	 * <p>Unlike {@link #get(int)}, a failed lookup is not an answer: the error is thrown, so that a
+	 * caller deciding whether to delete a user's files cannot mistake a lost connection for a
+	 * deleted user. Nor does it require a role, as get does.
+	 *
+	 * @param userId the id of the user
+	 * @return true if the user's row exists
+	 * @throws SQLException if the database could not be asked
+	 */
+	public static boolean exists(int userId) throws SQLException {
+		return Common.query(
+				"SELECT 1 FROM starexec.users WHERE id = ?", procedure -> procedure.setInt(1, userId), ResultSet::next);
 	}
 
 	/**
@@ -846,7 +863,6 @@ public class Users {
 	 */
 
 	public static boolean getUserByEmail(String email) {
-		log.debug("email = " + email);
 		Connection con = null;
 		java.sql.PreparedStatement procedure = null;
 		ResultSet results = null;
@@ -858,7 +874,8 @@ public class Users {
 
 			return results.next();
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the bound address; omit exception details.
+			log.error("Failed to check whether an email address is registered");
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
@@ -1217,14 +1234,16 @@ public class Users {
 			procedure.setString(2, newValue);
 
 			procedure.execute();
-			log.info("User [" + userId + "] updated e-mail address to [" + newValue + "]");
+			log.info("User [" + userId + "] updated e-mail address");
 		} catch (PSQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
-				throw new StarExecDatabaseException("User not found: " + userId, e);
+				throw new StarExecDatabaseException("User not found: " + userId);
 			}
-			log.error(e.getMessage(), e);
+			// Database errors can echo the bound address; omit exception details.
+			log.error("Failed to update e-mail address for user [" + userId + "]");
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the bound address; omit exception details.
+			log.error("Failed to update e-mail address for user [" + userId + "]");
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
@@ -1386,8 +1405,27 @@ public class Users {
 		Connection con = null;
 		PreparedStatement procedure = null;
 		try {
+			// Serialize deletion against new jobs owned by this user. AddJob and this
+			// transaction acquire the same advisory lock; unlike a users-row lock, it
+			// does not conflict with foreign-key checks while stopping running jobs.
+			con = Common.getConnection();
+			Common.beginTransaction(con);
+			lockUserJobLifecycleForDeletion(con, userToDeleteId);
+
 			// First, get information needed for cleanup
 			Space personalSpace = Spaces.getPersonalSpace(userToDeleteId);
+
+			// Stop and retire active executions before their database rows can be
+			// cascaded. A backend that cannot establish this must leave the user and
+			// job rows in place so the administrator can retry after resolving it.
+			Jobs.killUsersJobs(userToDeleteId);
+
+			// Hold the captured identities through the cascade, after backend callbacks finish.
+			try (PreparedStatement lock = con.prepareStatement(
+					"SELECT starexec.lock_user_solver_storage_for_deletion(?)")) {
+				lock.setInt(1, userToDeleteId);
+				lock.execute();
+			}
 
 			// Gather filesystem targets BEFORE the DB cascade so we can clean
 			// up job directories, solver pictures, and benchmark pictures that
@@ -1395,24 +1433,22 @@ public class Users {
 			List<Job> userJobs = Jobs.getByUserId(userToDeleteId);
 			List<Solver> userSolvers = Solvers.getByUser(userToDeleteId);
 			List<Benchmark> userBenchmarks = Benchmarks.getByUser(userToDeleteId);
+			if (userJobs == null || userSolvers == null || userBenchmarks == null) {
+				throw new StarExecDatabaseException(
+						"Could not collect all filesystem targets before deleting user " + userToDeleteId);
+			}
 
-			List<Integer> preGatheredJobIds = new ArrayList<>();
-			if (userJobs != null) {
-				for (Job j : userJobs) {
-					preGatheredJobIds.add(j.getId());
-				}
+			List<String> preGatheredJobDirectories = new ArrayList<>();
+			for (Job j : userJobs) {
+				preGatheredJobDirectories.add(Jobs.getDirectory(j.getId()));
 			}
 			List<Integer> preGatheredSolverIds = new ArrayList<>();
-			if (userSolvers != null) {
-				for (Solver s : userSolvers) {
-					preGatheredSolverIds.add(s.getId());
-				}
+			for (Solver s : userSolvers) {
+				preGatheredSolverIds.add(s.getId());
 			}
 			List<Integer> preGatheredBenchmarkIds = new ArrayList<>();
-			if (userBenchmarks != null) {
-				for (Benchmark b : userBenchmarks) {
-					preGatheredBenchmarkIds.add(b.getId());
-				}
+			for (Benchmark b : userBenchmarks) {
+				preGatheredBenchmarkIds.add(b.getId());
 			}
 
 			// Processor file paths must be collected before the cascade removes the
@@ -1428,14 +1464,35 @@ public class Users {
 				}
 			}
 
-			// One connection, one transaction. The personal-space removal and the
-			// user row deletion must succeed or fail together. Previously the space
+			List<String> cleanupPaths = new ArrayList<>(processorFiles);
+			cleanupPaths.add(R.getSolverPath() + "/" + userToDeleteId);
+			cleanupPaths.add(R.getBenchmarkPath() + "/" + userToDeleteId);
+			cleanupPaths.addAll(preGatheredJobDirectories);
+			cleanupPaths.add(R.getPicturePath() + "/users/Pic" + userToDeleteId + "_org.jpg");
+			cleanupPaths.add(R.getPicturePath() + "/users/Pic" + userToDeleteId + "_thn.jpg");
+			for (int id : preGatheredSolverIds) {
+				cleanupPaths.add(R.getPicturePath() + "/solvers/Pic" + id + "_org.jpg");
+				cleanupPaths.add(R.getPicturePath() + "/solvers/Pic" + id + "_thn.jpg");
+			}
+			for (int id : preGatheredBenchmarkIds) {
+				cleanupPaths.add(R.getPicturePath() + "/benchmarks/Pic" + id + "_org.jpg");
+				cleanupPaths.add(R.getPicturePath() + "/benchmarks/Pic" + id + "_thn.jpg");
+			}
+			for (String path : cleanupPaths) verifyUserCleanupAncestors(path);
+			try (PreparedStatement guard = con.prepareStatement(
+					"SELECT starexec.assert_user_solver_storage_deletable(?,?)")) {
+				guard.setInt(1, userToDeleteId);
+				guard.setArray(2, con.createArrayOf("TEXT", cleanupPaths.toArray(new String[0])));
+				guard.execute();
+			}
+
+			// One connection, one transaction. It has held the lifecycle advisory lock
+			// since before the job sweep. The personal-space removal and user deletion
+			// must succeed or fail together. Previously the space
 			// removal ran through Spaces.removeSubspace, which opened its own
 			// connection and committed; when the user deletion then failed (any user
 			// with analytics_users rows failed with SQLSTATE 23503) the user survived
 			// with their entire space subtree already destroyed.
-			con = Common.getConnection();
-			Common.beginTransaction(con);
 
 			if (personalSpace != null) {
 				log.info("Deleting personal space for user " + userToDeleteId + " with space id "
@@ -1481,13 +1538,17 @@ public class Users {
 			// who is genuinely gone - the safe direction - and is logged loudly so
 			// the paths remain discoverable.
 			Spaces.cleanProcessorFiles(processorFiles);
-			deleteUsersPrimitiveDirectories(userToDeleteId, preGatheredJobIds, preGatheredSolverIds, preGatheredBenchmarkIds);
+			deleteUsersPrimitiveDirectories(userToDeleteId, preGatheredJobDirectories, preGatheredSolverIds, preGatheredBenchmarkIds);
 
 			log.debug("Successfully deleted user with id=" + userToDeleteId + " and all associated data");
 			return true;
 		} catch (PSQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
 				throw new StarExecDatabaseException("User not found: " + userToDeleteId, e);
+			}
+			if ("55006".equals(e.getSQLState()) || "55P03".equals(e.getSQLState())) {
+				throw new UserDeletionBlockedException(UserDeletionBlockedException.SOLVER_STORAGE_IN_USE,
+						"User deletion requires retained solver storage to be resolved", null, null, e);
 			}
 			log.error("deleteUser", e);
 		} catch (StarExecDatabaseException e) {
@@ -1513,6 +1574,52 @@ public class Users {
 		}
 		log.debug("internal error trying to delete user with id = " + userToDeleteId);
 		return false;
+	}
+
+	/** Refuses symbolic or inaccessible ancestors before committing recursive cleanup. */
+	private static void verifyUserCleanupAncestors(String value) throws java.io.IOException {
+		java.nio.file.Path path = java.nio.file.Path.of(value);
+		if (!path.isAbsolute() || path.getParent() == null || !path.equals(path.normalize())) {
+			throw new java.io.IOException("User cleanup requires an absolute normalized non-root path");
+		}
+		java.nio.file.Path ancestor = path;
+		while (ancestor != null) {
+			try {
+				var attributes = java.nio.file.Files.readAttributes(ancestor,
+						java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+				if (attributes.isSymbolicLink()) throw new java.io.IOException("User cleanup cannot follow a symbolic ancestor");
+				if (!attributes.isDirectory()) ancestor = ancestor.getParent();
+				try (DescriptorDirectory ignored = DescriptorDirectory.open(ancestor)) { }
+				return;
+			} catch (java.nio.file.NoSuchFileException absent) {
+				ancestor = ancestor.getParent();
+			}
+		}
+		throw new java.io.IOException("User cleanup ancestors are unavailable");
+	}
+
+	/** Locks the user's job lifecycle and verifies the user exists before deletion. */
+	private static void lockUserJobLifecycleForDeletion(Connection con, int userId)
+			throws SQLException, StarExecDatabaseException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT starexec.LockUserJobLifecycle(?)")) {
+			ps.setInt(1, userId);
+			try (ResultSet ignored = ps.executeQuery()) {
+				// Exhaust and close the function result before running the existence query.
+				while (ignored.next()) {
+					// The function returns void; only its transaction-scoped lock matters.
+				}
+			}
+		}
+		try (PreparedStatement ps = con.prepareStatement(
+				"SELECT id FROM starexec.users WHERE id = ?")) {
+			ps.setInt(1, userId);
+			try (ResultSet rs = ps.executeQuery()) {
+				if (!rs.next()) {
+					throw new StarExecDatabaseException("User not found: " + userId,
+							new SQLException("User not found", "P0002"));
+				}
+			}
+		}
 	}
 
 	/**
@@ -1564,17 +1671,17 @@ public class Users {
 	 * This includes: solvers, benchmarks, jobs, and ALL pictures (user, solver, and
 	 * benchmark).
 	 *
-	 * <p>Accepts pre-gathered IDs so that filesystem cleanup works after the DB
+	 * <p>Accepts pre-gathered identities so that filesystem cleanup works after the DB
 	 * cascade has removed the user's rows.</p>
 	 *
 	 * @param userId Id of user whose data is to be completely deleted.
-	 * @param jobIds Ids of the user's jobs (pre-gathered before DB cascade).
+	 * @param jobDirectories Job directories checked before the DB cascade.
 	 * @param solverIds Ids of the user's solvers (pre-gathered before DB cascade).
 	 * @param benchmarkIds Ids of the user's benchmarks (pre-gathered before DB cascade).
 	 * @author Albert Giegerich, Andres Caicedo (comprehensive cleanup)
 	 */
 	private static void deleteUsersPrimitiveDirectories(int userId,
-			List<Integer> jobIds, List<Integer> solverIds, List<Integer> benchmarkIds) {
+			List<String> jobDirectories, List<Integer> solverIds, List<Integer> benchmarkIds) {
 		final String method = "deleteUsersPrimitiveDirectories";
 		log.info(method + ": Deleting ALL data for user with id=" + userId);
 
@@ -1584,8 +1691,8 @@ public class Users {
 		// Delete user's benchmark directory
 		deleteUsersBenchmarkDirectory(userId);
 
-		// Delete all job output directories for user's jobs (using pre-gathered IDs)
-		deleteUsersJobDirectories(userId, jobIds);
+		// Delete only the job output directories checked before the cascade.
+		deleteUsersJobDirectories(userId, jobDirectories);
 
 		// Delete user's profile pictures
 		deleteUserPictures(userId);
@@ -1600,22 +1707,20 @@ public class Users {
 	}
 
 	/**
-	 * Deletes the given user's job output directories using pre-gathered job IDs.
+	 * Deletes the given user's job output directories using prechecked paths.
 	 *
 	 * @param userId Id of user whose job directories are to be deleted.
-	 * @param jobIds Pre-gathered job IDs (collected before the DB cascade so they
-	 *               are still reachable after user row deletion).
+	 * @param jobDirectories Job paths captured and checked before the DB cascade.
 	 * @author Albert Giegerich
 	 */
-	private static void deleteUsersJobDirectories(int userId, List<Integer> jobIds) {
+	private static void deleteUsersJobDirectories(int userId, List<String> jobDirectories) {
 		final String method = "deleteUsersJobDirectories";
 		log.entry(method);
-		if (jobIds == null || jobIds.isEmpty()) {
-			log.debug(method + ": No pre-gathered job IDs for user " + userId);
+		if (jobDirectories == null || jobDirectories.isEmpty()) {
+			log.debug(method + ": No pre-gathered job directories for user " + userId);
 			return;
 		}
-		for (int jobId : jobIds) {
-			final String jobDirectory = Jobs.getDirectory(jobId);
+		for (String jobDirectory : jobDirectories) {
 			log.debug(method + ": Deleting job directory: " + jobDirectory);
 			Util.safeDeleteDirectory(jobDirectory);
 		}
@@ -1945,7 +2050,6 @@ public class Users {
 	 */
 	public static int add(User user) {
 		log.debug("beginning to add user...");
-		log.debug("pass = " + user.getPassword());
 		Connection con = null;
 		PreparedStatement stmt = null;
 		ResultSet rs = null;
@@ -1953,7 +2057,6 @@ public class Users {
 			con = Common.getConnection();
 
 			String hashedPass = PasswordHasher.hash(user.getPassword());
-			log.debug("hashedPass = " + hashedPass);
 			stmt = con.prepareStatement("SELECT AddUserAuthorized(?, ?, ?, ?, ?, ?, ?, ?)");
 			stmt.setString(1, user.getFirstName());
 			stmt.setString(2, user.getLastName());
@@ -1973,7 +2076,12 @@ public class Users {
 			log.debug("newid = " + user.getId());
 			return user.getId();
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			String sqlState = e instanceof SQLException ? ((SQLException) e).getSQLState() : null;
+			if (sqlState == null || !sqlState.matches("[A-Z0-9]{5}")) {
+				sqlState = "unknown";
+			}
+			log.error("add", "Failed to add user (exception: " + e.getClass().getSimpleName()
+					+ ", SQLState: " + sqlState + ")");
 			Common.doRollback(con);
 		} finally {
 			Common.safeClose(con);

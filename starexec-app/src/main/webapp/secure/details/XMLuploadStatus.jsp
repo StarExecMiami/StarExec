@@ -100,7 +100,7 @@
 				<td>
 					<c:choose>
 						<c:when test="${not empty status.errorMessage}">
-							<span class="error-text">${status.errorMessage}</span>
+							<span class="error-text"><c:out value="${status.errorMessage}"/></span>
 						</c:when>
 						<c:otherwise>
 							<span class="success-text">None</span>

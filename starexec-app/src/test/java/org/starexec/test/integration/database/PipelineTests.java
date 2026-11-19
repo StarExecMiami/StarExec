@@ -1,6 +1,6 @@
 package org.starexec.test.integration.database;
 
-import org.junit.Assert;
+import org.junit.jupiter.api.Assertions;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Pipelines;
 import org.starexec.data.to.Solver;
@@ -31,22 +31,22 @@ public class PipelineTests extends TestSequence {
 	private void getFullPipelineTest() {
 		SolverPipeline p=Pipelines.getFullPipeline(pipe.getId());
 
-		Assert.assertNotNull(p);
-		Assert.assertEquals(pipe.getName(), p.getName());
-		Assert.assertEquals(pipe.getId(),p.getId());
-		Assert.assertEquals(pipe.getStages().size(),p.getStages().size());
+		Assertions.assertNotNull(p);
+		Assertions.assertEquals(pipe.getName(), p.getName());
+		Assertions.assertEquals(pipe.getId(),p.getId());
+		Assertions.assertEquals(pipe.getStages().size(),p.getStages().size());
 
 		for (int i=0; i<pipe.getStages().size(); ++i) {
 			PipelineStage actualStage = pipe.getStages().get(i);
 			PipelineStage retrievedStage = p.getStages().get(i);
-			Assert.assertEquals(actualStage.getId(),retrievedStage.getId());
-			Assert.assertEquals(actualStage.getConfigId(),retrievedStage.getConfigId());
+			Assertions.assertEquals(actualStage.getId(),retrievedStage.getId());
+			Assertions.assertEquals(actualStage.getConfigId(),retrievedStage.getConfigId());
 
 			for (int dep=0; dep<actualStage.getDependencies().size(); ++dep) {
 				PipelineDependency actualDep = actualStage.getDependencies().get(i);
 				PipelineDependency retrievedDep = retrievedStage.getDependencies().get(i);
-				Assert.assertEquals(actualDep.getInputNumber(), retrievedDep.getInputNumber());
-				Assert.assertEquals(actualDep.getType(), retrievedDep.getType());
+				Assertions.assertEquals(actualDep.getInputNumber(), retrievedDep.getInputNumber());
+				Assertions.assertEquals(actualDep.getType(), retrievedDep.getType());
 			}
 		}
 	}

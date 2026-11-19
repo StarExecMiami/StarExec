@@ -1,7 +1,7 @@
 package org.starexec.test.junit.constants;
 
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.starexec.constants.PaginationQueries;
 import org.starexec.constants.R;
 
@@ -19,12 +19,12 @@ public class PaginationQueriesTest {
             PaginationQueries.loadPaginationQueries();
 
             // Verify that at least one query is loaded (not empty)
-            Assert.assertNotNull("Query should not be null", PaginationQueries.GET_PAIRS_IN_SPACE_QUERY);
-            Assert.assertFalse("Query should not be empty", PaginationQueries.GET_PAIRS_IN_SPACE_QUERY.isEmpty());
+            Assertions.assertNotNull(PaginationQueries.GET_PAIRS_IN_SPACE_QUERY, "Query should not be null");
+            Assertions.assertFalse(PaginationQueries.GET_PAIRS_IN_SPACE_QUERY.isEmpty(), "Query should not be empty");
 
             // Verify Postgres normalization happened
-            Assert.assertTrue("Query should be normalized for Postgres",
-                    PaginationQueries.GET_SOLVERS_IN_SPACE_QUERY.contains("|| COALESCE(:query, '')::text ||"));
+            Assertions.assertTrue(PaginationQueries.GET_SOLVERS_IN_SPACE_QUERY.contains("|| COALESCE(:query, '')::text ||"),
+                    "Query should be normalized for Postgres");
 
         } finally {
             // Restore original path

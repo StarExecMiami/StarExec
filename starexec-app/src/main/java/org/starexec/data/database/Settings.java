@@ -755,7 +755,11 @@ public class Settings {
 	 * @return True if the operation is successful
 	 * @author Ruoyu Zhang
 	 */
-	public static boolean updateSettingsProfile(int id, int num, long setting) {
+	// The setting is an int because starexec.SetDefaultSettingsById takes an INT and every
+	// caller already parses one. It used to be a long narrowed by a cast at the call to
+	// setInt, which no caller could reach but which the signature invited: widening a
+	// parameter past what the column holds makes truncation the caller's silent problem.
+	public static boolean updateSettingsProfile(int id, int num, int setting) {
 		Connection con = null;
 		PreparedStatement ps = null;
 		try {
@@ -768,7 +772,7 @@ public class Settings {
 			if ((num == 1 || num == 5 || num == 6 || num == 7 || num == 8) && setting == -1) {
 				ps.setObject(3, null);
 			} else {
-				ps.setInt(3, (int) setting);
+				ps.setInt(3, setting);
 			}
 
 			boolean hasResultSet = ps.execute();

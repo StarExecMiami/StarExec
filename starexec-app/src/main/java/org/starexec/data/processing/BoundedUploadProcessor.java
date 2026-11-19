@@ -375,7 +375,7 @@ public class BoundedUploadProcessor {
         try {
             valid = validateBatch(batch);
         } catch (IOException | StarExecException e) {
-            String errorMsg = "Benchmark validation failed for " + batch.size() + " files: " + e.getMessage();
+            String errorMsg = "Rejected a batch of " + batch.size() + " files: " + e.getMessage();
             log.error(errorMsg, e);
             UploadJobQueue.appendError(job.getId(), errorMsg);
             throw new SQLException(errorMsg, e);
@@ -470,9 +470,10 @@ public class BoundedUploadProcessor {
         // entries, and the failure would only surface later when a job pair tried to
         // stage the absent axiom. The synchronous path refuses the upload here, so this
         // one does too.
-        if (!Benchmarks.validateForUpload(batch, resolveDepRootSpaceId(usesDeps), job.isLinked(), usesDeps, null)) {
-            throw new StarExecException("Benchmark dependencies could not be resolved for this upload; "
-                    + "check the dependency root space and the benchmark processor output");
+        String unresolved =
+                Benchmarks.validateForUpload(batch, resolveDepRootSpaceId(usesDeps), job.isLinked(), usesDeps, null);
+        if (unresolved != null) {
+            throw new StarExecException("A benchmark dependency could not be resolved: " + unresolved);
         }
 
         List<Benchmark> valid = new ArrayList<>(batch.size());

@@ -4,6 +4,7 @@ target/
 README.markdown
 *.log
 .env
+starexec-app/src/main/resources/flyway.conf
 node_modules/
 web-docs/
 

@@ -6,12 +6,16 @@ on:
     paths:
       - "starexec-app/**"
       - "pom.xml"
+      - ".github/scripts/mvn_retry.py"
+      - ".github/scripts/test_mvn_retry.py"
       - ".github/workflows/maven-test.yml"
   pull_request:
     branches: [UMprod, dev, main, containerised]
     paths:
       - "starexec-app/**"
       - "pom.xml"
+      - ".github/scripts/mvn_retry.py"
+      - ".github/scripts/test_mvn_retry.py"
       # Without this, a PR that changes only this workflow gets no Maven
       # validation at all -- push.paths already lists it, pull_request.paths
       # did not.
@@ -37,7 +41,18 @@ jobs:
         with:
           java-version: "17"
           distribution: "temurin"
-          cache: "maven"
+
+      # Scope the Maven cache per job so plugins unique to one job (e.g.
+      # surefire/failsafe/jacoco vs flyway/dependency-check) do not collide on
+      # one immutable key and trigger cold Maven Central fetches.
+      - name: Cache Maven repository (unit-tests)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-unit-tests-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-unit-tests-
+            ${{ runner.os }}-m2-
 
       - name: Verify Java version
         run: java -version
@@ -45,14 +60,27 @@ jobs:
       - name: Verify Maven version
         run: mvn -version
 
+      - name: Test Maven retry helper
+        run: python3 -m unittest discover -s .github/scripts -p 'test_mvn_retry.py'
+
+      # CI never compiles SCSS, so nothing else notices a vendored icon that
+      # changed without regenerating css/global/_icon-data.scss.
+      - name: Check generated icon data
+        run: python3 scripts/build-icon-data.py --check
+
       - name: Run unit tests
-        run: mvn clean test -pl starexec-app
+        run: python3 .github/scripts/mvn_retry.py -- mvn -B --no-transfer-progress clean test -pl starexec-app
 
       # Surefire matches **/*Test.java and **/*Tests.java, which do not match *IT.java,
-      # so the step above runs none of the stored routines. Without this step the
-      # StoredRoutineSmokeIT added for exactly that purpose never executed in CI.
+      # so the step above runs none of the stored routines. Scope Failsafe explicitly to
+      # StoredRoutineSmokeIT here; PopulatedSchemaUpgradeIT runs in its own PostgreSQL job.
       - name: Run stored-routine integration tests
-        run: mvn verify -Pit -pl starexec-app -Dsurefire.skip=true
+        run: >-
+          python3 .github/scripts/mvn_retry.py --
+          mvn -B --no-transfer-progress verify -Pit -pl starexec-app
+          -Dsurefire.skip=true
+          -Dit.test=StoredRoutineSmokeIT
+          -Dfailsafe.failIfNoSpecifiedTests=true
 
       - name: Assert the integration tests actually executed
         run: |
@@ -173,14 +201,22 @@ jobs:
         with:
           java-version: "17"
           distribution: "temurin"
-          cache: "maven"
+
+      - name: Cache Maven repository (db-protocol-tests)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-db-protocol-tests-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-db-protocol-tests-
+            ${{ runner.os }}-m2-
 
       # The flyway-maven-plugin configuration interpolates ${starexec.db.*}, and no pom
       # defines those properties, so every flyway goal must be given them explicitly.
       # The schema Flyway targets is ${starexec.db.name}, i.e. "starexec" - not "public".
       - name: Apply migrations with Flyway
         run: |
-          mvn -B flyway:migrate -pl starexec-app \
+          python3 .github/scripts/mvn_retry.py -- mvn -B --no-transfer-progress flyway:migrate -pl starexec-app \
             -Dstarexec.db.host=localhost \
             -Dstarexec.db.name=starexec \
             -Dstarexec.db.user=starexec \
@@ -197,8 +233,8 @@ jobs:
           # connections in an aborted transaction, which poisons whichever DB class
           # surefire happens to schedule next and makes results order-dependent.
           # Add named classes here; do not replace this with a blanket run.
-          mvn -B test -pl starexec-app \
-            -Dtest=JobsRerunProtocolSqlTest,JobsKillProtocolSqlTest,UsersDeletionSqlRegressionTest,AuthenticatedUserStateLoaderTest,StaleSessionProcessorRevocationTest \
+          python3 .github/scripts/mvn_retry.py -- mvn -B --no-transfer-progress test -pl starexec-app \
+            -Dtest=JobStatusFunctionsSqlTest,JobsRerunProtocolSqlTest,JobsKillProtocolSqlTest,DeferredPairResetSqlTest,StaleSubmissionSettleSqlTest,UsersDeletionSqlRegressionTest,PipelineJobAtomicitySqlTest,CommittedButUnrestoredSqlTest,JobCreationLockFootprintSqlTest,ContainerMultiStageStatusSqlTest,TerminalStatusContractSqlTest,SolverBuildRecordSqlTest,KubernetesStageStatusSqlTest,LocalMonitorLifecycleSqlTest,LocalBackendMultiStageE2ESqlTest,StageZeroPreciseStatusSqlTest,StageMembershipPreciseStatusSqlTest,JobStatsNotCachedSqlTest,UnfinishedPairStatsSqlTest,PrimaryStageSummarySqlTest,PairListingClosureSqlTest,QueueForSystemJobSqlTest,JobAttributeTotalsSqlTest,JobAttributeTimePrecisionSqlTest,StageMatchedConflictsSqlTest,BrokenPairsInBackendSqlTest,JobsSqlRegressionTest,BenchmarksSqlRegressionTest,CommonTest,org.starexec.test.junit.data.database.JobTests,AuthenticatedUserStateLoaderTest,StaleSessionProcessorRevocationTest,JobCompletionIdempotenceSqlTest,PairCompletionSerializationSqlTest,UserDiskReconciliationSqlTest,DeveloperJobsQueueScopeSqlTest,AttemptFencedResultWritesSqlTest,JobDiskAccountingLockOrderSqlTest,PairLevelFailureVisibilitySqlTest,LegacyPasswordWrappingSqlTest,NeverStartedRetrySqlTest,RerunClearsJobCompletionSqlTest,StuckJobDetectionSqlTest,UploadDependencyReasonSqlTest,DependencyResolutionVisibilitySqlTest,UploadJobQueueClaimSqlTest,PendingPairsCountSqlTest \
             -DfailIfNoTests=false
 
       - name: Assert the DB-backed suites actually executed
@@ -218,9 +254,51 @@ jobs:
           for fqcn in \
             org.starexec.test.junit.database.JobsRerunProtocolSqlTest \
             org.starexec.test.junit.database.JobsKillProtocolSqlTest \
+            org.starexec.test.junit.database.DeferredPairResetSqlTest \
+            org.starexec.test.junit.database.StaleSubmissionSettleSqlTest \
             org.starexec.test.junit.database.UsersDeletionSqlRegressionTest \
+            org.starexec.test.junit.database.JobDiskAccountingLockOrderSqlTest \
+            org.starexec.test.junit.database.PipelineJobAtomicitySqlTest \
+            org.starexec.test.junit.database.CommittedButUnrestoredSqlTest \
+            org.starexec.test.junit.database.JobCreationLockFootprintSqlTest \
+            org.starexec.test.junit.database.ContainerMultiStageStatusSqlTest \
+            org.starexec.test.junit.database.TerminalStatusContractSqlTest \
+            org.starexec.test.junit.database.SolverBuildRecordSqlTest \
+            org.starexec.test.junit.database.KubernetesStageStatusSqlTest \
+            org.starexec.test.junit.database.UploadJobQueueClaimSqlTest \
+            org.starexec.test.junit.database.LocalMonitorLifecycleSqlTest \
+            org.starexec.test.junit.database.LocalBackendMultiStageE2ESqlTest \
+            org.starexec.test.junit.database.StageZeroPreciseStatusSqlTest \
+            org.starexec.test.junit.database.StageMembershipPreciseStatusSqlTest \
+            org.starexec.test.junit.database.JobStatsNotCachedSqlTest \
+            org.starexec.test.junit.database.UnfinishedPairStatsSqlTest \
+            org.starexec.test.junit.database.PrimaryStageSummarySqlTest \
+            org.starexec.test.junit.database.PairListingClosureSqlTest \
+            org.starexec.test.junit.database.QueueForSystemJobSqlTest \
+            org.starexec.test.junit.database.JobAttributeTotalsSqlTest \
+            org.starexec.test.junit.database.JobAttributeTimePrecisionSqlTest \
+            org.starexec.test.junit.database.StageMatchedConflictsSqlTest \
+            org.starexec.test.junit.database.BrokenPairsInBackendSqlTest \
+            org.starexec.test.junit.database.JobStatusFunctionsSqlTest \
+            org.starexec.test.junit.database.JobsSqlRegressionTest \
+            org.starexec.test.junit.database.BenchmarksSqlRegressionTest \
+            org.starexec.test.junit.database.UserDiskReconciliationSqlTest \
+            org.starexec.test.junit.database.CommonTest \
+            org.starexec.test.junit.data.database.JobTests \
             org.starexec.test.junit.security.AuthenticatedUserStateLoaderTest \
-            org.starexec.test.junit.security.StaleSessionProcessorRevocationTest; do
+            org.starexec.test.junit.security.StaleSessionProcessorRevocationTest \
+            org.starexec.test.junit.database.JobCompletionIdempotenceSqlTest \
+            org.starexec.test.junit.database.PairCompletionSerializationSqlTest \
+            org.starexec.test.junit.database.DeveloperJobsQueueScopeSqlTest \
+            org.starexec.test.junit.database.AttemptFencedResultWritesSqlTest \
+            org.starexec.test.junit.database.PairLevelFailureVisibilitySqlTest \
+            org.starexec.test.junit.database.LegacyPasswordWrappingSqlTest \
+            org.starexec.test.junit.database.NeverStartedRetrySqlTest \
+            org.starexec.test.junit.database.RerunClearsJobCompletionSqlTest \
+            org.starexec.app.StuckJobDetectionSqlTest \
+            org.starexec.test.junit.database.UploadDependencyReasonSqlTest \
+            org.starexec.test.junit.database.DependencyResolutionVisibilitySqlTest \
+            org.starexec.test.junit.database.PendingPairsCountSqlTest; do
             cls="${fqcn##*.}"
             report="starexec-app/target/surefire-reports/${fqcn}.txt"
             if [ ! -f "$report" ]; then
@@ -243,3 +321,77 @@ jobs:
             fi
           done
           exit $fail
+
+  populated-schema-upgrade:
+    name: Populated Database Upgrade
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: starexec
+          POSTGRES_PASSWORD: ci_upgrade_password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U starexec -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout proposed migrations
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout the historical schema before the payload-retention migration
+        uses: actions/checkout@v4
+        with:
+          ref: 85533a9d504353d831da58cd764c11175d91bf50
+          path: upgrade-baseline
+          persist-credentials: false
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+      - name: Cache Maven repository (populated-schema-upgrade)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-populated-schema-upgrade-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-populated-schema-upgrade-
+            ${{ runner.os }}-m2-
+      - name: Upgrade populated V0121 to V0137 and verify a fresh installation
+        env:
+          STAREXEC_UPGRADE_DB_URL: jdbc:postgresql://localhost:5432/postgres
+          STAREXEC_UPGRADE_DB_USER: starexec
+          STAREXEC_UPGRADE_DB_PASSWORD: ci_upgrade_password
+          STAREXEC_UPGRADE_BASELINE_DIR: ${{ github.workspace }}/upgrade-baseline/starexec-app/src/main/resources/db/migration
+        run: >-
+          python3 .github/scripts/mvn_retry.py --
+          mvn -B --no-transfer-progress -pl starexec-app -Pit test-compile failsafe:integration-test failsafe:verify
+          -Dit.test=PopulatedSchemaUpgradeIT -Dfailsafe.failIfNoSpecifiedTests=true
+      - name: Verify the upgrade actually executed without omissions
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          path = Path("starexec-app/target/failsafe-reports/TEST-org.starexec.test.junit.database.PopulatedSchemaUpgradeIT.xml")
+          result = ET.parse(path).getroot()
+          counts = {key: int(result.get(key, "0")) for key in ("tests", "failures", "errors", "skipped")}
+          if counts != {"tests": 1, "failures": 0, "errors": 0, "skipped": 0}:
+              raise SystemExit("Populated upgrade did not pass completely: " + str(counts))
+          print("Populated schema upgrade executed: 1 test, 0 failures, 0 errors, 0 skipped")
+          PY
+      - name: Preserve upgrade reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: populated-database-upgrade
+          path: starexec-app/target/failsafe-reports/
+          if-no-files-found: error

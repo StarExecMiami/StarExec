@@ -50,7 +50,6 @@ function registerAnonymousLinkButtonEventHandler() {
 		$('#dialog-confirm-anonymous-link').dialog({
 			modal: true,
 			width: 600,
-			height: 200,
 			buttons: {
 				'yes': function() {
 					$(this).dialog('close');
