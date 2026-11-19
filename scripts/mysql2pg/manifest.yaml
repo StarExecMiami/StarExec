@@ -1,0 +1,134 @@
+# Declarative table manifest for legacy MariaDB -> PostgreSQL (Flyway) data migration.
+#
+# Principles:
+#   - Target schema is owned exclusively by Flyway (starexec schema).
+#   - Tables are listed in strict FK-safe load order (parents before children).
+#   - Genuine mutual-FK cycles declare `deferred_fk_columns`: the loader inserts
+#     NULL for those nullable FK columns on initial COPY and backfills them once
+#     the referenced table finishes loading.
+#   - Staging imports force system_flags.paused = true so the scheduler does not
+#     dispatch imported jobs automatically.
+
+schema: starexec
+source_timezone: "+00:00"
+
+post_load_sql:
+  - sql/wrap-legacy-password-hashes.sql
+
+tiers:
+  0:
+    description: "System configuration, lookup tables, and user identity"
+    tables:
+      - name: syntax
+      - name: executable_types
+      - name: log_levels
+      - name: permissions
+      - name: queues
+      - name: nodes
+      - name: queue_assoc
+      - name: system_flags
+        overrides:
+          paused: true
+      - name: ui_status_message
+      - name: default_settings
+        # Breaks cycle: users -> default_settings -> (benchmarks, processors, solvers) -> users
+        deferred_fk_columns:
+          - post_processor
+          - default_benchmark
+          - pre_processor
+          - default_solver
+          - bench_processor
+      - name: users
+      - name: user_roles
+
+  1:
+    description: "Spaces, closure hierarchy, and space membership"
+    tables:
+      - name: spaces
+      - name: closure
+      - name: user_assoc
+      - name: set_assoc
+      - name: space_xml_uploads
+        optional: true
+      - name: community_requests
+      - name: anonymous_links
+
+  2:
+    description: "Processors, solvers, benchmarks, configurations, and pipelines"
+    tables:
+      - name: processors
+      - name: solvers
+      - name: solver_assoc
+      - name: configurations
+      - name: website
+      - name: benchmarks
+        chunk_by: id
+      - name: bench_assoc
+      - name: bench_attributes
+      - name: bench_dependency
+      - name: default_bench_assoc
+      - name: benchmark_uploads
+        optional: true
+      - name: unvalidated_benchmarks
+        optional: true
+      - name: solver_pipelines
+        # Breaks cycle: solver_pipelines.primary_stage_id <-> pipeline_stages.pipeline_id
+        deferred_fk_columns:
+          - primary_stage_id
+      - name: pipeline_stages
+      - name: pipeline_dependencies
+
+  3:
+    description: "Jobs, job spaces, job pairs, and execution results"
+    tables:
+      - name: jobs
+        chunk_by: id
+        zero_date_columns:
+          - completed
+      - name: job_assoc
+      - name: job_spaces
+      - name: job_space_assoc
+      - name: job_space_closure
+      - name: job_stage_params
+      - name: job_pairs
+        chunk_by: id
+        zero_date_columns:
+          - end_time
+          - queuesub_time
+          - start_time
+      - name: job_attributes
+      - name: jobpair_inputs
+      - name: jobpair_stage_data
+      - name: job_pair_completion
+      - name: jobpair_time_delta
+      - name: pairs_rerun
+      - name: job_stats
+      - name: runscript_errors
+      - name: anonymous_primitive_names
+      - name: report_data
+        optional: true
+
+  4:
+    description: "Transient, ephemeral, and telemetry tables (dropped by default in staging)"
+    default_action: drop
+    tables:
+      - name: comm_queue
+        action: drop
+      - name: notifications_jobs_users
+        action: drop
+      - name: verify
+        action: drop
+      - name: pass_reset_request
+        action: drop
+      - name: change_email_requests
+        action: drop
+      - name: analytics_events
+        action: drop
+      - name: analytics_historical
+        action: drop
+      - name: analytics_users
+        action: drop
+      - name: logins
+        action: optional
+      - name: error_logs
+        action: optional
