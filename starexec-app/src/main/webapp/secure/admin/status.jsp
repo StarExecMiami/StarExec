@@ -22,6 +22,6 @@
 				</tbody>
 			</table>
 			<input value="Submit" type="submit" />
-		<form>
+		</form>
 	</star:panel>
 </star:template>
