@@ -35,7 +35,9 @@ jQuery(function($) {
 			.attr("value"),
 			parseReturnCode,
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to rerun job pair", 5000);
+		});
 	});
 
 	$('#fieldDetails').expandable(false);
@@ -115,6 +117,10 @@ function initLiveJobLogStream() {
 			return;
 		}
 		setLiveBadgeState(badgeElement, "reconnecting", "Live: reconnecting");
+	});
+
+	window.addEventListener("pagehide", function() {
+		eventSource.close();
 	});
 }
 

@@ -616,7 +616,9 @@ function logout() {
     "json",
   ).fail(function () {
     showMessage(
+      "error",
       "There was an error logging you out. Please try refreshing this page or restarting your browser",
+      5000,
     );
   });
 }

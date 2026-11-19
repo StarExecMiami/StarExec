@@ -10,7 +10,6 @@ var progress = 0;
 5 = choose the benchmarks from the hierarchy - this is currently disabled so this step should never be reached.  some code is left
 in case we find a need for this option and an efficient table for large #s of rows
 */
-solverUndo = [];
 var solverUndo = [];
 var benchUndo = [];
 
@@ -26,7 +25,7 @@ $(document).ready(function() {
 			window.location.href = starexecRoot + "secure/add/addJobLocked.jsp";
 		}
 	  }).fail(function(xhr, status, error) {
-		console.log("Error: " + error);
+		log("Error: " + error);
 	  });
 	curSpaceId = $("#spaceIdInput").attr("value");
 	log('curSpaceId=' + curSpaceId);

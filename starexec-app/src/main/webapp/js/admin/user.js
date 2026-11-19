@@ -13,7 +13,9 @@ jQuery(function ($) {
         }
       },
       "json",
-    );
+    ).fail(function (_jqXHR, textStatus) {
+      handleAjaxError(textStatus);
+    });
   };
 
   // Setup the DataTable objects
@@ -80,7 +82,9 @@ function postAndReloadPageIfSuccessful(postPath) {
       }
     },
     "json",
-  );
+  ).fail(function () {
+    showMessage("error", "Internal error updating user", 5000);
+  });
 }
 
 function suspendUser(userId) {
