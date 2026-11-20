@@ -109,7 +109,7 @@
 		         id="dialog-confirm-delete-txt"></span></p>
 	</div>
 	<c:if test="${ownerId == user.id}">
-		<a id="deleteConfig">delete</a>
+		<a id="deleteConfig" role="button" tabindex="0">delete</a>
 		<a id="editLink"
 		   href="${starexecRoot}/secure/edit/configuration.jsp?id=${config.id}">edit</a>
 	</c:if>

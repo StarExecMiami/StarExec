@@ -106,15 +106,15 @@
 			<legend>actions</legend>
 			<ul id="actionList">
 				<li><a id="joinComm" href="#">join</a></li>
-				<li><a id="leaveComm">leave</a></li>
+				<li><a id="leaveComm" role="button" tabindex="0">leave</a></li>
 				<li><a id="editComm" href="#">edit</a></li>
-				<li><a id="downloadPreProcessors">download preprocessors</a>
+				<li><a id="downloadPreProcessors" role="button" tabindex="0">download preprocessors</a>
 				</li>
-				<li><a id="downloadPostProcessors">download postprocessors</a>
+				<li><a id="downloadPostProcessors" role="button" tabindex="0">download postprocessors</a>
 				</li>
-				<li><a id="downloadBenchProcessors">download benchmark
+				<li><a id="downloadBenchProcessors" role="button" tabindex="0">download benchmark
 					processors</a></li>
-				<li><a id="downloadUpdateProcessors">download update
+				<li><a id="downloadUpdateProcessors" role="button" tabindex="0">download update
 					processors</a></li>
 
 			</ul>

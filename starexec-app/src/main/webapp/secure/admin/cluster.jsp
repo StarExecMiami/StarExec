@@ -19,14 +19,14 @@
 		<fieldset>
 			<legend>actions</legend>
 			<ul id="actionList">
-				<li id="editQueue"><a>edit queue</a></li>
-				<li id="removeQueue"><a>remove queue</a></li>
-				<li id="removeGlobal"><a>remove global access</a></li>
-				<li id="clearErrorStates"><a>clear error states</a></li>
-				<li id="moveNodes"><a>move nodes to this queue</a></li>
-				<li id="CommunityAssoc"><a>give communities access</a></li>
-				<li id="makeTest"><a>set queue as test queue</a></li>
-				<li id="makeGlobal"><a>give queue global access</a></li>
+				<li id="editQueue"><a role="button" tabindex="0">edit queue</a></li>
+				<li id="removeQueue"><a role="button" tabindex="0">remove queue</a></li>
+				<li id="removeGlobal"><a role="button" tabindex="0">remove global access</a></li>
+				<li id="clearErrorStates"><a role="button" tabindex="0">clear error states</a></li>
+				<li id="moveNodes"><a role="button" tabindex="0">move nodes to this queue</a></li>
+				<li id="CommunityAssoc"><a role="button" tabindex="0">give communities access</a></li>
+				<li id="makeTest"><a role="button" tabindex="0">set queue as test queue</a></li>
+				<li id="makeGlobal"><a role="button" tabindex="0">give queue global access</a></li>
 			</ul>
 		</fieldset>
 	</div>

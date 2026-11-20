@@ -99,7 +99,7 @@
 		<h3 class="spaceName"></h3>
 
 		<star:userLoggedIn>
-			<a id="trashcan" class="btn btn-secondary btn-icon icon-only active" aria-label="Recycle Bin">
+			<a id="trashcan" class="btn btn-secondary btn-icon icon-only active" role="button" tabindex="0" aria-label="Recycle Bin">
 				<span class="ui-icon ui-icon-trash"></span>
 			</a>
 		</star:userLoggedIn>
@@ -247,9 +247,9 @@
 				<li><a class="btn btn-secondary btnEdit" id="editSpacePermissions"
 				       href="${starexecRoot}/secure/edit/spacePermissions.jsp"><span class="ui-icon ui-icon-pencil"></span> edit
 					space permissions</a></li>
-				<li><a class="btn btn-secondary btnDown" id="downloadXML"><span class="ui-icon ui-icon-arrowthick-1-s"></span> download space xml</a>
+				<li><a class="btn btn-secondary btnDown" id="downloadXML" role="button" tabindex="0"><span class="ui-icon ui-icon-arrowthick-1-s"></span> download space xml</a>
 				</li>
-				<li><a class="btn btn-secondary btnDown" id="downloadSpace"><span class="ui-icon ui-icon-arrowthick-1-s"></span> download space</a>
+				<li><a class="btn btn-secondary btnDown" id="downloadSpace" role="button" tabindex="0"><span class="ui-icon ui-icon-arrowthick-1-s"></span> download space</a>
 				</li>
 			</ul>
 		</star:panel>

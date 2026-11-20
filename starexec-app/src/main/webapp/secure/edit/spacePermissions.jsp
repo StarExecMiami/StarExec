@@ -256,7 +256,7 @@
 			<a id="exploreSpaces" class="btn btn-secondary backButton"
 			   href="${starexecRoot}/secure/explore/spaces.jsp?id=<c:out value='${param.id}'/>"><span class="ui-icon ui-icon-arrowthick-1-w"></span> return to space
 				explorer</a>
-			<a class="btn btn-primary" id="makePublic">make public</a>
+			<a class="btn btn-primary" id="makePublic" role="button" tabindex="0">make public</a>
 		</fieldset>
 
 	</div>

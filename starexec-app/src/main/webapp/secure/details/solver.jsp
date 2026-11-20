@@ -202,7 +202,7 @@
 	<fieldset id="actions">
 		<legend>actions</legend>
 		<c:if test="${!isAnonymousPage}">
-			<a id="anonymousLink">get anonymous link</a>
+			<a id="anonymousLink" role="button" tabindex="0">get anonymous link</a>
 			<c:if test="${usr.id == user.id || hasAdminReadPrivileges}">
 				<a href="${starexecRoot}/secure/add/configuration.jsp?sid=${solver.id}"
 				   id="uploadConfig">add configuration</a>
@@ -210,14 +210,14 @@
 				   id="editLink">edit</a>
 				<a href="${starexecRoot}/services/solvers/${solver.id}/buildoutput"
 				   target="_blank" id="downBuildInfo">see build info</a>
-				<a id="rebuildSolver">rebuild solver</a>
+				<a id="rebuildSolver" role="button" tabindex="0">rebuild solver</a>
 			</c:if>
 		</c:if>
 		<c:if test="${isAnonymousPage || downloadable || hasAdminReadPrivileges}">
-			<a type="button" id="downLink3">download</a>
+			<a id="downLink3" role="button" tabindex="0">download</a>
 		</c:if>
 		<c:if test="${!isAnonymousPage && sourceDownloadable && downloadable}">
-			<a id="srcLink">source</a>
+			<a id="srcLink" role="button" tabindex="0">source</a>
 		</c:if>
 		<c:if test="${hasAdminReadPrivileges && !isAnonymousPage}">
 			<star:copyToStardevButton/>
