@@ -74,6 +74,22 @@ test('an HTTP error keeps the editor open with the draft and enables another sav
   assert.equal(requests[1].data.description, 'Draft');
 });
 
+test('saving a description sends it in the form body and renders the same text', () => {
+  const { $, requests } = setup('description');
+  const description = 'A & B + C / D';
+  $('#input').val(description);
+  $('#button').fire('click');
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, '/services/job/edit/description/12');
+  assert.deepEqual(Object.entries(requests[0].data), [['description', description]]);
+  assert.equal($('#text').text(), 'Saved');
+
+  requests[0].resolve({ success: true });
+  assert.equal($('#text').text(), description);
+  assert.equal($('#wrapper').visible, false);
+});
+
 test('moving focus to Save works with the keyboard and requests cannot overlap', () => {
   const { $, requests } = setup('name');
   $('#wrapper').fire('focusout', { relatedTarget: $('#button') });

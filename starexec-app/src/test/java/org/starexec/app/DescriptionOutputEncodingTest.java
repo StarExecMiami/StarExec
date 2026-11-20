@@ -103,15 +103,18 @@ public class DescriptionOutputEncodingTest {
 		assertFalse(communityJavaScript.contains("'<td id=\"edit' + attr + '\">' + newVal + '</td>'"));
 
 		String jobJavaScript = Files.readString(JOB_DETAILS_JS);
-		assertTrue(jobJavaScript.contains("$(textSelector).text(name);"));
-		assertFalse(jobJavaScript.contains("$(textSelector).html(name);"));
+		assertTrue(jobJavaScript.contains("var $text = $(textSelector);"));
+		assertTrue(jobJavaScript.contains("$text.text(value);"));
+		assertFalse(jobJavaScript.contains("$text.html("));
+		assertFalse(jobJavaScript.contains("$(textSelector).html("));
 	}
 
 	@Test
 	public void jobDescriptionClientPostsTheValueAsFormData() throws Exception {
 		String jobJavaScript = Files.readString(JOB_DETAILS_JS);
 
-		assertTrue(jobJavaScript.contains("postData = {description: name};"));
+		assertTrue(jobJavaScript.contains("data.description = value;"));
+		assertTrue(jobJavaScript.contains("$.post(url, data, null, 'json')"));
 		assertFalse(jobJavaScript.contains(
 			"'services/job/edit/' + nameOrDescription + '/' + jobId + '/' + name"
 		));
