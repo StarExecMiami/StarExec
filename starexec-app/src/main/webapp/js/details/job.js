@@ -1346,62 +1346,84 @@ function updateSolverComparison(size, color, announce, isLatest) {
 function setupJobNameAndDescriptionEditing(
 	textSelector, inputSelector, buttonSelector, wrapperSelector,
 	nameOrDescription) {
-	// Hide the wrapper when the page loads.
-	$(wrapperSelector).hide();
+	var $text = $(textSelector);
+	var $input = $(inputSelector);
+	var $button = $(buttonSelector);
+	var $wrapper = $(wrapperSelector);
+	var saving = false;
+	var isName = nameOrDescription === 'name';
 
-	$(textSelector).click(function() {
-		$(textSelector).hide();
-		$(wrapperSelector).show();
-		$(inputSelector).select();
+	function closeEditor() {
+		$wrapper.hide();
+		$text.show();
+	}
+
+	function reportSaveError() {
+		showMessage('error', 'Could not save the job ' + nameOrDescription + '. Try again.', 5000);
+	}
+
+	$wrapper.hide();
+	$text.on('click', function() {
+		$text.hide();
+		$wrapper.show();
+		$input.select();
 	});
 
-	// Had to use mousedown here so that it would precede $('editJobName').blur()
-	$(buttonSelector).mousedown(function() {
-		log('Attempting to change name...');
-		var name = $(inputSelector).val();
-		// Make sure the name is a valid primitive name.
-		var primRegex = null;
-		if (nameOrDescription === 'name') {
-			primRegex = new RegExp(getPrimNameRegex());
-		} else {
-			primRegex = new RegExp(getPrimDescRegex());
+	// Keep pointer focus on the input until the Save click is dispatched.
+	$button.on('mousedown', function(event) {
+		if (event.button === 0) {
+			event.preventDefault();
 		}
-		if (!primRegex.test(name)) {
-			showMessage("error", "The given " + nameOrDescription + " contains illegal characters.",
-				5000);
+	}).on('click', function(event) {
+		event.preventDefault();
+		if (saving) {
 			return;
 		}
-		var postUrl = starexecRoot + 'services/job/edit/' + nameOrDescription + '/' + jobId;
-		var postData = {};
-		if (nameOrDescription === 'name') {
-			postUrl += '/' + encodeURIComponent(name);
-		} else {
-			postData = {description: name};
+		var value = $input.val();
+		var pattern = new RegExp(isName ? getPrimNameRegex() : getPrimDescRegex());
+		if (!pattern.test(value)) {
+			showMessage('error', 'The given ' + nameOrDescription + ' contains illegal characters.', 5000);
+			return;
 		}
-		$.post(
-			postUrl,
-			postData,
-			function(returnCode) {
-				success = parseReturnCode(returnCode);
-				if (success) {
-					$(textSelector).text(name);
-					$(inputSelector).val(name);
-					if (nameOrDescription === 'name') {
-						// Change the title of the page to the new name.
-						$('#mainTemplateHeader').text(name);
-					}
+		var url = starexecRoot + 'services/job/edit/' + nameOrDescription + '/' + jobId;
+		var data = {};
+		if (isName) {
+			url += '/' + encodeURIComponent(value);
+		} else {
+			data.description = value;
+		}
+		saving = true;
+		$input.prop('readOnly', true);
+		$button.prop('disabled', true);
+
+		$.post(url, data, null, 'json').done(function(response) {
+			if (!response || !parseReturnCode(response)) {
+				if (!response || !response.message) {
+					reportSaveError();
 				}
-			},
-			'json'
-		);
-		$(wrapperSelector).hide();
-		$(textSelector).show();
+				return;
+			}
+			$text.text(value);
+			if (isName) {
+				$('#mainTemplateHeader').text(value);
+			}
+			closeEditor();
+		}).fail(reportSaveError).always(function() {
+			$input.prop('readOnly', false);
+			$button.prop('disabled', false);
+			saving = false;
+		});
 	});
 
-	$(inputSelector).blur(function() {
-		$(wrapperSelector).hide();
-		$(textSelector).show();
-		$(inputSelector).val($(textSelector).text());
+	$wrapper.on('focusout', function(event) {
+		if (!saving && !this.contains(event.relatedTarget)) {
+			closeEditor();
+		}
+	}).on('keydown', function(event) {
+		if (!saving && event.key === 'Escape') {
+			$input.val($text.text());
+			closeEditor();
+		}
 	});
 }
 
@@ -1444,19 +1466,29 @@ function setupEverythingForUnknownStatusWrapper() {
 }
 
 function initializePanels() {
-	DETAILS_JOB.sentSpaceId = curSpaceId;
+	var spaceId = curSpaceId;
 	if (isLocalJobPage) {
-		var panelJson = $.parseJSON($("#subspacePanelJson" + DETAILS_JOB.sentSpaceId)
-		.attr("value"));
+		var panelJson = $.parseJSON($("#subspacePanelJson" + spaceId).attr("value"));
 		handleSpacesData(panelJson);
-
-	} else if (DETAILS_JOB.isAnonymousPage) {
-		$.getJSON(starexecRoot + "services/space/anonymousLink/" + DETAILS_JOB.anonymousLinkUuid + "/jobspaces/false/" + DETAILS_JOB.primitivesToAnonymize + "?id=" + DETAILS_JOB.sentSpaceId,
-			handleSpacesData);
-	} else {
-		$.getJSON(starexecRoot + "services/space/" + jobId + "/jobspaces/false?id=" + DETAILS_JOB.sentSpaceId,
-			handleSpacesData);
+		return;
 	}
+
+	// Identify the request, not just the space: users can navigate A → B → A.
+	var request = {};
+	DETAILS_JOB.panelRequest = request;
+	var baseUrl = starexecRoot + "services/space/";
+	var url = DETAILS_JOB.isAnonymousPage
+		? baseUrl + "anonymousLink/" + DETAILS_JOB.anonymousLinkUuid + "/jobspaces/false/" + DETAILS_JOB.primitivesToAnonymize
+		: baseUrl + jobId + "/jobspaces/false";
+	$.getJSON(url + "?id=" + spaceId, function(spaces) {
+		if (DETAILS_JOB.panelRequest === request) {
+			handleSpacesData(spaces);
+		}
+	}).fail(function(xhr, status) {
+		if (DETAILS_JOB.panelRequest === request && status !== "abort") {
+			showMessage("error", "Could not load the subspace summary.", 5000);
+		}
+	});
 }
 
 function handleSpacesData(spaces) {
@@ -1480,11 +1512,6 @@ function handleSpacesData(spaces) {
 				spaceId = parseInt(space.attr("id")),
 				child = getPanelTable(space);
 
-			//if the user has changed spaces since this request was sent, we don't want to continue
-			//generating panels for the old space.
-			if (DETAILS_JOB.sentSpaceId != curSpaceId) {
-				return;
-			}
 			$("#panelActions").after(child); //put the table after the panelActions fieldset
 			//if this is a local job page, the getPanelTableInitializer gets the json for the space and parses it.
 			var panelTableInitializer = getPanelTableInitializer(jobId,

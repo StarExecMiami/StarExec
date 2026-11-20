@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '../..');
 const webapp = path.join(root, 'starexec-app/src/main/webapp');
@@ -39,4 +40,25 @@ test('master.js defines Enter and Space keyboard activation for non-href role="b
   assert.match(masterSrc, /e\.key === "Enter"/);
   assert.match(masterSrc, /e\.key === " "/);
   assert.match(masterSrc, /!\$\(this\)\.hasClass\("ui-button"\)/);
+});
+
+test('action anchors activate once per key press and leave Space to jQuery UI buttons', () => {
+  const start = masterSrc.indexOf('$(document).on("keydown",', masterSrc.indexOf('// Keyboard activation for action anchors'));
+  const document = {};
+  let handler;
+  let clicks = 0;
+  let prevented = 0;
+  const context = { document, $: element => element === document
+    ? { on(event, selector, callback) { handler = callback; } }
+    : { hasClass: () => element.uiButton, trigger() { clicks++; } } };
+  vm.runInNewContext(masterSrc.slice(start, masterSrc.indexOf('// Extend jquery functions here', start)), context);
+
+  for (const key of [' ', 'Enter']) {
+    handler.call({}, { key, originalEvent: { repeat: false }, preventDefault() { prevented++; } });
+    handler.call({}, { key, originalEvent: { repeat: true }, preventDefault() { prevented++; } });
+  }
+  handler.call({ uiButton: true }, { key: ' ', preventDefault() { prevented++; } });
+
+  assert.equal(clicks, 2);
+  assert.equal(prevented, 5);
 });

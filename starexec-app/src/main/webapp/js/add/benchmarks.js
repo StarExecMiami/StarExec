@@ -15,6 +15,7 @@ $(document).ready(function() {
 });
 
 var resumableUploadState = null;
+var MAX_CHUNK_RETRIES = 3;
 var RESUMABLE_UPLOAD_STORAGE_PREFIX = 'starexec-benchmark-upload:';
 
 // Helper function to properly join URL paths (avoids double slashes)
@@ -291,30 +292,92 @@ function finalizeResumableUpload() {
 		});
 }
 
+function finishUploadRequest(state, request) {
+	if (resumableUploadState !== state || state.xhr !== request) {
+		return false;
+	}
+	state.xhr = null;
+	return true;
+}
+
+function cancelUploadWork(state) {
+	window.clearTimeout(state.retryTimer);
+	state.retryTimer = null;
+	var request = state.xhr;
+	state.xhr = null;
+	if (request) {
+		request.abort();
+	}
+}
+
+function pauseUploadWithError(state, message) {
+	state.isPaused = true;
+	updateUploadProgressUi('Upload paused.', message,
+		Math.round((state.bytesReceived * 100) / state.file.size));
+	updateUploadControlState();
+}
+
+function recoverUploadChunk(state, chunkIndex, message) {
+	var request = fetchUploadSession(state.sessionId);
+	state.xhr = request;
+	request.done(function(session) {
+		if (!finishUploadRequest(state, request) || state.isPaused || state.isStopped) {
+			return;
+		}
+		if (!session.success || (session.status !== 'UPLOADING' && session.status !== 'READY')) {
+			pauseUploadWithError(state, session.message || 'Could not recover the upload session.');
+			return;
+		}
+		syncStateFromSession(session);
+		if (session.status === 'READY') {
+			finalizeResumableUpload();
+		} else if (state.nextChunkIndex > chunkIndex) {
+			// A transport error does not mean that the server rejected the chunk.
+			state.retryCount = 0;
+			uploadNextChunk();
+		} else if (state.retryCount < MAX_CHUNK_RETRIES) {
+			var delay = 1000 * Math.pow(2, state.retryCount++);
+			updateUiFromSession(session, 'Retrying upload...');
+			state.retryTimer = window.setTimeout(function() {
+				state.retryTimer = null;
+				if (resumableUploadState === state) {
+					uploadNextChunk();
+				}
+			}, delay);
+		} else {
+			pauseUploadWithError(state, message);
+		}
+	}).fail(function() {
+		if (finishUploadRequest(state, request) && !state.isStopped) {
+			pauseUploadWithError(state, message);
+		}
+	});
+}
+
 function uploadNextChunk() {
-	if (!resumableUploadState || resumableUploadState.isPaused || resumableUploadState.isStopped) {
+	var state = resumableUploadState;
+	if (!state || state.isPaused || state.isStopped || state.xhr || state.retryTimer !== null) {
 		return;
 	}
-	if (resumableUploadState.nextChunkIndex >= resumableUploadState.totalChunks) {
+	if (state.nextChunkIndex >= state.totalChunks) {
 		finalizeResumableUpload();
 		return;
 	}
 
-	var chunkIndex = resumableUploadState.nextChunkIndex;
-	var start = chunkIndex * resumableUploadState.chunkSize;
-	var end = Math.min(resumableUploadState.file.size, start + resumableUploadState.chunkSize);
-	var chunk = resumableUploadState.file.slice(start, end);
+	var chunkIndex = state.nextChunkIndex;
+	var start = chunkIndex * state.chunkSize;
+	var end = Math.min(state.file.size, start + state.chunkSize);
+	var chunk = state.file.slice(start, end);
 
 	updateUploadProgressUi(
-		'Uploading chunk ' + (chunkIndex + 1) + ' of ' + resumableUploadState.totalChunks + '...',
-		formatBytes(start) + ' of ' + formatBytes(resumableUploadState.file.size) + ' uploaded',
-		Math.round((start * 100) / resumableUploadState.file.size)
+		'Uploading chunk ' + (chunkIndex + 1) + ' of ' + state.totalChunks + '...',
+		formatBytes(start) + ' of ' + formatBytes(state.file.size) + ' uploaded',
+		Math.round((start * 100) / state.file.size)
 	);
 	updateUploadControlState();
 
-	resumableUploadState.xhr = $.ajax({
-		url: joinPath(starexecRoot, '/services/uploads/sessions/') +
-			resumableUploadState.sessionId + '/chunks/' + chunkIndex,
+	var request = $.ajax({
+		url: joinPath(starexecRoot, '/services/uploads/sessions/') + state.sessionId + '/chunks/' + chunkIndex,
 		type: 'PUT',
 		data: chunk,
 		processData: false,
@@ -323,118 +386,115 @@ function uploadNextChunk() {
 		xhr: function() {
 			var xhr = new XMLHttpRequest();
 			xhr.upload.addEventListener('progress', function(e) {
-				if (!e.lengthComputable || !resumableUploadState) {
+				if (!e.lengthComputable || resumableUploadState !== state || state.xhr !== request) {
 					return;
 				}
-				var uploadedBytes = Math.min(resumableUploadState.file.size, start + e.loaded);
+				var uploadedBytes = Math.min(state.file.size, start + e.loaded);
 				updateUploadProgressUi(
-					'Uploading chunk ' + (chunkIndex + 1) + ' of ' + resumableUploadState.totalChunks + '...',
-					formatBytes(uploadedBytes) + ' of ' + formatBytes(resumableUploadState.file.size) + ' uploaded',
-					Math.round((uploadedBytes * 100) / resumableUploadState.file.size)
+					'Uploading chunk ' + (chunkIndex + 1) + ' of ' + state.totalChunks + '...',
+					formatBytes(uploadedBytes) + ' of ' + formatBytes(state.file.size) + ' uploaded',
+					Math.round((uploadedBytes * 100) / state.file.size)
 				);
 			});
 			return xhr;
 		}
-	}).done(function(session) {
-		resumableUploadState.xhr = null;
-		if (!session.success) {
-			showResumableUploadError(session.message || 'Upload chunk failed');
+	});
+	state.xhr = request;
+	request.done(function(session) {
+		if (!finishUploadRequest(state, request)) {
 			return;
 		}
+		if (!session.success) {
+			pauseUploadWithError(state, session.message || 'Upload chunk failed');
+			return;
+		}
+		state.retryCount = 0;
 		syncStateFromSession(session);
 		updateUiFromSession(session);
-		if (session.status === 'READY' || resumableUploadState.nextChunkIndex >= resumableUploadState.totalChunks) {
+		if (session.status === 'READY') {
 			finalizeResumableUpload();
 		} else {
 			uploadNextChunk();
 		}
 	}).fail(function(xhr, status) {
-		resumableUploadState.xhr = null;
-		if (status === 'abort' && (resumableUploadState.isPaused || resumableUploadState.isStopped)) {
+		if (!finishUploadRequest(state, request) || status === 'abort') {
 			return;
 		}
-		fetchUploadSession(resumableUploadState.sessionId)
-			.done(function(session) {
-				if (session.success) {
-					syncStateFromSession(session);
-					updateUiFromSession(session, resumableUploadState.isPaused ? 'Upload paused.' : 'Resuming upload...');
-					if (!resumableUploadState.isPaused && !resumableUploadState.isStopped) {
-						if (session.status === 'READY') {
-							finalizeResumableUpload();
-						} else {
-							uploadNextChunk();
-						}
-					}
-				} else {
-					showResumableUploadError(session.message || 'Upload failed while recovering session state');
-				}
-			})
-			.fail(function() {
-				showResumableUploadError(getErrorMessage(xhr, 'Upload failed while sending a chunk'));
-			});
+		var message = getErrorMessage(xhr, 'Upload failed while sending a chunk.');
+		if (status === 'parsererror' || [0, 408, 429, 500, 502, 503, 504].includes(xhr.status)) {
+			recoverUploadChunk(state, chunkIndex, message);
+		} else {
+			pauseUploadWithError(state, message);
+		}
 	});
 }
 
 function pauseResumableUpload() {
-	if (!resumableUploadState || !resumableUploadState.sessionId) {
+	var state = resumableUploadState;
+	if (!state || !state.sessionId) {
 		return;
 	}
-	resumableUploadState.isPaused = true;
-	if (resumableUploadState.xhr) {
-		resumableUploadState.xhr.abort();
-	}
+	state.isPaused = true;
+	cancelUploadWork(state);
 	updateUploadProgressUi(
 		'Upload paused.',
-		'Resume to continue from chunk ' + (resumableUploadState.nextChunkIndex + 1),
-		Math.round((resumableUploadState.bytesReceived * 100) / resumableUploadState.file.size)
+		'Resume to continue from chunk ' + (state.nextChunkIndex + 1),
+		Math.round((state.bytesReceived * 100) / state.file.size)
 	);
 	updateUploadControlState();
 }
 
 function resumeResumableUpload() {
-	if (!resumableUploadState || !resumableUploadState.sessionId) {
+	var state = resumableUploadState;
+	if (!state || !state.sessionId || !state.isPaused || state.isStopped || state.xhr) {
 		return;
 	}
-	fetchUploadSession(resumableUploadState.sessionId)
-		.done(function(session) {
-			if (!session.success) {
-				showResumableUploadError(session.message || 'Could not resume upload session');
-				return;
-			}
-			resumableUploadState.isPaused = false;
-			syncStateFromSession(session);
-			updateUiFromSession(session, 'Resuming upload...');
-			updateUploadControlState();
-			if (session.status === 'READY') {
-				finalizeResumableUpload();
-			} else {
-				uploadNextChunk();
-			}
-		})
-		.fail(function(xhr) {
-			showResumableUploadError(getErrorMessage(xhr, 'Could not resume upload session'));
-		});
+	var request = fetchUploadSession(state.sessionId);
+	state.xhr = request;
+	request.done(function(session) {
+		if (!finishUploadRequest(state, request)) {
+			return;
+		}
+		if (!session.success || (session.status !== 'UPLOADING' && session.status !== 'READY')) {
+			pauseUploadWithError(state, session.message || 'Could not resume upload session');
+			return;
+		}
+		state.isPaused = false;
+		state.retryCount = 0;
+		syncStateFromSession(session);
+		updateUiFromSession(session, 'Resuming upload...');
+		updateUploadControlState();
+		if (session.status === 'READY') {
+			finalizeResumableUpload();
+		} else {
+			uploadNextChunk();
+		}
+	}).fail(function(xhr) {
+		if (finishUploadRequest(state, request)) {
+			pauseUploadWithError(state, getErrorMessage(xhr, 'Could not resume upload session'));
+		}
+	});
 }
 
 function stopResumableUpload() {
-	if (!resumableUploadState) {
+	var state = resumableUploadState;
+	if (!state) {
 		return;
 	}
-	resumableUploadState.isStopped = true;
-	if (resumableUploadState.xhr) {
-		resumableUploadState.xhr.abort();
+	state.isStopped = true;
+	cancelUploadWork(state);
+	function closeStoppedUpload() {
+		clearStoredSession(state);
+		if (resumableUploadState === state) {
+			destroyDialog();
+			alert('Upload stopped.');
+		}
 	}
-	if (!resumableUploadState.sessionId) {
-		clearStoredSession(resumableUploadState);
-		destroyDialog();
-		alert('Upload stopped.');
-		return;
+	if (state.sessionId) {
+		abortUploadSessionRequest(state.sessionId).always(closeStoppedUpload);
+	} else {
+		closeStoppedUpload();
 	}
-	abortUploadSessionRequest(resumableUploadState.sessionId).always(function() {
-		clearStoredSession(resumableUploadState);
-		destroyDialog();
-		alert('Upload stopped.');
-	});
 }
 
 function submitLegacyUpload(form) {
@@ -625,6 +685,8 @@ function handleUploadClick(event) {
 		nextChunkIndex: 0,
 		bytesReceived: 0,
 		xhr: null,
+		retryCount: 0,
+		retryTimer: null,
 		isPaused: false,
 		isStopped: false,
 		isFinalizing: false

@@ -212,13 +212,13 @@ $(document).ready(function () {
 
   // Keyboard activation for action anchors without href (role="button")
   $(document).on("keydown", 'a[role="button"]:not([href])', function (e) {
-    if (e.key === "Enter") {
+    if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      $(this).trigger("click");
-    } else if (e.key === " ") {
-      e.preventDefault();
+      if (e.originalEvent && e.originalEvent.repeat) {
+        return;
+      }
       // jQuery UI .button() triggers click on Space keyup; avoid double firing.
-      if (!$(this).hasClass("ui-button")) {
+      if (e.key === "Enter" || !$(this).hasClass("ui-button")) {
         $(this).trigger("click");
       }
     }
