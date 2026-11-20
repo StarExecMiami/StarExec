@@ -154,8 +154,11 @@ public class DoJobPage {
 	 * @param cssName the name of the css file, including the parent directory if it has one.
 	 */
 	private static void handleCSSMaps(File sandbox, String cssName) throws StarExecException{
+		File cssMap = new File(R.STAREXEC_ROOT + CSS_FILE_TYPE + "/" + cssName + ".css.map");
+		if (!cssMap.isFile()) {
+			return;
+		}
 		try {
-			File cssMap = new File(R.STAREXEC_ROOT + CSS_FILE_TYPE + "/" + cssName + ".css.map");
 			File cssFolder = new File(sandbox, "css");
 			File fullPath = new File(cssFolder, cssName + ".css.map");
 			
