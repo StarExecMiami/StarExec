@@ -10,7 +10,7 @@
 	pageContext.setAttribute("yesterdayStr", yesterday.format(formatter));
 %>
 <star:template title="Analytics"
-               js="lib/jquery.dataTables.min, lib/jquery.jstree, admin/analytics"
+               js="lib/jquery.dataTables.min, admin/analytics"
                css="common/table, admin/analytics">
 
 	<!-- Live region for screen reader announcements -->

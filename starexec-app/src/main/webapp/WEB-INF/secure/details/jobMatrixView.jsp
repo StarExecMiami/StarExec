@@ -4,7 +4,7 @@
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
 <%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <star:template title="${fn:escapeXml(job.name)}"
-               js="util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/jobMatrixView, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min, lib/dataTables.fixedColumns.min"
+               js="util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.dataTables.min, details/jobMatrixView, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min, lib/dataTables.fixedColumns.min"
                css="details/jobMatrixView, common/table, common/dataTables.fixedColumns">
 	<div id="matrixPanel" data-job-id="${job.id}" data-job-space-id="${jobSpaceId}" data-stage="${stage}">
 		<h2 class="jobSpaceName">Matrix for job space

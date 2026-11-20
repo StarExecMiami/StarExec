@@ -21,7 +21,7 @@
 %>
 
 <star:template title="Personal Trash Bin"
-               js="common/delaySpinner, details/recycleBin, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.heatcolor.0.0.1.min"
+               js="common/delaySpinner, details/recycleBin, lib/jquery.dataTables.min, lib/jquery.heatcolor.0.0.1.min"
                css="common/delaySpinner, common/table, explore/common, explore/spaces, details/shared, details/recycleBin">
 	<fieldset id="recycledSolverField">
 		<legend class="expd" id="recycledSolverExpd"><span class="list-count"></span>

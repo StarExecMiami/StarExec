@@ -54,18 +54,10 @@ $explorer-heading-color: $text-main-color !default;
 $explorer-base-font-size: 14px !default;
 
 // Tree node styling
-$tree-node-padding-x: $space-sm !default;
-$tree-node-padding-y: $space-xs !default;
-$tree-node-padding: $tree-node-padding-y $tree-node-padding-x !default;
-$tree-node-margin: 0 0 2px 0 !default;
 $tree-node-border-radius: 2px !default;
 $tree-node-min-height: 28px !default;
 
 // Tree node states
-$tree-node-hover-bg: $accent-orange !default;
-$tree-node-hover-shadow: 0 0 2px 1px rgba($text-main-color, 0.3) !default;
-$tree-node-selected-bg: $accent-red !default;
-$tree-node-selected-shadow: 0 0 2px 1px rgba($text-main-color, 0.3) !default;
 $tree-node-active-border: 1px dashed $accent-green !default;
 $tree-node-drop-hover-bg: $accent-green !default;
 
@@ -110,20 +102,6 @@ $detail-panel-padding-mobile: $space-sm !default;
   padding: 0;
   display: inline-block;
   font-weight: normal;
-}
-
-@mixin tree-node-hover {
-  background-color: $tree-node-hover-bg;
-  box-shadow: $tree-node-hover-shadow;
-  border-radius: $tree-node-border-radius;
-  color: $text-main-color;
-}
-
-@mixin tree-node-selected {
-  background-color: $tree-node-selected-bg;
-  box-shadow: $tree-node-selected-shadow;
-  border-radius: $tree-node-border-radius;
-  color: $text-main-color;
 }
 
 // =============================================================================
@@ -178,50 +156,9 @@ $detail-panel-padding-mobile: $space-sm !default;
 // =============================================================================
 // Override jsTree default theme with StarExec dark theme colors
 
-.jstree-default {
-  // Base list item
-  li {
-    margin: $tree-node-margin;
-    padding: 0;
-    background-color: transparent;
-    
-    &.jstree-last {
-      background-color: $foreground-color;
-    }
-  }
-  
-  // No dots variant
-  .jstree-no-dots li,
-  .jstree-no-dots .jstree-leaf > ins {
-    background-color: $foreground-color;
-  }
-  
-  // Hover state
-  .jstree-hovered {
-    @include tree-node-hover;
-  }
-  
-  // Selected/clicked state
-  .jstree-clicked {
-    @include tree-node-selected;
-  }
-  
-  // Links
-  a {
-    color: $explorer-text-color !important;
-    padding: $tree-node-padding;
-    display: inline-block;
-    
-    &:hover {
-      color: $text-main-color !important;
-    }
-    
-    // Search results
-    &.jstree-search {
-      color: cyan !important;
-      font-style: italic;
-    }
-  }
+.jstree-default-dark .jstree-anchor:focus-visible {
+  outline: 2px solid $accent-orange;
+  outline-offset: 2px;
 }
 
 // =============================================================================
@@ -261,7 +198,6 @@ $tree-node-icons: (
 
 @each $type, $icon in $tree-node-icons {
   .jstree li[rel="#{$type}"] > a > .jstree-icon {
-    // jstree draws icons with <ins>, which the HTML5 reset paints black.
     color: inherit;
     background-image: none;
 
@@ -286,41 +222,6 @@ $tree-node-icons: (
 }
 
 // =============================================================================
-// CONTEXT MENU DARK THEME
-// =============================================================================
-
-#vakata-contextmenu.jstree-default-context {
-  background: $foreground-color;
-  border: 1px solid $background-color;
-  box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
-  border-radius: $tree-node-border-radius;
-  
-  li ul {
-    background: $foreground-color;
-    border: 1px solid $background-color;
-  }
-  
-  a {
-    color: $text-main-color;
-    font-size: $explorer-base-font-size;
-    padding: $space-xs $space-sm;
-    display: block;
-    
-    &:hover {
-      background-color: $accent-orange;
-      color: $text-main-color;
-      border-radius: $tree-node-border-radius;
-    }
-  }
-  
-  .vakata-hover > a {
-    background-color: $accent-orange;
-    color: $text-main-color;
-    border-radius: $tree-node-border-radius;
-  }
-}
-
-// =============================================================================
 // DRAG & DROP STYLING
 // =============================================================================
 
@@ -341,16 +242,6 @@ $tree-node-icons: (
     float: left;
     margin-right: $space-xs;
   }
-}
-
-#vakata-dragged.jstree-default {
-  ins {
-    background: transparent !important;
-  }
-}
-
-#jstree-marker.jstree-default {
-  z-index: 1000;
 }
 
 // =============================================================================

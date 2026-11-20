@@ -49,7 +49,7 @@
 %>
 <star:template
 		title="Conflicting benchmarks for solver/config ${fn:escapeXml(solver.name)} / ${fn:escapeXml(configuration.name)}"
-		js="details/solverConflicts, util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/shared, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min"
+		js="details/solverConflicts, util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.dataTables.min, details/shared, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min"
 		css="details/solverConflicts, common/table, common/delaySpinner, explore/common, details/shared">
 	<fieldset>
 		<legend>Conflicting benchmarks</legend>

@@ -1,7 +1,7 @@
 <%@page contentType="text/html" pageEncoding="UTF-8" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <star:template title="Logging"
-               js="admin/logging, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.heatcolor.0.0.1.min,lib/jquery.validate.min"
+               js="admin/logging, lib/jquery.dataTables.min, lib/jquery.heatcolor.0.0.1.min,lib/jquery.validate.min"
                css="common/table, details/shared, explore/common, explore/spaces, admin/admin">
 	<star:panel title="Logging Levels" withCount="false" expandable="false">
 		<table id="tableLevels" class="shaded contentTbl">
