@@ -26,8 +26,8 @@
 %>
 
 <star:template title="Communities"
-               js="shared/sharedFunctions, common/delaySpinner, lib/jquery.dataTables.min, lib/jquery.jstree, explore/communities"
-               css="common/delaySpinner, common/table, explore/common, explore/communities">
+               js="shared/sharedFunctions, common/delaySpinner, lib/jquery.dataTables.min, lib/jstree.min, explore/communities"
+               css="common/delaySpinner, common/table, explore/common, jstree/default-dark/style.min, explore/communities">
 	<span id="leaderResponse" value="${leaderResponseParameterName}"
 	      hidden></span>
 	<span id="hasAdminReadPrivileges" value="${hasAdminReadPrivileges}"
@@ -40,9 +40,10 @@
 	<span id="communityPage" value="${sentFromCommunityPage}" hidden></span>
 	<span id="userId" value="${userId}" hidden></span>
 	<div id="explorer">
-		<h3>Official</h3>
-		<ul id="exploreList" class="community-tree">
-		</ul>
+		<h3 id="community-tree-heading">Official</h3>
+		<p id="community-tree-status" role="status" tabindex="-1"></p>
+		<button id="community-tree-retry" class="btn btn-secondary community-tree-retry" type="button" hidden>Retry</button>
+		<div id="exploreList" class="community-tree" aria-labelledby="community-tree-heading"></div>
 	</div>
 
 	<div id="detailPanel">

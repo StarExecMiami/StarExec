@@ -1,6 +1,14 @@
 
 @use "../global/mixins" as m;
 
+.community-tree .jstree-anchor:focus-visible {
+	@include m.focus-ring;
+}
+
+.community-tree-retry[hidden] {
+	display: none;
+}
+
 @include m.mobile {
 	#explorer {
 		width: 100%;

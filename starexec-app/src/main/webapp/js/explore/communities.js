@@ -2,14 +2,12 @@ var leaderTable;
 var memberTable;
 requestsTable = null;
 var requestsTableInitializedOnce = false;
+var latestCommunityDetailsRequest;
 
 var commName; // Current community's name
 
 // When the document is ready to be executed on
 $(document).ready(function() {
-	// Set the path to the css theme for the jstree plugin
-	$.jstree._themes = starexecRoot + "css/jstree/";
-
 	var id = -1;
 	var userId = $('#userId').attr('value');
 	log('User Id is: ' + userId);
@@ -20,39 +18,8 @@ $(document).ready(function() {
 	memberTable = $('#members').dataTable(dataTableConfig);
 	leaderTable = $('#leaders').dataTable(dataTableConfig);
 
-	// Initialize the jstree plugin for the community list
-	jQuery("#exploreList").jstree({
-		"json_data": {
-			"ajax": {
-				"url": starexecRoot + "services/communities/all"	// Where we will be getting json data from
-			}
-		},
-		// comparator between two nodes that defines how the jstree will be sorted.
-		// Must return 1 or -1
-		"sort": function(a, b) {
-			return this.get_text(a).toLowerCase() > this.get_text(b)
-			.toLowerCase() ? 1 : -1;
-		},
-		"themes": {
-			"theme": "default",
-			"dots": false,
-			"icons": true
-		},
-		"types": {
-			"max_depth": -2,
-			"max_children": -2,
-			"valid_children": ["space"],
-			"types": {
-				"space": {
-					"valid_children": ["space"]
-				}
-			}
-		},
-		"plugins": ["types", "themes", "json_data", "ui", "cookies", "sort"],
-		"core": {animation: 200}
-	}).on("select_node.jstree", function(event, data) {
-		// When a node is clicked, get its ID and display the info in the details pane
-		id = data.rslt.obj.attr("id");
+	initCommunityTree(function(selectedId) {
+		id = selectedId;
 		updateActionId(id);
 		getCommunityDetails(id);
 		// immediately hide the community requests table so unauthorized users wont get a glimpse of it.
@@ -64,7 +31,7 @@ $(document).ready(function() {
 			requestsTableInitializedOnce = true;
 		}
 		requestsTable = initCommunityRequestsTable('#commRequests', false, id);
-	}).on("click", "a", function(event, data) { event.preventDefault(); });	// This just disable's links in the node title
+	});
 
 	$("#members").on("click", "tr", function() {
 		$(this).toggleClass("row_selected");
@@ -158,22 +125,113 @@ $(document).ready(function() {
 	});
 });
 
+function communityTreeNodes(response) {
+	if (!Array.isArray(response)) {
+		return null;
+	}
+	var nodes = [];
+	for (var community of response) {
+		if (!community || !community.attr || !Number.isInteger(community.attr.id)
+			|| community.attr.id <= 0 || typeof community.data !== 'string') {
+			return null;
+		}
+		nodes.push({
+			id: String(community.attr.id),
+			text: community.data,
+			li_attr: { rel: 'space' }
+		});
+	}
+	return nodes.sort(function(a, b) {
+		var left = a.text.toLowerCase();
+		var right = b.text.toLowerCase();
+		return left < right ? -1 : left > right ? 1 : 0;
+	});
+}
+
+function initCommunityTree(onSelect) {
+	var $tree = $('#exploreList');
+	var $status = $('#community-tree-status');
+	var $retry = $('#community-tree-retry');
+	var selectionCookie = 'starexec-community-selection';
+
+	function showLoadError() {
+		$status.text('Could not load communities.');
+		$retry.prop('hidden', false);
+	}
+
+	function load() {
+		$status.text('Loading communities…');
+		$retry.prop('hidden', true);
+		$.getJSON(starexecRoot + 'services/communities/all').done(function(response) {
+			var nodes = communityTreeNodes(response);
+			if (!nodes) {
+				showLoadError();
+				return;
+			}
+			if (!nodes.length) {
+				$status.text('No communities available.');
+				return;
+			}
+			$tree.one('ready.jstree', function(event, data) {
+				var legacySelection = $.cookie('jstree_select') || '';
+				var savedIds = [$.cookie(selectionCookie)].concat(legacySelection.split(',').map(function(id) {
+					return id.replace(/^#/, '');
+				}));
+				var savedId = savedIds.find(function(id) {
+					return id && /^[1-9]\d*$/.test(id) && data.instance.get_node(id);
+				});
+				if (savedId) {
+					data.instance.select_node(savedId);
+					$tree.attr('aria-activedescendant', savedId);
+				}
+				$status.text('');
+			}).on('select_node.jstree', function(event, data) {
+				$.cookie(selectionCookie, data.node.id);
+				onSelect(data.node.id);
+			}).jstree({
+				core: {
+					data: nodes,
+					force_text: true,
+					multiple: false,
+					worker: false,
+					themes: { name: 'default-dark', dots: false, icons: true }
+				}
+			});
+		}).fail(showLoadError);
+	}
+
+	$retry.on('click', function() {
+		if (!$retry.prop('hidden')) {
+			$status.trigger('focus');
+			load();
+		}
+	});
+	load();
+}
+
 /**
  * Populates the community details panel with information on the given community
  */
 function getCommunityDetails(id) {
 	log('getting community details for selected community.');
+	var request = { id: id };
+	latestCommunityDetailsRequest = request;
 	$('#loader').show();
 
 	$.get(
 		starexecRoot + "services/communities/details/" + id,
 		function(data) {
-			log('successfully got commmunity details');
-			populateDetails(data);
+			if (request === latestCommunityDetailsRequest) {
+				log('successfully got community details');
+				populateDetails(data);
+			}
 		},
 		"json"
 	).fail(function() {
-		showMessage('error', "Internal error getting community details", 5000);
+		if (request === latestCommunityDetailsRequest) {
+			$('#loader').hide();
+			showMessage('error', "Internal error getting community details", 5000);
+		}
 	});
 }
 
@@ -302,10 +360,8 @@ function leaveCommunity(id) {
 	$.post(
 		starexecRoot + "services/leave/space/" + id,
 		function(returnCode) {
-			s = parseReturnCode(returnCode);
-			if (s) {
+			if (parseReturnCode(returnCode) && latestCommunityDetailsRequest && latestCommunityDetailsRequest.id === id) {
 				getCommunityDetails(id);
-
 			}
 		},
 		"json"
