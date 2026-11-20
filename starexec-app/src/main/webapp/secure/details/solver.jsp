@@ -3,6 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 
 	try {
@@ -29,7 +30,7 @@
 	}
 %>
 
-<star:template title="${solverPageTitle}"
+<star:template title="${fn:escapeXml(solverPageTitle)}"
                js="common/delaySpinner, details/shared, details/solver, shared/copyToStardev, lib/jquery.dataTables.min"
                css="common/delaySpinner, common/table, shared/copyToStardev, details/shared, details/solver">
 	<star:primitiveTypes/>
@@ -65,12 +66,12 @@
 						<c:if test="${ !hideSolverName }">
 							<tr>
 								<td>name</td>
-								<td>${solver.name}</td>
+								<td><c:out value="${solver.name}"/></td>
 							</tr>
 						</c:if>
 						<tr>
 							<td>description</td>
-							<td>${solver.description}</td>
+							<td><c:out value="${solver.description}"/></td>
 						</tr>
 						<c:if test="${ !isAnonymousPage }">
 							<tr>
@@ -116,7 +117,7 @@
 								Configuration${ indexContainer.index + 1 }
 							</td>
 							<td>
-									${c.description}
+									<c:out value="${c.description}"/>
 							</td>
 						</tr>
 					</c:forEach>
@@ -126,12 +127,12 @@
 						<tr>
 							<td id="configItem">
 								<a href="${starexecRoot}/secure/details/configuration.jsp?id=${c.id}">
-										${c.name}
+										<c:out value="${c.name}"/>
 									<span class="ext-link-icon"></span>
 								</a>
 							</td>
 							<td>
-									${c.description}
+									<c:out value="${c.description}"/>
 							</td>
 						</tr>
 					</c:forEach>

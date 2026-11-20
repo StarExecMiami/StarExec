@@ -3,6 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int userId = SessionUtil.getUserId(request);
@@ -62,7 +63,7 @@
 %>
 
 <star:template
-		title="Job Pairs for ${solver.name} in ${jobspace.name} hierarchy"
+		title="Job Pairs for ${fn:escapeXml(solver.name)} in ${fn:escapeXml(jobspace.name)} hierarchy"
 		js="util/sortButtons, util/jobDetailsUtilityFunctions, util/datatablesUtility, lib/jquery.dataTables.min, common/delaySpinner, details/shared, details/pairsInSpace, lib/jquery.ba-throttle-debounce.min"
 		css="common/table, details/shared, details/pairsInSpace">
 	<fieldset id="#pairTblField">

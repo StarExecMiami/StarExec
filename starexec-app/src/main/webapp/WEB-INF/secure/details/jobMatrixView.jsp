@@ -2,12 +2,13 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
-<star:template title="${job.name}"
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
+<star:template title="${fn:escapeXml(job.name)}"
                js="util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/jobMatrixView, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min, lib/dataTables.fixedColumns.min"
                css="details/jobMatrixView, common/table, common/dataTables.fixedColumns">
 	<div id="matrixPanel" data-job-id="${job.id}" data-job-space-id="${jobSpaceId}" data-stage="${stage}">
 		<h2 class="jobSpaceName">Matrix for job space
-			&ldquo;${matrix.getJobSpaceName()}&rdquo; <span class="sr-only">with</span>
+			&ldquo;<c:out value="${matrix.getJobSpaceName()}"/>&rdquo; <span class="sr-only">with</span>
 			<small class="jobSpaceMeta">id=${matrix.getJobSpaceId()}</small>
 		</h2>
 
@@ -70,7 +71,7 @@
 
 		<%-- Matrix table --%>
 		<table id="jobMatrix" role="grid"
-		       aria-label="Solver results matrix for job space ${matrix.getJobSpaceName()}">
+		       aria-label="Solver results matrix for job space ${fn:escapeXml(matrix.getJobSpaceName())}">
 			<thead>
 			<tr class="matrixHeaderRow">
 				<th class="solverHeader benchmarksColumnHeader" scope="col">
@@ -79,11 +80,11 @@
 				<c:forEach var="solverConfig" varStatus="headerIndex"
 				           items="${matrix.getSolverConfigsByColumn()}">
 					<th class="solverHeader" scope="col"
-					    title="${solverConfig.getLeft().getName()} (${solverConfig.getRight().getName()})">
+					    title="${fn:escapeXml(solverConfig.getLeft().getName())} (${fn:escapeXml(solverConfig.getRight().getName())})">
 						<a href="${starexecRoot}/secure/details/solver.jsp?id=${solverConfig.getLeft().getId()}"
 						   target="_blank"
 						   rel="noopener noreferrer">
-							${matrix.getTruncatedColumnHeader(headerIndex.getIndex())}
+							<c:out value="${matrix.getTruncatedColumnHeader(headerIndex.getIndex())}"/>
 							<span class="sr-only">(opens in new tab)</span>
 						</a>
 					</th>
@@ -98,8 +99,8 @@
 						<a href="${starexecRoot}/secure/details/benchmark.jsp?id=${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getId()}"
 						   target="_blank"
 						   rel="noopener noreferrer"
-						   title="${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getName()}">
-							${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getName()}
+						   title="${fn:escapeXml(matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getName())}">
+							<c:out value="${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getName()}"/>
 							<span class="sr-only">(opens in new tab)</span>
 						</a>
 					</th>

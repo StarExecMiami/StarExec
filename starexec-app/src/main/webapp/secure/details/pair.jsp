@@ -142,10 +142,10 @@
 					<td>execution host</td>
 					<c:choose>
 						<c:when test="${isLocalJobPage}">
-							<td>${pair.node.name}</td>
+							<td><c:out value="${pair.node.name}"/></td>
 						</c:when>
 						<c:otherwise>
-							<td><a href="${starexecRoot}/secure/explore/cluster.jsp">${pair.node.name}
+							<td><a href="${starexecRoot}/secure/explore/cluster.jsp"><c:out value="${pair.node.name}"/>
 								<span class="ext-link-icon"></span></a>
 						</td>
 						</c:otherwise>
@@ -156,7 +156,7 @@
 			</c:if>
 			<tr>
 				<td>space</td>
-				<td>${pair.jobSpaceName}</td>
+				<td><c:out value="${pair.jobSpaceName}"/></td>
 			</tr>
 			</tbody>
 		</table>
@@ -181,7 +181,7 @@
 					<td>solver</td>
 					<c:choose>
 						<c:when test="${isLocalJobPage}">
-							<td>${stage.solver.getName()}</td>
+							<td><c:out value="${stage.solver.getName()}"/></td>
 						</c:when>
 						<c:otherwise>
 							<td><star:solver value="${stage.solver}"/></td>
@@ -192,7 +192,7 @@
 					<td>configuration</td>
 					<c:choose>
 						<c:when test="${isLocalJobPage}">
-							<td>${stage.solver.configurations[0].getName()}</td>
+							<td><c:out value="${stage.solver.configurations[0].getName()}"/></td>
 						</c:when>
 						<c:otherwise>
 							<td><star:config

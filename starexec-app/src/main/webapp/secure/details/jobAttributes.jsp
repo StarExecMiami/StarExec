@@ -103,12 +103,12 @@
 						<tr>
 							<td>
 								<a href="${starexecRoot}/secure/details/solver.jsp?id=${row.solverId}">
-									${row.solverName}
+									<c:out value="${row.solverName}"/>
 								</a>
 							</td>
 							<td>
 								<a href="${starexecRoot}/secure/details/configDeleted.jsp?id=${row.configId}">
-									${row.configName}
+									<c:out value="${row.configName}"/>
 								</a>
 							</td>
 							<c:forEach items="${row.countAndTimes}" var="countAndTimes">
@@ -142,7 +142,7 @@
 				<tbody>
 				<c:forEach items="${totalsTable}" var="row">
 					<tr>
-						<td>${row.left}</td>
+						<td><c:out value="${row.left}"/></td>
 						<td>${row.middle}</td>
 						<td>
 							<span class="wallclockSum">${row.right.wallclock}</span>
