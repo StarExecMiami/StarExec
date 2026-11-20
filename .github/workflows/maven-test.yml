@@ -5,6 +5,7 @@ on:
     branches: [UMprod, dev, main, containerised]
     paths:
       - "starexec-app/**"
+      - "scripts/tests/*.test.cjs"
       - "pom.xml"
       - ".github/scripts/mvn_retry.py"
       - ".github/scripts/test_mvn_retry.py"
@@ -13,6 +14,7 @@ on:
     branches: [UMprod, dev, main, containerised]
     paths:
       - "starexec-app/**"
+      - "scripts/tests/*.test.cjs"
       - "pom.xml"
       - ".github/scripts/mvn_retry.py"
       - ".github/scripts/test_mvn_retry.py"
@@ -70,6 +72,9 @@ jobs:
 
       - name: Run unit tests
         run: python3 .github/scripts/mvn_retry.py -- mvn -B --no-transfer-progress clean test -pl starexec-app
+
+      - name: Run frontend regression tests
+        run: ./node/node --test scripts/tests/*.test.cjs
 
       # Surefire matches **/*Test.java and **/*Tests.java, which do not match *IT.java,
       # so the step above runs none of the stored routines. Scope Failsafe explicitly to
