@@ -20,6 +20,7 @@
     <packaging>war</packaging>
 
     <properties>
+        <tomcat.version>9.0.124</tomcat.version>
         <!-- Skip SCSS compilation by default; enable with -Dskip.sass=false during build phase -->
         <skip.sass>true</skip.sass>
     </properties>
@@ -308,14 +309,14 @@
         <dependency>
             <groupId>org.apache.tomcat</groupId>
             <artifactId>tomcat-jdbc</artifactId>
-            <version>9.0.121</version>
+            <version>${tomcat.version}</version>
         </dependency>
 
         <!-- File upload -->
         <dependency>
             <groupId>org.apache.tomcat</groupId>
             <artifactId>tomcat-util</artifactId>
-            <version>9.0.121</version>
+            <version>${tomcat.version}</version>
         </dependency>
 
         <!-- PostConstruct annotation -->
@@ -329,7 +330,7 @@
         <dependency>
             <groupId>org.apache.tomcat</groupId>
             <artifactId>tomcat-catalina</artifactId>
-            <version>9.0.121</version>
+            <version>${tomcat.version}</version>
             <scope>provided</scope>
         </dependency>
 
@@ -337,7 +338,7 @@
         <dependency>
             <groupId>org.apache.tomcat</groupId>
             <artifactId>tomcat-jasper</artifactId>
-            <version>9.0.121</version>
+            <version>${tomcat.version}</version>
         </dependency>
         <!-- Eclipse compiler for JSP/annotation compilation -->
         <dependency>
