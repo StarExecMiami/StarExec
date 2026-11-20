@@ -1,7 +1,6 @@
 /***************** Password-Meter Styles *******************/
 
 .password-meter {
-	position: right;
 	margin-left: 13px;
 	display: inline-block;
 	width: 180px;
@@ -21,25 +20,7 @@
 .password-meter-bg {
 	top: 8px;
 	background: #e0e0e0;
-}
 
-.password-meter-message-illegal, .password-meter-message-too-short, .password-meter-message-very-weak, .password-meter-message-too-long {
-	color: #aa0000;
-}
-
-.password-meter-message-weak {
-	color: #f5ac00;
-}
-
-.password-meter-message-good {
-	color: #6699cc;
-}
-
-.password-meter-message-strong {
-	color: #008000;
-}
-
-.password-meter-bg {
 	.password-meter-illegal, .password-meter-too-short, .password-meter-too-long, .password-meter-very-weak {
 		background: #aa0000;
 		width: 0;
@@ -59,4 +40,20 @@
 		background: #008000;
 		width: 180px;
 	}
+}
+
+.password-meter-message-illegal, .password-meter-message-too-short, .password-meter-message-very-weak, .password-meter-message-too-long {
+	color: #aa0000;
+}
+
+.password-meter-message-weak {
+	color: #f5ac00;
+}
+
+.password-meter-message-good {
+	color: #6699cc;
+}
+
+.password-meter-message-strong {
+	color: #008000;
 }
