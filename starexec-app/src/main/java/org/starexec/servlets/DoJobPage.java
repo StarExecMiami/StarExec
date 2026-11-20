@@ -267,6 +267,8 @@ public class DoJobPage {
 			File sandboxCssDirectory = new File(sandboxDirectory, "css/");
 			File serverCssJstreeDirectory = new File(R.STAREXEC_ROOT + "css/jstree");
 			FileUtils.copyDirectoryToDirectory(serverCssJstreeDirectory, sandboxCssDirectory);
+			FileUtils.copyFileToDirectory(new File(R.STAREXEC_ROOT + "js/lib/jstree/LICENSE-MIT"),
+					new File(sandboxDirectory, "js/lib/jstree"));
 
 		} catch (Exception e) {
 			String msg = e.getMessage();

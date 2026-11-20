@@ -23,8 +23,8 @@
 	}
 %>
 <star:template title="${fn:escapeXml(pageTitle)}"
-               js="util/sortButtons, util/jobDetailsUtilityFunctions, util/datatablesUtility, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/shared, details/job, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min"
-               css="common/table, common/delaySpinner, explore/common, details/shared, details/job">
+               js="util/sortButtons, util/jobDetailsUtilityFunctions, util/datatablesUtility, common/delaySpinner, lib/jstree.min, util/tree, lib/jquery.dataTables.min, details/shared, details/job, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min"
+               css="jstree/default-dark/style.min, common/table, common/delaySpinner, explore/common, details/shared, details/job">
 	<script>
 		star = star || {};
 		<c:if test="${!isLocalJobPage and !isPublicUser && !isComplete}">
@@ -87,8 +87,7 @@
 
 	<div id="explorer" class="jobDetails">
 		<h3>spaces</h3>
-		<ul id="exploreList">
-		</ul>
+		<div id="exploreList" aria-label="Job spaces"></div>
 	</div>
 	<div id="detailPanel" class="jobDetails">
 		<h3 class="spaceName"><c:out value="${initialSpaceName}"/></h3>

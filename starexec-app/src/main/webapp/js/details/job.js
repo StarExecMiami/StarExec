@@ -76,36 +76,20 @@ function initializeGlobalPageVariables() {
 
 // Gets the JSON representation of the space explorer from the hidden <span> containing it.
 function getSpaceExplorerJsonData() {
-	var spaceExplorerJsonData;
 	if (isLocalJobPage) {
-		var jobSpaceTreeJsonText = $('#jobSpaceTreeJson').attr('value');
 		try {
-			spaceExplorerJsonData = {
-				"data": JSON.parse(jobSpaceTreeJsonText)
-			};
-		} catch (syntaxError) {
-			log("Caught syntax error when trying to call JSON.parse on: " + jobSpaceTreeJsonText);
-			return {};
+			var items = JSON.parse($('#jobSpaceTreeJson').attr('value'));
+			return Array.isArray(items) ? items : [];
+		} catch (error) {
+			log("Could not parse the offline job space tree.");
+			return [];
 		}
-	} else {
-		var url;
-		if (DETAILS_JOB.isAnonymousPage) {
-			url = starexecRoot + "services/space/anonymousLink/" + DETAILS_JOB.anonymousLinkUuid + "/jobspaces/true/" + DETAILS_JOB.primitivesToAnonymize;
-		} else {
-			url = starexecRoot + "services/space/" + jobId + "/jobspaces/true";
-		}
-		spaceExplorerJsonData = {
-			"ajax": {
-				"url": url, // Where we will be getting json data from
-				"data": function(n) {
-					return {
-						id: (n.attr ? n.attr("id") : 0)
-					}; // What the default space id should be
-				}
-			}
-		};
 	}
-	return spaceExplorerJsonData;
+	if (DETAILS_JOB.isAnonymousPage) {
+		return starexecRoot + "services/space/anonymousLink/" + DETAILS_JOB.anonymousLinkUuid
+			+ "/jobspaces/true/" + DETAILS_JOB.primitivesToAnonymize;
+	}
+	return starexecRoot + "services/space/" + jobId + "/jobspaces/true";
 }
 
 function setSyncResultsText() {
@@ -368,61 +352,29 @@ function initPairLinksForLJP() {
 }
 
 function initSpaceExplorer() {
-	// Set the path to the css theme for the jstree plugin
-
-	$.jstree._themes = starexecRoot + "css/jstree/";
-	var id;
-
-	$("#exploreList").jstree({
-		"json_data": DETAILS_JOB.spaceExplorerJsonData,
-		"themes": {
-			"theme": "default",
-			"dots": true,
-			"icons": true
-		},
-		"types": {
-			"max_depth": -2,
-			"max_children": -2,
-			"valid_children": ["space"],
-			"types": {
-				"space": {
-					"valid_children": ["space"]
+	star.mountTree($("#exploreList"), DETAILS_JOB.spaceExplorerJsonData, {
+		rootId: 0,
+		initial: DETAILS_JOB.rootJobSpaceId,
+		selectParentOnClose: true,
+		select: function(node) {
+			var id = node.id;
+			if (selectedJobSpaceId == null) {
+				selectedJobSpaceId = id;
+			}
+			if (selectedJobSpaceId !== id) {
+				killAjaxRequests();
+				selectedJobSpaceId = id;
+				setMaxStagesDropdown(node.data.maxStages);
+				$(".spaceName").text(node.text);
+				$("#displayJobSpaceID").text("job space id  = " + id);
+				$("#compareSolvers").hide();
+				reloadTables(id);
+				if (isLocalJobPage) {
+					loadStatsIntoSolveTbl();
 				}
 			}
-		},
-		"ui": {
-			"select_limit": 1,
-			"selected_parent_close": "select_parent",
-			"initially_select": ["#" + DETAILS_JOB.rootJobSpaceId]
-		},
-		"plugins": ["types", "themes", "json_data", "ui", "cookies"],
-		"core": {animation: 200}
-	}).on("select_node.jstree", function(event, data) {
-		// When a node is clicked, get its ID and display the info in the details pane
-		id = data.rslt.obj.attr("id");
-		if (selectedJobSpaceId == null) {
-			selectedJobSpaceId = id;
 		}
-		if (selectedJobSpaceId != id) {
-			killAjaxRequests();
-			// Only reload if a different space was clicked.
-			selectedJobSpaceId = id;
-			name = data.rslt.obj.attr("name");
-			var maxStages = data.rslt.obj.attr("maxStages");
-			setMaxStagesDropdown(parseInt(maxStages));
-			$(".spaceName").text($('.jstree-clicked').text());
-			$("#displayJobSpaceID").text("job space id  = " + id);
-			//no solvers will be selected when a space changes, so hide this button
-			$("#compareSolvers").hide();
-			reloadTables(id);
-			if (isLocalJobPage) {
-				loadStatsIntoSolveTbl();
-			}
-		}
-	}).on("click", "a", function(event, data) {
-		event.preventDefault();  // This just disable's links in the node title
 	});
-	log("Initialized exploreList tree.");
 }
 
 function killAjaxRequests() {
@@ -1428,9 +1380,12 @@ function setupJobNameAndDescriptionEditing(
 }
 
 function openSpace(childId) {
-	$("#exploreList").jstree("open_node", "#" + curSpaceId, function() {
-		$("#exploreList").jstree("select_node", "#" + childId, true);
-	});
+	var tree = $("#exploreList").jstree(true);
+	if (tree) {
+		star.openTreePath(tree, [String(curSpaceId), String(childId)], function(id) {
+			star.selectTreeNode(tree, id);
+		});
+	}
 }
 
 function getPanelTable(space) {
