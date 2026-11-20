@@ -1,13 +1,18 @@
 package org.starexec.test.junit.security;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import org.starexec.app.CsrfFilter;
+import org.starexec.app.RESTServices;
 import org.starexec.app.SessionFilter;
 import org.starexec.constants.R;
 import org.starexec.data.database.Users;
 import org.starexec.data.to.AuthenticatedUserState;
 import org.starexec.data.to.User;
+import org.starexec.util.CsrfUtil;
 import org.starexec.util.SessionUtil;
 
 import javax.servlet.FilterChain;
@@ -22,9 +27,11 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Behaviour of the SessionFilter revalidation gate.
@@ -214,6 +221,52 @@ public class SessionFilterRevocationTest {
 		}
 
 		assertEquals(1, chain.calls, "the index exemption is preserved behaviour");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {R.SUSPENDED_ROLE_NAME, R.UNAUTHORIZED_ROLE_NAME})
+	public void deniedAccountCanLogOutWithCsrfToken(String role) throws Exception {
+		User user = user(7, role);
+		SessionDoubles.Session session = sessionHolding(user);
+		HttpServletRequest request = SessionDoubles.request(
+				session, CTX + "/services/session/logout", CTX, "Mozilla/5.0");
+		HttpServletResponse response = mock(HttpServletResponse.class);
+		String token = "test-csrf-value";
+		session.attrs.put(CsrfUtil.CSRF_TOKEN_ATTR, token);
+		when(request.getMethod()).thenReturn("POST");
+		when(request.getServletPath()).thenReturn("/services");
+
+		FilterChain logout = (req, res) -> new RESTServices().doInvalidateSession((HttpServletRequest) req);
+		FilterChain authenticated = (req, res) -> new SessionFilter().doFilter(req, res, logout);
+		try (MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			users.when(() -> Users.loadAuthenticatedUserState(anyInt()))
+					.thenReturn(AuthenticatedUserState.denied(user, role));
+			new CsrfFilter().doFilter(request, response, authenticated);
+			verify(response).sendError(eq(HttpServletResponse.SC_FORBIDDEN), anyString());
+			assertFalse(session.invalidated);
+
+			when(request.getHeader(CsrfFilter.CSRF_HEADER)).thenReturn(token);
+			new CsrfFilter().doFilter(request, response, authenticated);
+			assertTrue(session.invalidated);
+		}
+	}
+
+	@Test
+	public void deniedAccountCannotUseGetForTheLogoutException() throws Exception {
+		String role = R.SUSPENDED_ROLE_NAME;
+		User user = user(7, role);
+		SessionDoubles.Session session = sessionHolding(user);
+		HttpServletRequest request = SessionDoubles.request(
+				session, CTX + "/services/session/logout", CTX, "Mozilla/5.0");
+		when(request.getMethod()).thenReturn("GET");
+		CountingChain chain = new CountingChain();
+		try (MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			users.when(() -> Users.loadAuthenticatedUserState(anyInt()))
+					.thenReturn(AuthenticatedUserState.denied(user, role));
+			new SessionFilter().doFilter(request, mock(HttpServletResponse.class), chain);
+		}
+		assertEquals(0, chain.calls);
+		assertFalse(session.invalidated);
 	}
 
 	// ------------------------------------------------------------ MALFORMED

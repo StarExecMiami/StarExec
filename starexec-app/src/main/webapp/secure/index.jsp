@@ -100,13 +100,9 @@
 					seconds--;
 					if (seconds < 0) {
 						clearInterval(interval);
-						logout();
+						window.logout();
 					}
 				}, 1000);
-			}
-
-			function logout() {
-				window.location.href = '${pageContext.request.contextPath}/logout';
 			}
 
 			// Initialize countdowns if elements exist
