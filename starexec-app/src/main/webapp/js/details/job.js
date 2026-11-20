@@ -1444,19 +1444,29 @@ function setupEverythingForUnknownStatusWrapper() {
 }
 
 function initializePanels() {
-	DETAILS_JOB.sentSpaceId = curSpaceId;
+	var spaceId = curSpaceId;
 	if (isLocalJobPage) {
-		var panelJson = $.parseJSON($("#subspacePanelJson" + DETAILS_JOB.sentSpaceId)
-		.attr("value"));
+		var panelJson = $.parseJSON($("#subspacePanelJson" + spaceId).attr("value"));
 		handleSpacesData(panelJson);
-
-	} else if (DETAILS_JOB.isAnonymousPage) {
-		$.getJSON(starexecRoot + "services/space/anonymousLink/" + DETAILS_JOB.anonymousLinkUuid + "/jobspaces/false/" + DETAILS_JOB.primitivesToAnonymize + "?id=" + DETAILS_JOB.sentSpaceId,
-			handleSpacesData);
-	} else {
-		$.getJSON(starexecRoot + "services/space/" + jobId + "/jobspaces/false?id=" + DETAILS_JOB.sentSpaceId,
-			handleSpacesData);
+		return;
 	}
+
+	// Identify the request, not just the space: users can navigate A → B → A.
+	var request = {};
+	DETAILS_JOB.panelRequest = request;
+	var baseUrl = starexecRoot + "services/space/";
+	var url = DETAILS_JOB.isAnonymousPage
+		? baseUrl + "anonymousLink/" + DETAILS_JOB.anonymousLinkUuid + "/jobspaces/false/" + DETAILS_JOB.primitivesToAnonymize
+		: baseUrl + jobId + "/jobspaces/false";
+	$.getJSON(url + "?id=" + spaceId, function(spaces) {
+		if (DETAILS_JOB.panelRequest === request) {
+			handleSpacesData(spaces);
+		}
+	}).fail(function(xhr, status) {
+		if (DETAILS_JOB.panelRequest === request && status !== "abort") {
+			showMessage("error", "Could not load the subspace summary.", 5000);
+		}
+	});
 }
 
 function handleSpacesData(spaces) {
@@ -1480,11 +1490,6 @@ function handleSpacesData(spaces) {
 				spaceId = parseInt(space.attr("id")),
 				child = getPanelTable(space);
 
-			//if the user has changed spaces since this request was sent, we don't want to continue
-			//generating panels for the old space.
-			if (DETAILS_JOB.sentSpaceId != curSpaceId) {
-				return;
-			}
 			$("#panelActions").after(child); //put the table after the panelActions fieldset
 			//if this is a local job page, the getPanelTableInitializer gets the json for the space and parses it.
 			var panelTableInitializer = getPanelTableInitializer(jobId,
