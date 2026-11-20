@@ -14,22 +14,12 @@
 	cursor: pointer;
 }
 
-.leaderWrap {
-	position: absolute;
-	bottom: 10px;
-	left: 72px;
-	width: 70px;
+.space-permission-trigger {
+	margin-inline-start: .5rem;
+}
 
-	h2 {
-		text-align: right;
-		font-weight: bold;
-		color: $accent-green;
-	}
-
-	span {
-		display: block;
-		position: absolute;
-	}
+.space-permission-dialog [hidden] {
+	display: none;
 }
 
 $select-dialog-separation: 7px;
@@ -112,55 +102,6 @@ div.selectWrap {
 		position: relative;
 		top: 3px;
 	}
-}
-
-/* these are tooltip styles
-*/
-
-/**
-	 * Custom tooltip style for tooltips that will never be deleted
-	 * (i.e. tooltips on the spaces in #exploreList)
-	 */
-
-.spaceTooltipLeader {
-	background-color: #E1E1E1;
-	padding: 10px;
-	height: 144px;
-	width: 220px;
-}
-
-.spaceTooltipNormal {
-	background-color: #E1E1E1;
-	padding: 10px;
-	height: 120px;
-	width: 220px;
-}
-
-.userTooltipLeader {
-	background-color: #E1E1E1;
-	height: 144px;
-	width: 220px;
-	padding: 10px;
-}
-
-.userTooltipNormal {
-	background-color: #E1E1E1;
-	height: 120px;
-	width: 220px;
-	padding: 10px;
-}
-
-.expdTooltip {
-	background-color: #E1E1E1;
-	width: 220px;
-	padding: 10px;
-}
-
-.userTooltip {
-	background-color: #E1E1E1;
-	height: 144px;
-	width: 220px;
-	padding: 10px;
 }
 
 .copy-options-hidden {
