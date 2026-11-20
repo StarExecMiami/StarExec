@@ -115,7 +115,7 @@ function initButtonUI() {
 function initSpaceExplorer() {
 	// Set the path to the css theme for the jstree plugin
 	jsTree = makeSpaceTree("#exploreList", !usingSpaceChain);
-	jsTree.bind("select_node.jstree", function(event, data) {
+	jsTree.on("select_node.jstree", function(event, data) {
 		// When a node is clicked, get its ID and display the info in the details pane
 		id = data.rslt.obj.attr("id");
 
@@ -124,9 +124,9 @@ function initSpaceExplorer() {
 		$('#permCheckboxes').hide();
 		$('#currentPerms').hide();
 
-	}).bind("loaded.jstree", function(event, data) {
+	}).on("loaded.jstree", function(event, data) {
 		handleSpaceChain("#spaceChain");
-	}).bind("open_node.jstree", function(event, data) {
+	}).on("open_node.jstree", function(event, data) {
 		openDone = true;
 	});
 	$('#exploreList').click(function() {
@@ -475,7 +475,7 @@ function changePermissions(hier, changingLeadership) {
  * @author Julio Cervantes
  */
 function setUpButtons() {
-	$("#savePermChanges").unbind("click");
+	$("#savePermChanges").off("click");
 	$("#savePermChanges").click(function() {
 		$("#dialog-confirm-update-txt")
 		.text("do you want the changes to be hierarchical?");
@@ -493,7 +493,7 @@ function setUpButtons() {
 		});
 	});
 
-	$("#resetPermChanges").unbind("click");
+	$("#resetPermChanges").off("click");
 	$("#resetPermChanges").click(function(e) {
 
 		if (lastSelectedUserId == null) {
@@ -504,7 +504,7 @@ function setUpButtons() {
 
 	});
 
-	$("#leaderStatus").unbind('click');
+	$("#leaderStatus").off('click');
 	$("#leaderStatus").click(function(e) {
 		$("#dialog-confirm-update-txt")
 		.text("how should the leadership change take effect?");
@@ -526,7 +526,7 @@ function setUpButtons() {
 		});
 	});
 
-	$('#addUsersButton').unbind('click');
+	$('#addUsersButton').off('click');
 	$('#addUsersButton').click(function(e) {
 		var selectedUsersIds = getSelectedRows(addUsersTable);
 		var selectedSpace = spaceId;

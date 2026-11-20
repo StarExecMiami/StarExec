@@ -103,7 +103,7 @@ function initSpaceExplorer(
 		},
 		"plugins": ["types", "themes", "json_data", "ui", "cookies"],
 		"core": {animation: 200}
-	}).bind("select_node.jstree", function(event, data) {
+	}).on("select_node.jstree", function(event, data) {
 		// Change the page to the appropriate jobspace.
 		var newJobSpaceId = data.rslt.obj.attr("id");
 		log("New job space id: " + newJobSpaceId);

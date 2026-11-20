@@ -65,7 +65,7 @@ function initUI() {
 								'continue': function() {
 									createDialog(
 										"Adding/deleting job pairs. Please wait. (May take a minute or two for large jobs.)");
-									$('#addJobPairsForm').unbind('submit');
+									$('#addJobPairsForm').off('submit');
 									$('#addJobPairsForm').submit();
 								},
 								'cancel': function() {

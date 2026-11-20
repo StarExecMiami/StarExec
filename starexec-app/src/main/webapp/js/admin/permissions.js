@@ -58,7 +58,7 @@ $(document).ready(function() {
 		},
 		"plugins": ["types", "themes", "json_data", "ui", "cookies"],
 		"core": {animation: 200}
-	}).bind("select_node.jstree", function(event, data) {
+	}).on("select_node.jstree", function(event, data) {
 		// When a node is clicked, get its ID and display the info in the details pane
 		space_id = data.rslt.obj.attr("id");
 		//updateActionId(id);
