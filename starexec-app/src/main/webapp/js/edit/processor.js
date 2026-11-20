@@ -88,7 +88,9 @@ jQuery(function($) {
 					}
 				},
 				"json"
-			);
+			).fail(function() {
+				showMessage('error', 'Failed to update processor', 5000);
+			});
 		}
 	})
 	;
@@ -116,7 +118,9 @@ jQuery(function($) {
 					}
 				},
 				"json"
-			);
+			).fail(function() {
+				showMessage('error', 'Failed to delete processor', 5000);
+			});
 		}
 	})
 	;

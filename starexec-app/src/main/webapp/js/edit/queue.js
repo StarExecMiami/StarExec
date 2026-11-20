@@ -78,7 +78,9 @@ function attachButtonActions() {
 					}
 				},
 				"json"
-			);
+			).fail(function() {
+				showMessage('error', 'Failed to update queue', 5000);
+			});
 		}
 	});
 }

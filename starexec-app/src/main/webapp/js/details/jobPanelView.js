@@ -218,6 +218,8 @@ function initializePanels() {
 
 			});
 			$(".panelField").expandable();
+		}).fail(function(_jqXHR, textStatus) {
+			handleAjaxError(textStatus);
 		});
 
 }

@@ -102,5 +102,10 @@ function makeAnonymousLinkPost(
 			}
 		},
 		'json'
-	);
+	).fail(function() {
+		if (isAnonymizedJobPage) {
+			destroyDialog();
+		}
+		showMessage('error', 'Failed to generate anonymous link', 5000);
+	});
 }

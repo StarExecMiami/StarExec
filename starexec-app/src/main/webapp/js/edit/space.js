@@ -112,7 +112,9 @@ function attachButtonActions() {
 					}
 				},
 				"json"
-			);
+			).fail(function() {
+				showMessage('error', 'Failed to update space', 5000);
+			});
 		}
 	});
 

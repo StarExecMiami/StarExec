@@ -78,7 +78,9 @@ function initUI() {
 					}
 				},
 				"json"
-			);
+			).fail(function() {
+				showMessage('error', 'Failed to process benchmarks', 5000);
+			});
 		}
 	});
 	$("#process").hide();
