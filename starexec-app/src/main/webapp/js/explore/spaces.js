@@ -585,7 +585,7 @@ function initSpaceExplorer() {
 	// Initialize the jstree plugin for the explorer list
 	// Bug: This is creating a global variable. Intentional?
 	jsTree = makeSpaceTree("#exploreList", !usingSpaceChain);
-	jsTree.bind("select_node.jstree", function(event, data) {
+	jsTree.on("select_node.jstree", function(event, data) {
 		// When a node is clicked, get its ID and display the info in the details pane
 		// Bug: This is creating a global variable. Intentional?
 		id = data.rslt.obj.attr("id");
@@ -613,9 +613,9 @@ function initSpaceExplorer() {
 		// the page from getting filled with hundreds of qtip divs
 		$(".qtip-userTooltip").remove();
 		$(".qtip-expdTooltip").remove();
-	}).bind("loaded.jstree", function(event, data) {
+	}).on("loaded.jstree", function(event, data) {
 		handleSpaceChain("#spaceChain");
-	}).bind("open_node.jstree", function(event, data) {
+	}).on("open_node.jstree", function(event, data) {
 		// Update global variable `openDone`
 		window.openDone = true;
 	});
@@ -1468,7 +1468,7 @@ function updateButtonIds(id) {
 	.attr('href', starexecRoot + "secure/add/quickJob.jsp?sid=" + id);
 	$("#processBenchmarks")
 	.attr("href", starexecRoot + "secure/edit/processBenchmarks.jsp?sid=" + id);
-	$("#downloadXML").unbind("click");
+	$("#downloadXML").off("click");
 	$('#downloadXML').click(function(e) {
 		$('#dialog-spacexml-attributes-txt')
 		.text('Do you want benchmark attributes included in the XML?');
@@ -1514,7 +1514,7 @@ function updateButtonIds(id) {
 	.attr('href', starexecRoot + "secure/add/batchJob.jsp?sid=" + id);
 	$('#uploadXML')
 	.attr('href', starexecRoot + "secure/add/batchSpace.jsp?sid=" + id);
-	$("#downloadSpace").unbind("click");
+	$("#downloadSpace").off("click");
 	$("#downloadSpace").click(function() {
 		// Display the confirmation dialog
 		$("#downloadBoth").prop("checked", "checked");

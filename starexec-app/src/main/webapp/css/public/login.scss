@@ -2,6 +2,7 @@
 @import "../global/colors";
 @import "../global/fonts";
 @import "../global/helper";
+@import "../components/button";
 
 // ============================================================================
 // Login Container - Main Layout
@@ -125,9 +126,6 @@
 // ============================================================================
 // Form Actions - Buttons
 // ============================================================================
-
-// Import the unified button component
-@import "../components/button";
 
 .form-actions {
     margin-bottom: 20px;

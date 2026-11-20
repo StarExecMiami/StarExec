@@ -137,7 +137,7 @@
 				<tr>
 					<td><a href="${s.url}">${s.name}<span class="ext-link-icon"></span></a>
 					</td>
-					<td><a class="delWebsite" id="${s.id}">delete</a></td>
+					<td><a class="delWebsite" id="${s.id}" role="button" tabindex="0">delete</a></td>
 				</tr>
 			</c:forEach>
 			</tbody>

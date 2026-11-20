@@ -210,6 +210,20 @@ $(document).ready(function () {
     logout();
   });
 
+  // Keyboard activation for action anchors without href (role="button")
+  $(document).on("keydown", 'a[role="button"]:not([href])', function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      $(this).trigger("click");
+    } else if (e.key === " ") {
+      e.preventDefault();
+      // jQuery UI .button() triggers click on Space keyup; avoid double firing.
+      if (!$(this).hasClass("ui-button")) {
+        $(this).trigger("click");
+      }
+    }
+  });
+
   // Extend jquery functions here
   $.fn.extend({
     toHTMLString: function () {

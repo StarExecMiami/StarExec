@@ -181,7 +181,7 @@
 		<legend>actions</legend>
 
 		<c:if test="${!isAnonymousPage}">
-			<a id="anonymousLink">get anonymous link</a>
+			<a id="anonymousLink" role="button" tabindex="0">get anonymous link</a>
 
 			<c:if test="${usr.id == user.id || hasAdminReadPrivileges}">
 				<a id="editLink"

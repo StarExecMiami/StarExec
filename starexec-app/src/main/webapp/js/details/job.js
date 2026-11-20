@@ -397,7 +397,7 @@ function initSpaceExplorer() {
 		},
 		"plugins": ["types", "themes", "json_data", "ui", "cookies"],
 		"core": {animation: 200}
-	}).bind("select_node.jstree", function(event, data) {
+	}).on("select_node.jstree", function(event, data) {
 		// When a node is clicked, get its ID and display the info in the details pane
 		id = data.rslt.obj.attr("id");
 		if (selectedJobSpaceId == null) {
@@ -667,7 +667,7 @@ function initUI() {
 	});
 
 	$("#jobDownload")
-	.unbind("click").click(function(e) {
+	.off("click").on("click", function(e) {
 		e.preventDefault();
 		$('#dialog-return-ids-txt')
 		.text(
@@ -696,13 +696,13 @@ function initUI() {
 	});
 
 	$("#jobXMLDownload")
-	.unbind("click").click(function(e) {
+	.off("click").on("click", function(e) {
 		e.preventDefault();
 		createDownloadRequest("#jobXMLDownload", "jobXML");
 	});
 
 	$("#jobOutputDownload")
-	.unbind("click").click(function(e) {
+	.off("click").on("click", function(e) {
 		e.preventDefault();
 		createDownloadRequest("#jobOutputDownload", "j_outputs");
 	});
@@ -2080,7 +2080,7 @@ function popup(url) {
 }
 
 function registerAnonymousLinkButtonEventHandler() {
-	$('#anonymousLink').unbind('click');
+	$('#anonymousLink').off('click');
 	$('#anonymousLink').click(function() {
 		$('#dialog-confirm-anonymous-link').text(
 			"Do you want the job, benchmark, solver, and configuration names to be hidden on the linked page?");

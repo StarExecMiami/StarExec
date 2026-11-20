@@ -171,7 +171,7 @@
 			<c:forEach var="site" items="${sites}">
 				<tr>
 					<td><a href="${fn:escapeXml(site.url)}" target="_blank" rel="noopener">${fn:escapeXml(site.name)} <span class="ext-link-icon"></span></a></td>
-					<td><a class="delWebsite" id="${site.id}">delete</a></td>
+					<td><a class="delWebsite" id="${site.id}" role="button" tabindex="0">delete</a></td>
 				</tr>
 
 			</c:forEach>

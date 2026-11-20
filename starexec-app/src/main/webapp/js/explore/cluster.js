@@ -292,7 +292,7 @@ function initClusterExplorer() {
 	// Set the path to the css theme for the jstree plugin
 	$.jstree._themes = starexecRoot + "css/jstree/";
 
-	$("#exploreList").bind("loaded.jstree", function(e, data) {
+	$("#exploreList").on("loaded.jstree", function(e, data) {
 		addNodeCountsToTree();
 		// Sync graph with current selection (e.g. from cookie) so initial view matches selected queue
 		var sel = $("#exploreList").jstree("get_selected", true);
@@ -342,7 +342,7 @@ function initClusterExplorer() {
 		},
 		"plugins": ["types", "themes", "json_data", "ui", "cookies"],
 		"core": {animation: 200}
-	}).bind("select_node.jstree", function(event, data) {
+	}).on("select_node.jstree", function(event, data) {
 		// When a node is clicked, get its ID and display the info in the details pane
 		id = data.rslt.obj.attr("id");
 		parent_node = $.jstree._reference('#exploreList')

@@ -19,7 +19,7 @@ $(document).ready(function() {
 });
 
 function registerDownloadLinkButtonEventHandler() {
-	$('#downLink').unbind("click");
+	$('#downLink').off("click");
 	$('#downLink').click(function() {
 		createDialog(
 			"Processing your download request, please wait. This will take some time for large benchmarks.");
@@ -42,7 +42,7 @@ function registerDownloadLinkButtonEventHandler() {
 
 function registerAnonymousLinkButtonEventHandler() {
 	'use strict';
-	$('#anonymousLink').unbind('click');
+	$('#anonymousLink').off('click');
 	$('#anonymousLink').click(function() {
 		$('#dialog-confirm-anonymous-link')
 		.text(
