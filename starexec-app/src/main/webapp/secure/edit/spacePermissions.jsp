@@ -46,15 +46,15 @@
 	}
 %>
 <star:template title="Edit Permissions"
-               js="util/spaceTree, common/delaySpinner, lib/jquery.dataTables.min, lib/jquery.jstree, edit/spacePermissions, util/datatablesUtility, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min, shared/sharedFunctions"
-               css="common/delaySpinner, common/table, explore/common, explore/spaces, edit/spacePermissions">
+               js="util/spaceTree, common/delaySpinner, lib/jquery.dataTables.min, lib/jstree.min, util/tree, edit/spacePermissions, util/datatablesUtility, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min, shared/sharedFunctions"
+               css="jstree/default-dark/style.min, common/delaySpinner, common/table, explore/common, explore/spaces, edit/spacePermissions">
 	<span id="userId" value="${userId}"></span>
 	<span id="isAdmin" value="${isAdmin}"></span>
 	<span id="spaceChain" value="${spaceChain}"></span>
 	<span id="communityIdList" value="${communityIdList}"></span>
 	<div id="explorer">
 		<h3>spaces</h3>
-		<ul id="exploreList"> </ul>
+		<div id="exploreList" aria-label="Spaces"></div>
 	</div>
 
 	<div id="detailPanel">
