@@ -6,6 +6,8 @@ on:
     paths:
       - "starexec-app/**"
       - "scripts/tests/*.test.cjs"
+      - "scripts/build-war-css.cjs"
+      - "package*.json"
       - "pom.xml"
       - ".github/scripts/mvn_retry.py"
       - ".github/scripts/test_mvn_retry.py"
@@ -15,6 +17,8 @@ on:
     paths:
       - "starexec-app/**"
       - "scripts/tests/*.test.cjs"
+      - "scripts/build-war-css.cjs"
+      - "package*.json"
       - "pom.xml"
       - ".github/scripts/mvn_retry.py"
       - ".github/scripts/test_mvn_retry.py"
@@ -65,8 +69,7 @@ jobs:
       - name: Test Maven retry helper
         run: python3 -m unittest discover -s .github/scripts -p 'test_mvn_retry.py'
 
-      # CI never compiles SCSS, so nothing else notices a vendored icon that
-      # changed without regenerating css/global/_icon-data.scss.
+      # Verify that the vendored SVGs and generated icon SCSS stay in sync.
       - name: Check generated icon data
         run: python3 scripts/build-icon-data.py --check
 
@@ -86,6 +89,17 @@ jobs:
           -Dsurefire.skip=true
           -Dit.test=StoredRoutineSmokeIT
           -Dfailsafe.failIfNoSpecifiedTests=true
+
+      - name: Verify compiled CSS is packaged in the WAR
+        run: |
+          python3 - <<'PY'
+          from zipfile import ZipFile
+
+          with ZipFile("starexec-app/target/starexec.war") as war:
+              for path in ("css/global.css", "css/details/job.css"):
+                  if not war.read(path).strip():
+                      raise SystemExit(f"Empty stylesheet in WAR: {path}")
+          PY
 
       - name: Assert the integration tests actually executed
         run: |

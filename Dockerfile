@@ -119,7 +119,7 @@ RUN mkdir -p /build/build-metadata && \
     echo "BUILD_USER=docker" >> /build/build-metadata/build-info.properties
 
 # Build the WAR (skip tests to speed iteration)
-RUN mvn clean install -DskipTests -Dmaven.test.skip=true -B -V -pl starexec-app && \
+RUN mvn clean install -DskipTests -Dmaven.test.skip=true -Dskip.sass=true -B -V -pl starexec-app && \
     mkdir -p /build/output && \
     cp starexec-app/target/starexec.war /build/output/starexec.war
 

@@ -5,6 +5,7 @@
   "description": "Build tooling for StarExec web assets",
   "scripts": {
     "sass-build": "sass --style=compressed --load-path=starexec-app/src/main/webapp/css starexec-app/src/main/webapp/css:starexec-app/src/main/webapp/css",
+    "sass-build:war": "node scripts/build-war-css.cjs",
     "lint:css": "stylelint 'starexec-app/src/main/webapp/css/**/*.scss'",
     "lint:css:fix": "stylelint 'starexec-app/src/main/webapp/css/**/*.scss' --fix"
   },

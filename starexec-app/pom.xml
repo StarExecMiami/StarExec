@@ -21,8 +21,9 @@
 
     <properties>
         <tomcat.version>9.0.124</tomcat.version>
-        <!-- Skip SCSS compilation by default; enable with -Dskip.sass=false during build phase -->
-        <skip.sass>true</skip.sass>
+        <!-- Image builds provide precompiled CSS from their assets stage. -->
+        <skip.sass>false</skip.sass>
+        <war.assembly.directory>${project.build.directory}/${project.build.finalName}</war.assembly.directory>
     </properties>
 
     <dependencies>
@@ -400,6 +401,7 @@
                 <version>3.3.2</version>
                 <configuration>
                     <warSourceDirectory>src/main/webapp</warSourceDirectory>
+                    <webappDirectory>${war.assembly.directory}</webappDirectory>
                     <webResources>
                         <resource>
                             <directory>${project.basedir}/../node_modules/jquery/dist</directory>
@@ -422,10 +424,7 @@
                             <includes><include>jquery.validate.min.js</include></includes>
                         </resource>
                     </webResources>
-                    <!-- NOTE: webResources are NOT used here because src/main/resources
-                         is already processed by the build/resources section and included
-                         in WEB-INF/classes. Using webResources would add these files
-                         to the WAR root instead, breaking migration file discovery. -->
+                    <!-- Java resources already enter WEB-INF/classes through build/resources. -->
                     <containerConfigXML
                     >src/main/webapp/META-INF/context.xml</containerConfigXML>
 
@@ -519,10 +518,13 @@
                         <goals>
                             <goal>npm</goal>
                         </goals>
-                        <phase>generate-resources</phase>
+                        <phase>prepare-package</phase>
                         <configuration>
-                            <arguments>run sass-build</arguments>
-                            <!-- Skip SCSS compilation during mvn test to avoid path resolution issues -->
+                            <workingDirectory>${project.basedir}/..</workingDirectory>
+                            <arguments>run sass-build:war</arguments>
+                            <environmentVariables>
+                                <STAREXEC_WAR_CSS_DIR>${war.assembly.directory}/css</STAREXEC_WAR_CSS_DIR>
+                            </environmentVariables>
                             <skip>${skip.sass}</skip>
                         </configuration>
                     </execution>
