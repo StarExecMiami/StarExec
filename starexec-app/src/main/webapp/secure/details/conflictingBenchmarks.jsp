@@ -2,6 +2,7 @@
         import="org.starexec.data.database.Jobs, org.starexec.data.database.Solvers, org.starexec.data.security.JobSecurity, org.starexec.data.to.Benchmark, org.starexec.data.to.Configuration, org.starexec.data.to.Solver, org.starexec.util.SessionUtil, java.util.List" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int jobId = Integer.parseInt(request.getParameter("jobId"));
@@ -47,12 +48,12 @@
 	}
 %>
 <star:template
-		title="Conflicting benchmarks for solver/config ${solver.name} / ${configuration.name}"
+		title="Conflicting benchmarks for solver/config ${fn:escapeXml(solver.name)} / ${fn:escapeXml(configuration.name)}"
 		js="details/solverConflicts, util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/shared, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
 		css="details/solverConflicts, common/table, common/delaySpinner, explore/common, details/shared">
 	<fieldset>
 		<legend>Conflicting benchmarks</legend>
-		<p class="field-hint">These benchmarks produced conflicting results for <strong>${solver.name}</strong> with configuration <strong>${configuration.name}</strong>.</p>
+		<p class="field-hint">These benchmarks produced conflicting results for <strong><c:out value="${solver.name}"/></strong> with configuration <strong><c:out value="${configuration.name}"/></strong>.</p>
 		<table class="conflictsTable shaded" aria-label="List of benchmarks with conflicting results">
 			<thead>
 			<tr>
@@ -64,7 +65,7 @@
 			<tr>
 				<td>
 					<a href="${starexecRoot}/secure/details/conflictingSolvers.jsp?jobId=${jobId}&benchId=${bench.id}&stageNumber=${stageNumber}">
-							${bench.name}
+							<c:out value="${bench.name}"/>
 						<span class="ext-link-icon"></span>
 					</a>
 				</td>

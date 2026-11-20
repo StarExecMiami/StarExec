@@ -43,4 +43,64 @@ public class JspRequestParameterEscapingTests {
 		assertTrue(jsp.contains("<c:out value='${ref}'/>"));
 		assertTrue(jsp.contains("prefix=\"c\""), "c taglib must be declared");
 	}
+
+	@Test
+	public void spacePermissionsEscapesSpaceIdParameter() throws IOException {
+		String jsp = read("edit/spacePermissions.jsp");
+		assertFalse(jsp.contains("spaces.jsp?id=${param.id}"));
+		assertTrue(jsp.contains("spaces.jsp?id=<c:out value='${param.id}'/>"));
+	}
+
+	@Test
+	public void pairAndBenchmarkPagesEscapeAttributes() throws IOException {
+		String pair = read("details/pair.jsp");
+		assertFalse(pair.contains("<td>${entry.key}</td>"));
+		assertFalse(pair.contains("<td>${entry.value}</td>"));
+		assertTrue(pair.contains("<c:out value=\"${entry.key}\"/>"));
+		assertTrue(pair.contains("<c:out value=\"${entry.value}\"/>"));
+
+		String bench = read("details/benchmark.jsp");
+		assertFalse(bench.contains("<td>${entry.key}</td>"));
+		assertFalse(bench.contains("<td>${entry.value}</td>"));
+		assertFalse(bench.contains("<td>${dependency.dependencyPath}</td>"));
+		assertTrue(bench.contains("<c:out value=\"${dependency.dependencyPath}\"/>"));
+	}
+
+	@Test
+	public void entityTagsEscapeNamesAndDescriptions() throws IOException {
+		Path tagsDir = Paths.get("src/main/webapp/WEB-INF/tags");
+		for (String tagName : new String[]{"solver.tag", "benchmark.tag", "config.tag"}) {
+			String tag = new String(Files.readAllBytes(tagsDir.resolve(tagName)), StandardCharsets.UTF_8);
+			assertTrue(tag.contains("fn:escapeXml(value.description)"), tagName + " must escape description");
+			assertTrue(tag.contains("<c:out value=\"${value.name}\"/>"), tagName + " must escape name");
+		}
+		String userTag = new String(Files.readAllBytes(tagsDir.resolve("user.tag")), StandardCharsets.UTF_8);
+		assertTrue(userTag.contains("<c:out value=\"${value.fullName}\"/>"));
+
+		String communityTag = new String(Files.readAllBytes(tagsDir.resolve("community.tag")), StandardCharsets.UTF_8);
+		assertTrue(communityTag.contains("<c:out value=\"${value.name}\"/>"));
+	}
+
+	@Test
+	public void detailViewsEscapeEntityFields() throws IOException {
+		String solver = read("details/solver.jsp");
+		assertTrue(solver.contains("title=\"${fn:escapeXml(solverPageTitle)}\""));
+		assertTrue(solver.contains("<c:out value=\"${solver.name}\"/>"));
+		assertTrue(solver.contains("<c:out value=\"${solver.description}\"/>"));
+
+		String user = read("details/user.jsp");
+		assertTrue(user.contains("title=\"${fn:escapeXml(t_user.fullName)}\""));
+		assertTrue(user.contains("<c:out value=\"${t_user.institution}\"/>"));
+
+		String job = read("details/job.jsp");
+		assertTrue(job.contains("<star:template title=\"${fn:escapeXml(pageTitle)}\""));
+		assertTrue(job.contains("<span id=\"jobNameText\"><c:out value=\"${job.name}\"/></span>"));
+
+		String matrix = new String(
+				Files.readAllBytes(Paths.get("src/main/webapp/WEB-INF/secure/details/jobMatrixView.jsp")),
+				StandardCharsets.UTF_8
+		);
+		assertTrue(matrix.contains("title=\"${fn:escapeXml(job.name)}\""));
+		assertTrue(matrix.contains("<c:out value=\"${matrix.getTruncatedColumnHeader(headerIndex.getIndex())}\"/>"));
+	}
 }

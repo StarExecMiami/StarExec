@@ -1,6 +1,8 @@
 <%@page contentType="text/html" pageEncoding="UTF-8"
         import="org.starexec.data.database.Jobs, org.starexec.data.database.Spaces, org.starexec.data.database.Users, org.starexec.data.security.JobSecurity, org.starexec.data.to.Job, org.starexec.data.to.JobSpace, org.starexec.data.to.User, org.starexec.util.SessionUtil" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
+<%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int userId = SessionUtil.getUserId(request);
@@ -41,7 +43,7 @@
 		return;
 	}
 %>
-<star:template title="${job.name}"
+<star:template title="${fn:escapeXml(job.name)}"
                js=" lib/jquery.jstree, util/jobDetailsUtilityFunctions, lib/jquery.dataTables.min, common/delaySpinner, details/shared, details/jobPanelView, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
                css="common/table, explore/common, details/shared, details/jobPanelView">
 	<div id="mainPanel"

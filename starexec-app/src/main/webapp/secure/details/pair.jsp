@@ -4,6 +4,7 @@
 		%>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	StarLogger log = StarLogger.getLogger(JobPair.class);
 
@@ -82,7 +83,7 @@
 		return;
 	}
 %>
-<star:template title="${job.name} pair #${pair.id}"
+<star:template title="${fn:escapeXml(job.name)} pair #${pair.id}"
                js="lib/jquery.dataTables.min, lib/prettify, lib/lang-log, common/delaySpinner, details/pair, details/shared"
                css="common/table, details/shared, details/pair, prettify/prettify">
 	<span id="pairId" value="${pair.id}"></span>
@@ -96,15 +97,15 @@
 			</tr>
 			</thead>
 			<tbody>
-			<tr title="${pair.status.getDescription()}">
+			<tr title="<c:out value='${pair.status.getDescription()}'/>">
 				<td>status</td>
-				<td>${pair.status.getStatus()}</td>
+				<td><c:out value="${pair.status.getStatus()}"/></td>
 			</tr>
 			<tr>
 				<td>benchmark</td>
 					<c:choose>
 						<c:when test="${isLocalJobPage}">
-							<td>${pair.bench.getName()}</td>
+							<td><c:out value="${pair.bench.getName()}"/></td>
 						</c:when>
 						<c:otherwise>
 							<td><star:benchmark value="${pair.bench}"/></td>
@@ -141,10 +142,10 @@
 					<td>execution host</td>
 					<c:choose>
 						<c:when test="${isLocalJobPage}">
-							<td>${pair.node.name}</td>
+							<td><c:out value="${pair.node.name}"/></td>
 						</c:when>
 						<c:otherwise>
-							<td><a href="${starexecRoot}/secure/explore/cluster.jsp">${pair.node.name}
+							<td><a href="${starexecRoot}/secure/explore/cluster.jsp"><c:out value="${pair.node.name}"/>
 								<span class="ext-link-icon"></span></a>
 						</td>
 						</c:otherwise>
@@ -155,7 +156,7 @@
 			</c:if>
 			<tr>
 				<td>space</td>
-				<td>${pair.jobSpaceName}</td>
+				<td><c:out value="${pair.jobSpaceName}"/></td>
 			</tr>
 			</tbody>
 		</table>
@@ -180,7 +181,7 @@
 					<td>solver</td>
 					<c:choose>
 						<c:when test="${isLocalJobPage}">
-							<td>${stage.solver.getName()}</td>
+							<td><c:out value="${stage.solver.getName()}"/></td>
 						</c:when>
 						<c:otherwise>
 							<td><star:solver value="${stage.solver}"/></td>
@@ -191,7 +192,7 @@
 					<td>configuration</td>
 					<c:choose>
 						<c:when test="${isLocalJobPage}">
-							<td>${stage.solver.configurations[0].getName()}</td>
+							<td><c:out value="${stage.solver.configurations[0].getName()}"/></td>
 						</c:when>
 						<c:otherwise>
 							<td><star:config
@@ -259,8 +260,8 @@
 						<tbody>
 						<c:forEach var="entry" items="${stage.attributes}">
 							<tr>
-								<td>${entry.key}</td>
-								<td>${entry.value}</td>
+								<td><c:out value="${entry.key}"/></td>
+								<td><c:out value="${entry.value}"/></td>
 							</tr>
 						</c:forEach>
 						</tbody>
@@ -313,7 +314,7 @@
 				<a href="${starexecRoot}/services/jobs/pairs/${pair.id}/log"
 				   target="_blank" class="popoutLink">popout</a>
 			</fieldset>
-		
+
 		</c:when>
 	</c:choose>
 	
@@ -326,11 +327,11 @@
 		<c:choose>
 			<c:when test="${isLocalJobPage}">
 				<a href="./job.html"
-				id="returnLink">return to ${job.name}</a>
+				id="returnLink">return to <c:out value="${job.name}"/></a>
 			</c:when>
 			<c:otherwise>
 				<a href="${starexecRoot}/secure/details/job.jsp?id=${job.id}"
-		   id="returnLink">return to ${job.name}</a>
+		   id="returnLink">return to <c:out value="${job.name}"/></a>
 			</c:otherwise>
 		</c:choose>
 		<c:if test="${!isLocalJobPage}">

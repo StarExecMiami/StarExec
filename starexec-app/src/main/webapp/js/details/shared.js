@@ -86,8 +86,13 @@ function makeAnonymousLinkPost(
 				destroyDialog();
 			}
 			if (returnCode.success) {
-				$('#dialog-show-anonymous-link')
-				.html('<a href="' + returnCode.message + '">' + returnCode.message + '</a>');
+				var linkUrl = String(returnCode.message || '');
+				var $dialog = $('#dialog-show-anonymous-link').empty();
+				if (/^(https?:\/\/|\/)/.test(linkUrl)) {
+					$dialog.append($('<a>', { href: linkUrl, text: linkUrl }));
+				} else {
+					$dialog.text(linkUrl);
+				}
 
 				$('#dialog-show-anonymous-link').dialog({
 					width: 750,

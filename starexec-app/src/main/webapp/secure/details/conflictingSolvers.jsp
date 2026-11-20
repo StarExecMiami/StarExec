@@ -3,6 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int jobId = Integer.parseInt(request.getParameter("jobId"));
@@ -34,7 +35,7 @@
 		return;
 	}
 %>
-<star:template title="Conflicting Solvers for Benchmark ${benchmark.name}"
+<star:template title="Conflicting Solvers for Benchmark ${fn:escapeXml(benchmark.name)}"
                js="details/solverConflicts, util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/shared, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
                css="details/solverConflicts, common/table, common/delaySpinner, explore/common, details/shared">
 	<table class="conflictsTable">
@@ -50,17 +51,17 @@
 			<tr>
 				<td>
 					<a href="${starexecRoot}/secure/details/solver.jsp?id=${solverConfigResult.left.id}">
-							${solverConfigResult.left.name}
+							<c:out value="${solverConfigResult.left.name}"/>
 						<span class="ext-link-icon"></span>
 					</a>
 				</td>
 				<td>
 					<a href="${starexecRoot}/secure/details/configuration.jsp?id=${solverConfigResult.middle.id}">
-							${solverConfigResult.middle.name}
+							<c:out value="${solverConfigResult.middle.name}"/>
 						<span class="ext-link-icon"></span>
 					</a>
 				</td>
-				<td>${solverConfigResult.right}</td>
+				<td><c:out value="${solverConfigResult.right}"/></td>
 			</tr>
 		</c:forEach>
 		</tbody>

@@ -2,6 +2,7 @@
         import="org.starexec.util.JspHelpers" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		JspHelpers.handleAnonymousJobKeyPage(request, response);
@@ -11,7 +12,7 @@
 		return;
 	}
 %>
-<star:template title="${job.name}"
+<star:template title="${fn:escapeXml(job.name)}"
                js="util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/shared, details/anonymousJobPageKey, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
                css="common/table, common/delaySpinner, explore/common, details/shared, details/anonymousJobPageKey">
 	<div class="alert alert--info" role="status">
@@ -33,10 +34,10 @@
 			<c:forEach var="solverTriple" items="${solverTripleList}">
 				<tr>
 					<td>
-						<a href="${starexecRoot}/secure/details/solver.jsp?id=${solverTriple.getRight()}">${solverTriple.getLeft()}</a>
+						<a href="${starexecRoot}/secure/details/solver.jsp?id=${solverTriple.getRight()}"><c:out value="${solverTriple.getLeft()}"/></a>
 						<span class="ext-link-icon"></span>
 					</td>
-					<td>${solverTriple.getMiddle()}</td>
+					<td><c:out value="${solverTriple.getMiddle()}"/></td>
 				</tr>
 			</c:forEach>
 			</tbody>

@@ -1466,10 +1466,18 @@ public class RESTHelpers {
 
 	}
 
+	private static String safeHtml(String value) {
+		return value == null ? "" : GeneralSecurity.getHTMLSafeString(value);
+	}
+
+	private static String safeAttr(String value) {
+		return value == null ? "" : GeneralSecurity.getHTMLAttributeSafeString(value);
+	}
+
 	private static String getConfigLink(int configId, String configName, PrimitivesToAnonymize primitivesToAnonymize) {
 		StringBuilder sb = new StringBuilder();
 		sb.append("<a class=\"configLink\" title=\"");
-		sb.append(configName).append("\"");
+		sb.append(safeAttr(configName)).append("\"");
 
 		// Add the link to the solver if we don't need to be an anoymous config.
 		if (!AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
@@ -1526,7 +1534,7 @@ public class RESTHelpers {
 		// Set the tooltip to be the benchmark's description
 		if (!AnonymousLinks.areBenchmarksAnonymized(primitivesToAnonymize)) {
 			sb.append(" title=\"");
-			sb.append(bench.getDescription());
+			sb.append(safeAttr(bench.getDescription()));
 			sb.append("\" ");
 			sb.append("href=\"").append(Util.docRoot("secure/details/benchmark.jsp?id="));
 			sb.append(bench.getId());
@@ -1592,7 +1600,7 @@ public class RESTHelpers {
 			int contextSpaceId) {
 		StringBuilder sb = new StringBuilder();
 		sb.append("<a title=\"");
-		sb.append(solverName);
+		sb.append(safeAttr(solverName));
 		sb.append("\" ");
 
 		if (!AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
@@ -1683,7 +1691,8 @@ public class RESTHelpers {
 			}
 
 			// Create the status field
-			String status = "<a title=\"" + stage.getStatus().getDescription() + "\">" + stage.getStatus().getStatus()
+			String status = "<a title=\"" + safeAttr(stage.getStatus().getDescription()) + "\">"
+					+ safeHtml(stage.getStatus().getStatus())
 					+ " (" +
 					stage.getStatus().getCode().getVal() + ")" + "</a>";
 
@@ -1705,7 +1714,7 @@ public class RESTHelpers {
 				entry.add(new JsonPrimitive(displayCpu + " s"));
 			}
 
-			entry.add(new JsonPrimitive(stage.getStarexecResult()));
+			entry.add(new JsonPrimitive(safeHtml(stage.getStarexecResult())));
 			dataTablePageEntries.add(entry);
 		}
 		return createPageDataJsonObject(query, dataTablePageEntries);
@@ -1859,9 +1868,9 @@ public class RESTHelpers {
 
 			StringBuilder sb = new StringBuilder();
 			sb.append("<a href=\"mailto:");
-			sb.append(user.getEmail());
+			sb.append(safeAttr(user.getEmail()));
 			sb.append("\">");
-			sb.append(user.getEmail());
+			sb.append(safeHtml(user.getEmail()));
 			RESTHelpers.addImg(sb);
 			String emailLink = sb.toString();
 
@@ -1874,7 +1883,7 @@ public class RESTHelpers {
 			// entry in the DataTable
 			JsonArray entry = new JsonArray();
 			entry.add(new JsonPrimitive(userLink));
-			entry.add(new JsonPrimitive(user.getInstitution()));
+			entry.add(new JsonPrimitive(safeHtml(user.getInstitution())));
 			entry.add(new JsonPrimitive(emailLink));
 			entry.add(new JsonPrimitive(permissionButton));
 
@@ -2027,7 +2036,7 @@ public class RESTHelpers {
 			// entry in the DataTable
 			JsonArray entry = new JsonArray();
 			entry.add(new JsonPrimitive(spaceLink));
-			entry.add(new JsonPrimitive(GeneralSecurity.getHTMLSafeString(space.getDescription())));
+			entry.add(new JsonPrimitive(safeHtml(space.getDescription())));
 
 			dataTablePageEntries.add(entry);
 		}
@@ -2076,7 +2085,7 @@ public class RESTHelpers {
 			// entry in the DataTable
 			JsonArray entry = new JsonArray();
 			entry.add(new JsonPrimitive(solverLink));
-			entry.add(new JsonPrimitive(solver.getDescription()));
+			entry.add(new JsonPrimitive(safeHtml(solver.getDescription())));
 			entry.add(new JsonPrimitive(solver.getType().toString().toLowerCase()));
 			dataTablePageEntries.add(entry);
 		}
@@ -2148,7 +2157,8 @@ public class RESTHelpers {
 			String benchLink = getBenchLink(bench, contextSpaceId);
 			// Create the benchmark type tag
 			// Set the tooltip to be the benchmark type's description
-			String typeSpan = "<span title=\"" + bench.getType().getDescription() + "\">" + bench.getType().getName()
+			String typeSpan = "<span title=\"" + safeAttr(bench.getType().getDescription()) + "\">"
+					+ safeHtml(bench.getType().getName())
 					+ "</span>";
 
 			// Create an object, and inject the above HTML, to represent an
@@ -2244,7 +2254,7 @@ public class RESTHelpers {
 
 	private static String getPairsInSpaceHtml(int spaceId, int configId, String linkText) {
 		StringBuilder sb = getPairsInSpaceLink("all", spaceId, configId, 1);
-		sb.append(linkText);
+		sb.append(safeHtml(linkText));
 		RESTHelpers.addImg(sb);
 		return sb.toString();
 	}
@@ -2459,7 +2469,7 @@ public class RESTHelpers {
 			JsonArray entry = new JsonArray();
 			entry.add(new JsonPrimitive(userLink));
 			entry.add(new JsonPrimitive(spaceLink));
-			entry.add(new JsonPrimitive(req.getMessage()));
+			entry.add(new JsonPrimitive(safeHtml(req.getMessage())));
 			entry.add(new JsonPrimitive(approveButton));
 			entry.add(new JsonPrimitive(declineButton));
 

@@ -3,6 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int id = -1;
@@ -78,7 +79,7 @@
 	}
 %>
 
-<star:template title="${t_user.fullName}"
+<star:template title="${fn:escapeXml(t_user.fullName)}"
                js="util/draggable, util/spaceTree, common/delaySpinner, common/alerts, details/user, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
                css="explore/common, details/user, common/delaySpinner, common/table, details/shared">
 	<span id="userId" data-user-id="${userId}"></span>
@@ -105,12 +106,12 @@
 							<tr>
 								<td>Email Address</td>
 								<td>
-									<a href="mailto:${t_user.email}">${t_user.email}<span class="ext-link-icon"></span></a>
+									<a href="mailto:${fn:escapeXml(t_user.email)}"><c:out value="${t_user.email}"/><span class="ext-link-icon"></span></a>
 								</td>
 							</tr>
 							<tr>
 								<td>Institution</td>
-								<td>${t_user.institution}</td>
+								<td><c:out value="${t_user.institution}"/></td>
 							</tr>
 							<tr>
 								<td>Member Since</td>
@@ -147,7 +148,7 @@
 						<c:forEach var="community" items="${communitiesUserIsIn}">
 							<span class="badge badge--info community-badge">
 								<i class="ui-icon ui-icon-person" aria-hidden="true"></i>
-								${community.getName()}
+								<c:out value="${community.getName()}"/>
 							</span>
 						</c:forEach>
 					</c:when>

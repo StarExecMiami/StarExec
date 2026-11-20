@@ -3,6 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int userId = SessionUtil.getUserId(request);
@@ -65,7 +66,7 @@
 %>
 
 <star:template
-		title="Comparison of ${solver.name} (${config1.name}) and ${solver2.name} (${config2.name}) in ${space.name} hierarchy"
+		title="Comparison of ${fn:escapeXml(solver.name)} (${fn:escapeXml(config1.name)}) and ${fn:escapeXml(solver2.name)} (${fn:escapeXml(config2.name)}) in ${fn:escapeXml(space.name)} hierarchy"
 		js="lib/jquery.dataTables.min, util/jobDetailsUtilityFunctions, util/datatablesUtility, common/delaySpinner, details/shared, details/solverComparison, lib/jquery.ba-throttle-debounce.min"
 		css="common/table, details/shared, details/pairsInSpace">
 	<span style="display:none" id="jobId" value="${jobId}"> </span>
