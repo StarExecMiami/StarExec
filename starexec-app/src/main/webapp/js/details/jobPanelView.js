@@ -1,6 +1,6 @@
 var jobSpaceId; //stores the ID of the job space that is currently selected from the space viewer
 var jobId; //the ID of the job being viewed
-var panelArray = null;
+var panelArray = [];
 var useWallclock = true;
 var includeUnknown = false;
 var stageNumber;
@@ -38,7 +38,7 @@ function isInt(value) {
 }
 
 function refreshPanels() {
-	for (i = 0; i < panelArray.length; i++) {
+	for (var i = 0; i < panelArray.length; i++) {
 		panelArray[i].api().ajax.reload(null, false);
 	}
 }
