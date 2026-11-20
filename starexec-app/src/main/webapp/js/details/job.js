@@ -40,12 +40,9 @@ $(document).ready(function() {
 
 	if (!isLocalJobPage) {
 		//update the tables every 30 seconds
-		var pairRefreshId = window.setInterval(function() {
+		star.startPagePolling(function() {
 			pairTable.fnDraw(false);
 		}, 30000);
-		$(window).on("pagehide", function() {
-			window.clearInterval(pairRefreshId);
-		});
 	}
 	//puts data into the data tables
 	reloadTables($("#spaceId").attr("value"));

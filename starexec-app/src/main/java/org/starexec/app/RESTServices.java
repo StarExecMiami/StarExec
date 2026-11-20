@@ -1206,7 +1206,7 @@ public class RESTServices {
 					.build());
 		}
 
-		final String lastEventId = request.getHeader("Last-Event-ID");
+		final String lastEventId = getPairLogResumeOffset(request);
 		streamPairLogEventsAsync(id, eventSink, sse, lastEventId);
 	}
 
@@ -1219,7 +1219,7 @@ public class RESTServices {
 			return preflightResponse;
 		}
 
-		final String lastEventId = request.getHeader("Last-Event-ID");
+		final String lastEventId = getPairLogResumeOffset(request);
 
 		return Response.ok((StreamingOutput) output -> {
 			try {
@@ -1424,7 +1424,7 @@ public class RESTServices {
 
 		if (fileSize < offset) {
 			offset = 0L;
-			if (!sendSseEvent(pairId, eventSink, sse, null, "reset", "{\"pairId\":" + pairId + ",\"offset\":0}")) {
+			if (!sendSseEvent(pairId, eventSink, sse, "0", "reset", "{\"pairId\":" + pairId + ",\"offset\":0}")) {
 				return -1L;
 			}
 		}
@@ -1654,6 +1654,13 @@ public class RESTServices {
 		}
 	}
 
+	private static String getPairLogResumeOffset(HttpServletRequest request) {
+		// Automatic reconnects supply the latest event ID. A new EventSource
+		// created after history restoration supplies its starting offset in the URL.
+		String lastEventId = request.getHeader("Last-Event-ID");
+		return Util.isNullOrEmpty(lastEventId) ? request.getParameter("offset") : lastEventId;
+	}
+
 	private static long resolveInitialOffset(File logFile, String lastEventId) {
 		if (!Util.isNullOrEmpty(lastEventId)) {
 			try {
@@ -1685,7 +1692,7 @@ public class RESTServices {
 
 		if (fileSize < offset) {
 			offset = 0L;
-			if (!writeSseEvent(output, "reset", "{\"pairId\":" + pairId + ",\"offset\":0}")) {
+			if (!writeSseEventWithId(output, "0", "reset", "{\"pairId\":" + pairId + ",\"offset\":0}")) {
 				return -1L;
 			}
 		}
