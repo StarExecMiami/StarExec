@@ -72,5 +72,5 @@ $(document).ready(function() {
 		}
 	}
 
-	$(window).unload(window.destroyDialog);
+	$(window).on("pagehide", window.destroyDialog);
 });

@@ -90,7 +90,9 @@ jQuery(function($) {
 							}
 						},
 						"json"
-					);
+					).fail(function() {
+						showMessage("error", "Failed to pause all jobs", 5000);
+					});
 				},
 				"cancel": function() {
 					$(this).dialog("close");
@@ -122,7 +124,9 @@ jQuery(function($) {
 							}
 						},
 						"json"
-					);
+					).fail(function() {
+						showMessage("error", "Failed to resume all jobs", 5000);
+					});
 				},
 				"cancel": function() {
 					$(this).dialog("close");

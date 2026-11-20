@@ -96,7 +96,9 @@ function attachButtonActions() {
 							}
 						},
 						"json"
-					);
+					).fail(function() {
+						showMessage('error', 'Failed to delete benchmark', 5000);
+					});
 				},
 				"cancel": function() {
 					log('user canceled job deletion');
@@ -134,7 +136,9 @@ function attachButtonActions() {
 
 				},
 				"json"
-			);
+			).fail(function() {
+				showMessage('error', 'Failed to update benchmark', 5000);
+			});
 		}
 	});
 }

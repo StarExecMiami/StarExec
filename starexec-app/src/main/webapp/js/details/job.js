@@ -40,7 +40,7 @@ $(document).ready(function() {
 
 	if (!isLocalJobPage) {
 		//update the tables every 30 seconds
-		setInterval(function() {
+		star.startPagePolling(function() {
 			pairTable.fnDraw(false);
 		}, 30000);
 	}

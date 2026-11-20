@@ -118,7 +118,9 @@ $(document).ready(function() {
 				}
 			},
 			'json'
-		);
+		).fail(function() {
+			showMessage('error', 'Failed to subscribe to error logs', 5000);
+		});
 	});
 
 	$("#unsubscribeFromErrorLogs").button({
@@ -137,7 +139,9 @@ $(document).ready(function() {
 				}
 			},
 			'json'
-		);
+		).fail(function() {
+			showMessage('error', 'Failed to unsubscribe from error logs', 5000);
+		});
 	});
 
 	$("#showSpaceExplorer").button({
@@ -203,7 +207,7 @@ function printao(elements) {
 		jsonStr += printaoElement(elements[i]) + ",";
 	}
 	jsonStr += elements[len - 1];
-	console.log(elements);
+	log(elements);
 }
 
 /*this handles the pagination of the page.

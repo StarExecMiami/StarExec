@@ -25,7 +25,7 @@ function joinPath(base, path) {
 	base = base.replace(/\/$/, '');
 	path = path.replace(/^\//, '');
 	var result = base + '/' + path;
-	console.log('joinPath: base="' + base + '", path="' + path + '", result="' + result + '"');
+	log('joinPath: base="' + base + '", path="' + path + '", result="' + result + '"');
 	return result;
 }
 

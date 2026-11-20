@@ -248,8 +248,11 @@ StarExec provides a live stream endpoint for job pair logs using
 - `error` event indicates stream timeout or transient read failure.
 - heartbeat comments are sent periodically to keep the connection alive.
 
-The stream supports reconnect resume using SSE `Last-Event-ID` when the
-client reconnects.
+The stream resumes at the byte offset in `Last-Event-ID` on automatic reconnect.
+A client opening a new connection can pass its last received `offsetEnd` as
+`?offset=<byte-offset>`. The header takes precedence when both are present.
+If the log has shrunk below that offset, the stream emits a `reset` with event
+ID `0` and starts again from the beginning.
 
 ### Example: curl
 

@@ -74,5 +74,7 @@ jQuery(function($) {
 
 	initCommunityRequestsTable('#commRequests', true);
 
-	setInterval($("#commRequests").DataTable().ajax.reload, 10000);
+	star.startPagePolling(function() {
+		$("#commRequests").DataTable().ajax.reload(null, false);
+	}, 10000);
 });

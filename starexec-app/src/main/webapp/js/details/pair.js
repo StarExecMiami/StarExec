@@ -35,7 +35,9 @@ jQuery(function($) {
 			.attr("value"),
 			parseReturnCode,
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to rerun job pair", 5000);
+		});
 	});
 
 	$('#fieldDetails').expandable(false);
@@ -74,48 +76,74 @@ function initLiveJobLogStream() {
 	}
 
 	var streamUrl = starexecRoot + "services/jobs/pairs/" + encodeURIComponent(pairId) + "/log/stream";
-	var eventSource = new EventSource(streamUrl);
-
-	setLiveBadgeState(badgeElement, "reconnecting", "Live: connecting");
-
-	eventSource.addEventListener("open", function() {
-		setLiveBadgeState(badgeElement, "live", "Live: on");
-	});
-
-	// pair.jsp renders the whole log into the page, and a first connection streams the log from byte 0,
-	// so the first chunk that starts at byte 0 replaces the rendered copy instead of repeating it.
+	var eventSource = null;
+	var offset = 0;
+	var finished = false;
 	var renderedLogReplaced = false;
 
-	eventSource.addEventListener("chunk", function(event) {
-		var payload = safeJsonParse(event.data);
-		if (!payload || typeof payload.text !== "string" || payload.text.length === 0) {
+	function stop() {
+		if (eventSource !== null) {
+			eventSource.close();
+			eventSource = null;
+		}
+	}
+
+	function start() {
+		if (eventSource !== null || finished) {
 			return;
 		}
-		if (!renderedLogReplaced && payload.offsetStart === 0) {
+
+		var source = new EventSource(offset === 0 ? streamUrl : streamUrl + "?offset=" + offset);
+		eventSource = source;
+		setLiveBadgeState(badgeElement, "reconnecting", "Live: connecting");
+
+		source.addEventListener("open", function() {
+			setLiveBadgeState(badgeElement, "live", "Live: on");
+		});
+
+		source.addEventListener("chunk", function(event) {
+			var payload = safeJsonParse(event.data);
+			if (!payload || typeof payload.text !== "string" || payload.text.length === 0) {
+				return;
+			}
+			// The first stream replaces the copy initially rendered by the JSP.
+			if (!renderedLogReplaced && payload.offsetStart === 0) {
+				logElement.textContent = "";
+			}
+			renderedLogReplaced = true;
+			appendLogText(logElement, payload.text, autoScrollCheckbox.checked);
+			offset = payload.offsetEnd;
+		});
+
+		source.addEventListener("complete", function() {
+			finished = true;
+			setLiveBadgeState(badgeElement, "stopped", "Live: complete");
+			stop();
+		});
+
+		source.addEventListener("reset", function() {
+			offset = 0;
+			renderedLogReplaced = true;
 			logElement.textContent = "";
+			appendLogText(logElement, "[log stream reset]\n", autoScrollCheckbox.checked);
+		});
+
+		source.addEventListener("error", function() {
+			if (source.readyState === EventSource.CLOSED) {
+				setLiveBadgeState(badgeElement, "stopped", "Live: unavailable");
+				return;
+			}
+			setLiveBadgeState(badgeElement, "reconnecting", "Live: reconnecting");
+		});
+	}
+
+	window.addEventListener("pagehide", stop);
+	window.addEventListener("pageshow", function(event) {
+		if (event.persisted) {
+			start();
 		}
-		renderedLogReplaced = true;
-		appendLogText(logElement, payload.text, autoScrollCheckbox.checked);
 	});
-
-	eventSource.addEventListener("complete", function() {
-		setLiveBadgeState(badgeElement, "stopped", "Live: complete");
-		eventSource.close();
-	});
-
-	eventSource.addEventListener("reset", function() {
-		renderedLogReplaced = true;
-		logElement.textContent = "";
-		appendLogText(logElement, "[log stream reset]\n", autoScrollCheckbox.checked);
-	});
-
-	eventSource.addEventListener("error", function() {
-		if (eventSource.readyState === EventSource.CLOSED) {
-			setLiveBadgeState(badgeElement, "stopped", "Live: unavailable");
-			return;
-		}
-		setLiveBadgeState(badgeElement, "reconnecting", "Live: reconnecting");
-	});
+	start();
 }
 
 function appendLogText(logElement, text, autoScroll) {

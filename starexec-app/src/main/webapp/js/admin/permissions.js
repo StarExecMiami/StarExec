@@ -145,7 +145,9 @@ function initUI(userId, spaceId) {
 
 						},
 						"json"
-					);
+					).fail(function() {
+						showMessage("error", "Failed to update space permissions", 5000);
+					});
 				},
 				"cancel": function() {
 					log('user canceled StarExec restart');
@@ -178,7 +180,9 @@ function initUI(userId, spaceId) {
 							}
 						},
 						"json"
-					);
+					).fail(function() {
+						showMessage("error", "Failed to add user to space", 5000);
+					});
 				},
 				"cancel": function() {
 					log('user canceled StarExec restart');

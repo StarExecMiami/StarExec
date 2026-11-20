@@ -41,7 +41,9 @@ function initUI() {
 					}
 				},
 				"json"
-			);
+			).fail(function() {
+				showMessage('error', 'Failed to update configuration', 5000);
+			});
 		}
 	});
 }

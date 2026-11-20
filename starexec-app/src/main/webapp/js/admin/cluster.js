@@ -88,7 +88,9 @@ jQuery(function($) {
 			starexecRoot + "services/cluster/clearerrors",
 			parseReturnCode,
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to clear error states", 5000);
+		});
 	})
 	;
 
@@ -129,7 +131,9 @@ jQuery(function($) {
 						starexecRoot + "services/queue/global/" + curQueueId,
 						reloadOnSucess,
 						"json"
-					);
+					).fail(function() {
+						showMessage("error", "Failed to grant global queue access", 5000);
+					});
 				},
 				"cancel": function() {
 					log('user canceled giving global access');
@@ -151,7 +155,9 @@ jQuery(function($) {
 			starexecRoot + "services/test/queue/" + curQueueId,
 			parseReturnCode,
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to update test queue status", 5000);
+		});
 	})
 	;
 
@@ -199,7 +205,9 @@ jQuery(function($) {
 						starexecRoot + "services/queue/global/remove/" + curQueueId,
 						reloadOnSucess,
 						"json"
-					);
+					).fail(function() {
+						showMessage("error", "Failed to remove global queue access", 5000);
+					});
 				},
 				"cancel": function() {
 					log('user canceled removing global access');
@@ -229,7 +237,9 @@ jQuery(function($) {
 						starexecRoot + "services/remove/queue/" + curQueueId,
 						reloadOnSucess,
 						"json"
-					);
+					).fail(function() {
+						showMessage("error", "Failed to remove queue", 5000);
+					});
 				},
 				"cancel": function() {
 					log('user canceled queue removal');
@@ -316,5 +326,7 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 			}
 		},
 		"json"
-	);
+	).fail(function(_jqXHR, textStatus) {
+		handleAjaxError(textStatus);
+	});
 }

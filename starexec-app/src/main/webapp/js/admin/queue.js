@@ -58,7 +58,9 @@ function InitUI() {
 
 			},
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to cancel queue request", 5000);
+		});
 	});
 
 	$('#btnUpdate').button({
@@ -168,6 +170,8 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 			}
 		},
 		"json"
-	);
+	).fail(function(_jqXHR, textStatus) {
+		handleAjaxError(textStatus);
+	});
 }
 

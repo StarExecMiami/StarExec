@@ -66,7 +66,12 @@ test('makeAnonymousLinkPost rejects javascript: URLs and constructs link safely'
     if (selector === '#dialog-show-anonymous-link') return dialog;
     return { ready() {}, click() {}, button() {}, hide() {} };
   }
-  $.post = (_url, _data, cb) => cb({ success: true, message: 'javascript:alert(1)' });
+  const messages = [];
+  let destroyed = 0;
+  $.post = (_url, _data, cb) => {
+    cb({ success: true, message: 'javascript:alert(1)' });
+    return { fail() { return this; } };
+  };
 
   const context = vm.createContext({
     $,
@@ -74,8 +79,9 @@ test('makeAnonymousLinkPost rejects javascript: URLs and constructs link safely'
     starexecRoot: '/starexec/',
     log() {},
     createDialog() {},
-    destroyDialog() {},
+    destroyDialog() { destroyed++; },
     parseReturnCode() {},
+    showMessage(type, msg) { messages.push({ type, msg }); },
   });
   vm.runInContext(sharedSrc, context);
 
@@ -83,10 +89,19 @@ test('makeAnonymousLinkPost rejects javascript: URLs and constructs link safely'
   assert.equal(createdNodes.length, 0);
   assert.deepEqual(dialogText, ['javascript:alert(1)']);
 
-  $.post = (_url, _data, cb) => cb({ success: true, message: 'https://example.org/anon?id=1"><script>' });
+  $.post = (_url, _data, cb) => {
+    cb({ success: true, message: 'https://example.org/anon?id=1"><script>' });
+    return { fail() { return this; } };
+  };
   context.makeAnonymousLinkPost('job', 1, 'all');
   assert.equal(createdNodes.length, 1);
   assert.equal(createdNodes[0].tag, 'a');
   assert.equal(createdNodes[0].href, 'https://example.org/anon?id=1"><script>');
   assert.equal(createdNodes[0].text, 'https://example.org/anon?id=1"><script>');
+
+  $.post = () => ({ fail(fn) { fn(); return this; } });
+  const beforeDestroyed = destroyed;
+  context.makeAnonymousLinkPost('job', 1, 'all');
+  assert.equal(destroyed, beforeDestroyed + 1);
+  assert.equal(messages.at(-1).type, 'error');
 });
