@@ -543,7 +543,7 @@
 					<li><a id="jobXMLDownload" class="btn btn-secondary btnDown"
 					       href="${starexecRoot}/secure/download?type=jobXML&id=${job.id}"><span class="ui-icon ui-icon-arrowthick-1-s"></span> job
 						xml download</a></li>
-					<li><a id="downloadJobPageButton" class="btn btn-secondary btnDown" type="button"><span class="ui-icon ui-icon-arrowthick-1-s"></span> download job
+					<li><a id="downloadJobPageButton" class="btn btn-secondary btnDown" role="button" tabindex="0"><span class="ui-icon ui-icon-arrowthick-1-s"></span> download job
 						page</a></li>
 					<c:if test="${job.userId == userId or isAdmin}">
 						<c:if test="${(isPaused or isComplete) and (not buildJob)}">
@@ -551,27 +551,27 @@
 							       href="${starexecRoot}/secure/add/jobPairs.jsp?jobId=${job.id}"><span class="ui-icon ui-icon-arrowthick-1-n"></span> add/delete
 								job pairs</a></li>
 						</c:if>
-						<li><a id="anonymousLink" class="btn btn-secondary">get anonymous link</a></li>
+						<li><a id="anonymousLink" class="btn btn-secondary" role="button" tabindex="0">get anonymous link</a></li>
 					</c:if>
 					<c:if test="${isAdmin}">
-						<li><a id="clearCache" class="btn btn-secondary"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> clear cache</a></li>
-						<li><a id="recompileSpaces" class="btn btn-secondary"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> recompile spaces</a></li>
+						<li><a id="clearCache" class="btn btn-secondary" role="button" tabindex="0"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> clear cache</a></li>
+						<li><a id="recompileSpaces" class="btn btn-secondary" role="button" tabindex="0"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> recompile spaces</a></li>
 					</c:if>
 					<c:if test="${job.userId == userId or isAdmin}">
 						<c:if test="${isComplete}">
-							<li><a id="postProcess" class="btn btn-secondary"><span class="ui-icon ui-icon-arrowthick-1-n"></span> run new postprocessor</a>
+							<li><a id="postProcess" class="btn btn-secondary" role="button" tabindex="0"><span class="ui-icon ui-icon-arrowthick-1-n"></span> run new postprocessor</a>
 							</li>
 						</c:if>
 					</c:if>
 					<c:if test="${isPaused or isAdminPaused}">
-						<li><a id="changeQueue" class="btn btn-secondary"><span class="ui-icon ui-icon-transferthick-e-w"></span> Change Queue</a></li>
+						<li><a id="changeQueue" class="btn btn-secondary" role="button" tabindex="0"><span class="ui-icon ui-icon-transferthick-e-w"></span> Change Queue</a></li>
 					</c:if>
 					<c:if test="${!isHighPriority}">
-						<li><a id="setHighPriority" class="btn btn-secondary"><span class="ui-icon ui-icon-gear"></span> set as high priority</a>
+						<li><a id="setHighPriority" class="btn btn-secondary" role="button" tabindex="0"><span class="ui-icon ui-icon-gear"></span> set as high priority</a>
 						</li>
 					</c:if>
 					<c:if test="${isHighPriority}">
-						<li><a id="setLowPriority" class="btn btn-secondary"><span class="ui-icon ui-icon-gear"></span> set as low priority</a></li>
+						<li><a id="setLowPriority" class="btn btn-secondary" role="button" tabindex="0"><span class="ui-icon ui-icon-gear"></span> set as low priority</a></li>
 					</c:if>
 				</ul>
 			</fieldset>
