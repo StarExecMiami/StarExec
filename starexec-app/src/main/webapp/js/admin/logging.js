@@ -24,7 +24,9 @@ jQuery(function($) {
 			{},
 			parseReturnCode,
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to update logging level", 5000);
+		});
 	})
 	;
 
@@ -42,7 +44,9 @@ jQuery(function($) {
 			{},
 			parseReturnCode,
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to update class logging level", 5000);
+		});
 	})
 	;
 
@@ -60,7 +64,9 @@ jQuery(function($) {
 			{},
 			parseReturnCode,
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to update logging configuration", 5000);
+		});
 	})
 	;
 
