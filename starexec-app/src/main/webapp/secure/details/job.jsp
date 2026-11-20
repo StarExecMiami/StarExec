@@ -3,6 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		JspHelpers.handleJobPage(request, response);
@@ -21,7 +22,7 @@
 		return;
 	}
 %>
-<star:template title="${pageTitle}"
+<star:template title="${fn:escapeXml(pageTitle)}"
                js="util/sortButtons, util/jobDetailsUtilityFunctions, util/datatablesUtility, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/shared, details/job, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
                css="common/table, common/delaySpinner, explore/common, details/shared, details/job">
 	<script>
@@ -90,7 +91,7 @@
 		</ul>
 	</div>
 	<div id="detailPanel" class="jobDetails">
-		<h3 class="spaceName">${initialSpaceName}</h3>
+		<h3 class="spaceName"><c:out value="${initialSpaceName}"/></h3>
 		<c:if test="${!isAnonymousPage}">
 			<p id="displayJobSpaceID" class="accent"
 			   title="The job space is a snapshot of the space hierarchy used to create the job. It exists independently of the actual space hierarchy.">
@@ -320,12 +321,12 @@
 							<c:forEach var="pair"
 							           items="${jobSpaceIdToPairMap.get(jsId)}">
 								<tr>
-									<td>${pair.getBench().getName()}
+									<td><c:out value="${pair.getBench().getName()}"/>
 										<input type="hidden" value="${pair.getId()}" name="pid">
 									</td>
-									<td>${pair.getPrimarySolver().getName()}</td>
-									<td>${pair.getPrimaryConfiguration().getName()}</td>
-									<td>${pair.getPrimaryStage().getStatus().getStatus()}
+									<td><c:out value="${pair.getPrimarySolver().getName()}"/></td>
+									<td><c:out value="${pair.getPrimaryConfiguration().getName()}"/></td>
+									<td><c:out value="${pair.getPrimaryStage().getStatus().getStatus()}"/>
 										(${pair.getPrimaryStage().getStatus().getCode().getVal()})
 									</td>
 									<td>
@@ -334,7 +335,7 @@
 										s
 									</td>
 
-									<td>${pair.getPrimaryStage().getStarexecResult()}</td>
+									<td><c:out value="${pair.getPrimaryStage().getStarexecResult()}"/></td>
 								</tr>
 							</c:forEach>
 								<%-- This will be populated by the job pair pagination feature --%>
@@ -375,10 +376,10 @@
 					<tr title="the job's name">
 						<td id="jobNameTitle">name (click to edit)</td>
 						<td id="jobName">
-							<span id="jobNameText">${job.name}</span>
+							<span id="jobNameText"><c:out value="${job.name}"/></span>
 							<span id="editJobNameWrapper">
 										<input id="editJobName" type="text"
-										       value="${job.name}"></input>
+										       value="${fn:escapeXml(job.name)}"></input>
 										<button id="editJobNameButton" class="btn btn-primary">change</button>
 									</span>
 						</td>
@@ -438,7 +439,7 @@
 					<tr title="the preprocessor that was used to process benchmarks for this job">
 						<td>preprocessor</td>
 						<c:if test="${not empty firstPreProc}">
-							<td title="${firstPreProc.description}">${firstPreProc.name}</td>
+							<td title="${fn:escapeXml(firstPreProc.description)}"><c:out value="${firstPreProc.name}"/></td>
 						</c:if>
 						<c:if test="${empty firstPreProc}">
 							<td>none</td>
@@ -447,7 +448,7 @@
 					<tr title="the postprocessor that was used to process output for this job">
 						<td>postprocessor</td>
 						<c:if test="${not empty firstPostProc}">
-							<td title="${firstPostProc.description}">${firstPostProc.name}</td>
+							<td title="${fn:escapeXml(firstPostProc.description)}"><c:out value="${firstPostProc.name}"/></td>
 						</c:if>
 						<c:if test="${empty firstPostProc}">
 							<td>none</td>
@@ -458,7 +459,7 @@
 						<c:if test="${not empty job.queue}">
 							<td>
 								<a href="${starexecRoot}/secure/explore/cluster.jsp">
-										${job.queue.name}
+										<c:out value="${job.queue.name}"/>
 								</a>
 							</td>
 						</c:if>
@@ -608,7 +609,7 @@
 					<label for="postProcessorSelection">Post Processor</label>
 					<select id="postProcessorSelection">
 						<c:forEach var="proc" items="${postProcs}">
-							<option value="${proc.id}">${proc.name}
+							<option value="${proc.id}"><c:out value="${proc.name}"/>
 								(${proc.id})
 							</option>
 						</c:forEach>
@@ -630,7 +631,7 @@
 				<p><span id="dialog-changeQueue-txt"></span></p><br/>
 				<p><select id="changeQueueSelection">
 					<c:forEach var="q" items="${queues}">
-						<option value="${q.id}">${q.name} (${q.id})</option>
+						<option value="${q.id}"><c:out value="${q.name}"/> (${q.id})</option>
 					</c:forEach>
 				</select></p>
 			</div>
