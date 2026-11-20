@@ -79,16 +79,8 @@ function attachFormValidation() {
 				regex: "invalid character(s)"
 			}
 		},
-		// Place the error messages in the tooltip instead of in the DOM
-		errorPlacement: function(error, element) {
-			if ($(error).text().length > 0) {
-				//$(element).qtip('api').updateContent('<b>'+$(error).text()+'</b>', true);
-			}
-		},
-		// Hide the error tooltip when no errors are present
-		success: function(label) {
-			//$('#' + $(label).attr('for')).qtip('api').hide();
-		}
+		// Keep validation messages out of the form layout.
+		errorPlacement: function() {}
 	});
 }
 

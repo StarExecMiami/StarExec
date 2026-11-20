@@ -76,7 +76,7 @@
 	}
 %>
 <star:template title="Reports ${titleSuffix}" js="explore/reports"
-               css="explore/reports, common/table, details/shared,explore/jquery.qtip, explore/common">
+               css="explore/reports, common/table, details/shared, explore/common">
 	<div id="mainPanel">
 		<span id="userId" value="${userId}"></span>
 

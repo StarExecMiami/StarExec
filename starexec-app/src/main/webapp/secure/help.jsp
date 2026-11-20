@@ -29,7 +29,7 @@
 	Analytics.JOB_ATTRIBUTES.record(userId);
 %>
 <star:template title="Help Center"
-               js="lib/jquery.dataTables.min, lib/jquery.jstree, help/help, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min"
+               js="lib/jquery.dataTables.min, lib/jquery.jstree, help/help, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min"
                css="help/support-hub, components/card, components/badge">
 
 	<span id="reference" href="<c:out value='${ref}'/>"></span>

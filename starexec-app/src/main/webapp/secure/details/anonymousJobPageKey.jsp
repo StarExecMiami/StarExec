@@ -13,7 +13,7 @@
 	}
 %>
 <star:template title="${fn:escapeXml(job.name)}"
-               js="util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/shared, details/anonymousJobPageKey, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
+               js="util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/shared, details/anonymousJobPageKey, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min"
                css="common/table, common/delaySpinner, explore/common, details/shared, details/anonymousJobPageKey">
 	<div class="alert alert--info" role="status">
 		<span class="ui-icon ui-icon-info" aria-hidden="true"></span>

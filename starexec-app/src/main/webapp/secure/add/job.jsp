@@ -79,7 +79,7 @@
 
 <star:template title="Run Job in ${space.name}"
                css="common/delaySpinner, common/table, add/job"
-               js="common/defaultSettings, common/delaySpinner, lib/jquery.validate.min, add/job, lib/jquery.dataTables.min, lib/jquery.qtip.min, add/sharedSolverConfigTableFunctions">
+               js="common/defaultSettings, common/delaySpinner, lib/jquery.validate.min, add/job, lib/jquery.dataTables.min, add/sharedSolverConfigTableFunctions">
 	<style>
 		/* Wizard Actions - Modern Flexbox Layout (Pilot) */
 		.wizard-actions {
