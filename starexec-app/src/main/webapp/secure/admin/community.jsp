@@ -12,8 +12,8 @@
 	request.setAttribute("sentFromCommunityPage", Web.SENT_FROM_COMMUNITY_PAGE);
 %>
 <star:template title="Communities Admin"
-               js="admin/community, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.heatcolor.0.0.1.min, shared/sharedFunctions"
-               css="common/table, details/shared, explore/common, admin/admin">
+               js="admin/community, lib/jquery.dataTables.min, lib/jstree.min, util/tree, lib/jquery.heatcolor.0.0.1.min, shared/sharedFunctions"
+               css="jstree/default-dark/style.min, common/table, details/shared, explore/common, admin/admin">
 	<span id="leaderResponse" value="${leaderResponseParameterName}"
 	      hidden></span>
 	<span id="emailCode" value="${emailCodeParameterName}" hidden></span>
@@ -25,7 +25,7 @@
 
 	<div id="explorer">
 		<h3>official</h3>
-		<ul id="exploreList" class="community-tree"></ul>
+		<div id="exploreList" class="community-tree" aria-label="Communities"></div>
 		<div id="explorerAction">
 			<ul id="exploreActions">
 				<li><a type="btnRun" id="newCommunity"

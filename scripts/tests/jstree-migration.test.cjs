@@ -34,12 +34,18 @@ test('queue and worker IDs do not collide and API identifiers stay numeric strin
   assert.equal(nodes[1].id, 'node-7');
   assert.equal(nodes[0].data.id, '7');
   assert.equal(nodes[1].data.id, '7');
+  const worker = feed(7, 'enabled_node', 'leaf');
+  const queues = api().treeNodes([
+    feed(7, 'active_queue', 'closed', [worker]), feed(8, 'active_queue', 'closed', [worker]),
+  ], true, true);
+  assert.equal(queues[0].children[0].id, 'node-7-7');
+  assert.equal(queues[1].children[0].id, 'node-8-7');
 });
 
 test('requests the root and then a lazy child using the original backend IDs', () => {
   const requests = [];
-  const star = api({ getJSON(url, params) {
-    const request = { url, params, done(fn) { this.resolve = fn; return this; }, fail(fn) { this.reject = fn; } };
+  const star = api({ ajax(options) {
+    const request = { options, done(fn) { this.resolve = fn; return this; }, fail(fn) { this.reject = fn; } };
     requests.push(request);
     return request;
   } });
@@ -50,7 +56,7 @@ test('requests the root and then a lazy child using the original backend IDs', (
   requests[0].resolve([feed(6, 'active_queue', 'closed')]);
   settings.core.data(results[0][0], value => results.push(value));
   requests[1].reject();
-  assert.deepEqual(requests.map(request => request.params.id), [-1, '6']);
+  assert.deepEqual(requests.map(request => request.options.data.id), [-1, '6']);
   assert.equal(results[1], false);
   assert.equal(settings.core.force_text, true);
   assert.equal(settings.state.key, 'starexec-tree-/app/cluster');

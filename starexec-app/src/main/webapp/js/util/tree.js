@@ -1,5 +1,5 @@
 /* Translate the existing StarExec tree feeds at the jsTree boundary. */
-star.treeNodes = function (items, lazy, distinguishQueues) {
+star.treeNodes = function (items, lazy, distinguishQueues, parentId) {
   if (!Array.isArray(items)) {
     return false;
   }
@@ -9,12 +9,17 @@ star.treeNodes = function (items, lazy, distinguishQueues) {
     var attrs = item.attr;
     var id = String(attrs.id);
     var children = Array.isArray(item.children) && item.children.length;
+    var nodeId = id;
+    if (distinguishQueues) {
+      nodeId = /queue$/.test(attrs.rel) ? "queue-" + id : "node-" + (parentId ? parentId + "-" : "") + id;
+    }
     return {
-      id: distinguishQueues ? (/queue$/.test(attrs.rel) ? "queue-" : "node-") + id : id,
+      id: nodeId,
       text: item.data,
       li_attr: { rel: attrs.rel, "class": attrs.cLass || attrs["class"] || "" },
       data: { id: id, rel: attrs.rel, global: attrs.global, defaultQueueId: attrs.defaultQueueId, maxStages: attrs.maxStages },
-      children: children ? star.treeNodes(item.children, lazy, distinguishQueues) : Boolean(lazy && item.state === "closed"),
+      children: children ? star.treeNodes(item.children, lazy, distinguishQueues, id)
+        : Boolean(lazy && item.state === "closed"),
       state: { opened: item.state === "open" },
     };
   });
@@ -54,8 +59,8 @@ star.mountTree = function ($tree, source, options) {
     data: Array.isArray(source) ? star.treeNodes(source, false, options.queues) : function (node, callback) {
       var id = node.id === "#" ? options.rootId : node.data.id;
       var params = id == null ? {} : { id: id };
-      $.getJSON(source, params).done(function (items) {
-        var nodes = star.treeNodes(items, true, options.queues);
+      $.ajax({ url: source, data: params, dataType: "json", cache: false }).done(function (items) {
+        var nodes = star.treeNodes(items, true, options.queues, node.id === "#" ? null : id);
         callback(nodes);
         if (nodes === false) {
           showMessage("error", "Could not load tree items.", 5000);

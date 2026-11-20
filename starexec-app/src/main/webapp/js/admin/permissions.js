@@ -27,45 +27,16 @@ $(document).ready(function() {
 
 	var user_id = getUrlVars()["id"];
 
-	// Set the path to the css theme for the jstree plugin
-	$.jstree._themes = starexecRoot + "css/jstree/";
-
-	// Initialize the jstree plugin for the community list
-	jQuery("#exploreList").jstree({
-		"json_data": {
-			"ajax": {
-				"url": starexecRoot + "services/space/subspaces",  // Where we will be getting json data from
-				"data": function(n) {
-					return {id: n.attr ? n.attr("id") : -1};
-				}
-
-			}
-		},
-		"themes": {
-			"theme": "default",
-			"dots": false,
-			"icons": true
-		},
-		"types": {
-			"max_depth": -2,
-			"max_children": -2,
-			"valid_children": ["space"],
-			"types": {
-				"space": {
-					"valid_children": ["space"]
-				}
-			}
-		},
-		"plugins": ["types", "themes", "json_data", "ui", "cookies"],
-		"core": {animation: 200}
-	}).on("select_node.jstree", function(event, data) {
-		// When a node is clicked, get its ID and display the info in the details pane
-		space_id = data.rslt.obj.attr("id");
-		//updateActionId(id);
-		getPermissionDetails(user_id, space_id);
-		initUI(user_id, space_id);
-
-	}).on("click", "a", function(event, data) { event.preventDefault(); });	// This just disable's links in the node title
+	star.mountTree($("#exploreList"), starexecRoot + "services/space/subspaces", {
+		rootId: -1,
+		dots: false,
+		stateKey: "admin-user-permissions",
+		select: function(node) {
+			space_id = node.id;
+			getPermissionDetails(user_id, space_id);
+			initUI(user_id, space_id);
+		}
+	});
 
 });
 

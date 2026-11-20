@@ -1,11 +1,11 @@
 <%@page contentType="text/html" pageEncoding="UTF-8" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <star:template title="Cluster Admin"
-               js="admin/cluster, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.heatcolor.0.0.1.min, shared/sharedFunctions"
-               css="common/table, details/shared, explore/common, explore/spaces, admin/admin, shared/cluster">
+               js="admin/cluster, lib/jquery.dataTables.min, lib/jstree.min, util/tree, lib/jquery.heatcolor.0.0.1.min, shared/sharedFunctions"
+               css="jstree/default-dark/style.min, common/table, details/shared, explore/common, explore/spaces, admin/admin, shared/cluster">
 	<div id="explorer">
 		<h3>queues</h3>
-		<ul id="exploreList"></ul>
+		<div id="exploreList" aria-label="Queues and workers"></div>
 		<div id="explorerAction">
 			<ul id="exploreActions">
 				<li><a type="btnRun" id="newQueue"

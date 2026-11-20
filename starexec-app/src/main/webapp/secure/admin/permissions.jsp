@@ -23,11 +23,11 @@
 %>
 
 <star:template title="${t_user.fullName}"
-               js="admin/permissions, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.heatcolor.0.0.1.min, shared/sharedFunctions"
-               css="common/table, details/shared, explore/common, admin/admin">
+               js="admin/permissions, lib/jquery.dataTables.min, lib/jstree.min, util/tree, lib/jquery.heatcolor.0.0.1.min, shared/sharedFunctions"
+               css="jstree/default-dark/style.min, common/table, details/shared, explore/common, admin/admin">
 	<div id="explorer">
 		<h3>official</h3>
-		<ul id="exploreList"></ul>
+		<div id="exploreList" aria-label="Spaces"></div>
 	</div>
 
 	<div id="actionPanel">
