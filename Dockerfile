@@ -22,7 +22,7 @@ RUN npx sass --style=compressed --load-path src/main/webapp/css src/main/webapp/
 # ==============================================================================
 # Stage 2: Compile runsolver (separate stage for build tools)
 # ==============================================================================
-FROM docker.io/library/alpine:3.19 AS runsolver-builder
+FROM docker.io/library/alpine:3.24 AS runsolver-builder
 
 WORKDIR /build
 
@@ -126,7 +126,8 @@ RUN mvn clean install -DskipTests -Dmaven.test.skip=true -Dskip.sass=true -B -V 
 # ==============================================================================
 # Stage 5: Runtime - Tomcat with Security Hardening
 # ==============================================================================
-FROM docker.io/library/eclipse-temurin:17-jre-alpine
+# Use the same Alpine release as the runsolver builder for musl and libstdc++.
+FROM docker.io/library/eclipse-temurin:17-jre-alpine-3.24
 
 LABEL maintainer="StarExec Team" \
     org.opencontainers.image.title="StarExec" \
