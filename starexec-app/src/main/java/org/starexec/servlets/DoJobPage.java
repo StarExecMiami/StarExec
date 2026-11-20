@@ -250,8 +250,6 @@ public class DoJobPage {
 			addFilesInDirectory(sandboxDirectory, ICO_FILE_TYPE, Web.GLOBAL_ICO_FILES);
 			File csspath = new File(sandboxDirectory, "css/global.css");
 			handleCSS(csspath,"/" + R.STAREXEC_APPNAME + "/css", ".");
-			csspath = new File(sandboxDirectory, "css/explore/common.css");
-			handleCSS(csspath,"qtip-nonPermanentLeader a.tooltipButton,img{cursor:pointer}", "");
 			//get the maps as well
 			handleCSSMaps(sandboxDirectory, "global");
 			handleCSSMaps(sandboxDirectory, "details/job");

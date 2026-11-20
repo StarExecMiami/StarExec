@@ -61,7 +61,7 @@
 %>
 
 <star:template title="Add Job Pairs"
-               js="util/sortButtons, util/datatablesUtility, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min, add/sharedSolverConfigTableFunctions, add/jobPairs"
+               js="util/sortButtons, util/datatablesUtility, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min, add/sharedSolverConfigTableFunctions, add/jobPairs"
                css="common/delaySpinner, explore/common, add/jobPairs">
 	<form id="addJobPairsForm" method="post"
 	      action="${starexecRoot}/secure/add/jobPairs">

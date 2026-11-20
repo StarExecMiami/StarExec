@@ -85,7 +85,7 @@
 
 <star:template title="Run Quick Job"
                css="common/delaySpinner, common/table, add/quickJob"
-               js="common/defaultSettings, common/delaySpinner, lib/jquery.validate.min, add/quickJob, lib/jquery.dataTables.min, lib/jquery.qtip.min">
+               js="common/defaultSettings, common/delaySpinner, lib/jquery.validate.min, add/quickJob, lib/jquery.dataTables.min">
 	<c:forEach items="${defaultSettings}" var="setting">
 		<star:settings setting="${setting}"/>
 	</c:forEach>

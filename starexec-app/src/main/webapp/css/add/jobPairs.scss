@@ -92,11 +92,6 @@ fieldset h6 {
 	margin-bottom: -4px;
 }
 
-.qtip .processing {
-	margin-top: 45px;
-	text-align: center;
-}
-
 select {
 	width:95%;
 }
@@ -108,11 +103,6 @@ table {
 	max-width:100%;
 	overflow-x:scroll;
 	word-wrap:break-word;
-}
-
-table.tooltipTable {
-	table-layout:auto;
-	word-wrap:normal;
 }
 
 #content tbody tr .dataTables_empty:hover {

@@ -33,7 +33,6 @@ public final class Web {
         "details/shared",
         "details/job",
         "lib/jquery.ba-throttle-debounce.min",
-        "lib/jquery.qtip.min",
         "lib/jquery.heatcolor.0.0.1.min",
         "util/datatablesUtility",
     };

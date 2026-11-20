@@ -64,7 +64,7 @@
 
 <star:template title="Upload Benchmarks to ${space.name}"
                css="common/delaySpinner, add/benchmark"
-               js="common/delaySpinner, lib/jquery.validate.min, add/benchmarks, lib/jquery.qtip.min">
+               js="common/delaySpinner, lib/jquery.validate.min, add/benchmarks">
 	<form id="uploadForm" enctype="multipart/form-data" method="POST"
 	      action="${starexecRoot}/secure/upload/benchmarks?csrfToken=${csrfToken}">
 		<input type="hidden" name="space" value="${space.id}"/>

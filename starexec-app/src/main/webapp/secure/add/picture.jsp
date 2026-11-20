@@ -32,7 +32,7 @@
 %>
 
 <star:template title="Upload a Picture" css="add/picture"
-               js="lib/jquery.validate.min, add/picture, lib/jquery.qtip.min, common/delaySpinner">
+               js="lib/jquery.validate.min, add/picture, common/delaySpinner">
 	<form method="POST" enctype="multipart/form-data"
 	      action="${starexecRoot}/secure/upload/pictures?csrfToken=${csrfToken}" id="upForm"
 	      aria-labelledby="upload-legend">

@@ -631,12 +631,6 @@ tbody tr.row_selected {
 // SPECIAL TABLE CONTEXTS
 // =============================================================================
 
-// Tooltip tables
-.tooltipTable {
-  table-layout: auto;
-  word-wrap: normal;
-}
-
 // Dialog tables
 .ui-dialog table {
   width: 100%;
@@ -730,11 +724,6 @@ fieldset {
 .processing {
   margin-right: 8px;
   margin-bottom: -4px;
-}
-
-.qtip .processing {
-  margin-top: 45px;
-  text-align: center;
 }
 
 td {

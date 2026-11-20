@@ -36,7 +36,7 @@ public class WebAssetReferencesTest {
 	/** Third-party code and themes, kept as shipped. */
 	private static final List<Path> VENDORED = List.of(
 		WEBAPP.resolve("js/lib"), WEBAPP.resolve("css/jqueryui"), WEBAPP.resolve("css/jstree"),
-		WEBAPP.resolve("css/datatables"), WEBAPP.resolve("css/prettify"), WEBAPP.resolve("css/explore/jquery.qtip.css"));
+		WEBAPP.resolve("css/datatables"), WEBAPP.resolve("css/prettify"));
 
 	/** Icon classes jQuery UI 1.13 widgets add by themselves (dialog, datepicker, menu, resizable). */
 	private static final Set<String> JQUERY_UI_INTERNAL_ICONS = Set.of(
