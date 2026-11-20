@@ -314,7 +314,7 @@
 				<a href="${starexecRoot}/services/jobs/pairs/${pair.id}/log"
 				   target="_blank" class="popoutLink">popout</a>
 			</fieldset>
-		
+
 		</c:when>
 	</c:choose>
 	
