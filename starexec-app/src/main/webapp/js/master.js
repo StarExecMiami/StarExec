@@ -4,6 +4,30 @@
  */
 var star = star || {};
 
+/** Pause polling on navigation and resume it on history restoration. */
+star.startPagePolling = function (refresh, delay) {
+  var timer = null;
+
+  function start() {
+    if (timer === null) {
+      timer = window.setInterval(refresh, delay);
+    }
+  }
+
+  window.addEventListener("pagehide", function () {
+    if (timer !== null) {
+      window.clearInterval(timer);
+      timer = null;
+    }
+  });
+  window.addEventListener("pageshow", function (event) {
+    if (event.persisted) {
+      start();
+    }
+  });
+  start();
+};
+
 /**
  * CSRF Protection Setup
  *

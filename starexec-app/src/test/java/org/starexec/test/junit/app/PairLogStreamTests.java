@@ -43,6 +43,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.sse.OutboundSseEvent;
 import javax.ws.rs.sse.Sse;
 import javax.ws.rs.sse.SseEventSink;
@@ -61,6 +62,20 @@ public class PairLogStreamTests {
         counterField.setAccessible(true);
         AtomicInteger counter = (AtomicInteger) counterField.get(null);
         counter.set(0);
+    }
+
+    @Test
+    public void automaticReconnectUsesTheHeaderAheadOfTheStartingOffset() throws Exception {
+        HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+        Method resume = RESTServices.class.getDeclaredMethod("getPairLogResumeOffset", HttpServletRequest.class);
+        resume.setAccessible(true);
+        Assertions.assertNull(resume.invoke(null, request));
+
+        Mockito.when(request.getParameter("offset")).thenReturn("20");
+        Assertions.assertEquals("20", resume.invoke(null, request));
+
+        Mockito.when(request.getHeader("Last-Event-ID")).thenReturn("32");
+        Assertions.assertEquals("32", resume.invoke(null, request));
     }
 
     @Test
@@ -125,7 +140,7 @@ public class PairLogStreamTests {
         long returnedOffset = (Long) streamMethod.invoke(null, 42, output, tempFile, 10L, 1024, false);
         String events = output.toString(StandardCharsets.UTF_8.name());
 
-        Assertions.assertTrue(events.contains("event: reset"));
+        Assertions.assertTrue(events.contains("id: 0\nevent: reset"));
         Assertions.assertTrue(events.contains("event: chunk"));
         Assertions.assertEquals(3L, returnedOffset);
 

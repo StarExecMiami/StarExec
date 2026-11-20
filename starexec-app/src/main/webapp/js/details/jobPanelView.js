@@ -21,12 +21,7 @@ $(document).ready(function() {
 	});
 
 	//update the tables every 5 seconds
-	var panelRefreshId = window.setInterval(function() {
-		refreshPanels();
-	}, 5000);
-	$(window).on("pagehide", function() {
-		window.clearInterval(panelRefreshId);
-	});
+	star.startPagePolling(refreshPanels, 5000);
 	initUI();
 	initializePanels();
 });
