@@ -11,7 +11,9 @@ jQuery(function($) {
 
 	var postTo = function(url) {
 		return (function() {
-			$.post(url, parseReturnCode, "json");
+			$.post(url, parseReturnCode, "json").fail(function() {
+				showMessage('error', 'Failed to rerun job pairs', 5000);
+			});
 		});
 	};
 

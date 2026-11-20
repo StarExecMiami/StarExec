@@ -159,7 +159,9 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 				}
 			},
 			"json"
-		);
+		).fail(function(_jqXHR, textStatus) {
+			handleAjaxError(textStatus);
+		});
 	}
 
 }

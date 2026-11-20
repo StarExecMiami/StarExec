@@ -119,7 +119,9 @@ function getFinishedJobPairsFromServer(done, dataTable) {
 				}, 5000);
 			},
 			'json'
-		);
+		).fail(function() {
+			showMessage('error', 'Failed to refresh job matrix status', 5000);
+		});
 	}
 }
 
