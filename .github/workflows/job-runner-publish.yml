@@ -235,7 +235,7 @@ jobs:
           else
             echo "| Platforms | \`linux/amd64, linux/arm64\` |" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "| Base | \`alpine:3.21\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Base | \`alpine:3.24\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ github.event_name }}" != "pull_request" ]; then

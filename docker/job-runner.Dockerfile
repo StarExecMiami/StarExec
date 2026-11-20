@@ -42,14 +42,13 @@
 # ==============================================================================
 # Stage 1: Build runsolver natively on Alpine (musl libc)
 # ==============================================================================
-# Pinned to the SAME base as the root Dockerfile's runsolver-builder stage (alpine:3.19).
+# Pinned to the same base as the root Dockerfile's runsolver-builder stage.
 # The two images must ship the same measurement binary, and building identical source on
 # two different Alpine releases means two different musl/gcc toolchains and so potentially
 # two different binaries -- which is the divergence the vendored-source change exists to
-# remove. Deliberately the older of the two bases: a binary built against musl 1.2.4 runs
-# on the 3.21 runtime stage below, and CI asserts the resulting SHA-256 matches the app
-# image's (see .github/workflows/runsolver-parity.yml). Change both stages or neither.
-FROM docker.io/library/alpine:3.19 AS runsolver-builder
+# remove. CI checks that both builds produce the same SHA-256 (see
+# .github/workflows/runsolver-parity.yml). Update both builders together.
+FROM docker.io/library/alpine:3.24 AS runsolver-builder
 
 # /build, matching the root Dockerfile's runsolver-builder stage, NOT /tmp. gcc embeds the
 # compilation directory in the binary's debug information, so the same source built at a
@@ -108,7 +107,7 @@ RUN set -eux; \
 # ==============================================================================
 # Stage 2: Minimal runtime image
 # ==============================================================================
-FROM docker.io/library/alpine:3.21
+FROM docker.io/library/alpine:3.24
 
 LABEL maintainer="StarExec Team"
 LABEL org.opencontainers.image.title="StarExec Job Runner"
