@@ -71,7 +71,6 @@ ops.txt
 !**/css/datatables/*.css
 !**/css/jqueryui/*.css
 !**/css/jstree/**/*.css
-!**/css/explore/jquery.qtip.css
 
 ####################################
 # Legacy/Ant / Maven wrapper
