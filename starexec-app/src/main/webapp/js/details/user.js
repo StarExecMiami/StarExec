@@ -74,7 +74,7 @@ $(document).ready(function() {
 
 	jsTree = makeSpaceTree("#exploreList");
 	// Initialize the jstree plugin for the explorer list
-	jsTree.bind("select_node.jstree", function(event, data) {
+	jsTree.on("select_node.jstree", function(event, data) {
 		// When a node is clicked, get its ID and display the info in the details pane
 		spaceId = data.rslt.obj.attr("id");
 		spaceName = $('.jstree-clicked').text();

@@ -22,8 +22,8 @@ function addFilterOnDoneTyping() {
 		this.each(function(i) {
 			$.fn.dataTableExt.iApiIndex = i;
 			var anControl = $('input', _that.fnSettings().aanFeatures.f);
-			anControl.unbind('keyup')
-			.bind('keyup', $.debounce(400, function(e) {
+			anControl.off('keyup')
+			.on('keyup', $.debounce(400, function(e) {
 				$.fn.dataTableExt.iApiIndex = i;
 				_that.fnFilter(anControl.val());
 			}));

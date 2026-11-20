@@ -207,7 +207,7 @@ function popUp(uri) {
 
 function registerAnonymousLinkButtonEventHandler() {
 	'use strict';
-	$('#anonymousLink').unbind('click');
+	$('#anonymousLink').off('click');
 	$('#anonymousLink').click(function() {
 		$('#dialog-confirm-anonymous-link')
 		.text("Do you want the solver's name to be hidden on the linked page?");
