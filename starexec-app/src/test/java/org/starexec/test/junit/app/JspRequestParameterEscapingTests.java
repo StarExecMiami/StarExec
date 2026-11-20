@@ -43,4 +43,26 @@ public class JspRequestParameterEscapingTests {
 		assertTrue(jsp.contains("<c:out value='${ref}'/>"));
 		assertTrue(jsp.contains("prefix=\"c\""), "c taglib must be declared");
 	}
+
+	@Test
+	public void spacePermissionsEscapesSpaceIdParameter() throws IOException {
+		String jsp = read("edit/spacePermissions.jsp");
+		assertFalse(jsp.contains("spaces.jsp?id=${param.id}"));
+		assertTrue(jsp.contains("spaces.jsp?id=<c:out value='${param.id}'/>"));
+	}
+
+	@Test
+	public void pairAndBenchmarkPagesEscapeAttributes() throws IOException {
+		String pair = read("details/pair.jsp");
+		assertFalse(pair.contains("<td>${entry.key}</td>"));
+		assertFalse(pair.contains("<td>${entry.value}</td>"));
+		assertTrue(pair.contains("<c:out value=\"${entry.key}\"/>"));
+		assertTrue(pair.contains("<c:out value=\"${entry.value}\"/>"));
+
+		String bench = read("details/benchmark.jsp");
+		assertFalse(bench.contains("<td>${entry.key}</td>"));
+		assertFalse(bench.contains("<td>${entry.value}</td>"));
+		assertFalse(bench.contains("<td>${dependency.dependencyPath}</td>"));
+		assertTrue(bench.contains("<c:out value=\"${dependency.dependencyPath}\"/>"));
+	}
 }

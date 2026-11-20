@@ -3,6 +3,7 @@
         session="true" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	final StarLogger log = StarLogger.getLogger(getClass());
 
@@ -69,7 +70,7 @@
 		return;
 	}
 %>
-<star:template title="${config.name}"
+<star:template title="${fn:escapeXml(config.name)}"
                css="details/configuration, details/shared, prettify/prettify"
                js="common/delaySpinner, details/shared, lib/prettify, details/configuration">
 	<input type="hidden" id="solverId" value="${solver.id}"/>
@@ -85,7 +86,7 @@
 			<tbody>
 			<tr>
 				<td>name</td>
-				<td>${config.name}</td>
+				<td><c:out value="${config.name}"/></td>
 			</tr>
 			<tr>
 				<td>description</td>
@@ -114,5 +115,5 @@
 	</c:if>
 	<a href="${starexecRoot}/secure/details/solver.jsp?id=${solver.id}"
 	   id="returnLink<c:if test="${ownerId != user.id}">Margin</c:if>">
-		back to ${solver.name}</a>
+		back to <c:out value="${solver.name}"/></a>
 </star:template>
