@@ -7,12 +7,16 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.command.HTMLParser;
+import org.starexec.constants.R;
+import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
 import org.starexec.data.database.Users;
 import org.starexec.data.to.Benchmark;
+import org.starexec.data.to.JobPair;
 import org.starexec.data.to.Processor;
 import org.starexec.data.to.Solver;
 import org.starexec.data.to.Space;
 import org.starexec.data.to.User;
+import org.starexec.data.to.pipelines.JoblineStage;
 import org.starexec.util.DataTablesQuery;
 
 import java.nio.file.Files;
@@ -29,6 +33,28 @@ public class DescriptionOutputEncodingTest {
 	private static final Path EDIT_SPACE_JSP = Path.of("src/main/webapp/secure/edit/space.jsp");
 	private static final Path EDIT_COMMUNITY_JS = Path.of("src/main/webapp/js/edit/community.js");
 	private static final Path JOB_DETAILS_JS = Path.of("src/main/webapp/js/details/job.js");
+
+	@Test
+	public void anonymousPairTableRendersStageResultsAsText() {
+		Benchmark benchmark = new Benchmark();
+		benchmark.setName("Benchmark 1");
+		JobPair pair = new JobPair();
+		pair.setBench(benchmark);
+		JoblineStage stage = new JoblineStage();
+		stage.setStageNumber(1);
+		stage.getSolver().setName("Solver 1");
+		String result = "<b>unsat & unknown</b>";
+		stage.getAttributes().setProperty(R.STAREXEC_RESULT, result);
+		pair.addStage(stage);
+
+		JsonObject response = RESTHelpers.convertJobPairsToJsonObject(
+				List.of(pair), new DataTablesQuery(), true, 1, PrimitivesToAnonymize.ALL);
+		String cell = response.getAsJsonArray("aaData").get(0).getAsJsonArray().get(5).getAsString();
+
+		assertFalse(cell.contains("<b>"));
+		assertTrue(cell.contains("&lt;b&gt;unsat &amp; unknown"));
+		assertEquals(result, stage.getStarexecResult());
+	}
 
 	@Test
 	public void spaceDataTableEncodesDescriptionsForHtmlRendering() {
