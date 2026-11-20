@@ -3,12 +3,6 @@ var communityInfo;
 var currentChart = null;
 var lastUpdate = null;
 var loadingMessage = "Please wait while the information is retrieved…";
-var usersMessage = "a user is counted in a community if he/she is a member of at least one of that community's subspaces";
-var solversMessage = "a solver is counted as part of a community if it appears in at least one of that community's subspaces, whether or not it appears in a community is based on id so if a solver is copied, it's counted as a new solver because it has a new id";
-var benchesMessage = "a benchmark is counted as part of a community if it appears in at least one of that community's subspaces, whether or not it appears in a community is based on id so if a benchmark is copied, it's counted as a new benchmark because it has a new id";
-var jobsMessage = "a job is counted as part of a community if it appears in at least one of that community's subspaces";
-var jobPairsMessage = "a job pair is counted as part of a community if it appears in at least one of that community's subspaces";
-var diskUseMessage = "disk use = space used by solvers + space used by benchmarks, where solvers and benchmarks belong to the given community";
 
 // Human-readable labels for each graph type, used in chart title, x-axis, and dataset label
 var labelMap = {
@@ -67,12 +61,6 @@ jQuery(function($) {
 
 	$('.expd').parent().expandable(true);
 
-	$('#benchHeader').qtip({
-		content: benchesMessage,
-		show: "mouseover",
-		hide: "mouseout"
-	});
-
 	$('.compareBtn').button({
 		icons: { secondary: "ui-icon-refresh" }
 	});
@@ -83,35 +71,12 @@ jQuery(function($) {
 		changeCommunityOverviewGraph(type);
 	}, 16);
 
-	$('#compareBenches')
-	.qtip({ content: benchesMessage, show: "mouseover", hide: "mouseout" })
-	.click(function() { debouncedChange('benchmarks'); });
-
-	$('#compareDiskUse')
-	.qtip({ content: diskUseMessage, show: "mouseover", hide: "mouseout" })
-	.click(function() { debouncedChange('disk_usage'); });
-
-	$('#compareJobs')
-	.qtip({ content: jobsMessage, show: "mouseover", hide: "mouseout" })
-	.click(function() { debouncedChange('jobs'); });
-
-	$('#compareJobPairs')
-	.qtip({ content: jobPairsMessage, show: "mouseover", hide: "mouseout" })
-	.click(function() { debouncedChange('job_pairs'); });
-
-	$('#compareSolvers')
-	.qtip({ content: solversMessage, show: "mouseover", hide: "mouseout" })
-	.click(function() { debouncedChange('solvers'); });
-
-	$('#compareUsers')
-	.qtip({ content: usersMessage, show: "mouseover", hide: "mouseout" })
-	.click(function() { debouncedChange('users'); });
-
-	$('#diskUseHeader').qtip({ content: diskUseMessage, show: "mouseover", hide: "mouseout" });
-	$('#solverHeader').qtip({ content: solversMessage, show: "mouseover", hide: "mouseout" });
-	$('#jobHeader').qtip({ content: jobsMessage, show: "mouseover", hide: "mouseout" });
-	$('#jobPairHeader').qtip({ content: jobPairsMessage, show: "mouseover", hide: "mouseout" });
-	$('#userHeader').qtip({ content: usersMessage, show: "mouseover", hide: "mouseout" });
+	$('#compareBenches').on('click', function() { debouncedChange('benchmarks'); });
+	$('#compareDiskUse').on('click', function() { debouncedChange('disk_usage'); });
+	$('#compareJobs').on('click', function() { debouncedChange('jobs'); });
+	$('#compareJobPairs').on('click', function() { debouncedChange('job_pairs'); });
+	$('#compareSolvers').on('click', function() { debouncedChange('solvers'); });
+	$('#compareUsers').on('click', function() { debouncedChange('users'); });
 
 	$("#lastUpdate").text(loadingMessage);
 	updateCommunityOverview();
