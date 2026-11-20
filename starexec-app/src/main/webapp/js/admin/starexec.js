@@ -81,7 +81,9 @@ function initUI() {
 							}
 						},
 						"json"
-					);
+					).fail(function() {
+						showMessage("error", "Failed to restart StarExec", 5000);
+					});
 				},
 				"cancel": function() {
 					log('user canceled StarExec restart');
@@ -100,7 +102,9 @@ function initUI() {
 
 			},
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to clear stats cache", 5000);
+		});
 	});
 
 	$("#clearLoadData").click(function() {
@@ -108,7 +112,9 @@ function initUI() {
 			starexecRoot + "services/jobs/clearloadbalance/",
 			parseReturnCode,
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to clear load balance data", 5000);
+		});
 	});
 
 	$("#clearSolverCacheData").click(function() {
@@ -116,7 +122,9 @@ function initUI() {
 			starexecRoot + "services/jobs/clearsolvercache/",
 			parseReturnCode,
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to clear solver cache", 5000);
+		});
 	});
 
 	$("#toggleDebugMode").click(function() {
@@ -130,7 +138,9 @@ function initUI() {
 				}
 			},
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to toggle debug mode", 5000);
+		});
 	});
 
 	$("#toggleFreezePrimitives")
@@ -149,7 +159,9 @@ function initUI() {
 				}
 			},
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to toggle freeze primitives mode", 5000);
+		});
 	});
 
 	$("#toggleReadOnly").button({
@@ -166,7 +178,9 @@ function initUI() {
 				}
 			},
 			"json"
-		);
+		).fail(function() {
+			showMessage("error", "Failed to toggle read-only mode", 5000);
+		});
 	});
 
 	setDebugText();
