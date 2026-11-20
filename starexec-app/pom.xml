@@ -418,6 +418,21 @@
                             <targetPath>js/lib</targetPath>
                             <includes><include>jquery.validate.min.js</include></includes>
                         </resource>
+                        <resource>
+                            <directory>${project.basedir}/../node_modules/jstree/dist</directory>
+                            <targetPath>js/lib</targetPath>
+                            <includes><include>jstree.min.js</include></includes>
+                        </resource>
+                        <resource>
+                            <directory>${project.basedir}/../node_modules/jstree/dist/themes/default-dark</directory>
+                            <targetPath>css/jstree/default-dark</targetPath>
+                            <includes>
+                                <include>style.min.css</include>
+                                <include>32px.png</include>
+                                <include>40px.png</include>
+                                <include>throbber.gif</include>
+                            </includes>
+                        </resource>
                     </webResources>
                     <!-- Java resources already enter WEB-INF/classes through build/resources. -->
                     <containerConfigXML
