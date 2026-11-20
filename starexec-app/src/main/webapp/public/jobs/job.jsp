@@ -3,6 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int userId = R.PUBLIC_USER_ID;
@@ -43,11 +44,11 @@
 	}
 %>
 
-<star:template title="${job.name}"
+<star:template title="${fn:escapeXml(job.name)}"
                js="lib/jquery.dataTables.min, common/delaySpinner, details/shared, details/job, lib/jquery.ba-throttle-debounce.min"
                css="common/table, details/shared, details/job">
 	<main role="main" class="job-details-container">
-		<h1 class="sr-only">Job Details: ${job.name}</h1>
+		<h1 class="sr-only">Job Details: <c:out value="${job.name}"/></h1>
 		
 		<section aria-labelledby="details-heading">
 			<fieldset>
@@ -84,7 +85,7 @@
 					<tr title="the postprocessor that was used to process output for this job">
 						<td scope="row">postprocessor</td>
 						<c:if test="${not empty firstPostProc}">
-							<td title="${firstPostProc.description}">${firstPostProc.name}</td>
+							<td title="<c:out value='${firstPostProc.description}'/>"><c:out value="${firstPostProc.name}"/></td>
 						</c:if>
 						<c:if test="${empty firstPostProc}">
 							<td>none</td>
@@ -94,7 +95,7 @@
 						<td scope="row">queue</td>
 						<c:if test="${not empty job.queue}">
 							<td>
-								<a href="${starexecRoot}/secure/explore/cluster.jsp">${job.queue.name}
+								<a href="${starexecRoot}/secure/explore/cluster.jsp"><c:out value="${job.queue.name}"/>
 									<span class="ext-link-icon"></span></a>
 							</td>
 						</c:if>
