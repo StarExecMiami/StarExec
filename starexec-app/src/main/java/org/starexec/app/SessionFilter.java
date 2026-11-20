@@ -158,6 +158,12 @@ public class SessionFilter implements Filter {
 						if (live != null) {
 							live.setAttribute(SessionUtil.USER, account.getUser());
 						}
+						if ("POST".equals(httpRequest.getMethod())
+								&& requestURI.equals(contextPath + "/services/session/logout")) {
+							// The CSRF filter has already checked this exact logout request.
+							chain.doFilter(request, response);
+							return;
+						}
 						// Preserved product behaviour: a suspended or unauthorized
 						// user is returned to the index page rather than logged out,
 						// and is still allowed to view that page.
