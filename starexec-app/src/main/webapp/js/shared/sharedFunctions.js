@@ -226,21 +226,31 @@ function populateSpaceDetails(jsonData, id) {
   log("Client side UI updated with details for " + spaceName);
 }
 
+var latestSpaceDetailsRequest;
+
 /**
  * Populates the space details panel with the basic information about the space
  * (e.g. the name, description) but does not query for details about primitives
  */
 function getSpaceDetails(id) {
+  var request = {};
+  latestSpaceDetailsRequest = request;
   $("#loader").show();
   $.post(
     starexecRoot + "services/space/" + id,
     function (data) {
+      if (latestSpaceDetailsRequest !== request) {
+        return;
+      }
       log("AJAX response received for details of space " + id);
       populateSpaceDetails(data, id);
     },
     "json",
   ).fail(function () {
-    showMessage("error", "Internal error getting space details", 5000);
+    if (latestSpaceDetailsRequest === request) {
+      $("#loader").hide();
+      showMessage("error", "Internal error getting space details", 5000);
+    }
   });
 }
 

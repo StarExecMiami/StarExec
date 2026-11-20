@@ -1,5 +1,7 @@
 // Global object for explore/spaces. Future globals should go here.
 var EXP_SP = {
+	permissionSelection: {},
+	permissionRequest: null,
 	copySpaceDialog: '#dialog-confirm-space-copy',
 	copySpaceDialogText: '#dialog-confirm-space-copy-txt',
 	hierarchyDialogConfig: {
@@ -35,6 +37,7 @@ $(document).ready(function() {
 	usingSpaceChain = (getSpaceChain("#spaceChain").length > 0); //check whether to turn off cookies
 
 	determineIfUserIsDeveloper();
+	initSpacePermissionDialog();
 
 	// Build left-hand side of page (space explorer)
 	initSpaceExplorer();
@@ -577,8 +580,7 @@ function spaceIsLeaf(spaceId) {
 }
 
 /**
- * Creates the space explorer tree for the left-hand side of the page, also
- * creates tooltips for the space explorer, .expd class, and userTable (if applicable)
+ * Creates the space explorer tree for the left-hand side of the page.
  * @author Tyler Jensen & Todd Elvers & Skylar Stark
  */
 function initSpaceExplorer() {
@@ -601,6 +603,9 @@ function initSpaceExplorer() {
 		log('Selected space isLeafSpace=' + isLeafSpace);
 		log('Space explorer node ' + id + ' was clicked');
 
+		EXP_SP.permissionSelection = {};
+		$('#space-permission-dialog').dialog('close');
+		$('#users .space-permission-trigger').remove();
 		updateButtonIds(id);
 		getSpaceDetails(id);
 
@@ -608,11 +613,6 @@ function initSpaceExplorer() {
 		// We replace rather than push so the Back button still navigates away
 		//   from the Space Explorer
 		window.history.replaceState(null, "Space Explorer", permalink);
-
-		// Remove all non-permanent tooltips from the page; helps keep
-		// the page from getting filled with hundreds of qtip divs
-		$(".qtip-userTooltip").remove();
-		$(".qtip-expdTooltip").remove();
 	}).on("loaded.jstree", function(event, data) {
 		handleSpaceChain("#spaceChain");
 	}).on("open_node.jstree", function(event, data) {
@@ -1069,6 +1069,7 @@ function makeRemoveSubspacesPost(selectedSubspaces, recyclePrims) {
  */
 function fnPaginationHandler(sSource, aoData, fnCallback) {
 	var tableName = $(this).attr('id');
+	var permissionSelection = EXP_SP.permissionSelection;
 
 	// Extract the id of the currently selected space from the DOM
 	var idOfSelectedSpace = $('#exploreList')
@@ -1104,6 +1105,10 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 		if (s) {
 			// Replace the current page with the newly received page
 			fnCallback(nextDataTablePage);
+			if (tableName === 'users' && permissionSelection === EXP_SP.permissionSelection
+				&& permissionSelection.spaceId === String(idOfSelectedSpace)) {
+				addSpacePermissionButtons(permissionSelection);
+			}
 
 			// If the primitive type is 'job', then color code the results appropriately
 			if ('j' == tableName[0]) {
@@ -1223,16 +1228,14 @@ function initDataTables() {
 	}
 
 	for (x = 0; x < 6; x++) {
-		$(tables[x]).on("mousedown", "tr", function() {
+		$(tables[x]).on("mousedown", "tr", function(event) {
+			if ($(event.target).closest('.space-permission-trigger').length) {
+				return;
+			}
 			unselectAll("#" + $(this).parent().parent().attr("id"));
 			$(this).toggleClass("row_selected");
 		});
 	}
-	// Setup user permission tooltip
-	$('#users tbody').on('hover', 'tr', function() {
-		$(this).toggleClass('hovered');
-	});
-
 	linkButtons()
 
 	// Set all fieldsets as expandable (except for action fieldset)
@@ -1333,55 +1336,13 @@ function redrawAllTables() {
 }
 
 /**
- * Creates either a leader tooltip, a personal tooltip, a space tooltip, or a expd tooltip for a given element
- * @author Todd Elvers
- */
-function createTooltip(element, selector, type, message) {
-	/**
-	 * Tooltips for displaying to a leader what a particular user's permissions are in a given space;
-	 * these persist until a new space is selected in the space explorer
-	 */
-	if (type[0] == 'l') {
-		$(element).on('mouseenter mouseleave', selector, function() {
-			// Check and see if a qtip object already exists
-			if (!$(this).data("qtip")) {
-				// If not, create one with the relevant configuration
-				configuration = getTooltipConfig(type, message);
-				$(this).qtip(configuration);
-			}
-		});
-	}
-	/* Tooltips for displaying to a user what their permission are for a given space in the space explorer;
-	 * these persist forever and are never removed from the page
-	 */
-	else if (type[0] == 'p') {
-		$(element).on('mouseenter mouseleave', selector, function() {
-			//only add this to the row for the current user
-			if ($(this).find("td input[name=\"currentUser\"]").length > 0) {
-				if (!$(this).data("qtip")) {
-					$(this).qtip(getTooltipConfig(type, message));
-				}
-			}
-
-		});
-	}
-	/* Tooltips for displaying to the user what their permissions are in a given fieldset, shown from
-	 * the expd class; these are removed from the page when a new space in the space explorer is selected
-	 */
-	else if (type[0] == 'e') {
-		if (!$(element).data("qtip")) {
-			$(element).qtip(getTooltipConfig(type, message));
-		}
-	}
-	log('tooltip created of type ' + type);
-}
-
-/**
  * Checks the permissions for the current space and hides/shows buttons based on
  * the user's permissions
  * @param perms The JSON permission object representing permissions for the current space
  */
 function checkPermissions(perms, id) {
+	EXP_SP.permissionSelection.spaceId = String(id);
+	EXP_SP.permissionSelection.isLeader = Boolean(perms && perms.isLeader);
 	// Check for no permission and hide entire action list if not present
 	// Don't hide if user is developer
 	if (userIsDeveloper) {
@@ -1396,15 +1357,10 @@ function checkPermissions(perms, id) {
 	}
 
 	if (perms.isLeader) {
-		// attach leader tooltips to every entry
-		createTooltip($('#users tbody'), 'tr', 'leader');
-
 		$('#editSpace').fadeIn('fast');
 		$('#editSpacePermissions').fadeIn('fast');
 
 	} else {
-		// Otherwise only attach a personal tooltip to the current user's entry in the userTable
-		createTooltip($('#users tbody'), 'tr', 'personal');
 		$('#editSpace').fadeOut('fast');
 		$('#editSpacePermissions').fadeOut('fast');
 	}
@@ -1440,12 +1396,143 @@ function checkPermissions(perms, id) {
 		$("#addQuickJob").fadeOut('fast');
 	}
 
-	// Create tooltips for the expd class
-	createTooltip($("#userExpd"),
-		null,
-		'expd',
-		getSinglePermTable('user', perms.addUser, perms.removeUser));
 	log('permissions checked and processed');
+}
+
+function addSpacePermissionButtons(selection) {
+	var $users = $('#users');
+	if ($users.attr('data-permission-viewer') !== 'true') {
+		return;
+	}
+	var canViewOthers = selection.isLeader || $users.attr('data-permission-viewer-all') === 'true';
+	$users.find('tbody tr').each(function() {
+		var $cell = $(this).children('td').first();
+		var userId = Number($cell.children('input[prim="user"]').val());
+		if (!Number.isInteger(userId) || userId <= 0 || (!canViewOthers && userId !== currentUserId)
+			|| $cell.children('.space-permission-trigger').length) {
+			return;
+		}
+		var name = $cell.children('a').first().text().trim();
+		$('<button>', {
+			type: 'button',
+			class: 'btn btn-secondary space-permission-trigger',
+			'aria-haspopup': 'dialog',
+			'aria-label': 'View permissions for ' + name,
+			text: 'View permissions'
+		}).data('permissionTarget', { selection: selection, userId: userId, name: name }).appendTo($cell);
+	});
+}
+
+function initSpacePermissionDialog() {
+	var $dialog = $('#space-permission-dialog').dialog({
+		autoOpen: false,
+		modal: true,
+		draggable: false,
+		resizable: false,
+		close: cancelSpacePermissionRequest
+	});
+	$dialog.dialog('widget').attr('aria-modal', 'true').removeAttr('aria-describedby');
+
+	$('#users').on('click', '.space-permission-trigger', function() {
+		var target = $(this).data('permissionTarget');
+		if (target.selection !== EXP_SP.permissionSelection) {
+			return;
+		}
+		// A pointer click does not focus buttons in every browser.
+		this.focus();
+		$dialog.dialog('option', {
+			title: 'Permissions for ' + target.name,
+			width: Math.min(420, window.innerWidth - 32)
+		}).dialog('open');
+		loadSpacePermissions(target);
+	});
+
+	$('#space-permission-retry').on('click', function() {
+		if (EXP_SP.permissionRequest) {
+			$dialog.dialog('widget').find('.ui-dialog-titlebar-close').trigger('focus');
+			loadSpacePermissions(EXP_SP.permissionRequest.target);
+		}
+	});
+}
+
+function cancelSpacePermissionRequest() {
+	var request = EXP_SP.permissionRequest;
+	EXP_SP.permissionRequest = null;
+	if (request && request.xhr) {
+		request.xhr.abort();
+	}
+}
+
+function loadSpacePermissions(target) {
+	cancelSpacePermissionRequest();
+	var request = { target: target };
+	EXP_SP.permissionRequest = request;
+	var selection = target.selection;
+	var $status = $('#space-permission-status').text('Loading permissions…');
+	var $results = $('#space-permission-results').empty();
+	var $retry = $('#space-permission-retry').prop('hidden', true);
+	var $edit = $('#space-permission-edit').prop('hidden', true).removeAttr('href');
+
+	function showLoadError() {
+		$status.text('Could not load permissions. Try again.');
+		$retry.prop('hidden', false);
+	}
+
+	request.xhr = $.ajax({
+		url: starexecRoot + 'services/permissions/details/' + target.userId + '/' + selection.spaceId,
+		dataType: 'json',
+		cache: false
+	}).done(function(response) {
+		if (request !== EXP_SP.permissionRequest) {
+			return;
+		}
+		if (response && response.success === false) {
+			$status.text('You cannot view these permissions.');
+			return;
+		}
+		var perms = response && response.perm;
+		if (!perms || typeof perms.isLeader !== 'boolean') {
+			showLoadError();
+			return;
+		}
+
+		$status.text(perms.isLeader ? 'Space leader.' : 'Permissions loaded.');
+		$results.append(buildSpacePermissionTable(perms));
+		var isAdmin = response.requester && response.requester.role === 'admin';
+		if (isAdmin || (selection.isLeader && !(response.isCommunity && perms.isLeader))) {
+			$edit.attr('href', starexecRoot + 'secure/edit/spacePermissions.jsp?id=' + selection.spaceId)
+				.prop('hidden', false);
+		}
+	}).fail(function(xhr) {
+		if (request !== EXP_SP.permissionRequest) {
+			return;
+		}
+		if (xhr.status === 403) {
+			$status.text('You cannot view these permissions.');
+		} else {
+			showLoadError();
+		}
+	});
+}
+
+function buildSpacePermissionTable(perms) {
+	var $table = $('<table aria-label="Permission settings">');
+	$table.append('<thead><tr><th scope="col">Resource</th><th scope="col">Add</th><th scope="col">Remove</th></tr></thead>');
+	var $body = $('<tbody>').appendTo($table);
+	[
+		['Jobs', 'addJob', 'removeJob'],
+		['Solvers', 'addSolver', 'removeSolver'],
+		['Benchmarks', 'addBenchmark', 'removeBench'],
+		['Users', 'addUser', 'removeUser'],
+		['Spaces', 'addSpace', 'removeSpace']
+	].forEach(function(resource) {
+		$('<tr>').append(
+			$('<th scope="row">').text(resource[0]),
+			$('<td>').text(perms[resource[1]] === true ? 'Yes' : 'No'),
+			$('<td>').text(perms[resource[2]] === true ? 'Yes' : 'No')
+		).appendTo($body);
+	});
+	return $table;
 }
 
 /**
@@ -1617,329 +1704,4 @@ function updateTable(dataTable) {
 	.text(rowsRemaining.length);
 
 	log('table updated. rows removed: ' + rowsToRemove.length + ' rows remaining: ' + rowsRemaining.length);
-}
-
-/**
- * Takes in a set of permissions and builds a pretty table to display to the user
- * @param tooltip the tooltip we are creating a permissions table for
- * @param perms The set of permissions to display in a table
- * @returns A jQuery object that is the table to display in the UI for the given permissions
- */
-function getPermTable(tooltip, perms, type, isCommunity) {
-	var permWrap = $('<div>');  // A wrapper for the table and leader info
-	var table = $('<table class="tooltipTable">'); // The table where the permissions are displayed
-	$(table).append('<tr><th>property</th><th>add</th><th>remove</th></tr>');
-
-	// Resolves bug where tooltip is empty
-	if ('undefined' == typeof perms || null == perms) {
-		perms = {
-			isLeader: false,
-			addJob: false,
-			removeJob: false,
-			addUser: false,
-			removeUser: false,
-			addSolver: false,
-			removeSolver: false,
-			addBenchmark: false,
-			removeBenchmark: false,
-			addSpace: false,
-			removeSpace: false
-		};
-	}
-
-	// Build a row for each permission
-	$(table).append(wrapPermRow('job', perms.addJob, perms.removeJob));
-	$(table).append(wrapPermRow('solver', perms.addSolver, perms.removeSolver));
-	$(table)
-	.append(wrapPermRow('bench', perms.addBenchmark, perms.removeBench));
-	$(table).append(wrapPermRow('user', perms.addUser, perms.removeUser));
-	$(table).append(wrapPermRow('space', perms.addSpace, perms.removeSpace));
-
-	// Save the data on the table for use throughout the page
-	table.data('perms', perms);
-
-	// Add the table to the wrapper
-	$(permWrap).append(table);
-
-	$(permWrap)
-	.append(
-		"<div><input class=\"btn btn-secondary permButton\" type='button' value='edit' onClick='editPermissions()'></input></div>");
-	// HTML to add to the wrapper to indicate someone is a leader
-	var leaderDiv = '<div class="leaderWrap"><span class="ui-icon ui-icon-star"></span><h2 class="leaderTitle">leader</h2></div>';
-
-	if (perms.isLeader) {
-		// If this person is a leader, add the leader div to the wrapper
-		$(permWrap).append(leaderDiv);
-	}
-
-	// Return the resulting DOM element to be inserted
-	return permWrap;
-}
-
-/**
- * Gives back HTML for a table containing only one permission
- * @param name The name of the single permission to display
- * @param add The permission's add value
- * @param remove The permission's remove value
- * @returns HTML representing a table to be displayed in a qtip for the table
- */
-function getSinglePermTable(name, add, remove) {
-	var table = $('<table class="tooltipTable"></table>');
-	$(table).append('<tr><th>property</th><th>add</th><th>remove</th></tr>');
-	$(table).append(wrapPermRow(name, add, remove));
-
-	return $(table).toHTMLString();
-}
-
-/**
- * used in tooltip, links to edit permissions page
- */
-function editPermissions() {
-	location = starexecRoot + "secure/edit/spacePermissions.jsp?id=" + spaceId;
-}
-
-/**
- * Wraps up a permission and it's value for display in a table. Includes onclicks for the images.
- * @param perm The permission type to display (job, user, solver, bench, space)
- * @param add The value for the add permission for the type
- * @param remove The value for the remove permission for the type
- * @returns HTML representing a row in a table display the type and it's permission values
- */
-function wrapPermRow(perm, add, remove) {
-	var yes = $('<span>')
-	.css('margin', 'auto')
-	.addClass('ui-icon ui-icon-check')
-	.toHTMLString();
-	var no = $('<span>')
-	.css('margin', 'auto')
-	.addClass('ui-icon ui-icon-closethick')
-	.toHTMLString();
-	return "<tr><td>" + perm + "</td><td class='add'>" + (add ? yes : no) + "</td><td class='remove'>" + (remove ? yes : no) + "</td></tr>";
-}
-
-/**
- * Returns the desired qTip configuration, with the given message, depending on the inputted type
- *
- * @param type users/benchmarks/solvers/subspaces
- * @author Todd Elvers
- */
-function getTooltipConfig(type, message) {
-	// Leader tooltips
-	if (type[0] == 'l') {
-		return {
-			content: {
-				text: getProcessingMessage(),
-				title: '<center><a>permissions</a></center>'
-			},
-			position: {  // Place right middle portion of the tooltip to the left middle portion of the row element
-				target: "mouse",
-				my: "right center",
-				at: "left center",
-				adjust: {
-					mouse: false
-				}
-			},
-			hide: {
-				fixed: true
-			},
-			show: {
-				ready: true, // Ensures the tooltip is shown the first time it's moused over
-				solo: false, // When this is false, all tooltip commands are applied only to the corresponding tooltip (what we want) instead of to all tooltips on the page (which causes weird artifacts to occur)
-				delay: 1000, // Every mouseover that occurs, after the first mouseover, will have to wait a second before the tooltip is triggered
-				event: "mouseover"
-			},
-			style: {
-				classes: "userTooltip",  // Load custom color scheme
-				tip: 'rightMiddle'   // Add a tip to the right middle portion of the tooltip
-			},
-			events: {
-				render: function() { // Before rendering the tooltip, get the user's permissions for the given space
-					var tooltip = this;
-					api = $(this).qtip("api");
-					var userId = $(api.elements.target)
-					.children('td:first')
-					.children('input')
-					.val();
-					$.get(
-						starexecRoot + 'services/permissions/details/' + userId + '/' + spaceId,
-						function(theResponse) {
-							s = parseReturnCode(theResponse);
-							if (s) {
-								// Replace the placeholder content
-								$(tooltip).qtip('option', 'content.text', ' ');
-								if (theResponse.requester.role == "admin") {
-									$(tooltip)
-									.qtip('option',
-										'content.text',
-										getPermTable(tooltip,
-											theResponse.perm,
-											'admin',
-											theResponse.isCommunity));
-
-								} else {
-									$(tooltip)
-									.qtip('option',
-										'content.text',
-										getPermTable(tooltip,
-											theResponse.perm,
-											'leader',
-											theResponse.isCommunity));
-								}
-
-							}
-							return true;
-						}
-					).fail(function() {
-						//showMessage('error',"Internal error getting user permissions",5000); bother the user for a tooltip problem?
-					});
-				},
-				hide: function() {   // If a user modifies a tooltip but does not press the 'save' or 'cancel' button then this resets the tooltip once it loses focus and fades from view
-					var tooltip = this;
-					api = $(this).qtip("api");
-					if ('p' != $(api.elements.title).text()[0]) {
-						$(tooltip)
-						.qtip('option',
-							'content.title',
-							'<center><a>permissions</a></center>');
-
-						var userId = $(api.elements.target)
-						.children('td:first')
-						.children('input')
-						.val();
-						$.post(
-							starexecRoot + 'services/permissions/details/' + userId + '/' + spaceId,
-							function(theResponse) {
-								log('AJAX response for permission tooltip received');
-								$(tooltip).qtip('option', 'content.text', ' ');
-								if (theResponse.requester.role == "admin") {
-									$(tooltip)
-									.qtip('option',
-										'content.text',
-										getPermTable(tooltip,
-											theResponse.perm,
-											'admin'));
-
-								} else {
-									$(tooltip)
-									.qtip('option',
-										'content.text',
-										getPermTable(tooltip,
-											theResponse.perm,
-											'leader'));
-								}
-								$(tooltip)
-								.qtip('option',
-									'content.title',
-									'<center><a>permissions</a></center>');
-								tooltip.hide();
-								return true;
-							}
-						).fail(function() {
-							//showMessage('error',"Internal error getting space details",5000);
-						});
-					}
-
-					// Fixes bug where 'hovered' class doesn't get removed from the no-longer-hovered tr element
-					var userId = $(api.elements.target)
-					.children('td:first')
-					.children('input')
-					.val();
-					$('#uid' + userId).parent().parent().removeClass('hovered');
-				}
-			}
-		};
-	}
-
-	// Expd tooltips
-	else if (type[0] == 'e') {
-		return {
-			content: {
-				text: message,
-				title: '<center>permissions</center>'
-			},
-			position: {
-				target: "mouse",
-				my: "right center",
-				at: "left center",
-				adjust: {
-					mouse: false
-				}
-			},
-			show: {
-				solo: true,
-				delay: 1000,
-				event: "mouseover"
-			},
-			hide: {
-				effect: {
-					type: 'slide',
-					length: 150
-				}
-			},
-			style: {
-				classes: 'expdTooltip'
-			}
-		};
-	}
-	// Personal tooltips
-	else if (type[0] == 'p') {
-		return {
-			content: {
-				text: getProcessingMessage(),
-				title: '<center><a>permissions</a></center>'
-			},
-			position: {
-				target: "mouse",
-				my: "right center",
-				at: "left center",
-				adjust: {
-					mouse: false
-				}
-			},
-			show: {
-				ready: true,
-				solo: false,
-				delay: 1000,
-				event: "mouseover"
-			},
-			hide: {
-				effect: {
-					type: 'fade',
-					length: 100
-				}
-			},
-			style: {
-				classes: "userTooltip",
-				tip: 'rightMiddle'
-			},
-			events: {
-				render: function() {
-					var tooltip = this;
-					api = $(this).qtip("api");
-					var userId = $("#users tbody tr")
-					.find('td:first input[name="currentUser"]')
-					.val();
-					if (typeof userId != 'undefined' && $(api.elements.target)
-						.children('td:first')
-						.children('input')
-						.val() == userId) {
-						var url = starexecRoot + 'services/space/' + spaceId + '/perm/' + userId;
-						$.post(
-							url,
-							function(theResponse) {
-								log('AJAX response for permission tooltip received');
-								$(tooltip).qtip('option', 'content.text', ' ');
-								$(tooltip)
-								.qtip('option',
-									'content.text',
-									getPermTable(tooltip, theResponse));
-
-								return true;
-							}
-						)
-					}
-				}
-			}
-		};
-	}
 }

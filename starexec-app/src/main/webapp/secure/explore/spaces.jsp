@@ -1,5 +1,5 @@
 <%@page contentType="text/html" pageEncoding="UTF-8"
-        import="org.starexec.data.database.Spaces,org.starexec.data.database.Users,org.starexec.data.security.SpaceSecurity, org.starexec.util.SessionUtil, org.starexec.logger.StarLogger, java.util.List, javax.servlet.http.Cookie" %>
+        import="org.starexec.data.database.Spaces,org.starexec.data.database.Users,org.starexec.data.security.GeneralSecurity, org.starexec.data.security.SpaceSecurity, org.starexec.util.SessionUtil, org.starexec.logger.StarLogger, java.util.List, javax.servlet.http.Cookie" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
@@ -82,12 +82,14 @@
 	request.setAttribute("spaceChain", spaceChain);
 
 	request.setAttribute("userId", uid);
-	request.setAttribute("isAdmin", Users.isAdmin(uid));
+	boolean canViewPermissions = !Users.isPublicUser(uid);
+	request.setAttribute("canViewPermissions", canViewPermissions);
+	request.setAttribute("canViewOtherUserPermissions", canViewPermissions && GeneralSecurity.hasAdminReadPrivileges(uid));
 	request.setAttribute("pageTitle", pageTitle);
 %>
 <star:template title="${pageTitle}"
-               js="util/draggable, util/spaceTree, util/sortButtons, common/delaySpinner, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.qtip.min, explore/spaces, util/datatablesUtility, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min, shared/sharedFunctions, util/selectInDatatable"
-               css="common/delaySpinner, common/table, explore/common, explore/jquery.qtip, explore/spaces">
+               js="util/draggable, util/spaceTree, util/sortButtons, common/delaySpinner, lib/jquery.dataTables.min, lib/jquery.jstree, explore/spaces, util/datatablesUtility, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min, shared/sharedFunctions, util/selectInDatatable"
+               css="common/delaySpinner, common/table, explore/common, explore/spaces">
 	<span id="userId" value="${userId}"></span>
 	<span id="spaceChain" value="${spaceChain}"></span>
 	<div id="explorer">
@@ -202,7 +204,8 @@
 		</star:panel>
 
 		<star:panel title="users" withCount="true" expandable="true">
-			<table id="users">
+				<table id="users" data-permission-viewer="${canViewPermissions}"
+				       data-permission-viewer-all="${canViewOtherUserPermissions}">
 				<thead>
 				<tr>
 					<th id="userNameHead">name</th>
@@ -256,6 +259,13 @@
 
 	</div>
 	<br class="clear"/>
+	<div id="space-permission-dialog" title="User permissions" class="hiddenDialog space-permission-dialog">
+		<p id="space-permission-status" role="status"></p>
+		<div id="space-permission-results"></div>
+		<button id="space-permission-retry" type="button" class="btn btn-secondary" hidden>Retry</button>
+		<a id="space-permission-edit" class="btn btn-secondary"
+		   href="${starexecRoot}/secure/edit/spacePermissions.jsp" hidden>Edit space permissions</a>
+	</div>
 	<div id="dialog-confirm-space-copy" title="confirm copy"
 	     class="hiddenDialog">
 		<p><span class="ui-icon ui-icon-info" aria-hidden="true"></span><span
