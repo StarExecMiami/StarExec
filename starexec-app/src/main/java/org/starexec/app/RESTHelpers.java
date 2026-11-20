@@ -1714,7 +1714,7 @@ public class RESTHelpers {
 				entry.add(new JsonPrimitive(displayCpu + " s"));
 			}
 
-			entry.add(new JsonPrimitive(stage.getStarexecResult()));
+			entry.add(new JsonPrimitive(safeHtml(stage.getStarexecResult())));
 			dataTablePageEntries.add(entry);
 		}
 		return createPageDataJsonObject(query, dataTablePageEntries);
@@ -2254,7 +2254,7 @@ public class RESTHelpers {
 
 	private static String getPairsInSpaceHtml(int spaceId, int configId, String linkText) {
 		StringBuilder sb = getPairsInSpaceLink("all", spaceId, configId, 1);
-		sb.append(linkText);
+		sb.append(safeHtml(linkText));
 		RESTHelpers.addImg(sb);
 		return sb.toString();
 	}
