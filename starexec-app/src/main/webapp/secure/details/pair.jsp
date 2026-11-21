@@ -341,7 +341,7 @@
 		</c:if>
 
 		<!-- IDV and GDV stuff from here down -->
-		<c:if test="${pair.status.getStatus() == 'complete'}">
+		<c:if test="${!isLocalJobPage && pair.status.getStatus() == 'complete'}">
 			<script>
 				window.benchmarkIds = JSON.parse('${benchDependencyIds}').concat(['${pair.bench.id}']);
 

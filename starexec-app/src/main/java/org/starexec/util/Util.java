@@ -1981,8 +1981,7 @@ public class Util {
 
     public static String getWebPage(String url, List<Cookie> cookiesToSend)
         throws IOException {
-        String nextLine;
-        StringBuilder outputHtml = new StringBuilder();
+        StringWriter outputHtml = new StringWriter();
         URI uri = URI.create(url);
         URL inputUrl = uri.toURL();
         URLConnection urlConnection = inputUrl.openConnection();
@@ -1991,13 +1990,12 @@ public class Util {
             urlConnection.setRequestProperty("Cookie", cookieString);
         }
         try (
-            BufferedReader reader = new BufferedReader(
-                new InputStreamReader(urlConnection.getInputStream())
+            InputStreamReader reader = new InputStreamReader(
+                urlConnection.getInputStream(),
+                StandardCharsets.UTF_8
             )
         ) {
-            while ((nextLine = reader.readLine()) != null) {
-                outputHtml.append(nextLine);
-            }
+            reader.transferTo(outputHtml);
         }
         return outputHtml.toString();
     }
