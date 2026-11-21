@@ -41,7 +41,7 @@ function initUI() {
 		pairTable.fnDraw(false);
 	});
 
-	$(".stageSelector").change(function() {
+	$(".stageSelector").on("change", function() {
 		//set the value of all .stageSelectors to this one to sync them.
 		//this does not trigger the change event, which is good because it would loop forever
 		$(".stageSelector").val($(this).val());
@@ -57,7 +57,7 @@ function initUI() {
 		var pairId = $(this).find('input').val();
 		window.location.assign(starexecRoot + "secure/details/pair.jsp?id=" + pairId);
 	});
-	$("#pairFilter").change(function() {
+	$("#pairFilter").on("change", function() {
 		pairTable.fnDraw(false);
 	});
 	attachSortButtonFunctions();

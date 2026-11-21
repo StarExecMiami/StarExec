@@ -202,7 +202,7 @@ function refreshPanels() {
 			//the simplest way is to just parse the element out of the id.
 			let id = parseInt(panelArray[i].attr("id").replace('panel',''));
 			//get the json and parse for current pannel
-			let json = $.parseJSON($(getIDStringForJSON(id)).attr("value"));
+			let json = JSON.parse($(getIDStringForJSON(id)).attr("value"));
 			/*console.log has some weird problem as shown in the link, this is why was do 
 			stringify to make sure it works. This took me an hour to figure out...
 			let this be a WARNING to the next person that sees this
@@ -641,7 +641,7 @@ function initUI() {
 			'description');
 		registerAnonymousLinkButtonEventHandler();
 		$(".stageSelector")
-		.change(function() {
+		.on("change", function() {
 			//set the value of all .stageSelectors to this one to sync them.
 			//this does not trigger the change event, which is good because it would loop forever
 			$(".stageSelector").val($(this).val());
@@ -785,7 +785,7 @@ function initUI() {
 
 	lastValidSelectOption = $("#spaceOverviewSelections").val();
 
-	$("#spaceOverviewSelections").change(function() {
+	$("#spaceOverviewSelections").on("change", function() {
 		if ($(this).val().length > 5) {
 			showMessage('error',
 				"You may only choose a maximum of 5 solver / configuration pairs to display at one time",
@@ -1233,7 +1233,7 @@ function updateSolverComparison(size, color, announce, isLatest) {
 			}
 			var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
 			if (s) {
-				var jsonObject = $.parseJSON(returnCode);
+				var jsonObject = JSON.parse(returnCode);
 				var src = jsonObject.src;
 				var map = jsonObject.map;
 				$("#solverComparison" + size).attr("src", src);
@@ -1367,7 +1367,7 @@ function getPanelTable(space) {
 */
 function setupEverythingForUnknownStatusWrapper() {
 	if (isLocalJobPage) {
-		var panelJson = $.parseJSON($("#subspacePanelJson" + curSpaceId)
+		var panelJson = JSON.parse($("#subspacePanelJson" + curSpaceId)
 		.attr("value"));
 		setupEverythingForUnknownStatus(panelJson);
 
@@ -1383,7 +1383,7 @@ function setupEverythingForUnknownStatusWrapper() {
 function initializePanels() {
 	var spaceId = curSpaceId;
 	if (isLocalJobPage) {
-		var panelJson = $.parseJSON($("#subspacePanelJson" + spaceId).attr("value"));
+		var panelJson = JSON.parse($("#subspacePanelJson" + spaceId).attr("value"));
 		handleSpacesData(panelJson);
 		return;
 	}
@@ -1571,7 +1571,7 @@ function loadStatsIntoSolveTbl() {
 	//get the datatable api
 	var id = parseInt(curSpaceId);
 	var $solveTbl = $("#solveTbl").DataTable()
-	let json = $.parseJSON($(getIDStringForJSON(id)).attr("value"));
+	let json = JSON.parse($(getIDStringForJSON(id)).attr("value"));
 	var newDataArray = parseStatsForLJP(json, false);
 	$solveTbl.clear().rows.add(newDataArray).draw()
 }
@@ -1808,7 +1808,7 @@ function getSolverTableInitializer() {
 	if (isLocalJobPage) {
 		window.getPanelTableInitializer = function(jobId, spaceId) {
 			return $.extend({},
-				$.parseJSON($(getIDStringForJSON(spaceId))
+				JSON.parse($(getIDStringForJSON(spaceId))
 				.attr('value')),
 				panelTableInitializer
 			);

@@ -169,7 +169,7 @@ function attachButtonActions() {
 						"data": {"id": solverId},
 						"dataType": "json",
 						"complete": function(jqXHR) {
-							var s = parseReturnCode($.parseJSON(jqXHR.responseText));
+							var s = parseReturnCode(JSON.parse(jqXHR.responseText));
 							destroyDialog();
 							if (s) {
 								var msg="Rebuilding solver";
