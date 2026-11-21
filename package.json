@@ -12,7 +12,7 @@
   "devDependencies": {
     "jquery": "3.8.0",
     "jquery-migrate": "3.5.2",
-    "jquery-ui-dist": "1.13.3",
+    "jquery-ui": "1.14.2",
     "jquery-validation": "1.21.0",
     "jstree": "3.3.17",
     "sass": "1.69.5",

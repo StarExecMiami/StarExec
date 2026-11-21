@@ -9,6 +9,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -16,6 +17,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class JobPageDependenciesTest {
 	@TempDir
 	Path temporary;
+
+	@Test
+	void jqueryUiCompatibilityLoadsBeforeWidgetsAndIsIncludedInOfflineExports() {
+		List<String> globalScripts = List.of(Web.GLOBAL_JS_FILES);
+		int jquery = globalScripts.indexOf("lib/jquery.min");
+		int compatibility = globalScripts.indexOf("common/jquery-ui-compat");
+		int widgets = globalScripts.indexOf("lib/jquery-ui.min");
+		assertTrue(jquery >= 0 && jquery < compatibility && compatibility < widgets);
+		assertTrue(List.of(Web.JS_FILES_FOR_LOCAL_JOB).containsAll(
+				List.of("lib/jquery.min", "common/jquery-ui-compat", "lib/jquery-ui.min")));
+	}
 
 	@Test
 	void offlineExportCopiesTreeAssetsWhenSourceMapsAreAbsent() throws Exception {
@@ -45,6 +57,8 @@ class JobPageDependenciesTest {
 
 		assertFalse(Files.exists(export.resolve("css/global.css.map")));
 		assertTrue(Files.isRegularFile(export.resolve("css/details/job.css.map")));
+		assertTrue(Files.isRegularFile(export.resolve("js/common/jquery-ui-compat.js")));
+		assertTrue(Files.isRegularFile(export.resolve("js/lib/jquery-ui.min.js")));
 		assertTrue(Files.isRegularFile(export.resolve("js/lib/jstree.min.js")));
 		assertTrue(Files.isRegularFile(export.resolve("js/util/tree.js")));
 		assertTrue(Files.isRegularFile(export.resolve("js/lib/jstree/LICENSE-MIT")));
