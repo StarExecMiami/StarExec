@@ -5,8 +5,8 @@
 	request.setAttribute("columnWidth", "100px");
 %>
 <star:template title="Users Admin"
-               js="admin/user, lib/jquery-ui.min, lib/jquery.dataTables.min"
-               css="common/table, explore/common, admin/admin, jqueryui/jquery-ui">
+               js="admin/user, lib/jquery.dataTables.min"
+               css="common/table, explore/common, admin/admin">
 	<star:panel title="users" withCount="true" expandable="false">
 		<c:if test="${sessionScope.regSuccess}">
 			<c:remove var="regSuccess" scope="session" />

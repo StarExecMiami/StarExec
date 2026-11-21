@@ -409,7 +409,7 @@
                             <includes><include>jquery-migrate.min.js</include></includes>
                         </resource>
                         <resource>
-                            <directory>${project.basedir}/../node_modules/jquery-ui-dist</directory>
+                            <directory>${project.basedir}/../node_modules/jquery-ui/dist</directory>
                             <targetPath>js/lib</targetPath>
                             <includes><include>jquery-ui.min.js</include></includes>
                         </resource>
