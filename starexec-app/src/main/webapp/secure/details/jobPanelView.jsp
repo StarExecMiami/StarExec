@@ -44,7 +44,7 @@
 	}
 %>
 <star:template title="${fn:escapeXml(job.name)}"
-               js=" lib/jquery.jstree, util/jobDetailsUtilityFunctions, lib/jquery.dataTables.min, common/delaySpinner, details/shared, details/jobPanelView, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min"
+               js=" util/jobDetailsUtilityFunctions, lib/jquery.dataTables.min, common/delaySpinner, details/shared, details/jobPanelView, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min"
                css="common/table, explore/common, details/shared, details/jobPanelView">
 	<div id="mainPanel"
 	     data-job-id="${job.id}"

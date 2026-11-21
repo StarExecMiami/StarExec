@@ -72,12 +72,12 @@ $(document).ready(function() {
 		PopUp($(this).attr('enlarge'));
 	});
 
-	jsTree = makeSpaceTree("#exploreList");
-	// Initialize the jstree plugin for the explorer list
-	jsTree.on("select_node.jstree", function(event, data) {
-		// When a node is clicked, get its ID and display the info in the details pane
-		spaceId = data.rslt.obj.attr("id");
-		spaceName = $('.jstree-clicked').text();
+	makeSpaceTree("#exploreList", {
+		stateKey: "user-spaces",
+		select: function(node) {
+			spaceId = node.id;
+			spaceName = node.text;
+		}
 	});
 
 	var dataTableConfig = new star.DataTableConfig({

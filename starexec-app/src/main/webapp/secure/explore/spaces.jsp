@@ -88,13 +88,13 @@
 	request.setAttribute("pageTitle", pageTitle);
 %>
 <star:template title="${pageTitle}"
-               js="util/draggable, util/spaceTree, util/sortButtons, common/delaySpinner, lib/jquery.dataTables.min, lib/jquery.jstree, explore/spaces, util/datatablesUtility, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min, shared/sharedFunctions, util/selectInDatatable"
-               css="common/delaySpinner, common/table, explore/common, explore/spaces">
+               js="util/draggable, util/spaceTree, util/sortButtons, common/delaySpinner, lib/jquery.dataTables.min, lib/jstree.min, util/tree, explore/spaces, util/datatablesUtility, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min, shared/sharedFunctions, util/selectInDatatable"
+               css="jstree/default-dark/style.min, common/delaySpinner, common/table, explore/common, explore/spaces">
 	<span id="userId" value="${userId}"></span>
 	<span id="spaceChain" value="${spaceChain}"></span>
 	<div id="explorer">
 		<h3>Spaces</h3>
-		<ul id="exploreList"></ul>
+		<div id="exploreList" aria-label="Spaces"></div>
 	</div>
 
 	<div id="detailPanel">

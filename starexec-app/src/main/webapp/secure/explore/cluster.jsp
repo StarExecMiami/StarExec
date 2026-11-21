@@ -2,12 +2,11 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 
 <star:template title="Compute Cluster"
-               js="lib/chart.min, common/format, lib/jquery.dataTables.min, lib/jquery.jstree, shared/sharedFunctions, explore/cluster, lib/jquery.progressbar.min, lib/jquery.heatcolor.0.0.1.min"
-               css="explore/cluster, common/table, explore/common, shared/cluster">
+               js="lib/chart.min, common/format, lib/jquery.dataTables.min, lib/jstree.min, util/tree, shared/sharedFunctions, explore/cluster, lib/jquery.progressbar.min, lib/jquery.heatcolor.0.0.1.min"
+               css="jstree/default-dark/style.min, explore/cluster, common/table, explore/common, shared/cluster">
 	<div id="explorer">
 		<h3>Active Queues</h3>
-		<ul id="exploreList">
-		</ul>
+		<div id="exploreList" aria-label="Queues and workers"></div>
 	</div>
 
 	<div id="detailPanel">

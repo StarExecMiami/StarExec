@@ -80,8 +80,8 @@
 %>
 
 <star:template title="${fn:escapeXml(t_user.fullName)}"
-               js="util/draggable, util/spaceTree, common/delaySpinner, common/alerts, details/user, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.heatcolor.0.0.1.min"
-               css="explore/common, details/user, common/delaySpinner, common/table, details/shared">
+               js="util/draggable, util/spaceTree, common/delaySpinner, common/alerts, details/user, lib/jquery.dataTables.min, lib/jstree.min, util/tree, lib/jquery.heatcolor.0.0.1.min"
+               css="jstree/default-dark/style.min, explore/common, details/user, common/delaySpinner, common/table, details/shared">
 	<span id="userId" data-user-id="${userId}"></span>
 	<div id="popDialog" role="dialog" aria-labelledby="popDialog-title" aria-modal="true">
 		<h2 id="popDialog-title" class="sr-only">Profile picture</h2>
@@ -89,8 +89,7 @@
 	</div>
 	<div id="explorer">
 		<h3>Spaces</h3>
-		<ul id="exploreList">
-		</ul>
+		<div id="exploreList" aria-label="Spaces"></div>
 	</div>
 
 

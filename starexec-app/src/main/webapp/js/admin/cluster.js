@@ -6,7 +6,6 @@ jQuery(function($) {
 	"use strict";
 
 	// Set the path to the css theme for the jstree plugin
-	$.jstree._themes = starexecRoot + "css/jstree/";
 
 	var reloadOnSucess = function(returnCode) {
 		if (parseReturnCode(returnCode)) {
@@ -24,58 +23,18 @@ jQuery(function($) {
 		.appendTo($confirmRemove.contents("p"))
 	;
 
-	// Initialize the jstree plugin for the community list
-	$("#exploreList")
-	.on("loaded.jstree", addNodeCountsToTree)
-	.jstree({
-		"json_data": {
-			"ajax": {
-				"url": starexecRoot + "services/cluster/queues", // Where we will be getting json data from
-				"data": function(n) {
-					return {id: n.attr ? n.attr("id") : -1}; // What the default space id should be
-				}
+	star.mountTree($("#exploreList").on("ready.jstree refresh.jstree", addNodeCountsToTree),
+		starexecRoot + "services/cluster/queues", {
+			rootId: -1,
+			queues: true,
+			dots: false,
+			select: function(node) {
+				var queue = node.data;
+				window.type = queue.rel;
+				defaultQueueId = queue.defaultQueueId;
+				updateActionId(queue.id, queue.rel, queue.global);
 			}
-		},
-		"themes": {
-			"theme": "default",
-			"dots": false,
-			"icons": true
-		},
-		"types": {
-			"max_depth": -2,
-			"max_children": -2,
-			"valid_children": ["space"],
-			"types": {
-				"active_queue": {
-					"valid_children": ["enabled_node", "disabled_node"]
-				},
-				"inactive_queue": {
-					"valid_children": ["enabled_node", "disabled_node"]
-				},
-				"enabled_node": {
-					"valid_children": []
-				},
-				"disabled_node": {
-					"valid_children": []
-				}
-			}
-		},
-		"plugins": ["types", "themes", "json_data", "ui"],
-		"core": {animation: 200}
-	})
-	.on("select_node.jstree", function(event, data) {
-		// When a node is clicked, get its ID and display the info in the details pane
-		id = data.rslt.obj.attr("id");
-		window['type'] = data.rslt.obj.attr("rel");
-		var global = data.rslt.obj.attr("global");
-		defaultQueueId = data.rslt.obj.attr("defaultQueueId");
-		updateActionId(id, type, global);
-	})
-	.on("click", "a", function(event, data) {
-		// This just disable's links in the node title
-		event.preventDefault();
-	})
-	;
+		});
 
 	$("#clearErrorStates a")
 	.button({
@@ -289,7 +248,7 @@ function updateActionId(id, type, global) {
 			$("#removeQueue").show();
 			$("#moveNodes").show();
 
-			if (global == 'true') {
+			if (global) {
 				$("#makeGlobal").hide();
 				$("#removeGlobal").show();
 				$("#CommunityAssoc").hide();

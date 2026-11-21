@@ -29,7 +29,7 @@
 %>
 
 <star:template title="Move Nodes to Queue"
-               js="util/selectInDatatable, admin/moveNodes, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.heatcolor.0.0.1.min,lib/jquery.validate.min"
+               js="util/selectInDatatable, admin/moveNodes, lib/jquery.dataTables.min, lib/jquery.heatcolor.0.0.1.min,lib/jquery.validate.min"
                css="common/table, details/shared, explore/common, explore/spaces, admin/admin">
 	<form id="addForm" method="POST" action="${starexecRoot}/secure/move/nodes"
 	      class="queue">

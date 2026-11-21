@@ -7,11 +7,6 @@ var currentUserId;
 var lastSelectedUserId = null;
 
 // utility - space chain (spaces.js)
-var spaceChain;
-var spaceChainIndex = 0;
-var spaceChainInterval;
-var openDone = true;
-var usingSpaceChain = false;
 
 var curIsLeader = false;
 
@@ -23,7 +18,6 @@ $(document).ready(function() {
 
 	currentUserId = parseInt($("#userId").attr("value"));
 	lastSelectedUserId = null;
-	usingSpaceChain = (getSpaceChain("#spaceChain").length > 1);
 
 	communityIdList = getCommunityIdList();
 
@@ -113,24 +107,15 @@ function initButtonUI() {
  * @author Tyler Jensen & Todd Elvers & Skylar Stark changes Julio Cervantes
  */
 function initSpaceExplorer() {
-	// Set the path to the css theme for the jstree plugin
-	jsTree = makeSpaceTree("#exploreList", !usingSpaceChain);
-	jsTree.on("select_node.jstree", function(event, data) {
-		// When a node is clicked, get its ID and display the info in the details pane
-		id = data.rslt.obj.attr("id");
-
-		getSpaceDetails(id);
-		setUpButtons();
-		$('#permCheckboxes').hide();
-		$('#currentPerms').hide();
-
-	}).on("loaded.jstree", function(event, data) {
-		handleSpaceChain("#spaceChain");
-	}).on("open_node.jstree", function(event, data) {
-		openDone = true;
-	});
-	$('#exploreList').click(function() {
-
+	makeSpaceTree("#exploreList", {
+		stateKey: "space-permissions",
+		chain: "#spaceChain",
+		select: function(node) {
+			getSpaceDetails(node.id);
+			setUpButtons();
+			$('#permCheckboxes').hide();
+			$('#currentPerms').hide();
+		}
 	});
 }
 

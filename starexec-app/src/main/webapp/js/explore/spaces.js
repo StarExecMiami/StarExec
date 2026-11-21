@@ -25,16 +25,10 @@ var jobTable;
 var spaceId;      // id of the current space
 var spaceName;    // name of the current space
 var currentUserId;
-var spaceChain;   // array of space ids to trigger in order
-var spaceChainIndex = 0; //the current index of the space chain
-var openDone = true;
-var spaceChainInterval;
-var usingSpaceChain = false;
 var isLeafSpace = false;
 var userIsDeveloper = false;
 $(document).ready(function() {
 	currentUserId = parseInt($("#userId").attr("value"));
-	usingSpaceChain = (getSpaceChain("#spaceChain").length > 0); //check whether to turn off cookies
 
 	determineIfUserIsDeveloper();
 	initSpacePermissionDialog();
@@ -576,7 +570,8 @@ function doSolverCopyPost(ids, destSpace, spaceId, hierarchy, copy) {
 }
 
 function spaceIsLeaf(spaceId) {
-	return $('#' + spaceId).hasClass('jstree-leaf');
+	var tree = $('#exploreList').jstree(true);
+	return Boolean(tree && tree.is_leaf(String(spaceId)));
 }
 
 /**
@@ -584,40 +579,33 @@ function spaceIsLeaf(spaceId) {
  * @author Tyler Jensen & Todd Elvers & Skylar Stark
  */
 function initSpaceExplorer() {
-	// Initialize the jstree plugin for the explorer list
-	// Bug: This is creating a global variable. Intentional?
-	jsTree = makeSpaceTree("#exploreList", !usingSpaceChain);
-	jsTree.on("select_node.jstree", function(event, data) {
-		// When a node is clicked, get its ID and display the info in the details pane
-		// Bug: This is creating a global variable. Intentional?
-		id = data.rslt.obj.attr("id");
+	makeSpaceTree("#exploreList", {
+		stateKey: "spaces",
+		chain: "#spaceChain",
+		select: function(node, tree) {
+			var id = node.id;
+			/**
+			 * The URL linking directly to this space
+			 * @const {string}
+			 */
+			var permalink = "?id=" + String(id);
 
-		/**
-		 * The URL linking directly to this space
-		 * @const {string}
-		 */
-		var permalink = "?id=" + String(id);
+			// Update global variable `isLeafSpace`
+			window.isLeafSpace = tree.is_leaf(node);
+			log('Selected space isLeafSpace=' + isLeafSpace);
+			log('Space explorer node ' + id + ' was clicked');
 
-		// Update global variable `isLeafSpace`
-		window.isLeafSpace = spaceIsLeaf(id);
-		log('Selected space isLeafSpace=' + isLeafSpace);
-		log('Space explorer node ' + id + ' was clicked');
+			EXP_SP.permissionSelection = {};
+			$('#space-permission-dialog').dialog('close');
+			$('#users .space-permission-trigger').remove();
+			updateButtonIds(id);
+			getSpaceDetails(id);
 
-		EXP_SP.permissionSelection = {};
-		$('#space-permission-dialog').dialog('close');
-		$('#users .space-permission-trigger').remove();
-		updateButtonIds(id);
-		getSpaceDetails(id);
-
-		// Replace the current URL with a URL linking directly to this space
-		// We replace rather than push so the Back button still navigates away
-		//   from the Space Explorer
-		window.history.replaceState(null, "Space Explorer", permalink);
-	}).on("loaded.jstree", function(event, data) {
-		handleSpaceChain("#spaceChain");
-	}).on("open_node.jstree", function(event, data) {
-		// Update global variable `openDone`
-		window.openDone = true;
+			// Replace the current URL with a URL linking directly to this space
+			// We replace rather than push so the Back button still navigates away
+			//   from the Space Explorer
+			window.history.replaceState(null, "Space Explorer", permalink);
+		}
 	});
 
 	var $copyPrimitivesOptions = $("#copy-primitives-options");
@@ -1025,20 +1013,12 @@ function removeSubspaces(selectedSubspaces) {
 				// If the user actually confirms, close the dialog right away
 				$('#dialog-confirm-delete').dialog('close');
 				makeRemoveSubspacesPost(selectedSubspaces, false);
-				selectedSubspaces.forEach(function(subspace) {
-					$('#exploreList').jstree("remove", "#" + subspace);
-				});
-				$('#exploreList').jstree("refresh");
 			},
 			'Remove subspace(s), and move primitives to trash': function() {
 				log('user confirmed subspace deletion');
 				// If the user actually confirms, close the dialog right away
 				$('#dialog-confirm-delete').dialog('close');
 				makeRemoveSubspacesPost(selectedSubspaces, true);
-				selectedSubspaces.forEach(function(subspace) {
-					$('#exploreList').jstree("remove", "#" + subspace);
-				});
-				$('#exploreList').jstree("refresh");
 			},
 			"Cancel": function() {
 				log('user canceled subspace deletion');
@@ -1052,7 +1032,11 @@ function makeRemoveSubspacesPost(selectedSubspaces, recyclePrims) {
 	$.post(
 		starexecRoot + "services/remove/subspace",
 		{selectedIds: selectedSubspaces, recyclePrims: recyclePrims},
-		parseReturnCode,
+		function(result) {
+			if (parseReturnCode(result)) {
+				$('#exploreList').jstree('refresh');
+			}
+		},
 		"json"
 	).fail(function() {
 		log('remove subspace error');
@@ -1071,23 +1055,8 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 	var tableName = $(this).attr('id');
 	var permissionSelection = EXP_SP.permissionSelection;
 
-	// Extract the id of the currently selected space from the DOM
-	var idOfSelectedSpace = $('#exploreList')
-	.find('.jstree-clicked')
-	.parent()
-	.attr("id");
-
-	// If we can't find the id of the space selected from the DOM, get it from the cookie instead
-	if (idOfSelectedSpace == null || typeof idOfSelectedSpace == 'undefined') {
-		idOfSelectedSpace = $.cookie("jstree_select");
-		// If we also can't find the cookie, then just set the space selected to be the root space
-		if (idOfSelectedSpace == null || typeof idOfSelectedSpace == 'undefined') {
-			$('#exploreList').jstree('select_node', '#1', true);
-			idOfSelectedSpace = 1;
-		} else {
-			idOfSelectedSpace = idOfSelectedSpace[1];
-		}
-	}
+	var tree = $('#exploreList').jstree(true);
+	var idOfSelectedSpace = tree && tree.get_selected()[0] || "1";
 
 	if (sortOverride != null && tableName == "benchmarks") {
 		aoData.push({"name": "sort_by", "value": getSelectedSort()});

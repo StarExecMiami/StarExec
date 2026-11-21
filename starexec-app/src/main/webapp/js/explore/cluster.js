@@ -289,83 +289,20 @@ $(document).ready(function() {
 });
 
 function initClusterExplorer() {
-	// Set the path to the css theme for the jstree plugin
-	$.jstree._themes = starexecRoot + "css/jstree/";
-
-	$("#exploreList").on("loaded.jstree", function(e, data) {
-		addNodeCountsToTree();
-		// Sync graph with current selection (e.g. from cookie) so initial view matches selected queue
-		var sel = $("#exploreList").jstree("get_selected", true);
-		if (sel && sel.length > 0) {
-			var node = sel[0];
-			var rel = node.attr ? node.attr("rel") : null;
-			if (rel === "active_queue" || rel === "inactive_queue") {
-				qIdForQueueGraph = node.attr("id");
-			} else if (node.parent && node.parent !== "#") {
-				qIdForQueueGraph = node.parent;
+	star.mountTree($("#exploreList").on("ready.jstree refresh.jstree", addNodeCountsToTree),
+		starexecRoot + "services/cluster/queues", {
+			rootId: -1,
+			queues: true,
+			stateKey: "cluster",
+			initial: "queue-1",
+			select: function(node, tree) {
+				var parent = tree.get_node(node.parent);
+				var parentId = parent && parent.data ? parent.data.id : null;
+				getDetails(node.data.id, node.data.rel, parentId);
+				qIdForQueueGraph = parentId || node.data.id;
+				updateQueueGraph();
 			}
-			updateQueueGraph();
-		}
-	}).jstree({
-		// Initialize the jstree plugin for the explorer list
-		"json_data": {
-			"ajax": {
-				"url": starexecRoot + "services/cluster/queues",	// Where we will be getting json data from
-				"data": function(n) {
-					return {id: n.attr ? n.attr("id") : -1}; // What the default space id should be
-				}
-			}
-		},
-		"themes": {
-			"theme": "default",
-			"dots": true,
-			"icons": true
-		},
-		"types": {
-			"max_depth": -2,    // -2 means disable max_children checking in the tree
-			"max_children": -2, // -2 means disable max_depth checking in the tree
-			"valid_children": ["queue"],
-			"types": {
-				"active_queue": {
-					"valid_children": ["enabled_node", "disabled_node"]
-				},
-				"inactive_queue": {
-					"valid_children": ["enabled_node", "disabled_node"]
-				},
-				"enabled_node": {
-					"valid_children": []
-				},
-				"disabled_node": {
-					"valid_children": []
-				}
-			}
-		},
-		"plugins": ["types", "themes", "json_data", "ui", "cookies"],
-		"core": {animation: 200}
-	}).on("select_node.jstree", function(event, data) {
-		// When a node is clicked, get its ID and display the info in the details pane
-		id = data.rslt.obj.attr("id");
-		parent_node = $.jstree._reference('#exploreList')
-		._get_parent(data.rslt.obj);
-		getDetails(id, data.rslt.obj.attr("rel"), parent_node);
-
-        // ---------------------------------------------------------------------------------------------------------- //
-		// when an item is selected in Active Queues (exploreList), update the queuegraph
-		// Alexander Brown, 11/20
-
-		// if the selected item is a queue, set qIdForQueueGraph to that item's id
-        if ( data.rslt.obj.attr("rel") == 'active_queue' || data.rslt.obj.attr("rel") == 'inactive_queue' ) {
-            qIdForQueueGraph = id;
-        } else {
-        // if the selected item is not a queue, then it is a node; set qIdForQueueGraph to that item's parent's id
-            qIdForQueueGraph = parent_node.attr("id");
-        }
-
-        // call updateQueueGraph() to immediately change the queuegraph image instead of waiting for the periodic update
-        updateQueueGraph();
-        // ---------------------------------------------------------------------------------------------------------- //
-
-	}).on("click", "a", function(event, data) { event.preventDefault(); });	// This just disable's links in the node title
+		});
 }
 
 function initDataTables() {
@@ -469,18 +406,7 @@ function initDataTables() {
 }
 
 function fnPaginationHandler(sSource, aoData, fnCallback) {
-	var id = $('#exploreList').find('.jstree-clicked').parent().attr("id");
-	//If we can't find the id of the queue/node from the DOM, get it from the cookie instead
-	if (id == null || typeof id == 'undefined') {
-		id = $.cookie("jstree_select");
-		// If we also can't find the cookie, then just set the space selected to be the root space
-		if (id == null || typeof id == 'undefined') {
-			$('#exploreList').jstree('select_node', '#1', true);
-			id = 1;
-		} else {
-			id = id[1];
-		}
-	}
+	var id = selectedId || 1;
 
 	//In case the paginate happens before type is set
 	if (typeof type == 'undefined') {
@@ -505,7 +431,7 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 /**
  * Populates the node details panel with information on the given node
  */
-function getDetails(id, type, parent_node) {
+function getDetails(id, type, parentId) {
 	var url = '';
 	selectedId = id;
 	jobPairTable.fnClearTable();	//immediately get rid of the current data, which makes it look more responsive
@@ -550,7 +476,7 @@ function getDetails(id, type, parent_node) {
 		$("#clusterExpd").html("<span class='list-count'></span> Running Job Pairs");
 		$("#jobsContainer").hide();
 		url = starexecRoot + "services/cluster/nodes/details/" + id;
-		qid = parent_node.attr("id");
+		qid = parentId;
 		window['type'] = 'nodes';
 		if (star.JobTableRefresh !== undefined) {
 			window.clearInterval(star.JobTableRefresh);

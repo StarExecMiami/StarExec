@@ -10,7 +10,8 @@ function addNodeCountsToTree() {
     .children("ul")
     .children("li")
     .each(function () {
-      var queueId = $(this).attr("id");
+      var tree = $("#exploreList").jstree(true);
+      var queueId = tree.get_node(this).data.id;
       // Set that to this so we can use it in the callback.
       var that = this;
       $.get(
@@ -18,10 +19,9 @@ function addNodeCountsToTree() {
         "",
         function (numberOfNodes) {
           log("numberOfNodes: " + numberOfNodes);
-          // Insert the node count span inside the node list.
-          $(that).prepend(
-            '<span class="nodeCount">(' + numberOfNodes + ")</span>",
-          );
+          var $label = $(that).children(".jstree-anchor");
+          $label.children(".nodeCount").remove();
+          $("<span>", { class: "nodeCount", text: "(" + numberOfNodes + ")" }).appendTo($label);
         },
         "json",
       );

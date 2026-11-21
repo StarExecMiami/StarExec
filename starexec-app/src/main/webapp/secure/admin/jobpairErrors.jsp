@@ -12,7 +12,7 @@
 	pageContext.setAttribute("yesterdayStr", yesterday.format(formatter));
 %>
 <star:template title="JobPair Errors"
-               js=" common/format, lib/jquery.dataTables.min, lib/jquery.jstree, admin/jobpairErrors"
+               js=" common/format, lib/jquery.dataTables.min, admin/jobpairErrors"
                css="common/table, admin/jobpairErrors">
 
 	<!-- Screen reader announcement region -->

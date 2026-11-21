@@ -70,7 +70,6 @@ ops.txt
 **/css/**/*.css
 !**/css/datatables/*.css
 !**/css/jqueryui/*.css
-!**/css/jstree/**/*.css
 
 ####################################
 # Legacy/Ant / Maven wrapper
