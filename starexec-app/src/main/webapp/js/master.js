@@ -126,23 +126,20 @@ $(document).ready(function () {
   var $navItems = $("#pageHeader nav > ul > li");
 
   // Mouse hover handling
-  $navItems.hover(
-    function () {
-      var $submenu = $(this).find("ul.subnav");
-      var $trigger = $(this).find("> a[aria-haspopup]");
+  $navItems.on("mouseenter", function () {
+    var $submenu = $(this).find("ul.subnav");
+    var $trigger = $(this).find("> a[aria-haspopup]");
 
-      $submenu.stop(true, true);
-      $submenu.slideDown("fast").show();
-      $trigger.attr("aria-expanded", "true");
-    },
-    function () {
-      var $submenu = $(this).find("ul.subnav");
-      var $trigger = $(this).find("> a[aria-haspopup]");
+    $submenu.stop(true, true);
+    $submenu.slideDown("fast").show();
+    $trigger.attr("aria-expanded", "true");
+  }).on("mouseleave", function () {
+    var $submenu = $(this).find("ul.subnav");
+    var $trigger = $(this).find("> a[aria-haspopup]");
 
-      $submenu.slideUp("fast");
-      $trigger.attr("aria-expanded", "false");
-    },
-  );
+    $submenu.slideUp("fast");
+    $trigger.attr("aria-expanded", "false");
+  });
 
   // Keyboard navigation support
   $navItems.find("> a[aria-haspopup]").on("keydown", function (e) {

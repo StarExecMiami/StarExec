@@ -174,7 +174,7 @@ function onSpaceDrop(event, ui) {
 
 	log(ids.length + ' rows dropped onto ' + destName);
 
-	$("#hier-copy-options").change(function() {
+	$("#hier-copy-options").on("change", function() {
 		if ($(this).val() === "move") {
 			$('.copy-primitives-options').hide();
 		} else {
@@ -382,7 +382,7 @@ function setupSpaceCopyDialog(ids, destSpace, destName) {
 	'use strict';
 
 	displayOrHideSampleRate();
-	$('#copyPrimitives').change(function() {
+	$('#copyPrimitives').on("change", function() {
 		displayOrHideSampleRate();
 	});
 
@@ -609,7 +609,7 @@ function initSpaceExplorer() {
 	});
 
 	var $copyPrimitivesOptions = $("#copy-primitives-options");
-	$("#hier-copy-options").change(function(e) {
+	$("#hier-copy-options").on("change", function(e) {
 		switch (e.target.value) {
 		case "move":
 			$copyPrimitivesOptions.hide();
