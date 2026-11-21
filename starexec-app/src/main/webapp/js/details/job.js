@@ -351,7 +351,7 @@ function clearPanels() {
 		if (panel.data("panelRefreshInterval") !== undefined) {
 			window.clearInterval(panel.data("panelRefreshInterval"));
 		}
-		panel.fnDestroy();
+		panel.api().destroy();
 		panel.remove();
 	}
 	$(".panelField").remove();
@@ -1475,7 +1475,9 @@ function handleSpacesData(spaces) {
 //  Initializes the DataTable objects
 //
 function initDataTables() {
-	extendDataTableFunctions();
+	if (!isLocalJobPage) {
+		extendDataTableFunctions();
+	}
 	//summary table
 
 	var $pairTbl = $('#pairTbl'),
@@ -1560,7 +1562,9 @@ function initDataTables() {
 		}}
 
 	// Change the filter so that it only queries the server when the user stops typing
-	$pairTbl.dataTable().fnFilterOnDoneTyping();
+	if (!isLocalJobPage) {
+		$pairTbl.dataTable().fnFilterOnDoneTyping();
+	}
 }
 
 /* 
