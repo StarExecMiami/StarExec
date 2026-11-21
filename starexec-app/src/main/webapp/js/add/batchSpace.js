@@ -36,7 +36,7 @@ function attachFormValidation() {
 	addValidators();
 
 	// Re-validate the 'file location' field when it loses focus
-	$("#fileUpload").change(function() {
+	$("#fileUpload").on("change", function() {
 		$("#fileUpload").blur().focus();
 	});
 

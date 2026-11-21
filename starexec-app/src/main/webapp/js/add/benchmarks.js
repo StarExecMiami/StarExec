@@ -539,7 +539,7 @@ function attachFormValidation() {
 	// Add 'regex' method to JQuery validator
 	addValidators();
 
-	$("#radioLocal").change(function() {
+	$("#radioLocal").on("change", function() {
 		if ($("#radioLocal").is(":checked")) {
 			$("#fileURL").stop(true, true, true);
 			$("#gitURL").stop(true, true, true);
@@ -559,7 +559,7 @@ function attachFormValidation() {
 		}
 	});
 
-	$("#radioURL").change(function() {
+	$("#radioURL").on("change", function() {
 		if ($("#radioURL").is(":checked")) {
 			$("#benchFile").stop(true, true, true);
 			$("#gitURL").stop(true, true, true);
@@ -579,7 +579,7 @@ function attachFormValidation() {
 		}
 	});
 	//button for git
-	$("#radioGit").change(function() {
+	$("#radioGit").on("change", function() {
 		if ($("#radioGit").is(":checked")) {
 			$("#fileURL").stop(true, true, true);
 			$("#benchFile").stop(true, true, true);
@@ -599,7 +599,7 @@ function attachFormValidation() {
 	});
 
 	// Re-validate the 'file location' field when it loses focus
-	$("#benchFile").change(function() {
+	$("#benchFile").on("change", function() {
 		$("#benchFile").blur().focus();
 	});
 
@@ -726,26 +726,26 @@ function handleUploadClick(event) {
  * Initializes user-interface
  */
 function initUI() {
-	$('#radioConvert').change(function() {
+	$('#radioConvert').on("change", function() {
 		if ($('#radioConvert').is(':checked')) {
 			$('#permRow').fadeIn('fast');
 		}
 	});
 
-	$('#radioDump').change(function() {
+	$('#radioDump').on("change", function() {
 		if ($('#radioDump').is(':checked')) {
 			$('#permRow').fadeOut('fast');
 		}
 	});
 
-	$('#radioDependency').change(function() {
+	$('#radioDependency').on("change", function() {
 		if ($('#radioDependency').is(':checked')) {
 			$('#depSpaces').fadeIn('fast');
 			$('#depLinked').fadeIn('fast');
 		}
 	});
 
-	$('#radioNoDependency').change(function() {
+	$('#radioNoDependency').on("change", function() {
 		if ($('#radioNoDependency').is(':checked')) {
 			$('#depSpaces').fadeOut('fast');
 			$('#depLinked').fadeOut('fast');

@@ -19,7 +19,7 @@ var COM_DS = {
 };
 
 $(document).ready(function() {
-	$("#settingProfile").change(function() {
+	$("#settingProfile").on("change", function() {
 
 		populateDefaults();
 

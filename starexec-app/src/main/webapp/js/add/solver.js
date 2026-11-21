@@ -10,7 +10,7 @@ $(document).ready(function() {
 	$("#default").show();
 	$("#fileLoc2").hide();
 	$("#description").hide();
-	$(".testJobRadio").change(function() {
+	$(".testJobRadio").on("change", function() {
 		handleTestJobVisibility();
 	});
 	handleTestJobVisibility();
@@ -51,7 +51,7 @@ function initUI() {
  */
 function attachFormValidation() {
 
-	$("#radioLocal").change(function() {
+	$("#radioLocal").on("change", function() {
 		if ($("#radioLocal").is(":checked")) {
 			$("#fileURL").stop(true, true, true);
 			$("#fileURL").fadeOut('fast', function() {
@@ -65,7 +65,7 @@ function attachFormValidation() {
 		}
 	});
 
-	$("#radioURL").change(function() {
+	$("#radioURL").on("change", function() {
 		if ($("#radioURL").is(":checked")) {
 			$("#fileLoc").stop(true, true, true);
 			$("#fileLoc").fadeOut('fast', function() {
@@ -79,7 +79,7 @@ function attachFormValidation() {
 		}
 	});
 
-	$("#radioUpload").change(function() {
+	$("#radioUpload").on("change", function() {
 		if ($("#radioUpload").is(":checked")) {
 			$("#description").fadeOut('fast', function() {
 				$("#fileLoc2").fadeOut('fast', function() {
@@ -89,7 +89,7 @@ function attachFormValidation() {
 		}
 	});
 
-	$("#radioText").change(function() {
+	$("#radioText").on("change", function() {
 		if ($("#radioText").is(":checked")) {
 			$("#fileLoc2").fadeOut('fast', function() {
 				$("#default").fadeOut('fast', function() {
@@ -99,7 +99,7 @@ function attachFormValidation() {
 		}
 	});
 
-	$("#radioFile").change(function() {
+	$("#radioFile").on("change", function() {
 		if ($("#radioFile").is(":checked")) {
 			$("#description").fadeOut('fast', function() {
 				$("#default").fadeOut('fast', function() {
@@ -113,7 +113,7 @@ function attachFormValidation() {
 	addValidators();
 
 	// Re-validate the 'solver location' field when it loses focus
-	$("#fileLoc").change(function() {
+	$("#fileLoc").on("change", function() {
 		$("#fileLoc").blur().focus();
 	});
 

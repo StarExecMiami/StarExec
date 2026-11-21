@@ -257,42 +257,42 @@ function initUI() {
 		togglePlusMinus(this);
 	});
 
-	$('#editPostProcess').change(function() {
+	$('#editPostProcess').on("change", function() {
 		saveChanges($(this).children('option:selected').attr('value'),
 			true,
 			'PostProcess',
 			0);
 	});
 
-	$('#editBenchProcess').change(function() {
+	$('#editBenchProcess').on("change", function() {
 		saveChanges($(this).children('option:selected').attr('value'),
 			true,
 			'BenchProcess',
 			0);
 	});
 
-	$('#editPreProcess').change(function() {
+	$('#editPreProcess').on("change", function() {
 		saveChanges($(this).children('option:selected').attr('value'),
 			true,
 			'PreProcess',
 			0);
 	});
 
-	$('#editUpdateProcess').change(function() {
+	$('#editUpdateProcess').on("change", function() {
 		saveChanges($(this).children('option:selected').attr('value'),
 			true,
 			'UpdateProcess',
 			0);
 	});
 
-	$('#editDependenciesEnabled').change(function() {
+	$('#editDependenciesEnabled').on("change", function() {
 		saveChanges($(this).children('option:selected').attr('value'),
 			true,
 			'DependenciesEnabled',
 			0);
 	});
 
-	$('#editBenchmarkingFramework').change(function() {
+	$('#editBenchmarkingFramework').on("change", function() {
 		'use strict';
 		log('changing benchmarking framework');
 		saveChanges($(this).children('option:selected').attr('value'),
@@ -371,11 +371,11 @@ function initUI() {
  */
 function attachFormValidation() {
 	// Re-validate the 'post-processor' and benchmark 'processor type' fields when they loses focus
-	$("#typeFile").change(function() {
+	$("#typeFile").on("change", function() {
 		$("#typeFile").blur().focus();
 	});
 
-	$(".processorFile").change(function() {
+	$(".processorFile").on("change", function() {
 		$(".processorFile").blur().focus();
 	});
 

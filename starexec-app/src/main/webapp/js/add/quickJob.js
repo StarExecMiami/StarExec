@@ -167,7 +167,7 @@ function attachFormValidation() {
 	});
 
 	//when we change queues, we need to refresh the validation to use the new timeouts
-	$("#workerQueue").change(function() {
+	$("#workerQueue").on("change", function() {
 		var settings = $('#addForm').validate().settings;
 		settings.rules.cpuTimeout = {
 			required: true,

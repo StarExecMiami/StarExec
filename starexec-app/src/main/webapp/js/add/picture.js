@@ -23,7 +23,7 @@ function attachFormValidation() {
 	addValidators();
 
 	// Re-validate the 'picture location' field when it loses focus
-	$("#uploadPic").change(function() {
+	$("#uploadPic").on("change", function() {
 		$("#uploadPic").blur().focus();
 	});
 
