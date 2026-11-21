@@ -97,6 +97,10 @@ thead {
 	cursor: pointer;
 }
 
+.offline-pair-table tbody tr:has(.offline-pair-link) {
+	cursor: pointer;
+}
+
 #solverChoice1 {
 	width: 90%;
 }

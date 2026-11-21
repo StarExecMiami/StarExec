@@ -305,7 +305,7 @@
 				<c:when test="${isLocalJobPage}">
 					<c:forEach var="jsId"
 					           items="${jobSpaceIdToPairMap.keySet()}">
-						<table id="${jsId}pairTbl" class="shaded">
+						<table id="${jsId}pairTbl" class="shaded offline-pair-table">
 							<thead>
 							<tr>
 								<th class="benchHead">benchmark</th>
@@ -320,9 +320,7 @@
 							<c:forEach var="pair"
 							           items="${jobSpaceIdToPairMap.get(jsId)}">
 								<tr>
-									<td><c:out value="${pair.getBench().getName()}"/>
-										<input type="hidden" value="${pair.getId()}" name="pid">
-									</td>
+									<td><a class="offline-pair-link" href="./pair_${pair.getId()}.html"><c:out value="${pair.getBench().getName()}"/></a></td>
 									<td><c:out value="${pair.getPrimarySolver().getName()}"/></td>
 									<td><c:out value="${pair.getPrimaryConfiguration().getName()}"/></td>
 									<td><c:out value="${pair.getPrimaryStage().getStatus().getStatus()}"/>
