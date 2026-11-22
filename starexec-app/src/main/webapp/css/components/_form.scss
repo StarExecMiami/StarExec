@@ -126,6 +126,7 @@
 .form-select,
 .form-textarea {
   width: 100%;
+  height: auto;
   background: c.$input-background;
   border: 1px solid c.$surface-tertiary;
   border-radius: 8px;
@@ -133,6 +134,7 @@
   color: c.$text-main-color;
   font-size: t.$font-size-base;
   font-family: inherit;
+  line-height: 1.5;
   box-sizing: border-box;
   @include m.transition-default;
 
@@ -156,7 +158,19 @@
   // Error state
   &.error,
   &.is-invalid,
-  &:invalid:not(:placeholder-shown) {
+  &.is-touched:invalid,
+  .was-validated &:invalid {
+    border-color: c.$error;
+
+    &:focus {
+      border-color: c.$error;
+      box-shadow: 0 0 0 3px rgba(c.$error, 0.1);
+    }
+  }
+
+  // Native post-interaction invalid state (kept separate so browsers without
+  // :user-invalid support do not discard the error rules above)
+  &:user-invalid {
     border-color: c.$error;
 
     &:focus {

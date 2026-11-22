@@ -51,9 +51,9 @@ input, textarea, select {
 	}
 }
 
-input[type="text"],
-input[type="search"],
-input[type="password"] {
+input[type="text"]:not(.form-input, .form-control),
+input[type="search"]:not(.form-input, .form-control),
+input[type="password"]:not(.form-input, .form-control) {
 	-webkit-appearance: none;
 	height: 26px;
 	padding: 0 5px 0 5px;
