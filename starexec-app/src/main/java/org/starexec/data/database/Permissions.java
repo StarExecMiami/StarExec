@@ -646,7 +646,11 @@ public class Permissions {
 
 		try {
 			con = Common.getConnection();
-			return Permissions.set(userId, spaceId, newPerm, con);
+			boolean updated = Permissions.set(userId, spaceId, newPerm, con);
+			if (updated) {
+				org.starexec.util.SessionUtil.invalidateUserPermissions(userId);
+			}
+			return updated;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {

@@ -9,7 +9,10 @@ import org.starexec.logger.StarLogger;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Contains handy methods for accessing data within a user's session
@@ -19,6 +22,8 @@ public class SessionUtil {
 	private static final StarLogger log = StarLogger.getLogger(SessionUtil.class);
 	public static final String USER = "user";	// The string we store the user's User object under
 	public static final String PERMISSION_CACHE = "perm";	// The string we store the user's permission cache object under
+	private static final String PERMISSION_CACHE_EPOCH = "perm_epoch";
+	private static final ConcurrentHashMap<Integer, AtomicLong> USER_PERMISSION_EPOCHS = new ConcurrentHashMap<>();
 	/**
 	 * @param request The request to retrieve the user object from
 	 * @return The user object representing the currently logged in user
@@ -86,6 +91,7 @@ public class SessionUtil {
 		if (session.getAttribute(SessionUtil.PERMISSION_CACHE)==null) {
 			HashMap<Integer, Permission> newCache = new HashMap<>();
 			session.setAttribute(SessionUtil.PERMISSION_CACHE, newCache);
+			session.setAttribute(SessionUtil.PERMISSION_CACHE_EPOCH, currentPermissionEpoch(SessionUtil.getUserId(session)));
 			return newCache;
 		}
 		return (HashMap<Integer, Permission>)session.getAttribute(SessionUtil.PERMISSION_CACHE);
@@ -101,6 +107,36 @@ public class SessionUtil {
 	}
 	
 	
+	private static long currentPermissionEpoch(int userId) {
+		AtomicLong epoch = USER_PERMISSION_EPOCHS.get(userId);
+		return epoch == null ? 0L : epoch.get();
+	}
+
+	/**
+	 * Marks all cached space permissions for {@code userId} across all active HTTP
+	 * sessions as stale so the next lookup reloads fresh permissions from the database.
+	 */
+	public static void invalidateUserPermissions(int userId) {
+		if (userId <= 0) {
+			return;
+		}
+		USER_PERMISSION_EPOCHS.computeIfAbsent(userId, k -> new AtomicLong(0L)).incrementAndGet();
+	}
+
+	/**
+	 * Marks all cached space permissions for every user ID in {@code userIds} as stale.
+	 */
+	public static void invalidateUsersPermissions(Collection<Integer> userIds) {
+		if (userIds == null) {
+			return;
+		}
+		for (Integer userId : userIds) {
+			if (userId != null) {
+				invalidateUserPermissions(userId);
+			}
+		}
+	}
+
 	/**
 	 * @param session The session to get the permission from
 	 * @param spaceId The space to get the current user's permissions for
@@ -111,43 +147,50 @@ public class SessionUtil {
 			return new Permission();
 		}
 		final int userId = SessionUtil.getUserId(session);
+		final long expectedEpoch = currentPermissionEpoch(userId);
 		HashMap<Integer, Permission> cache = SessionUtil.getPermissionCache(session);
-		if(!cache.containsKey(spaceId)) {
-			SessionUtil.cachePermission(session, spaceId);
-			cache = SessionUtil.getPermissionCache(session);
-		} else {
-			log.trace("Cache hit for spaceId="+spaceId);
-		}
+		synchronized (cache) {
+			Object recordedEpochObj = session.getAttribute(PERMISSION_CACHE_EPOCH);
+			if (recordedEpochObj instanceof Long && ((Long) recordedEpochObj).longValue() != expectedEpoch) {
+				cache.clear();
+				session.setAttribute(PERMISSION_CACHE_EPOCH, expectedEpoch);
+			}
+			if (!cache.containsKey(spaceId)) {
+				SessionUtil.cachePermission(session, spaceId);
+			} else {
+				log.trace("Cache hit for spaceId=" + spaceId);
+			}
 
-		Permission p = cache.get(spaceId);
-		if (p != null) {
-			log.trace("Returning cached permission: "+p);
-			return p;
-		}
-
-		boolean isPublic = Spaces.isPublicSpace(spaceId);
-
-		if (userId != R.PUBLIC_USER_ID) {
-			// For a real (logged in) user, attempt a one-time forced reload before falling back.
-			forceReloadPermission(session, spaceId);
-			p = cache.get(spaceId); // cache reference unchanged; entry may have been added
+			Permission p = cache.get(spaceId);
 			if (p != null) {
-				log.trace("Reload succeeded, returning permission: "+p);
+				log.trace("Returning cached permission: " + p);
 				return p;
 			}
-		}
 
-		if (isPublic) {
-			if (userId == R.PUBLIC_USER_ID) {
-				log.trace("Public space and public user; returning empty permission");
-			} else {
-				log.trace("Public space but no specific permission row; returning empty permission");
+			boolean isPublic = Spaces.isPublicSpace(spaceId);
+
+			if (userId != R.PUBLIC_USER_ID) {
+				// For a real (logged in) user, attempt a one-time forced reload before falling back.
+				forceReloadPermission(session, spaceId);
+				p = cache.get(spaceId); // cache reference unchanged; entry may have been added
+				if (p != null) {
+					log.trace("Reload succeeded, returning permission: " + p);
+					return p;
+				}
 			}
-			return Permissions.getEmptyPermission();
-		}
 
-		log.trace("Permission unresolved (private space) returning null");
-		return null;
+			if (isPublic) {
+				if (userId == R.PUBLIC_USER_ID) {
+					log.trace("Public space and public user; returning empty permission");
+				} else {
+					log.trace("Public space but no specific permission row; returning empty permission");
+				}
+				return Permissions.getEmptyPermission();
+			}
+
+			log.trace("Permission unresolved (private space) returning null");
+			return null;
+		}
 	}
 
 	/**
@@ -162,10 +205,22 @@ public class SessionUtil {
 		}
 		HashMap<Integer, Permission> cache = SessionUtil.getPermissionCache(session);
 		int userId = SessionUtil.getUserId(session);
-		if (cache.containsKey(spaceId)) { return; }
+		long epochBeforeLoad = currentPermissionEpoch(userId);
+		synchronized (cache) {
+			if (cache.containsKey(spaceId)) {
+				return;
+			}
+		}
 		Permission p = Permissions.get(userId, spaceId);
 		if (p != null) {
-			cache.put(spaceId, p);
+			synchronized (cache) {
+				if (currentPermissionEpoch(userId) == epochBeforeLoad) {
+					cache.put(spaceId, p);
+					if (session.getAttribute(PERMISSION_CACHE_EPOCH) == null) {
+						session.setAttribute(PERMISSION_CACHE_EPOCH, epochBeforeLoad);
+					}
+				}
+			}
 		}
 	}
 
@@ -175,8 +230,9 @@ public class SessionUtil {
 			return;
 		}
 		HashMap<Integer, Permission> cache = SessionUtil.getPermissionCache(session);
-		cache.remove(spaceId);
-		// log.debug("forceReloadPermission: removed cache entry for spaceId="+spaceId);
+		synchronized (cache) {
+			cache.remove(spaceId);
+		}
 		cachePermission(session, spaceId);
 	}
 	
@@ -189,7 +245,20 @@ public class SessionUtil {
 	 * @author Todd Elvers
 	 */
 	public static void removeCachePermission(HttpServletRequest request, int spaceId){
-		HashMap<Integer, Permission> cache = SessionUtil.getPermissionCache(request.getSession());
-		cache.remove(spaceId);
+		if (request == null) {
+			return;
+		}
+		HttpSession session = request.getSession(false);
+		if (session == null) {
+			return;
+		}
+		HashMap<Integer, Permission> cache = SessionUtil.getPermissionCache(session);
+		synchronized (cache) {
+			cache.remove(spaceId);
+		}
+		int userId = SessionUtil.getUserId(session);
+		if (userId != R.PUBLIC_USER_ID) {
+			invalidateUserPermissions(userId);
+		}
 	}
 }

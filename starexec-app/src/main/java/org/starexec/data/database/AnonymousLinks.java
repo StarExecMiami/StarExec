@@ -192,36 +192,21 @@ public class AnonymousLinks {
 		final String methodName = "getAnonymousLinkCode";
 		log.entry(methodName);
 
-		Connection con = null;
-		PreparedStatement ps = null;
-		ResultSet results = null;
-
-		try {
-			con = Common.getConnection();
-			Common.beginTransaction(con);
-
-			// Setup the GetAnonymousLink function call.
-					// Setup the GetAnonymousLink function call.
-					ps = con.prepareStatement("SELECT * FROM starexec.GetAnonymousLink(?, ?, ?)");
-					ps.setString(1, primitiveType);
-					ps.setInt(2, primitiveId);
-					ps.setString(3, getPrimitivesToAnonymizeName(primitivesToAnonymize));
-			results = ps.executeQuery();
-					results = ps.executeQuery();
-			// If the code is in the database return it otherwise return an empty Optional.
-			if (results.next()) {
-				return Optional.of(results.getString("unique_id"));
-			} else {
+		try (Connection con = Common.getConnection();
+			 PreparedStatement ps = con.prepareStatement("SELECT * FROM starexec.GetAnonymousLink(?, ?, ?)")) {
+			ps.setString(1, primitiveType);
+			ps.setInt(2, primitiveId);
+			ps.setString(3, getPrimitivesToAnonymizeName(primitivesToAnonymize));
+			try (ResultSet results = ps.executeQuery()) {
+				// If the code is in the database return it otherwise return an empty Optional.
+				if (results.next()) {
+					return Optional.of(results.getString("unique_id"));
+				}
 				return Optional.empty();
 			}
 		} catch (SQLException e) {
 			log.error("Caught an exception while trying to get an anonymous link from database.", e);
-			Common.doRollback(con);
 			throw e;
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(ps);
-			Common.safeClose(results);
 		}
 	}
 
@@ -291,7 +276,6 @@ public class AnonymousLinks {
 
 		try {
 			con = Common.getConnection();
-			Common.beginTransaction(con);
 
 			// Setup the GetIdOfPrimitiveAssociatedWithLink function call.
 			ps = con.prepareStatement("SELECT * FROM starexec.GetIdOfPrimitiveAssociatedWithLink(?, ?)");
@@ -299,7 +283,6 @@ public class AnonymousLinks {
 			ps.setString(2, primitiveType);
 
 			results = ps.executeQuery();
-			Common.endTransaction(con);
 			// If the code is in the database return it otherwise return an empty Optional.
 			if (results.next()) {
 				return Optional.of(results.getInt("primitive_id"));
@@ -308,7 +291,6 @@ public class AnonymousLinks {
 			}
 		} catch (SQLException e) {
 			log.error(methodName, e.toString());
-			Common.doRollback(con);
 			throw e;
 		} finally {
 			Common.safeClose(con);
@@ -539,42 +521,34 @@ public class AnonymousLinks {
 			}
 		}
 
-		Connection con = null;
 		try {
-
 			// Generate a map of anonymized solver names and add them to the database.
 			Map<Integer, String> anonymizedSolverNames = buildAnonymizedSolverNamesMap(solvers);
+			Map<Integer, String> anonymizedBenchmarkNames = buildAnonymizedBenchmarkNamesMap(benchmarks);
 
-			con = Common.getConnection();
-			Common.beginTransaction(con);
+			Common.inTransaction(con -> {
+				for (Integer solverId : anonymizedSolverNames.keySet()) {
+					// For each solver, add all the anonymous config names.
+					Map<Integer, String> anonymizedConfigNames = buildAnonymizedConfigNamesMap(solverId);
+					for (Integer configId : anonymizedConfigNames.keySet()) {
+						String anonymousConfigName = anonymizedConfigNames.get(configId);
+						addAnonymousPrimitiveName(anonymousConfigName, configId, R.CONFIGURATION, jobId, con);
+					}
 
-			for (Integer solverId : anonymizedSolverNames.keySet()) {
-
-				// For each solver, add all the anonymous config names.
-				Map<Integer, String> anonymizedConfigNames = buildAnonymizedConfigNamesMap(solverId);
-				for (Integer configId : anonymizedConfigNames.keySet()) {
-					String anonymousConfigName = anonymizedConfigNames.get(configId);
-					addAnonymousPrimitiveName(anonymousConfigName, configId, R.CONFIGURATION, jobId, con);
+					String anonymousSolverName = anonymizedSolverNames.get(solverId);
+					addAnonymousPrimitiveName(anonymousSolverName, solverId, R.SOLVER, jobId, con);
 				}
 
-				String anonymousSolverName = anonymizedSolverNames.get(solverId);
-				addAnonymousPrimitiveName(anonymousSolverName, solverId, R.SOLVER, jobId, con);
-			}
-
-			// Generate a map of anonymized benchmark names and add them to the database.
-			Map<Integer, String> anonymizedBenchmarkNames = buildAnonymizedBenchmarkNamesMap(benchmarks);
-			for (Integer benchmarkId : anonymizedBenchmarkNames.keySet()) {
-				String anonymousBenchmarkName = anonymizedBenchmarkNames.get(benchmarkId);
-				addAnonymousPrimitiveName(anonymousBenchmarkName, benchmarkId, R.BENCHMARK, jobId, con);
-			}
-
-			Common.endTransaction(con);
+				// Add anonymized benchmark names to the database.
+				for (Integer benchmarkId : anonymizedBenchmarkNames.keySet()) {
+					String anonymousBenchmarkName = anonymizedBenchmarkNames.get(benchmarkId);
+					addAnonymousPrimitiveName(anonymousBenchmarkName, benchmarkId, R.BENCHMARK, jobId, con);
+				}
+				return null;
+			});
 		} catch (SQLException e) {
 			log.error(methodName, e.getMessage(), e);
 			throw e;
-		} finally {
-			Common.doRollback(con);
-			Common.safeClose(con);
 		}
 	}
 

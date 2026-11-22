@@ -2054,8 +2054,9 @@ public class KubernetesNativeBackend implements Backend {
                 scriptPath
         );
 
+        BuildExecutionContext build = pendingBuildContext.get();
+        ExecutionRef createdExecution = null;
         try {
-            BuildExecutionContext build = pendingBuildContext.get();
             if (build != null) build.requireMatches(pairId, attemptNo);
             Job job = buildKubernetesJob(
                 pairId,
@@ -2126,6 +2127,7 @@ public class KubernetesNativeBackend implements Backend {
                     " (pair " + pairId + ", execId " + execId + ")"
                 );
             }
+            createdExecution = submitted;
 
             if (build != null) {
                 KubernetesBuildStopObserver.Identity identity = rememberBuild(created);
@@ -2185,9 +2187,79 @@ public class KubernetesNativeBackend implements Backend {
             // closed to "present", so StarExec would account for a Job it never asked for.
             throw e;
         } catch (Exception e) {
+            if (build != null && createdExecution != null) {
+                return handlePostCreateBuildFailure(build, createdExecution, pairId, attemptNo, e);
+            }
             log.error("Failed to submit Kubernetes Job: " + jobName, e);
             return resolveAmbiguousSubmission(execId, pairId, jobName, logPath, attemptNo);
         }
+    }
+
+    private Job fetchKubernetesJob(String jobName) {
+        if (kubernetesClient == null || jobName == null) {
+            return null;
+        }
+        try {
+            return kubernetesClient.batch().v1().jobs().inNamespace(namespace).withName(jobName).get();
+        } catch (Exception e) {
+            log.warn("Could not inspect Kubernetes Job " + jobName, e);
+            return null;
+        }
+    }
+
+    private static boolean isUnstartedSuspendedBuildJob(Job job) {
+        return job != null
+            && job.getMetadata() != null
+            && Long.valueOf(1L).equals(job.getMetadata().getGeneration())
+            && job.getSpec() != null
+            && Boolean.TRUE.equals(job.getSpec().getSuspend());
+    }
+
+    private boolean settleSuspendedUnstartedBuildJob(ExecutionRef execution, int pairId, Integer attemptNo) {
+        if (execution == null) {
+            return false;
+        }
+        if (!ensureKubernetesJobGone(execution)) {
+            return false;
+        }
+        if (observeExecutionSafety(execution.execId()) != KillOutcome.CONFIRMED_SAFE) {
+            return false;
+        }
+        if (attemptNo != null) {
+            JobPairs.NeverStartedRetryResult result =
+                JobPairs.retryNeverStartedPair(pairId, execution.execId(), attemptNo);
+            if (result == null || result == JobPairs.NeverStartedRetryResult.ERROR) {
+                return false;
+            }
+        }
+        releaseAccountingIfSafe(execution, "suspended build non-execution cleanup");
+        return true;
+    }
+
+    private int handlePostCreateBuildFailure(
+        BuildExecutionContext build,
+        ExecutionRef execution,
+        int pairId,
+        Integer attemptNo,
+        Exception failure
+    ) {
+        log.error("Post-create build initialization failed for pair " + pairId + " (" + execution + ")", failure);
+        Job latest = fetchKubernetesJob(execution.jobName());
+        if (latest != null && execution.equals(ExecutionRef.fromJob(execution.execId(), latest))) {
+            rememberBuild(latest);
+            if (latest.getSpec() != null && Boolean.FALSE.equals(latest.getSpec().getSuspend())) {
+                log.warn("Suspended build Job " + execution + " resumed on API server despite failure; monitor owns it");
+                return execution.execId();
+            }
+            if (isUnstartedSuspendedBuildJob(latest) && settleSuspendedUnstartedBuildJob(execution, pairId, attemptNo)) {
+                return execution.execId();
+            }
+        }
+        ambiguousSubmissions.put(
+            execution.execId(),
+            new AmbiguousSubmission(pairId, execution.jobName(), clock.getAsLong(), true, attemptNo)
+        );
+        return execution.execId();
     }
 
     private void resumeAdmittedBuild(BuildExecutionContext build, ExecutionRef execution, Job created)
@@ -2736,6 +2808,8 @@ public class KubernetesNativeBackend implements Backend {
         private final int pairId;
         private final String jobName;
         private final long firstSeenAtMillis;
+        private final boolean suspendedBuild;
+        private final Integer attemptNo;
 
         /**
          * True once the cluster has positively established that nothing was created.
@@ -2750,9 +2824,21 @@ public class KubernetesNativeBackend implements Backend {
         private volatile boolean clusterProvedAbsent;
 
         private AmbiguousSubmission(int pairId, String jobName, long firstSeenAtMillis) {
+            this(pairId, jobName, firstSeenAtMillis, false, null);
+        }
+
+        private AmbiguousSubmission(
+            int pairId,
+            String jobName,
+            long firstSeenAtMillis,
+            boolean suspendedBuild,
+            Integer attemptNo
+        ) {
             this.pairId = pairId;
             this.jobName = jobName;
             this.firstSeenAtMillis = firstSeenAtMillis;
+            this.suspendedBuild = suspendedBuild;
+            this.attemptNo = attemptNo;
         }
     }
 
@@ -2832,6 +2918,32 @@ public class KubernetesNativeBackend implements Backend {
             JobPresence presence = observeJob(pending.jobName);
 
             if (presence == JobPresence.PRESENT) {
+                Job latest = fetchKubernetesJob(pending.jobName);
+                boolean isBuild = pending.suspendedBuild || (latest != null && rememberBuild(latest) != null);
+                if (isBuild) {
+                    if (latest == null) {
+                        continue;
+                    }
+                    if (isUnstartedSuspendedBuildJob(latest)) {
+                        ExecutionRef ref = ExecutionRef.fromJob(execId, latest);
+                        if (ref != null) {
+                            execIdToJobUid.putIfAbsent(execId, ref.jobUid());
+                            execIdToJobName.putIfAbsent(execId, ref.jobName());
+                            execIdToPairId.putIfAbsent(execId, pending.pairId);
+                            Integer resolvedAttempt = pending.attemptNo != null
+                                ? pending.attemptNo
+                                : execIdToAttemptNo.get(execId);
+                            if (settleSuspendedUnstartedBuildJob(ref, pending.pairId, resolvedAttempt)) {
+                                ambiguousSubmissions.remove(execId);
+                            }
+                        }
+                        continue;
+                    }
+                    ExecutionRef resumedRef = ExecutionRef.fromJob(execId, latest);
+                    if (resumedRef != null) {
+                        execIdToJobUid.putIfAbsent(execId, resumedRef.jobUid());
+                    }
+                }
                 log.info(
                     "Ambiguous submission for pair " + pending.pairId + " (execId " + execId +
                     ") resolved: Job " + pending.jobName + " exists and the monitor now owns it"

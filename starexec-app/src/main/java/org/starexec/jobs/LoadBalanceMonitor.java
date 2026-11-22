@@ -282,7 +282,11 @@ public class LoadBalanceMonitor {
 	 */
 	public boolean skipUser(int userId) {
 		Long userLoad = this.getLoad(userId);
-		return userLoad - getMin() > R.LOAD_DIFFERENCE_THRESHOLD;
+		Long minLoad = getMin();
+		if (userLoad == null || minLoad == null) {
+			return false;
+		}
+		return userLoad - minLoad > R.LOAD_DIFFERENCE_THRESHOLD;
 	}
 	
 	private String stringRepresentation = null;

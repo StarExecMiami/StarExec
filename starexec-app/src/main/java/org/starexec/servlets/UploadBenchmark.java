@@ -743,12 +743,13 @@ public class UploadBenchmark extends HttpServlet {
 					log.debug("String is: "+gitSpaceString);
 					log.debug("Before addBenchmarksGit: "+ uniqueDir.getAbsolutePath());
 
-					String[] gitClonecmd = new String[4];
+					String[] gitClonecmd = new String[5];
 					gitClonecmd[0] = "git";
 					gitClonecmd[1] = "clone";
-					gitClonecmd[2] = gitUrl;
-					gitClonecmd[3] = gitSpaceString;
-					log.debug("gitclonecmd: " + gitClonecmd[0] + " " + gitClonecmd[1] + " " + gitClonecmd[2]+" " +gitClonecmd[3]);
+					gitClonecmd[2] = "--";
+					gitClonecmd[3] = gitUrl;
+					gitClonecmd[4] = gitSpaceString;
+					log.debug("gitclonecmd: " + gitClonecmd[0] + " " + gitClonecmd[1] + " " + gitClonecmd[2] + " " + gitClonecmd[3] + " " + gitClonecmd[4]);
 					Util.executeCommand(gitClonecmd);
 
 					String[] gitSubmodulecmd = new String[5];
@@ -908,7 +909,11 @@ public class UploadBenchmark extends HttpServlet {
 			String fileName = null;
 			// Last test, return true when we find a valid file extension
 			if (fileLoc.equals("local")) {
-				fileName = ((PartWrapper) form.get(BENCHMARK_FILE)).getName();
+				PartWrapper filePart = (PartWrapper) form.get(BENCHMARK_FILE);
+				if (filePart == null) {
+					return new ValidatorStatusCode(false, "Benchmark file is required");
+				}
+				fileName = filePart.getName();
 				if (!Validator.isValidArchiveType(fileName)) {
 					return new ValidatorStatusCode(false, "Uploaded archives need to be either .zip, .tar, or .tgz");
 				}
@@ -923,13 +928,18 @@ public class UploadBenchmark extends HttpServlet {
 					return new ValidatorStatusCode(false, urlProblem);
 				}
 			}
-			else {
-				log.debug("in else");
+			else if (fileLoc.equals("Git")) {
 				fileName = (String) form.get(FILE_GIT);
-				log.debug("fileName: "+ fileName);
-				if (!Validator.isValidGitType(fileName)) {
+				String gitProblem = gitUrlProblem(fileName);
+				if (gitProblem != null) {
+					return new ValidatorStatusCode(false, gitProblem);
+				}
+				if (!Validator.isValidGitType(fileName.trim())) {
 					return new ValidatorStatusCode(false, "Uploaded Git URLs need to be .git");
 				}
+			}
+			else {
+				return new ValidatorStatusCode(false, "Please select a file source (local, URL, or Git)");
 			}
 
 			// Validate space parameter for permission check
@@ -1031,6 +1041,26 @@ public class UploadBenchmark extends HttpServlet {
 		}
 		if (Util.archiveNameFromUrl(url) == null) {
 			return Util.ARCHIVE_NAME_REQUIRED;
+		}
+		return null;
+	}
+
+	/**
+	 * Why a Git repository URL cannot be cloned, or null when it can be tried.
+	 */
+	static String gitUrlProblem(String raw) {
+		URL url;
+		try {
+			url = new URI(raw == null ? "" : raw.trim()).toURL();
+		} catch (Exception e) {
+			return "The Git URL is not a valid URL";
+		}
+		String scheme = url.getProtocol();
+		if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+			return "Git URLs must use http or https";
+		}
+		if (url.getUserInfo() != null) {
+			return "Git URLs must not contain a user name or password";
 		}
 		return null;
 	}

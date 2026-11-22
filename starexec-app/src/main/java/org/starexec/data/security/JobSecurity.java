@@ -382,6 +382,9 @@ public class JobSecurity {
 			return new ValidatorStatusCode(false, "The given queue could not be found");
 		}
 		List<Queue> queues = Queues.getUserQueues(userId);
+		if (queues == null) {
+			return new ValidatorStatusCode(false, "You do not have permission to access the selected queue");
+		}
 		for (Queue queue : queues) {
 			if (queue.getId() == queueId) {
 				return new ValidatorStatusCode(true);
@@ -405,6 +408,9 @@ public class JobSecurity {
 			return new ValidatorStatusCode(false, "This job is currently Read Only and no pairs can be added");
 		}
 		Job j = Jobs.get(jobId);
+		if (j == null) {
+			return new ValidatorStatusCode(false, "The job could not be found");
+		}
 		if (j.isBuildJob()) {
 			return new ValidatorStatusCode(false, "You can not add job pairs to a solver build job");
 		}
@@ -456,7 +462,8 @@ public class JobSecurity {
 		}
 		try {
 			DefaultSettings settings = Settings.getProfileById(statusId);
-			if (settings.getBenchIds().isEmpty() || Benchmarks.get(settings.getBenchIds().get(0)) == null) {
+			if (settings == null || settings.getBenchIds() == null || settings.getBenchIds().isEmpty()
+					|| Benchmarks.get(settings.getBenchIds().get(0)) == null) {
 				return new ValidatorStatusCode(false, "The selected community has no default benchmark selected");
 			}
 		} catch (SQLException e) {

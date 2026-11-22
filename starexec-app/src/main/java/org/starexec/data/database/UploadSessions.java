@@ -236,34 +236,22 @@ public class UploadSessions {
     }
 
     public static boolean recordChunkIfAbsent(long sessionId, int chunkIndex, int chunkSizeBytes) {
-        Connection con = null;
-        PreparedStatement insertPs = null;
-        PreparedStatement updatePs = null;
-
         try {
-            con = Common.getConnection();
-            Common.beginTransaction(con);
+            return Common.inTransaction(con -> {
+                try (PreparedStatement insertPs = con.prepareStatement(INSERT_CHUNK_SQL);
+                     PreparedStatement updatePs = con.prepareStatement(UPDATE_PROGRESS_FROM_CHUNKS_SQL)) {
+                    insertPs.setLong(1, sessionId);
+                    insertPs.setInt(2, chunkIndex);
+                    insertPs.setInt(3, chunkSizeBytes);
+                    insertPs.executeUpdate();
 
-            insertPs = con.prepareStatement(INSERT_CHUNK_SQL);
-            insertPs.setLong(1, sessionId);
-            insertPs.setInt(2, chunkIndex);
-            insertPs.setInt(3, chunkSizeBytes);
-            insertPs.executeUpdate();
-
-            updatePs = con.prepareStatement(UPDATE_PROGRESS_FROM_CHUNKS_SQL);
-            updatePs.setLong(1, sessionId);
-            int updated = updatePs.executeUpdate();
-
-            Common.endTransaction(con);
-            return updated > 0;
+                    updatePs.setLong(1, sessionId);
+                    return updatePs.executeUpdate() > 0;
+                }
+            });
         } catch (SQLException e) {
-            Common.doRollback(con);
             log.error("recordChunkIfAbsent", "Failed to persist chunk for session " + sessionId + " chunk " + chunkIndex, e);
             return false;
-        } finally {
-            Common.safeClose(insertPs);
-            Common.safeClose(updatePs);
-            Common.safeClose(con);
         }
     }
 

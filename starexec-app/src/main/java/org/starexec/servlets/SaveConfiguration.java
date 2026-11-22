@@ -79,8 +79,8 @@ public class SaveConfiguration extends HttpServlet {
 						"secure/details/solver.jsp?id=" + Integer.parseInt((String) request.getParameter(SOLVER_ID))));
 			}
 		} catch (Exception e) {
-			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
 			log.warn("Caught Exception in SaveConfiguration.doPost", e);
+			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to save new configuration.");
 		}
 	}
 
@@ -96,6 +96,9 @@ public class SaveConfiguration extends HttpServlet {
 
 			// Set up a new configuration object with the submitted information
 			Solver solver = Solvers.get(Integer.parseInt(request.getParameter(SOLVER_ID)));
+			if (solver == null) {
+				return -1;
+			}
 			Configuration newConfig = new Configuration();
 			newConfig.setName(request.getParameter(CONFIG_NAME));
 			newConfig.setDescription(request.getParameter(CONFIG_DESC));
@@ -173,8 +176,11 @@ public class SaveConfiguration extends HttpServlet {
 			}
 
 			// Permissions check; ensure the user owns the solver to which they are saving
-			if (Solvers.get(Integer.parseInt(request.getParameter(SOLVER_ID))).getUserId() != userId &&
-					!GeneralSecurity.hasAdminWritePrivileges(userId)) {
+			Solver solver = Solvers.get(Integer.parseInt(request.getParameter(SOLVER_ID)));
+			if (solver == null) {
+				return new ValidatorStatusCode(false, "The selected solver could not be found");
+			}
+			if (solver.getUserId() != userId && !GeneralSecurity.hasAdminWritePrivileges(userId)) {
 				return new ValidatorStatusCode(false, "Only owners of a solver may save configurations to it.");
 			}
 

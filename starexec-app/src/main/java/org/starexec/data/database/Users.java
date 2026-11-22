@@ -652,7 +652,11 @@ public class Users {
 	}
 
 	public static boolean isDiskQuotaExceeded(int userId) {
-		return Users.get(userId).getDiskQuota() <= Users.getDiskUsage(userId);
+		User user = Users.get(userId);
+		if (user == null) {
+			return false;
+		}
+		return user.getDiskQuota() <= Users.getDiskUsage(userId);
 	}
 
 	/**

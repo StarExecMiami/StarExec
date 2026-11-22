@@ -608,7 +608,7 @@ public class Download extends HttpServlet {
 		ByteArrayOutputStream buffer = new ByteArrayOutputStream();
 		try (ZipArchiveOutputStream stream = new ZipArchiveOutputStream(buffer)) {
 			for (JobPair p : pairs) {
-				String zipFileNameParent = "";
+				String zipFileNameParent;
 				StringBuilder zipFileName = new StringBuilder(baseName);
 				zipFileName.append(File.separator);
 				if (useSpacePath) {
@@ -616,19 +616,19 @@ public class Download extends HttpServlet {
 					zipFileNameParent = zipFileName.toString();
 					zipFileName.append(File.separator);
 					zipFileName.append(p.getId());
+				} else {
+					zipFileName.append(p.getId());
+					zipFileNameParent = zipFileName.toString();
 				}
 				List<File> files = JobPairs.getOutputPaths(p);
 				boolean running = p.getStatus().getCode().running();
-				for (File file : files) {
+				for (int fileIdx = 0; fileIdx < files.size(); fileIdx++) {
+					File file = files.get(fileIdx);
 					if (file.exists()) {
 						long modified;
 						StringBuilder singleFileName;
 						if (file.isDirectory()) {
-							if (useSpacePath) {
-								singleFileName = new StringBuilder(zipFileNameParent);
-							} else {
-								singleFileName = new StringBuilder(zipFileName);
-							}
+							singleFileName = new StringBuilder(zipFileNameParent);
 							//means this is adjacent to a stdout file
 							if (files.size() > 1) {
 								singleFileName.append(File.separator);
@@ -658,8 +658,10 @@ public class Download extends HttpServlet {
 						}
 					} else {
 						//if we can't find output for the pair, just put an empty file there
-						zipFileName.append(".txt");
-						ArchiveUtil.addStringToArchive(stream, "", zipFileName.toString());
+						String missingName = (fileIdx == 0)
+								? zipFileName.toString() + ".txt"
+								: zipFileName.toString() + "_" + file.getName() + ".txt";
+						ArchiveUtil.addStringToArchive(stream, "", missingName);
 					}
 				}
 			}

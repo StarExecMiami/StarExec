@@ -74,14 +74,23 @@ public class UserSecurity {
 			}
 			break;
 		case "diskquota":
+			if (!admin) {
+				return new ValidatorStatusCode(
+						false, "You do not have permission to perform the requested operation");
+			}
+			if (!Validator.isValidLong(newVal) || Long.parseLong(newVal) < 0) {
+				return new ValidatorStatusCode(
+						false, "The new quota is not in the proper format. It must be a non-negative integer");
+			}
+			break;
 		case "pairquota":
 			if (!admin) {
 				return new ValidatorStatusCode(
 						false, "You do not have permission to perform the requested operation");
 			}
-			if (!Validator.isValidLong(newVal)) {
+			if (!Validator.isValidPosInteger(newVal)) {
 				return new ValidatorStatusCode(
-						false, "The new quota is not in the proper format. It must be an integer");
+						false, "The new quota is not in the proper format. It must be a non-negative 32-bit integer");
 			}
 			break;
 		case "pagesize":

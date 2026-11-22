@@ -672,6 +672,9 @@ public class Queues {
 	 */
 	public static boolean developerJobsExist() {
 		List<Queue> queues = Queues.getAllActive();
+		if (queues == null || queues.isEmpty()) {
+			return false;
+		}
 		for (Queue q : queues) {
 			int queueId = q.getId();
 			Connection con = null;
@@ -1227,36 +1230,26 @@ public class Queues {
 	 * @return True on success and false on error.
 	 */
 	public static boolean setQueueCommunityAccess(List<Integer> community_ids, int queue_id) {
-		Connection con = null;
-		PreparedStatement procedure = null;
-		ResultSet results = null;
 		try {
-			con = Common.getConnection();
-			Common.beginTransaction(con);
-
-			if (community_ids != null) {
-				for (int id : community_ids) {
-					procedure = con.prepareStatement("SELECT starexec.SetQueueCommunityAccess(?, ?)");
-					procedure.setInt(1, id);
-					procedure.setInt(2, queue_id);
-
-					procedure.execute();
+			Common.inTransaction(con -> {
+				if (community_ids != null && !community_ids.isEmpty()) {
+					try (PreparedStatement procedure = con.prepareStatement("SELECT starexec.SetQueueCommunityAccess(?, ?)")) {
+						for (int id : community_ids) {
+							procedure.setInt(1, id);
+							procedure.setInt(2, queue_id);
+							Common.executeAndDrain(procedure);
+						}
+					}
 				}
-			}
-
-			Common.endTransaction(con);
-			// community access affects queue visibility -> clear cache
+				return null;
+			});
+			// community access affects queue visibility -> clear cache after commit
 			invalidateQueueCache();
-
 			return true;
 		} catch (Exception e) {
 			log.error("setQueueCommunityAccess", e);
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(procedure);
-			Common.safeClose(results);
+			return false;
 		}
-		return false;
 	}
 
 	/*

@@ -2,24 +2,40 @@ package org.starexec.app;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import org.starexec.constants.R;
+import org.starexec.data.database.Analytics;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Jobs;
+import org.starexec.data.database.Notifications;
+import org.starexec.data.database.Permissions;
 import org.starexec.data.database.Processors;
+import org.starexec.data.database.Queues;
+import org.starexec.data.database.RunscriptErrors;
+import org.starexec.data.database.Solvers;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.BenchmarkSecurity;
+import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.security.JobSecurity;
 import org.starexec.data.security.ProcessorSecurity;
 import org.starexec.data.security.SpaceSecurity;
 import org.starexec.data.security.UserSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.AnalyticsResults;
 import org.starexec.data.to.Benchmark;
+import org.starexec.data.to.Configuration;
+import org.starexec.data.to.Job;
+import org.starexec.data.to.JobPair;
+import org.starexec.data.to.JobStatus;
+import org.starexec.data.to.Permission;
+import org.starexec.data.to.Solver;
 import org.starexec.data.to.Processor;
 import org.starexec.data.to.Space;
 import org.starexec.data.to.User;
@@ -43,6 +59,7 @@ import java.util.TreeMap;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RESTServicesTest {
@@ -536,6 +553,249 @@ public class RESTServicesTest {
 			assertFalse(msg.contains("23502"), "SQLSTATE must not reach the client");
 			assertFalse("User not found.".equals(msg),
 					"must not be classified as a missing user");
+		}
+	}
+
+	@Test
+	public void getUserSpacePermissionsChecksCallerPrivilegesOnCommunityAndDeniesOutsiders() {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Space community = new Space();
+		community.setId(5);
+		Permission adminPerm = new Permission(true);
+		adminPerm.setLeader(true);
+		List<Space> communities = java.util.Collections.singletonList(community);
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<Communities> communitiesDb = Mockito.mockStatic(Communities.class);
+			 MockedStatic<GeneralSecurity> generalSecurity = Mockito.mockStatic(GeneralSecurity.class);
+			 MockedStatic<Permissions> permissions = Mockito.mockStatic(Permissions.class)) {
+			communitiesDb.when(Communities::getAll).thenReturn(communities);
+			permissions.when(() -> Permissions.get(77, 5)).thenReturn(adminPerm);
+			generalSecurity.when(() -> GeneralSecurity.hasAdminWritePrivileges(1)).thenReturn(true);
+			generalSecurity.when(() -> GeneralSecurity.hasAdminWritePrivileges(42)).thenReturn(false);
+
+			// Non-admin caller querying an admin's community permissions must be denied
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(42);
+			ValidatorStatusCode denied = gson.fromJson(
+					new RESTServices().getUserSpacePermissions(5, 1, request),
+					ValidatorStatusCode.class);
+			assertFalse(denied.isSuccess());
+
+			// Public/unauthenticated caller querying public user permissions must be denied
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(R.PUBLIC_USER_ID);
+			ValidatorStatusCode publicDenied = gson.fromJson(
+					new RESTServices().getUserSpacePermissions(9, R.PUBLIC_USER_ID, request),
+					ValidatorStatusCode.class);
+			assertFalse(publicDenied.isSuccess());
+
+			// Non-leader querying another user's non-community space permissions must receive JSON error, not null
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(42);
+			sessionUtil.when(() -> SessionUtil.getPermission(request, 9)).thenReturn(new Permission(false));
+			ValidatorStatusCode spaceDenied = gson.fromJson(
+					new RESTServices().getUserSpacePermissions(9, 77, request),
+					ValidatorStatusCode.class);
+			assertFalse(spaceDenied.isSuccess());
+
+			permissions.verify(() -> Permissions.get(Mockito.anyInt(), Mockito.anyInt()), Mockito.never());
+
+			// Admin caller can inspect another user's community permissions
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(1);
+			Permission fetched = gson.fromJson(
+					new RESTServices().getUserSpacePermissions(5, 77, request),
+					Permission.class);
+			assertTrue(fetched.isLeader());
+		}
+	}
+
+	@Test
+	public void queueJobsFiltersPrivateJobsForNonAdminUsers() {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Job visibleJob = new Job();
+		visibleJob.setId(10);
+		visibleJob.setName("visible-job");
+		visibleJob.setUserId(42);
+		visibleJob.setCreateTime(new Timestamp(1000L));
+		java.util.HashMap<String, Integer> stats = new java.util.HashMap<>();
+		stats.put("totalPairs", 5);
+		stats.put("pendingPairs", 2);
+		visibleJob.setLiteJobPairStats(stats);
+
+		Job hiddenJob = new Job();
+		hiddenJob.setId(11);
+		hiddenJob.setName("secret-job");
+		hiddenJob.setUserId(99);
+		hiddenJob.setCreateTime(new Timestamp(1000L));
+
+		User owner = new User();
+		owner.setId(42);
+		owner.setFirstName("Alice");
+		owner.setLastName("Smith");
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class);
+			 MockedStatic<GeneralSecurity> generalSecurity = Mockito.mockStatic(GeneralSecurity.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(42);
+			generalSecurity.when(() -> GeneralSecurity.hasAdminReadPrivileges(42)).thenReturn(false);
+			jobs.when(() -> Jobs.getByQueueId(1)).thenReturn(java.util.Arrays.asList(visibleJob, hiddenJob));
+			jobs.when(() -> Jobs.getJobStatus(Mockito.anyInt())).thenReturn(JobStatus.RUNNING);
+			jobSecurity.when(() -> JobSecurity.canUserSeeJob(10, 42)).thenReturn(new ValidatorStatusCode(true));
+			jobSecurity.when(() -> JobSecurity.canUserSeeJob(11, 42)).thenReturn(new ValidatorStatusCode(false));
+			users.when(() -> Users.get(42)).thenReturn(owner);
+
+			JsonObject json = JsonParser.parseString(new RESTServices().getQueueJobs(1, request)).getAsJsonObject();
+			JsonArray data = json.getAsJsonArray("data");
+			assertEquals(1, data.size());
+			assertEquals(10, data.get(0).getAsJsonObject().get("id").getAsInt());
+		}
+
+		JobPair visiblePair = new JobPair();
+		visiblePair.setId(1);
+		visiblePair.setJobId(10);
+		JobPair hiddenPair = new JobPair();
+		hiddenPair.setId(2);
+		hiddenPair.setJobId(11);
+		try (MockedStatic<GeneralSecurity> generalSecurity = Mockito.mockStatic(GeneralSecurity.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class)) {
+			generalSecurity.when(() -> GeneralSecurity.hasAdminReadPrivileges(42)).thenReturn(false);
+			jobSecurity.when(() -> JobSecurity.canUserSeeJob(10, 42)).thenReturn(new ValidatorStatusCode(true));
+			jobSecurity.when(() -> JobSecurity.canUserSeeJob(11, 42)).thenReturn(new ValidatorStatusCode(false));
+
+			List<JobPair> filtered = RESTHelpers.filterVisibleClusterPairs(
+					java.util.Arrays.asList(visiblePair, hiddenPair), 42);
+			assertEquals(1, filtered.size());
+			assertEquals(1, filtered.get(0).getId());
+		}
+	}
+
+	@Test
+	public void jobNotificationsRequireJobVisibilityAndAuthenticatedUser() {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Notifications> notifications = Mockito.mockStatic(Notifications.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(42);
+			jobSecurity.when(() -> JobSecurity.canUserSeeJob(99, 42)).thenReturn(new ValidatorStatusCode(false));
+
+			assertThrows(RESTException.class, () -> new RESTServices().subscribeUserToJob(99, request));
+			assertThrows(RESTException.class, () -> new RESTServices().unsubscribeUserToJob(99, request));
+			notifications.verifyNoInteractions();
+		}
+	}
+
+	@Test
+	public void addJobPairsConfirmationRejectsUnauthorizedAndSkipsMissingConfigs() {
+		HttpServletRequest unauthorizedReq = Mockito.mock(HttpServletRequest.class);
+		Mockito.when(unauthorizedReq.getParameter("jobId")).thenReturn("77");
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(unauthorizedReq)).thenReturn(42);
+			jobSecurity.when(() -> JobSecurity.canUserAddJobPairs(77, 42))
+					.thenReturn(new ValidatorStatusCode(false));
+
+			JsonObject res = JsonParser.parseString(
+					new RESTServices().getNumberOfPairsToBeAddedAndDeleted(unauthorizedReq)).getAsJsonObject();
+			assertFalse(res.get("success").getAsBoolean());
+			jobs.verifyNoInteractions();
+		}
+
+		HttpServletRequest authorizedReq = Mockito.mock(HttpServletRequest.class);
+		Mockito.when(authorizedReq.getParameter("jobId")).thenReturn("77");
+		Mockito.when(authorizedReq.getParameterValues("configs")).thenReturn(new String[]{"500"});
+		Mockito.when(authorizedReq.getParameterValues("addToAll")).thenReturn(new String[]{"8"});
+		Mockito.when(authorizedReq.getParameterValues("addToPaired")).thenReturn(null);
+		User u = new User();
+		u.setId(42);
+		u.setPairQuota(100);
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Solvers> solvers = Mockito.mockStatic(Solvers.class);
+			 MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(authorizedReq)).thenReturn(42);
+			jobSecurity.when(() -> JobSecurity.canUserAddJobPairs(77, 42))
+					.thenReturn(new ValidatorStatusCode(true));
+			solvers.when(() -> Solvers.getConfigIdSetByJob(77)).thenReturn(new java.util.HashSet<>());
+			solvers.when(() -> Solvers.getConfiguration(500)).thenReturn(null);
+			jobs.when(() -> Jobs.getJobPairsToBeDeletedFromConfigIds(Mockito.eq(77), Mockito.anySet()))
+					.thenReturn(java.util.Collections.emptyList());
+			jobs.when(() -> Jobs.countJobPairsToBeAddedFromConfigIdsForPairedBenchmarks(
+					Mockito.eq(77), Mockito.anySet(), Mockito.anySet())).thenReturn(0);
+			jobs.when(() -> Jobs.countJobPairsToBeAddedFromConfigIdsForAllBenchmarks(
+					Mockito.eq(77), Mockito.anySet(), Mockito.anySet())).thenReturn(0);
+			users.when(() -> Users.get(42)).thenReturn(u);
+			jobs.when(() -> Jobs.countPairsByUser(42)).thenReturn(10);
+
+			JsonObject res = JsonParser.parseString(
+					new RESTServices().getNumberOfPairsToBeAddedAndDeleted(authorizedReq)).getAsJsonObject();
+			assertTrue(res.get("success").getAsBoolean());
+			assertEquals(90, res.get("remainingQuota").getAsInt());
+		}
+	}
+
+	@Test
+	public void adminEditingOtherUserDoesNotMutateAdminSessionUser() throws Exception {
+		User adminSessionUser = new User();
+		adminSessionUser.setId(1);
+		adminSessionUser.setFirstName("Admin");
+		adminSessionUser.setPairQuota(50);
+
+		HttpServletRequest req = Mockito.mock(HttpServletRequest.class);
+		byte[] body = "{\"attribute\":\"pairquota\",\"value\":\"250\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		Mockito.when(req.getInputStream()).thenReturn(new javax.servlet.ServletInputStream() {
+			private int idx = 0;
+			@Override public boolean isFinished() { return idx >= body.length; }
+			@Override public boolean isReady() { return true; }
+			@Override public void setReadListener(javax.servlet.ReadListener readListener) {}
+			@Override public int read() { return idx < body.length ? (body[idx++] & 0xff) : -1; }
+		});
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<UserSecurity> userSecurity = Mockito.mockStatic(UserSecurity.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(req)).thenReturn(1);
+			sessionUtil.when(() -> SessionUtil.getUser(req)).thenReturn(adminSessionUser);
+			userSecurity.when(() -> UserSecurity.canUpdateData(99, 1, "pairquota", "250"))
+					.thenReturn(new ValidatorStatusCode(true));
+			users.when(() -> Users.setPairQuota(99, 250)).thenReturn(true);
+
+			JsonObject res = JsonParser.parseString(new RESTServices().editUserInfoFromBody(99, req)).getAsJsonObject();
+			assertTrue(res.get("success").getAsBoolean());
+			assertEquals(50, adminSessionUser.getPairQuota(), "Admin session pair quota must remain unchanged");
+			assertEquals("Admin", adminSessionUser.getFirstName());
+		}
+	}
+
+	@Test
+	public void userSecurityRejectsOutOfRangeOrNegativePairQuota() {
+		try (MockedStatic<GeneralSecurity> generalSecurity = Mockito.mockStatic(GeneralSecurity.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			generalSecurity.when(() -> GeneralSecurity.hasAdminWritePrivileges(1)).thenReturn(true);
+			users.when(() -> Users.isPublicUser(1)).thenReturn(false);
+
+			assertFalse(UserSecurity.canUpdateData(2, 1, "pairquota", "3000000000").isSuccess());
+			assertFalse(UserSecurity.canUpdateData(2, 1, "pairquota", "-1").isSuccess());
+			assertFalse(UserSecurity.canUpdateData(2, 1, "diskquota", "-1").isSuccess());
+			assertTrue(UserSecurity.canUpdateData(2, 1, "pairquota", "500").isSuccess());
+			assertTrue(UserSecurity.canUpdateData(2, 1, "diskquota", "3000000000").isSuccess());
+		}
+	}
+
+	@Test
+	public void editJobNameValidatesJobNameFormatBeforeUpdatingDatabase() {
+		org.starexec.util.Validator.initialize();
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(7);
+			JsonObject invalid = JsonParser.parseString(
+					new RESTServices().editJobName(12, "", request)).getAsJsonObject();
+			assertFalse(invalid.get("success").getAsBoolean());
+			jobSecurity.verifyNoInteractions();
+			jobs.verifyNoInteractions();
 		}
 	}
 }

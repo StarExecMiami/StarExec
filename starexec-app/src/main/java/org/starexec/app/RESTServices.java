@@ -461,6 +461,10 @@ public class RESTServices {
 	@Path("/cluster/qstat")
 	@Produces("text/plain")
 	public String getQstatOutput(@Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0) {
+			throw RESTException.FORBIDDEN;
+		}
 		String qstat = R.BACKEND.getRunningJobsStatus();
 		if (Util.isNullOrEmpty(qstat)) {
 			throw RESTException.NOT_FOUND;
@@ -2064,9 +2068,24 @@ public class RESTServices {
 	@Path("/cluster/queues/jobs/{id}")
 	@Produces("application/json")
 	public String getQueueJobs(@PathParam("id") int id, @Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0) {
+			throw RESTException.FORBIDDEN;
+		}
 		final JsonObject out = new JsonObject();
 		try {
-			final List<Job> jobsToDisplay = Jobs.getByQueueId(id);
+			List<Job> jobsToDisplay = Jobs.getByQueueId(id);
+			if (jobsToDisplay == null) {
+				jobsToDisplay = Collections.emptyList();
+			} else if (!GeneralSecurity.hasAdminReadPrivileges(userId)) {
+				List<Job> visibleJobs = new ArrayList<>();
+				for (Job job : jobsToDisplay) {
+					if (job != null && JobSecurity.canUserSeeJob(job.getId(), userId).isSuccess()) {
+						visibleJobs.add(job);
+					}
+				}
+				jobsToDisplay = visibleJobs;
+			}
 			out.add("data", RESTHelpers.convertJobsToJsonArray(jobsToDisplay));
 		} catch (SQLException e) {
 			return gson.toJson(ERROR_DATABASE);
@@ -3033,6 +3052,11 @@ public class RESTServices {
 		try {
 			final int userId = SessionUtil.getUserId(request);
 			final int jobId = Integer.parseInt(request.getParameter(jobIdParam));
+			if (userId == R.PUBLIC_USER_ID || userId <= 0 || !JobSecurity.canUserAddJobPairs(jobId, userId).isSuccess()) {
+				Map<String, Object> unauthorized = new HashMap<>();
+				unauthorized.put("success", false);
+				return gson.toJson(unauthorized);
+			}
 
 			Set<Integer> selectedConfigIds = new HashSet<>(
 					Util.toIntegerList(request.getParameterValues(configsParam)));
@@ -3054,6 +3078,9 @@ public class RESTServices {
 			Set<Integer> configIdsToAddToPaired = new HashSet<>();
 			for (Integer configId : selectedConfigIds) {
 				Configuration config = Solvers.getConfiguration(configId);
+				if (config == null) {
+					continue;
+				}
 				if (solverIdsToAddToAll.contains(config.getSolverId())) {
 					configIdsToAddToAll.add(configId);
 				} else if (solverIdsToAddToPaired.contains(config.getSolverId())) {
@@ -3071,8 +3098,15 @@ public class RESTServices {
 					jobPairIdsToBeDeleted);
 			log.debug("allBenchmarkCount: " + allBenchmarkCount);
 
+			User user = Users.get(userId);
+			if (user == null) {
+				Map<String, Object> missingUser = new HashMap<>();
+				missingUser.put("success", false);
+				return gson.toJson(missingUser);
+			}
+
 			jsonObject.put("pairsToBeAdded", pairedBenchmarkCount + allBenchmarkCount);
-			jsonObject.put("remainingQuota", Users.get(userId).getPairQuota() - Jobs.countPairsByUser(userId));
+			jsonObject.put("remainingQuota", user.getPairQuota() - Jobs.countPairsByUser(userId));
 
 			jsonObject.put("success", true);
 			return gson.toJson(jsonObject);
@@ -3106,8 +3140,10 @@ public class RESTServices {
 	@Produces("application/json")
 	public String getNodeJobPairs(@PathParam("id") int id, @Context HttpServletRequest request) {
 		int userId = SessionUtil.getUserId(request);
-		JsonObject nextDataTablesPage = null;
-		nextDataTablesPage = RESTHelpers.getNextDataTablesPageCluster("node", id, userId, request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0) {
+			throw RESTException.FORBIDDEN;
+		}
+		JsonObject nextDataTablesPage = RESTHelpers.getNextDataTablesPageCluster("node", id, userId, request);
 
 		return nextDataTablesPage == null ? gson.toJson(ERROR_DATABASE) : gson.toJson(nextDataTablesPage);
 	}
@@ -3124,6 +3160,9 @@ public class RESTServices {
 	@Produces("application/json")
 	public String getQueueJobPairs(@PathParam("id") int id, @Context HttpServletRequest request) {
 		int userId = SessionUtil.getUserId(request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0) {
+			throw RESTException.FORBIDDEN;
+		}
 		JsonObject nextDataTablesPage = null;
 		try {
 			nextDataTablesPage = RESTHelpers.getNextDataTablesPageCluster("queue", id, userId, request);
@@ -3318,12 +3357,15 @@ public class RESTServices {
 		int userId = SessionUtil.getUserId(request);
 
 		ValidatorStatusCode status = null;
-		if (JobSecurity.userOwnsJobOrIsAdmin(jobId, userId)) {
+		if (!Validator.isValidJobName(newName)) {
+			status = new ValidatorStatusCode(false, "The new job name is not in the proper format.");
+		} else if (JobSecurity.userOwnsJobOrIsAdmin(jobId, userId)) {
 			try {
 				Jobs.setJobName(jobId, newName);
 				status = new ValidatorStatusCode(true, "Name changed successfully.");
 			} catch (Exception e) {
-				status = new ValidatorStatusCode(false, e.getMessage());
+				log.error(method, "Failed to update job name for job " + jobId, e);
+				status = new ValidatorStatusCode(false, "Failed to update job name.");
 			}
 		} else {
 			status = new ValidatorStatusCode(false, "You do not have permission to change this job's name.");
@@ -3476,21 +3518,27 @@ public class RESTServices {
 	@Produces("application/json")
 	public String getUserSpacePermissions(@PathParam("spaceId") int spaceId, @PathParam("userId") int userId,
 			@Context HttpServletRequest request) {
-		Permission p = SessionUtil.getPermission(request, spaceId);
+		int callerId = SessionUtil.getUserId(request);
+		if (callerId == R.PUBLIC_USER_ID || callerId <= 0) {
+			return gson.toJson(ERROR_INVALID_PERMISSIONS);
+		}
 		List<Space> communities = Communities.getAll();
-		for (Space s : communities) {
-			if (spaceId == s.getId()) {
-				if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
-					return gson.toJson(Permissions.get(userId, spaceId));
+		if (communities != null) {
+			for (Space s : communities) {
+				if (spaceId == s.getId()) {
+					if (callerId == userId || GeneralSecurity.hasAdminWritePrivileges(callerId)) {
+						return gson.toJson(Permissions.get(userId, spaceId));
+					}
+					return gson.toJson(ERROR_INVALID_PERMISSIONS);
 				}
-				return gson.toJson(ERROR_INVALID_PERMISSIONS);
 			}
 		}
 
-		if (p != null && (SessionUtil.getUserId(request) == userId || p.isLeader())) {
+		Permission p = SessionUtil.getPermission(request, spaceId);
+		if (p != null && (callerId == userId || p.isLeader())) {
 			return gson.toJson(Permissions.get(userId, spaceId));
 		}
-		return null;
+		return gson.toJson(ERROR_INVALID_PERMISSIONS);
 	}
 
 	/**
@@ -3602,8 +3650,8 @@ public class RESTServices {
 
 			return gson.toJson(benchmarkStatus);
 		} catch (IOException e) {
-			log.error("Caught IOException while trying to get community ID.");
-			return gson.toJson(new ValidatorStatusCode(false, "Failed to upload benchmark.", Util.getStackTrace(e)));
+			log.error("Caught IOException while trying to get community ID.", e);
+			return gson.toJson(new ValidatorStatusCode(false, "Failed to upload benchmark."));
 		}
 	}
 
@@ -3870,10 +3918,14 @@ public class RESTServices {
 			return gson.toJson(new ValidatorStatusCode(true, EMAIL_CHANGE_GENERIC_MESSAGE));
 		}
 
-		// Admin changing another user's email: apply immediately, no verification needed
+		// Admin changing a user's email: apply immediately, no verification needed
 		if (adminDirectChange) {
 			try {
 				Users.updateEmail(userId, newEmail);
+				User sessionUser = SessionUtil.getUser(request);
+				if (sessionUser != null && sessionUser.getId() == userId) {
+					sessionUser.setEmail(newEmail);
+				}
 				return gson.toJson(new ValidatorStatusCode(true, "Email address updated successfully"));
 			} catch (StarExecDatabaseException e) {
 				log.error("Admin direct email update failed for userId=" + userId, e);
@@ -3903,12 +3955,16 @@ public class RESTServices {
 	private String editUserInfoInternal(String attribute, int userId, String newValue, HttpServletRequest request) {
 		boolean success = false;
 		String messageToUser = null;
+		User sessionUser = SessionUtil.getUser(request);
+		boolean editingOwnProfile = sessionUser != null && sessionUser.getId() == userId;
 		switch (attribute) {
 			case "firstname":
 				try {
 					success = Users.updateFirstName(userId, newValue);
 					if (success) {
-						SessionUtil.getUser(request).setFirstName(newValue);
+						if (editingOwnProfile) {
+							sessionUser.setFirstName(newValue);
+						}
 						messageToUser = "Edit successful.";
 					}
 				} catch (StarExecDatabaseException e) {
@@ -3921,7 +3977,9 @@ public class RESTServices {
 				try {
 					success = Users.updateLastName(userId, newValue);
 					if (success) {
-						SessionUtil.getUser(request).setLastName(newValue);
+						if (editingOwnProfile) {
+							sessionUser.setLastName(newValue);
+						}
 						messageToUser = "Edit successful.";
 					}
 				} catch (StarExecDatabaseException e) {
@@ -3934,7 +3992,9 @@ public class RESTServices {
 				try {
 					success = Users.updateInstitution(userId, newValue);
 					if (success) {
-						SessionUtil.getUser(request).setInstitution(newValue);
+						if (editingOwnProfile) {
+							sessionUser.setInstitution(newValue);
+						}
 						messageToUser = "Edit successful.";
 					}
 				} catch (StarExecDatabaseException e) {
@@ -3944,17 +4004,35 @@ public class RESTServices {
 				}
 				break;
 			case "diskquota":
-				success = Users.setDiskQuota(userId, Long.parseLong(newValue));
-				if (success) {
-					SessionUtil.getUser(request).setDiskQuota(Long.parseLong(newValue));
-					messageToUser = "Edit successful.";
+				try {
+					long diskQuota = Long.parseLong(newValue);
+					success = Users.setDiskQuota(userId, diskQuota);
+					if (success) {
+						if (editingOwnProfile) {
+							sessionUser.setDiskQuota(diskQuota);
+						}
+						messageToUser = "Edit successful.";
+					}
+				} catch (NumberFormatException e) {
+					log.error("Invalid number format for disk quota for user " + userId + ": " + newValue, e);
+					messageToUser = "Invalid number entered for disk quota.";
+					success = false;
 				}
 				break;
 			case "pairquota":
-				success = Users.setPairQuota(userId, Integer.parseInt(newValue));
-				if (success) {
-					SessionUtil.getUser(request).setPairQuota(Integer.parseInt(newValue));
-					messageToUser = "Edit successful.";
+				try {
+					int pairQuota = Integer.parseInt(newValue);
+					success = Users.setPairQuota(userId, pairQuota);
+					if (success) {
+						if (editingOwnProfile) {
+							sessionUser.setPairQuota(pairQuota);
+						}
+						messageToUser = "Edit successful.";
+					}
+				} catch (NumberFormatException e) {
+					log.error("Invalid number format for pair quota for user " + userId + ": " + newValue, e);
+					messageToUser = "Invalid number entered for pair quota.";
+					success = false;
 				}
 				break;
 			case "pagesize":
@@ -7549,9 +7627,36 @@ public class RESTServices {
 	@Path("/reports/past/{reportName}")
 	@Produces("text/plain")
 	public String getPastReport(@PathParam("reportName") String reportName, @Context HttpServletRequest request) {
+		int callerId = SessionUtil.getUserId(request);
+		return readPastReport(reportName, callerId, Paths.get(R.STAREXEC_DATA_DIR, "reports"));
+	}
+
+	static String readPastReport(String reportName, int callerId, java.nio.file.Path reportsDir) {
+		if (callerId == R.PUBLIC_USER_ID || callerId <= 0) {
+			throw RESTException.FORBIDDEN;
+		}
+		if (reportName == null || reportName.isEmpty() || ".".equals(reportName) || "..".equals(reportName)
+				|| reportName.indexOf('/') >= 0 || reportName.indexOf('\\') >= 0 || reportName.indexOf('\0') >= 0) {
+			throw RESTException.FORBIDDEN;
+		}
 		try {
-			File pastReport = new File(R.STAREXEC_DATA_DIR, "/reports/" + reportName);
-			return FileUtils.readFileToString(pastReport, "UTF8");
+			java.nio.file.Path normalizedDir = reportsDir.toAbsolutePath().normalize();
+			java.nio.file.Path candidate = normalizedDir.resolve(reportName).normalize();
+			if (!normalizedDir.equals(candidate.getParent()) || Files.isSymbolicLink(candidate)) {
+				throw RESTException.FORBIDDEN;
+			}
+			if (!Files.exists(candidate, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+				throw RESTException.NOT_FOUND;
+			}
+			if (!Files.isRegularFile(candidate, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+				throw RESTException.FORBIDDEN;
+			}
+			java.nio.file.Path realDir = normalizedDir.toRealPath();
+			java.nio.file.Path realCandidate = candidate.toRealPath(java.nio.file.LinkOption.NOFOLLOW_LINKS);
+			if (!realDir.equals(realCandidate.getParent())) {
+				throw RESTException.FORBIDDEN;
+			}
+			return new String(Files.readAllBytes(realCandidate), StandardCharsets.UTF_8);
 		} catch (IOException e) {
 			return "Could not get file.";
 		}
@@ -7765,6 +7870,9 @@ public class RESTServices {
 	public String subscribeUserToJob(@FormParam("id") int jobId, @Context HttpServletRequest request)
 			throws SQLException {
 		int userId = SessionUtil.getUserId(request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0 || !JobSecurity.canUserSeeJob(jobId, userId).isSuccess()) {
+			throw RESTException.FORBIDDEN;
+		}
 		Notifications.subscribeUserToJob(userId, jobId);
 		return "{}";
 	}
@@ -7780,6 +7888,9 @@ public class RESTServices {
 	public String unsubscribeUserToJob(@FormParam("id") int jobId, @Context HttpServletRequest request)
 			throws SQLException {
 		int userId = SessionUtil.getUserId(request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0 || !JobSecurity.canUserSeeJob(jobId, userId).isSuccess()) {
+			throw RESTException.FORBIDDEN;
+		}
 		Notifications.unsubscribeUserToJob(userId, jobId);
 		return "{}";
 	}
@@ -7791,7 +7902,11 @@ public class RESTServices {
 	@Path("/analytics")
 	@Produces("application/json")
 	public String analytics(@QueryParam("start") @DefaultValue("2017-04-01") java.sql.Date startDate,
-			@QueryParam("end") @DefaultValue("2030-04-01") java.sql.Date endDate) {
+			@QueryParam("end") @DefaultValue("2030-04-01") java.sql.Date endDate,
+			@Context HttpServletRequest request) {
+		if (!GeneralSecurity.hasAdminReadPrivileges(SessionUtil.getUserId(request))) {
+			throw RESTException.FORBIDDEN;
+		}
 		org.starexec.data.database.Analytics.saveToDB();
 		return gson.toJson(org.starexec.data.to.AnalyticsResults.getAllEvents(startDate, endDate));
 	}
@@ -7803,7 +7918,11 @@ public class RESTServices {
 	@Path("/jobpairErrors")
 	@Produces("application/json")
 	public String jobpairErrors(@QueryParam("start") java.sql.Date startDate,
-			@QueryParam("end") @DefaultValue("2030-04-01") java.sql.Date endDate) {
+			@QueryParam("end") @DefaultValue("2030-04-01") java.sql.Date endDate,
+			@Context HttpServletRequest request) {
+		if (!GeneralSecurity.hasAdminReadPrivileges(SessionUtil.getUserId(request))) {
+			throw RESTException.FORBIDDEN;
+		}
 		if (startDate == null) {
 			final Calendar cal = Calendar.getInstance();
 			cal.add(Calendar.DATE, -1);

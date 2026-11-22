@@ -824,19 +824,19 @@ public class Jobs {
      * @param spaceId the ID of the space we are making the association to
      * @author Tyler Jensen
      */
-    protected static void associate(Connection con, int jobId, int spaceId) {
-        PreparedStatement procedure = null;
-        try {
-            procedure = con.prepareStatement(
+    protected static void associate(Connection con, int jobId, int spaceId)
+        throws SQLException {
+        try (
+            PreparedStatement procedure = con.prepareStatement(
                 "SELECT starexec.AssociateJob(?, ?)"
-            );
+            )
+        ) {
             procedure.setInt(1, jobId);
             procedure.setInt(2, spaceId);
             procedure.execute();
-        } catch (Exception e) {
+        } catch (SQLException e) {
             log.error("associate", e);
-        } finally {
-            Common.safeClose(procedure);
+            throw e;
         }
     }
 
@@ -849,23 +849,15 @@ public class Jobs {
      * @author Tyler Jensen
      */
     public static boolean associate(List<Integer> jobIds, int spaceId) {
-        Connection con = null;
-
         try {
-            con = Common.getConnection();
-            Common.beginTransaction(con);
-
-            for (int jid : jobIds) {
-                Jobs.associate(con, jid, spaceId);
-            }
-
-            Common.endTransaction(con);
-            return true;
+            return Common.inTransaction(con -> {
+                for (int jid : jobIds) {
+                    Jobs.associate(con, jid, spaceId);
+                }
+                return true;
+            });
         } catch (Exception e) {
             log.error("associate", e);
-            Common.doRollback(con);
-        } finally {
-            Common.safeClose(con);
         }
 
         return false;
@@ -7850,34 +7842,30 @@ public class Jobs {
         if (!Jobs.canJobBePostProcessed(jobId)) {
             return false;
         }
-        Connection con = null;
-        PreparedStatement procedure = null;
         try {
-            con = Common.getConnection();
-            Common.beginTransaction(con);
-            if (!Jobs.removeCachedJobStats(jobId, con)) {
-                throw new Exception(
-                    "Couldn't clear out the cache of job stats"
-                );
-            }
+            return Common.inTransaction(con -> {
+                if (!Jobs.removeCachedJobStats(jobId, con)) {
+                    throw new SQLException(
+                        "Couldn't clear out the cache of job stats"
+                    );
+                }
 
-            procedure = con.prepareStatement(
-                "SELECT starexec.PrepareJobForPostProcessing(?,?,?,?,?)"
-            );
-            procedure.setInt(1, jobId);
-            procedure.setInt(2, processorId);
-            procedure.setInt(3, StatusCode.STATUS_COMPLETE.getVal());
-            procedure.setInt(4, StatusCode.STATUS_PROCESSING.getVal());
-            procedure.setInt(5, stageNumber);
-            procedure.execute();
-            return true;
+                try (
+                    PreparedStatement procedure = con.prepareStatement(
+                        "SELECT starexec.PrepareJobForPostProcessing(?,?,?,?,?)"
+                    )
+                ) {
+                    procedure.setInt(1, jobId);
+                    procedure.setInt(2, processorId);
+                    procedure.setInt(3, StatusCode.STATUS_COMPLETE.getVal());
+                    procedure.setInt(4, StatusCode.STATUS_PROCESSING.getVal());
+                    procedure.setInt(5, stageNumber);
+                    procedure.execute();
+                }
+                return true;
+            });
         } catch (Exception e) {
-            Common.doRollback(con);
             log.error("prepareJobForPostProcessing", e);
-        } finally {
-            Common.endTransaction(con);
-            Common.safeClose(con);
-            Common.safeClose(procedure);
         }
         return false;
     }
@@ -7903,23 +7891,19 @@ public class Jobs {
             );
             return; // don't save stats if the job is not complete
         }
-        Connection con = null;
         try {
-            con = Common.getConnection();
-            Common.beginTransaction(con);
-            for (SolverStats s : stats) {
-                if (!saveStats(s, con, includeUnknown)) {
-                    throw new Exception(
-                        "saving stats failed, rolling back connection"
-                    );
+            Common.inTransaction(con -> {
+                for (SolverStats s : stats) {
+                    if (!saveStats(s, con, includeUnknown)) {
+                        throw new SQLException(
+                            "saving stats failed, rolling back connection"
+                        );
+                    }
                 }
-            }
+                return null;
+            });
         } catch (Exception e) {
             log.error("caught exception in save stats: " + e.getMessage());
-            Common.doRollback(con);
-        } finally {
-            Common.endTransaction(con);
-            Common.safeClose(con);
         }
     }
 
@@ -8014,20 +7998,21 @@ public class Jobs {
         int jobId,
         Set<Integer> configIds
     ) throws SQLException {
-        Connection con = null;
-        try {
-            con = Common.getConnection();
-            Common.beginTransaction(con);
-            Job job = Jobs.get(jobId);
+        Job job = Jobs.get(jobId);
+        if (job == null) {
+            return;
+        }
+        int rootSpaceId = job.getPrimarySpace();
+        List<JobSpace> jobSpacesInJob = Spaces.getSubSpacesForJob(
+            rootSpaceId,
+            true
+        );
+        JobSpace rootSpace = Spaces.getJobSpace(rootSpaceId);
+        if (rootSpace != null) {
+            jobSpacesInJob.add(rootSpace);
+        }
 
-            // get all the job spaces in the job
-            int rootSpaceId = job.getPrimarySpace();
-            List<JobSpace> jobSpacesInJob = Spaces.getSubSpacesForJob(
-                rootSpaceId,
-                true
-            );
-            jobSpacesInJob.add(Spaces.getJobSpace(rootSpaceId));
-
+        Common.inTransaction(con -> {
             for (JobSpace jobSpace : jobSpacesInJob) {
                 for (int cid : configIds) {
                     removeCachedJobStatsForConfigAndJobSpace(
@@ -8037,10 +8022,8 @@ public class Jobs {
                     );
                 }
             }
-        } finally {
-            Common.endTransaction(con);
-            Common.safeClose(con);
-        }
+            return null;
+        });
     }
 
     private static void removeCachedJobStatsForConfigAndJobSpace(

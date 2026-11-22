@@ -62,6 +62,8 @@ public class ContainerJobMonitor {
 
     // Handle for the currently scheduled poll (for cancellation on interval change)
     private volatile ScheduledFuture<?> scheduledPoll;
+    private final Object pollScheduleLock = new Object();
+    private long pollGeneration = 0;
 
     public ContainerJobMonitor(PodmanBackend backend) {
         this.backend = backend;
@@ -77,14 +79,16 @@ public class ContainerJobMonitor {
      * Starts the monitor with adaptive polling.
      */
     public void start() {
-        if (running) {
-            log.warn("ContainerJobMonitor already running");
-            return;
-        }
-        running = true;
+        synchronized (pollScheduleLock) {
+            if (running) {
+                log.warn("ContainerJobMonitor already running");
+                return;
+            }
+            running = true;
 
-        // Schedule the first poll
-        scheduleNextPoll();
+            // Schedule the first poll
+            scheduleNextPollLocked();
+        }
 
         log.info(
             "ContainerJobMonitor started with adaptive polling: " +
@@ -94,31 +98,43 @@ public class ContainerJobMonitor {
 
     /**
      * Schedules the next poll based on the current adaptive interval.
+     * Caller must hold {@link #pollScheduleLock}.
      */
-    private void scheduleNextPoll() {
+    private void scheduleNextPollLocked() {
         if (!running) {
             return;
         }
 
+        if (scheduledPoll != null && !scheduledPoll.isDone()) {
+            scheduledPoll.cancel(false);
+        }
+
+        long expectedGen = ++pollGeneration;
         long interval = pollInterval.getCurrentInterval();
         scheduledPoll = scheduler.schedule(
-            this::pollAndReschedule,
+            () -> pollAndReschedule(expectedGen),
             interval,
             TimeUnit.MILLISECONDS
         );
     }
 
     /**
-     * Executes a poll and schedules the next one.
+     * Executes a poll and schedules the next one if this generation is still active.
      * This method is called by the scheduler.
      */
-    private void pollAndReschedule() {
+    private void pollAndReschedule(long expectedGen) {
+        synchronized (pollScheduleLock) {
+            if (!running || expectedGen != pollGeneration) {
+                return;
+            }
+        }
         try {
             checkCompletedJobs();
         } finally {
-            // Always reschedule, even if an exception occurred
-            if (running) {
-                scheduleNextPoll();
+            synchronized (pollScheduleLock) {
+                if (running && expectedGen == pollGeneration) {
+                    scheduleNextPollLocked();
+                }
             }
         }
     }
@@ -200,31 +216,25 @@ public class ContainerJobMonitor {
      * tracking handles concurrent access correctly.</p>
      */
     private void cancelCurrentPollAndReschedule() {
-        if (!running) {
-            return;
+        synchronized (pollScheduleLock) {
+            if (!running) {
+                return;
+            }
+            scheduleNextPollLocked();
         }
-
-        ScheduledFuture<?> currentPoll = scheduledPoll;
-        if (currentPoll != null) {
-            // Cancel with mayInterruptIfRunning=false - don't interrupt if
-            // the poll is currently executing, just prevent it from running
-            // if it hasn't started yet.
-            currentPoll.cancel(false);
-        }
-
-        // Immediately schedule a new poll at the (now reset) base interval
-        scheduleNextPoll();
     }
 
     /**
      * Stops the monitor.
      */
     public void stop() {
-        running = false;
-
-        // Cancel any pending poll
-        if (scheduledPoll != null) {
-            scheduledPoll.cancel(false);
+        synchronized (pollScheduleLock) {
+            running = false;
+            pollGeneration++;
+            if (scheduledPoll != null) {
+                scheduledPoll.cancel(false);
+                scheduledPoll = null;
+            }
         }
 
         scheduler.shutdown();
@@ -258,12 +268,13 @@ public class ContainerJobMonitor {
      */
     public void drainAndStop() {
         log.info("ContainerJobMonitor: draining final completions before stop...");
-        running = false;
-
-        // Stops a poll that has not started. One already running is handled by the
-        // lock on checkCompletedJobs, which the final scan below must acquire.
-        if (scheduledPoll != null) {
-            scheduledPoll.cancel(false);
+        synchronized (pollScheduleLock) {
+            running = false;
+            pollGeneration++;
+            if (scheduledPoll != null) {
+                scheduledPoll.cancel(false);
+                scheduledPoll = null;
+            }
         }
 
         try {

@@ -38,6 +38,9 @@ public class Shell {
 			while (true) {
 				System.out.print("\nStarCom> ");
 				String nextLine = br.readLine();
+				if (nextLine == null) {
+					return;
+				}
 				status = parser.parseCommand(nextLine);
 				MessagePrinter.printStatusMessage(status, parser);
 				MessagePrinter.printWarningMessages();

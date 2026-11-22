@@ -108,4 +108,35 @@ public class UploadBenchmarkDependencyRootTest {
             permissions.verify(() -> Permissions.canUserSeeSpace(anyInt(), anyInt()), Mockito.never());
         }
     }
+
+    @Test
+    public void gitUploadsRequireHttpOrHttpsAndRejectCredentialsOrUnknownSource() throws Exception {
+        try (MockedStatic<Permissions> permissions = Mockito.mockStatic(Permissions.class)) {
+            HashMap<String, Object> fileGit = form(null, null);
+            fileGit.remove("benchFile");
+            fileGit.put("localOrURLOrGit", "Git");
+            fileGit.put("git", "file:///etc/passwd.git");
+            ValidatorStatusCode fileScheme = validate(fileGit, true, permissions);
+            assertFalse(fileScheme.isSuccess());
+            assertEquals("Git URLs must use http or https", fileScheme.getMessage());
+
+            HashMap<String, Object> credsGit = form(null, null);
+            credsGit.remove("benchFile");
+            credsGit.put("localOrURLOrGit", "Git");
+            credsGit.put("git", "https://user:secret@example.org/repo.git");
+            ValidatorStatusCode creds = validate(credsGit, true, permissions);
+            assertFalse(creds.isSuccess());
+
+            HashMap<String, Object> unknownSource = form(null, null);
+            unknownSource.remove("benchFile");
+            unknownSource.put("localOrURLOrGit", "ftp");
+            assertFalse(validate(unknownSource, true, permissions).isSuccess());
+
+            HashMap<String, Object> validGit = form(null, null);
+            validGit.remove("benchFile");
+            validGit.put("localOrURLOrGit", "Git");
+            validGit.put("git", "https://example.org/benchmarks.git");
+            assertTrue(validate(validGit, true, permissions).isSuccess());
+        }
+    }
 }

@@ -546,19 +546,10 @@ public class Common {
 	 * @throws SQLException
 	 */
 	public static void update(String callPreparationSql, ThrowingConsumer<CallableStatement,SQLException> setParameters) throws SQLException {
-		Connection con = null;
-		try {
-			con = Common.getConnection();
-			Common.beginTransaction(con);
+		Common.inTransaction(con -> {
 			updateUsingConnection(con, callPreparationSql, setParameters);
-			Common.endTransaction(con);
-		} catch (SQLException e) {
-			log.warn("update", "Rolling back update & rethrowing SQLException", e);
-			Common.doRollback(con);
-			throw e;
-		} finally {
-			Common.safeClose(con);
-		}
+			return null;
+		});
 	}
 
 	/**
@@ -574,32 +565,13 @@ public class Common {
 			String callPreparationSql,
 			ThrowingConsumer<CallableStatement,SQLException> setParameters,
 			ThrowingFunction<CallableStatement, T, SQLException> getOutput) throws SQLException {
-		Connection con = null;
-		CallableStatement procedure = null;
-		try {
-			// Setup the stored procedure.
-			con = Common.getConnection();
-			Common.beginTransaction(con);
-			procedure = prepareCallable(con, callPreparationSql);
-
-			// Apply the parameter setting function.
-			setParameters.accept(procedure);
-
-			// Run the procedure.
-			procedure.executeUpdate();
-
-			// Apply the output getting function and return the result.
-			T output = getOutput.accept(procedure);
-			Common.endTransaction(con);
-			return output;
-		} catch (SQLException e) {
-			log.warn("updateWithOutput", "Rolling back update & rethrowing SQLException", e);
-			Common.doRollback(con);
-			throw e;
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(procedure);
-		}
+		return Common.inTransaction(con -> {
+			try (CallableStatement procedure = prepareCallable(con, callPreparationSql)) {
+				setParameters.accept(procedure);
+				procedure.executeUpdate();
+				return getOutput.accept(procedure);
+			}
+		});
 	}
 
 	/**
@@ -608,22 +580,12 @@ public class Common {
 	 * @throws SQLException on database error.
 	 */
 	public static void execute(String sql) throws SQLException {
-		Connection con = null;
-		Statement statement = null;
-		try {
-			con = Common.getConnection();
-			Common.beginTransaction(con);
-			statement = con.createStatement();
-			statement.execute(sql);
-			Common.endTransaction(con);
-		} catch (SQLException e) {
-			log.warn("execute", "Rolling back execute & rethrowing SQLException", e);
-			Common.doRollback(con);
-			throw e;
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(statement);
-		}
+		Common.inTransaction(con -> {
+			try (Statement statement = con.createStatement()) {
+				statement.execute(sql);
+			}
+			return null;
+		});
 	}
 
 	/**
@@ -666,27 +628,53 @@ public class Common {
 		Connection con = null;
 		try {
 			con = Common.getConnection();
-			Common.beginTransaction(con);
-			T result = work.accept(con);
-			// Commit here rather than through endTransaction: that helper swallows a
-			// failed commit, which would let this method return success for work the
-			// database rolled back. Callers would then treat un-persisted rows as
-			// durable -- for the batched upload path, that means advancing a resume
-			// checkpoint past benchmarks that were never written.
-			con.commit();
-			enableAutoCommit(con);
+			if (!con.getAutoCommit()) {
+				throw new SQLException("runInTransaction was given a connection that is already in a"
+						+ " transaction; it will not commit or roll back a transaction it does not own");
+			}
+			Exception failure = null;
+			T result = null;
+			boolean committed = false;
+			try {
+				con.setAutoCommit(false);
+				result = work.accept(con);
+				con.commit();
+				committed = true;
+			} catch (Exception e) {
+				failure = e;
+			}
+
+			if (failure != null && !committed) {
+				try {
+					con.rollback();
+				} catch (SQLException rollbackFailure) {
+					if (failure != rollbackFailure) failure.addSuppressed(rollbackFailure);
+				}
+			}
+
+			try {
+				con.setAutoCommit(true);
+			} catch (SQLException restoreFailure) {
+				discard(con, restoreFailure);
+				if (failure != null) {
+					if (failure != restoreFailure) failure.addSuppressed(restoreFailure);
+				} else {
+					log.error("runInTransaction", "transaction COMMITTED but the connection could"
+							+ " not be restored; it has been discarded. The caller's write is"
+							+ " durable and was reported as successful.", restoreFailure);
+				}
+			}
+
+			if (failure != null) {
+				if (failure instanceof SQLException) {
+					throw (SQLException) failure;
+				}
+				if (failure instanceof RuntimeException) {
+					throw (RuntimeException) failure;
+				}
+				throw rethrowAs(failure);
+			}
 			return result;
-		} catch (SQLException e) {
-			log.warn("runInTransaction", "Rolling back transaction due to SQLException", e);
-			Common.doRollback(con);
-			throw e;
-		} catch (RuntimeException e) {
-			Common.doRollback(con);
-			throw e;
-		} catch (Exception e) {
-			log.warn("runInTransaction", "Rolling back transaction due to exception", e);
-			Common.doRollback(con);
-			throw rethrowAs(e);
 		} finally {
 			Common.safeClose(con);
 		}

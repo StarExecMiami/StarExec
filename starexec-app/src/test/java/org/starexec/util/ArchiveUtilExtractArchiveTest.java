@@ -1,5 +1,12 @@
 package org.starexec.util;
 
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import org.apache.commons.compress.archivers.tar.TarConstants;
+import org.apache.commons.compress.archivers.zip.UnixStat;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -10,7 +17,10 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.Arrays;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -118,5 +128,151 @@ public class ArchiveUtilExtractArchiveTest {
 			out.closeEntry();
 		}
 		return bytes.toByteArray();
+	}
+
+	@Test
+	public void tarGzAndZipSymlinksAreRejectedInBothExtractors() throws IOException {
+		File tarDir = newFolder(tmp, "tar-sym");
+		File tgz = new File(tarDir, "bad.tar.gz");
+		Files.write(tgz.toPath(), tarGzWithEntry("link", "/etc/passwd", TarConstants.LF_SYMLINK, null));
+
+		File dest1 = newFolder(tmp, "dest-extract");
+		File dest2 = newFolder(tmp, "dest-sandbox");
+		assertFalse(ArchiveUtil.extractArchive(tgz.getAbsolutePath(), dest1.getAbsolutePath()));
+		assertFalse(ArchiveUtil.extractArchiveAsSandbox(tgz.getAbsolutePath(), dest2.getAbsolutePath()));
+		assertFalse(Files.exists(dest1.toPath().resolve("link")));
+		assertFalse(Files.exists(dest2.toPath().resolve("link")));
+
+		File hardTgz = new File(tarDir, "hard.tgz");
+		Files.write(hardTgz.toPath(), tarGzWithEntry("hard", "/etc/passwd", TarConstants.LF_LINK, null));
+		assertFalse(ArchiveUtil.extractArchive(hardTgz.getAbsolutePath(), dest1.getAbsolutePath()));
+		assertFalse(ArchiveUtil.extractArchiveAsSandbox(hardTgz.getAbsolutePath(), dest2.getAbsolutePath()));
+
+		File symZip = new File(tarDir, "sym.zip");
+		ByteArrayOutputStream zipBytes = new ByteArrayOutputStream();
+		try (ZipArchiveOutputStream zos = new ZipArchiveOutputStream(zipBytes)) {
+			ZipArchiveEntry entry = new ZipArchiveEntry("link");
+			entry.setUnixMode(UnixStat.LINK_FLAG | 0777);
+			zos.putArchiveEntry(entry);
+			zos.write("/etc/passwd".getBytes(StandardCharsets.UTF_8));
+			zos.closeArchiveEntry();
+		}
+		Files.write(symZip.toPath(), zipBytes.toByteArray());
+		assertFalse(ArchiveUtil.extractArchive(symZip.getAbsolutePath(), dest1.getAbsolutePath()));
+		assertFalse(ArchiveUtil.extractArchiveAsSandbox(symZip.getAbsolutePath(), dest2.getAbsolutePath()));
+	}
+
+	@Test
+	public void validTarGzExtractsAndHighRatioTarGzBombIsRejected() throws IOException {
+		File dir = newFolder(tmp, "tar-ok");
+		File validTgz = new File(dir, "solver.tar.gz");
+		Files.write(validTgz.toPath(), tarGzWithEntry("bin/run.sh", null, TarConstants.LF_NORMAL, "#!/bin/sh\n"));
+		File dest = newFolder(tmp, "dest-ok");
+
+		assertTrue(ArchiveUtil.extractArchive(validTgz.getAbsolutePath(), dest.getAbsolutePath()));
+		assertEquals("#!/bin/sh\n", Files.readString(dest.toPath().resolve("bin/run.sh")));
+
+		File bombDir = newFolder(tmp, "tar-bomb");
+		File bombTgz = new File(bombDir, "bomb.tar.gz");
+		byte[] sixteenMegsOfZeros = new byte[16 * 1024 * 1024];
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		try (GzipCompressorOutputStream gz = new GzipCompressorOutputStream(baos);
+			 TarArchiveOutputStream tos = new TarArchiveOutputStream(gz)) {
+			TarArchiveEntry entry = new TarArchiveEntry("zeros.bin");
+			entry.setSize(sixteenMegsOfZeros.length);
+			tos.putArchiveEntry(entry);
+			tos.write(sixteenMegsOfZeros);
+			tos.closeArchiveEntry();
+		}
+		Files.write(bombTgz.toPath(), baos.toByteArray());
+		File bombDest = newFolder(tmp, "dest-bomb");
+		assertFalse(ArchiveUtil.extractArchive(bombTgz.getAbsolutePath(), bombDest.getAbsolutePath()));
+		assertFalse(Files.exists(bombDest.toPath().resolve("zeros.bin")));
+	}
+
+	@Test
+	public void tarTgzTarGzAndZipPreserveExecutableBitsAndStripSpecialModeBits() throws IOException {
+		File tarFile = new File(newFolder(tmp, "exec-tar"), "solver.tar");
+		try (TarArchiveOutputStream tos = new TarArchiveOutputStream(Files.newOutputStream(tarFile.toPath()))) {
+			addTarEntryWithMode(tos, "bin/starexec_run_default", "#!/bin/sh\n", 0104755);
+			addTarEntryWithMode(tos, "bin/readme.txt", "doc\n", 0100644);
+			tos.finish();
+		}
+		File tarDest = newFolder(tmp, "dest-tar");
+		assertTrue(ArchiveUtil.extractArchive(tarFile.getAbsolutePath(), tarDest.getAbsolutePath()));
+		Path tarBin = tarDest.toPath().resolve("bin/starexec_run_default");
+		Path tarDoc = tarDest.toPath().resolve("bin/readme.txt");
+		assertTrue(Files.isExecutable(tarBin));
+		assertFalse(Files.isExecutable(tarDoc));
+		assertEquals(0755, ((Integer) Files.getAttribute(tarBin, "unix:mode")) & 07777);
+
+		for (String ext : new String[]{".tgz", ".tar.gz"}) {
+			File tgzFile = new File(newFolder(tmp, "exec-" + ext.replace(".", "")), "solver" + ext);
+			try (GzipCompressorOutputStream gz = new GzipCompressorOutputStream(Files.newOutputStream(tgzFile.toPath()));
+				 TarArchiveOutputStream tos = new TarArchiveOutputStream(gz)) {
+				addTarEntryWithMode(tos, "bin/starexec_run_default", "#!/bin/sh\n", 0100755);
+				tos.finish();
+			}
+			File tgzDest = newFolder(tmp, "dest-" + ext.replace(".", ""));
+			assertTrue(ArchiveUtil.extractArchive(tgzFile.getAbsolutePath(), tgzDest.getAbsolutePath()));
+			Set<PosixFilePermission> perms = Files.getPosixFilePermissions(
+					tgzDest.toPath().resolve("bin/starexec_run_default"));
+			assertTrue(perms.contains(PosixFilePermission.OWNER_EXECUTE), "Missing +x for " + ext);
+		}
+
+		File zipFile = new File(newFolder(tmp, "exec-zip"), "solver.zip");
+		try (ZipArchiveOutputStream zos = new ZipArchiveOutputStream(Files.newOutputStream(zipFile.toPath()))) {
+			ZipArchiveEntry exec = new ZipArchiveEntry("bin/solver");
+			exec.setUnixMode(UnixStat.FILE_FLAG | 04755);
+			byte[] execBytes = "#!/bin/sh\n".getBytes(StandardCharsets.UTF_8);
+			zos.putArchiveEntry(exec);
+			zos.write(execBytes);
+			zos.closeArchiveEntry();
+
+			ZipArchiveEntry doc = new ZipArchiveEntry("bin/notes.txt");
+			doc.setUnixMode(UnixStat.FILE_FLAG | 0644);
+			zos.putArchiveEntry(doc);
+			zos.write("notes\n".getBytes(StandardCharsets.UTF_8));
+			zos.closeArchiveEntry();
+		}
+		File zipDest = newFolder(tmp, "dest-zip");
+		assertTrue(ArchiveUtil.extractArchive(zipFile.getAbsolutePath(), zipDest.getAbsolutePath()));
+		Path zipBin = zipDest.toPath().resolve("bin/solver");
+		Path zipDoc = zipDest.toPath().resolve("bin/notes.txt");
+		assertTrue(Files.isExecutable(zipBin));
+		assertFalse(Files.isExecutable(zipDoc));
+		assertEquals(0755, ((Integer) Files.getAttribute(zipBin, "unix:mode")) & 07777);
+	}
+
+	private static void addTarEntryWithMode(TarArchiveOutputStream tos, String name, String content, int mode)
+			throws IOException {
+		byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+		TarArchiveEntry entry = new TarArchiveEntry(name);
+		entry.setSize(bytes.length);
+		entry.setMode(mode);
+		tos.putArchiveEntry(entry);
+		tos.write(bytes);
+		tos.closeArchiveEntry();
+	}
+
+	private static byte[] tarGzWithEntry(String name, String linkName, byte linkFlag, String content) throws IOException {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		try (GzipCompressorOutputStream gz = new GzipCompressorOutputStream(baos);
+			 TarArchiveOutputStream tos = new TarArchiveOutputStream(gz)) {
+			TarArchiveEntry entry = new TarArchiveEntry(name, linkFlag);
+			if (linkName != null) {
+				entry.setLinkName(linkName);
+			}
+			if (content != null) {
+				byte[] data = content.getBytes(StandardCharsets.UTF_8);
+				entry.setSize(data.length);
+				tos.putArchiveEntry(entry);
+				tos.write(data);
+			} else {
+				tos.putArchiveEntry(entry);
+			}
+			tos.closeArchiveEntry();
+		}
+		return baos.toByteArray();
 	}
 }

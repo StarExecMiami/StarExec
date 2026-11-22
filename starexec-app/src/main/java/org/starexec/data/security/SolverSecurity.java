@@ -172,6 +172,9 @@ public class SolverSecurity {
 			return new ValidatorStatusCode(false, "The given configuration could not be found");
 		}
 		Solver solver = Solvers.getSolverByConfig(configId, false);
+		if (solver == null) {
+			return new ValidatorStatusCode(false, "The solver owning this configuration could not be found");
+		}
 
 		// If the old config and new config names are NOT the same, ensure the file pointed to by
 		// the new config does not already exist on disk
@@ -191,9 +194,6 @@ public class SolverSecurity {
 			);
 		}
 
-		if (solver == null) {
-			return new ValidatorStatusCode(false, "The solver owning this configuration could not be found");
-		}
 		if (!userOwnsSolverOrIsAdmin(solver, userId)) {
 			return new ValidatorStatusCode(
 					false, "You do not have permission to update any configurations associated with this solver");
@@ -446,6 +446,9 @@ public class SolverSecurity {
 	 */
 	public static ValidatorStatusCode canUserDownloadSolver(int solverId, int userId) {
 		Solver s = Solvers.get(solverId);
+		if (s == null) {
+			return new ValidatorStatusCode(false, "The given solver could not be found");
+		}
 		boolean userHasAdminReadPrivileges = GeneralSecurity.hasAdminReadPrivileges(userId);
 		if (!Permissions.canUserSeeSolver(s.getId(), userId)) {
 			return new ValidatorStatusCode(false, "You do not have permission to see this solver");

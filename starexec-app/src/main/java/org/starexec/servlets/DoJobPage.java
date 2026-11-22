@@ -83,11 +83,20 @@ public class DoJobPage {
 	 */
 	private static void getPairOutput(File output, int pairID) throws IOException {
 		JobPair pair = JobPairs.getPairDetailed(pairID);
+		if (pair == null || pair.getStages() == null) {
+			return;
+		}
 		File pidFile = new File(output, Integer.toString(pairID));
 		pidFile.mkdirs();
 		for (JoblineStage stage: pair.getStages()) {
 			String originalFile = JobPairs.getStdout(pairID, stage.getStageNumber());
+			if (originalFile == null) {
+				continue;
+			}
 			File oPath = new File(originalFile);
+			if (!oPath.isFile()) {
+				continue;
+			}
 			File newFile = new File(pidFile,stage.getStageNumber() + ".txt");
 			FileUtils.copyFile(oPath, newFile);
 		}

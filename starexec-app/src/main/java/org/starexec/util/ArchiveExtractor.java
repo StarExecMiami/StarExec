@@ -2,6 +2,8 @@ package org.starexec.util;
 
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 import org.apache.commons.io.FileUtils;
 import org.starexec.config.EnvironmentConfig;
@@ -18,10 +20,9 @@ import java.nio.file.FileVisitResult;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Enumeration;
 import java.util.function.BooleanSupplier;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 import static java.nio.file.FileVisitResult.CONTINUE;
 
@@ -216,48 +217,50 @@ public class ArchiveExtractor {
 
         long totalUncompressedSize = 0;
         int entryCount = 0;
-        
-        try (InputStream is = Files.newInputStream(archivePath);
-             BufferedInputStream bis = new BufferedInputStream(is);
-             ZipInputStream zis = new ZipInputStream(bis)) {
-            
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
+
+        try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
+            Enumeration<ZipArchiveEntry> entries = zipFile.getEntries();
+            while (entries.hasMoreElements()) {
                 checkExtractionState(settings, archivePath, totalUncompressedSize);
-                // Validate entry name
+                ZipArchiveEntry entry = entries.nextElement();
                 String entryName = entry.getName();
                 if (entryName.length() > MAX_ENTRY_NAME_LENGTH) {
                     throw new SecurityException("Entry name too long: " + entryName);
                 }
-                
-                // Skip directory entries
+                if (entry.isUnixSymlink()) {
+                    throw new SecurityException("Archive contains unsupported symlink entry: " + entryName);
+                }
+
+                Path targetPath = validateTargetPath(extractDir, entryName);
+
                 if (entry.isDirectory()) {
+                    Files.createDirectories(targetPath);
+                    ArchiveUtil.applyPosixPermissions(targetPath, entry.getUnixMode());
                     continue;
                 }
-                
-                // Extract entry
-                Path targetPath = validateTargetPath(extractDir, entryName);
-                
-                // Create parent directories
+
                 Files.createDirectories(targetPath.getParent());
-                
-                // Write file
-                try (OutputStream os = Files.newOutputStream(targetPath);
+                if (Files.isSymbolicLink(targetPath)) {
+                    throw new SecurityException("Target path is a symbolic link: " + entryName);
+                }
+
+                try (InputStream is = zipFile.getInputStream(entry);
+                     OutputStream os = Files.newOutputStream(targetPath);
                      BufferedOutputStream bos = new BufferedOutputStream(os)) {
-                    long entryBytes = copyEntryData(zis, bos, entryName, archivePath, settings, totalUncompressedSize);
+                    long entryBytes = copyEntryData(is, bos, entryName, archivePath, settings, totalUncompressedSize);
                     if (entryBytes > MAX_ENTRY_SIZE_BYTES) {
                         throw new SecurityException("Entry too large: " + entryName + " (" + entryBytes + " bytes)");
                     }
                     totalUncompressedSize += entryBytes;
                     validateTotalSize(totalUncompressedSize, settings);
                 }
-                
+                ArchiveUtil.applyPosixPermissions(targetPath, entry.getUnixMode());
+
                 entryCount++;
                 if (extractedCount != null) {
                     extractedCount.set(entryCount);
                 }
                 invokeProgressCallback(settings);
-                zis.closeEntry();
             }
         }
         
@@ -308,6 +311,7 @@ public class ArchiveExtractor {
                 Path targetPath = validateTargetPath(extractDir, entryName);
                 if (entry.isDirectory()) {
                     Files.createDirectories(targetPath);
+                    ArchiveUtil.applyPosixPermissions(targetPath, entry.getMode());
                     continue;
                 }
 
@@ -321,6 +325,7 @@ public class ArchiveExtractor {
                     totalUncompressedSize += entryBytes;
                     validateTotalSize(totalUncompressedSize, settings);
                 }
+                ArchiveUtil.applyPosixPermissions(targetPath, entry.getMode());
 
                 count++;
                 if (extractedCount != null) {
@@ -461,8 +466,12 @@ public class ArchiveExtractor {
     }
 
     private static Path validateTargetPath(Path extractDir, String entryName) throws IOException {
-        Path targetPath = extractDir.resolve(entryName).normalize();
-        if (!targetPath.startsWith(extractDir.normalize())) {
+        if (entryName == null || entryName.isEmpty() || entryName.indexOf('\0') >= 0) {
+            throw new SecurityException("Archive contains invalid entry name: " + entryName);
+        }
+        Path normalizedBase = extractDir.toAbsolutePath().normalize();
+        Path targetPath = normalizedBase.resolve(entryName).normalize();
+        if (!targetPath.startsWith(normalizedBase)) {
             throw new SecurityException("Entry attempts path traversal: " + entryName);
         }
         return targetPath;

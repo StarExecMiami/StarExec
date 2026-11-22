@@ -291,6 +291,40 @@ public class ArchiveExtractorTest {
         assertTrue(message.contains("disk quota"));
     }
 
+    @Test
+    public void extractSafelyPreservesExecutableBitsAcrossTarTgzAndZip() throws Exception {
+        Path tgz = tempDir.resolve("exec.tar.gz");
+        try (OutputStream fos = Files.newOutputStream(tgz);
+             GzipCompressorOutputStream gz = new GzipCompressorOutputStream(fos);
+             TarArchiveOutputStream tos = new TarArchiveOutputStream(gz)) {
+            TarArchiveEntry exec = new TarArchiveEntry("bin/run.sh");
+            byte[] data = "#!/bin/sh\n".getBytes(StandardCharsets.UTF_8);
+            exec.setSize(data.length);
+            exec.setMode(0100755);
+            tos.putArchiveEntry(exec);
+            tos.write(data);
+            tos.closeArchiveEntry();
+            tos.finish();
+        }
+        Path tarOut = tempDir.resolve("tar-exec-out");
+        ArchiveExtractor.extractSafely(tgz.toString(), tarOut);
+        assertTrue(Files.isExecutable(tarOut.resolve("bin/run.sh")));
+
+        Path zip = tempDir.resolve("exec.zip");
+        try (org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream zos =
+                 new org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream(Files.newOutputStream(zip))) {
+            org.apache.commons.compress.archivers.zip.ZipArchiveEntry exec =
+                new org.apache.commons.compress.archivers.zip.ZipArchiveEntry("bin/run.sh");
+            exec.setUnixMode(org.apache.commons.compress.archivers.zip.UnixStat.FILE_FLAG | 0755);
+            zos.putArchiveEntry(exec);
+            zos.write("#!/bin/sh\n".getBytes(StandardCharsets.UTF_8));
+            zos.closeArchiveEntry();
+        }
+        Path zipOut = tempDir.resolve("zip-exec-out");
+        ArchiveExtractor.extractSafely(zip.toString(), zipOut);
+        assertTrue(Files.isExecutable(zipOut.resolve("bin/run.sh")));
+    }
+
     private Path createTarGzArchive(String firstEntryName, String firstContent, String secondEntryName, String secondContent)
         throws IOException {
         Path archive = tempDir.resolve("archive.tgz");
