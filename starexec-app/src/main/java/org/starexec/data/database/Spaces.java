@@ -797,6 +797,7 @@ public class Spaces {
 			procedure.setInt(2, spaceId);
 
 			Common.executeAndDrain(procedure);
+			org.starexec.util.SessionUtil.invalidateUserPermissions(userId);
 			return true;
 		} catch (Exception e) {
 			log.error("leave", e);
@@ -2715,6 +2716,7 @@ public class Spaces {
 
 			// Commit changes to database
 			Common.endTransaction(con);
+			org.starexec.util.SessionUtil.invalidateUsersPermissions(userIds);
 
 			log.info(userIds.size() + " user(s) were successfully removed from community " + commId);
 			return true;
@@ -2749,6 +2751,7 @@ public class Spaces {
 			}
 
 			Common.endTransaction(con);
+			org.starexec.util.SessionUtil.invalidateUsersPermissions(userIds);
 
 			return true;
 		} catch (Exception e) {
