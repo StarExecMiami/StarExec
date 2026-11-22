@@ -1043,74 +1043,31 @@ function makeRemoveSubspacesPost(selectedSubspaces, recyclePrims) {
 	});
 }
 
-/**
- * Handles querying for pages in a given DataTable object
- *
- * @param sSource the "sAjaxSource" of the calling table
- * @param aoData the parameters of the DataTable object to send to the server
- * @param fnCallback the function that actually maps the returned page to the DataTable object
- * @author Todd Elvers
- */
-function fnPaginationHandler(sSource, aoData, fnCallback) {
-	var tableName = $(this).attr('id');
-	var tree = $('#exploreList').jstree(true);
-	var idOfSelectedSpace = tree && tree.get_selected()[0] || "1";
-
-	// Request the next page of primitives from the server via AJAX
-	log('Source: ' + sSource + idOfSelectedSpace + "/" + tableName + "/pagination");
-	$.ajax({
-		type: 'POST',
-		url: sSource + idOfSelectedSpace + "/" + tableName + "/pagination",
-		data: aoData,
-		dataType: "json"
-	}).done(function(nextDataTablePage) {
-		var s = parseReturnCode(nextDataTablePage, false);
-		if (s) {
-			// Replace the current page with the newly received page
-			fnCallback(nextDataTablePage);
-
-			// If the primitive type is 'job', then color code the results appropriately
-			if ('j' == tableName[0]) {
-				colorizeJobStatistics();
-			}
-
-			// Make the table that was just populated draggable too
-			initDraggable('#' + tableName);
-		}
-	}).always(function() {
-		// Reload the jobs table 10 seconds after receiving the response.
-		if (spaceId != 1 && typeof spaceId != 'undefined' && 'j' == tableName[0]) {
-			//log('Setting new call to happen in 10 seconds.');
-			setTimeout(function() {
-				var rows = $(jobTable)
-				.children('tbody')
-				.children('tr.row_selected');
-				if (rows.length == 0) {
-					jobTable.fnDraw(false);
-				}
-			}, 10000);
-		}
-	});
-}
-
 // DataTables supplies the draw number and paging parameters. The endpoint still
 // speaks the legacy pagination contract shared by the explorer tables.
 function explorerTableAjax(tableName) {
 	var latestDraw;
+	var refreshTimer;
 	return function(request, draw) {
 		var selection = EXP_SP.permissionSelection;
 		var tree = $('#exploreList').jstree(true);
 		var selectedSpace = String(tree && tree.get_selected()[0] || '1');
-		var order = request.order[0] || {column: 0, dir: 'asc'};
+		var order = request.order[0];
 		latestDraw = request.draw;
+		if (tableName === 'jobs') {
+			window.clearTimeout(refreshTimer);
+		}
 		var data = {
 			sEcho: request.draw,
 			iDisplayStart: request.start,
 			iDisplayLength: request.length,
-			sSearch: request.search.value,
-			iSortCol_0: order.column,
-			sSortDir_0: order.dir
+			sSearch: request.search.value
 		};
+		// The server sorts unsorted job requests by creation time.
+		if (order || tableName !== 'jobs') {
+			data.iSortCol_0 = order ? order.column : 0;
+			data.sSortDir_0 = order ? order.dir : 'asc';
+		}
 		if (tableName === 'benchmarks' && sortOverride != null) {
 			data.sort_by = getSelectedSort();
 			data.sort_dir = isASC();
@@ -1150,10 +1107,21 @@ function explorerTableAjax(tableName) {
 			if (tableName === 'users' && selection.spaceId === selectedSpace) {
 				addSpacePermissionButtons(selection);
 			}
+			if (tableName === 'jobs') {
+				colorizeJobStatistics();
+			}
 			initDraggable('#' + tableName);
 		}).fail(function(xhr, status) {
 			if (status !== 'abort') {
 				showLoadError();
+			}
+		}).always(function() {
+			if (tableName === 'jobs' && selectedSpace !== '1' && isCurrent()) {
+				refreshTimer = window.setTimeout(function() {
+					if (isCurrent() && !$('#jobs tbody tr.row_selected').length) {
+						jobTable.api().draw(false);
+					}
+				}, 10000);
 			}
 		});
 	};
@@ -1214,26 +1182,19 @@ function initDataTables() {
 	// Extend the DataTables api and add our custom features
 	extendDataTableFunctions();
 
-	function initTable(name) {
-		return $('#' + name).dataTable(new star.DataTableConfig({
+	function initTable(name, options) {
+		return $('#' + name).dataTable(new star.DataTableConfig(Object.assign({
 			serverSide: true,
 			ajax: explorerTableAjax(name)
-		}));
+		}, options)));
 	}
-
-	var dataTableConfigNoSort = new window.star.DataTableConfig({
-		"bServerSide": true,
-		"sAjaxSource": starexecRoot + "services/space/",
-		"fnServerData": fnPaginationHandler, // included in this file
-		"aaSorting": [] // tells server to sort by 'created'
-	});
 
 	// Setup the DataTable objects
 	userTable = initTable('users');
 	solverTable = initTable('solvers');
 	benchTable = initTable('benchmarks');
 	spaceTable = initTable('spaces');
-	jobTable = $('#jobs').dataTable(dataTableConfigNoSort);
+	jobTable = initTable('jobs', {order: []});
 
 	setSortTable(benchTable);
 
@@ -1354,11 +1315,11 @@ function getProcessingMessage() {
 }
 
 function redrawAllTables() {
-	benchTable.fnDraw();
-	jobTable.fnDraw();
-	userTable.fnDraw();
-	solverTable.fnDraw();
-	spaceTable.fnDraw();
+	benchTable.api().draw();
+	jobTable.api().draw();
+	userTable.api().draw();
+	solverTable.api().draw();
+	spaceTable.api().draw();
 }
 
 /**

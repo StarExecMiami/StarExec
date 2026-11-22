@@ -12,10 +12,15 @@ function setup() {
   const pages = [];
   const errors = [];
   const actions = [];
+  const timers = new Map();
+  const jobRedraws = [];
+  let selectedJobRows = 0;
+  let nextTimer = 0;
   let selection;
   const document = {};
   const $ = element => {
     if (element === document) return { ready() {} };
+    if (element === '#jobs tbody tr.row_selected') return {length: selectedJobRows};
     assert.equal(element, '#exploreList');
     return { jstree: () => ({ get_selected: () => selection ? [selection.spaceId] : [] }) };
   };
@@ -24,6 +29,7 @@ function setup() {
       options,
       done(handler) { this.resolve = handler; return this; },
       fail(handler) { this.reject = handler; return this; },
+      always(handler) { this.finish = handler; return this; },
     };
     calls.push(xhr);
     return xhr;
@@ -31,12 +37,23 @@ function setup() {
   const context = vm.createContext({
     $, document, starexecRoot: '/', parseReturnCode: page => page.success !== false,
     showMessage: (...args) => errors.push(args),
+    window: {
+      setTimeout(handler, delay) {
+        assert.equal(delay, 10000);
+        timers.set(++nextTimer, handler);
+        return nextTimer;
+      },
+      clearTimeout(id) { timers.delete(id); },
+    },
   });
   vm.runInContext(source, context);
   context.addSpacePermissionButtons = space => actions.push(space.spaceId);
   context.initDraggable = table => actions.push(table);
+  context.colorizeJobStatistics = () => actions.push('job colors');
+  context.jobTable = {api: () => ({draw: reset => jobRedraws.push(reset)})};
   const loadUsers = context.explorerTableAjax('users');
   const loadBenchmarks = context.explorerTableAjax('benchmarks');
+  const loadJobs = context.explorerTableAjax('jobs');
   context.sortOverride = 'name';
   context.getSelectedSort = () => 'name';
   context.isASC = () => 'false';
@@ -47,7 +64,9 @@ function setup() {
     select: spaceId => { context.EXP_SP.permissionSelection = selection = {spaceId}; },
     request: (draw, order = [{column: 1, dir: 'desc'}]) => requestPage(loadUsers, draw, order),
     requestBenchmarks: draw => requestPage(loadBenchmarks, draw, [{column: 0, dir: 'asc'}]),
-    calls, pages, errors, actions,
+    requestJobs: draw => requestPage(loadJobs, draw, []),
+    selectJobRow: () => { selectedJobRows = 1; },
+    calls, pages, errors, actions, timers, jobRedraws,
   };
 }
 
@@ -114,4 +133,26 @@ test('keeps benchmark sort overrides and independent table draw counters', () =>
   users.resolve(response(9));
   assert.deepEqual(pages.map(page => page.draw), [2, 9]);
   assert.deepEqual(actions, ['#benchmarks', '10', '#users']);
+});
+
+test('keeps creation order and only refreshes an unselected current jobs table', () => {
+  const {select, requestJobs, selectJobRow, timers, jobRedraws, actions} = setup();
+  select('10');
+  const stale = requestJobs(1);
+  const current = requestJobs(2);
+  assert.equal(current.options.data.iSortCol_0, undefined);
+  current.resolve(response(2, 'Job'));
+  current.finish();
+  stale.finish();
+  assert.deepEqual(actions, ['job colors', '#jobs']);
+  assert.equal(timers.size, 1);
+  [...timers.values()][0]();
+  selectJobRow();
+  [...timers.values()][0]();
+  assert.deepEqual(jobRedraws, [false]);
+  select('20');
+  [...timers.values()][0]();
+  assert.deepEqual(jobRedraws, [false]);
+  requestJobs(3);
+  assert.equal(timers.size, 0);
 });
