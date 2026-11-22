@@ -108,7 +108,8 @@ public class UploadConfiguration extends HttpServlet {
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST);
 			}
 		} catch (Exception e) {
-			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+			log.error("Internal error adding configuration", e);
+			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Internal error adding configuration");
 			log.warn("Caught Exception in UploadConfiguration.doPost", e);
 		}
 	}

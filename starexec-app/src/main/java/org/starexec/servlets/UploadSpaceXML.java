@@ -79,7 +79,8 @@ public class UploadSpaceXML extends HttpServlet {
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST);
 			}
 		} catch (Exception e) {
-			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+			log.error("Failed to upload Space XML", e);
+			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to upload Space XML");
 			log.error("Caught Exception in UploadSpaceXML.doPost", e);
 		}
 	}
