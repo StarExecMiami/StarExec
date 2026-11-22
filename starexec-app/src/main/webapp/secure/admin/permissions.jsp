@@ -3,6 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 
 
 <%
@@ -22,7 +23,7 @@
 	}
 %>
 
-<star:template title="${t_user.fullName}"
+<star:template title="${fn:escapeXml(t_user.fullName)}"
                js="admin/permissions, lib/jquery.dataTables.min, lib/jstree.min, util/tree, lib/jquery.heatcolor.0.0.1.min, shared/sharedFunctions"
                css="jstree/default-dark/style.min, common/table, details/shared, explore/common, admin/admin">
 	<div id="explorer">

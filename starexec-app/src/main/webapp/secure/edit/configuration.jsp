@@ -3,6 +3,7 @@
         session="true" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 
 <%
 	try {
@@ -58,7 +59,7 @@
 	}
 %>
 
-<star:template title="Edit ${config.name}" css="edit/configuration"
+<star:template title="Edit ${fn:escapeXml(config.name)}" css="edit/configuration"
                js="lib/jquery.validate.min, edit/configuration">
 	<form id="editConfigForm">
 		<fieldset>
@@ -75,7 +76,7 @@
 					<td>name</td>
 					<td><input id="name" type="text" name="name"
 					           maxlength="${configNameLen}" pattern="${nameRegex}"
-					           value="${config.name}"/></td>
+					           value="${fn:escapeXml(config.name)}"/></td>
 				</tr>
 				<tr>
 					<td>description</td>

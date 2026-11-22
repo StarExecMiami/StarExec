@@ -70,7 +70,7 @@
 						</div>
 					</td>
 					<td>
-						<textarea name="description" rows="4" cols="50" maxlength="200" id="descTextBox" oninput="onDescBoxUpdate()" value="" >${queue.getDesc()}</textarea>
+						<textarea name="description" rows="4" cols="50" maxlength="200" id="descTextBox" oninput="onDescBoxUpdate()" value="" ><c:out value="${queue.getDesc()}"/></textarea>
 					</td>
 				</tr>
 				</tbody>
@@ -89,7 +89,7 @@
 					<tr id="node_${n.id}">
 						<td>
 							<input type="hidden" name="node" value="${n.id}"/>
-							<p>${n.name}</p>
+							<p><c:out value="${n.name}"/></p>
 						</td>
 					</tr>
 				</c:forEach>

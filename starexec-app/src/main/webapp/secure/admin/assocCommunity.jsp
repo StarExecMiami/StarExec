@@ -2,6 +2,7 @@
         import="org.starexec.constants.DB, org.starexec.data.database.Queues, org.starexec.data.database.Spaces, org.starexec.data.to.Queue, org.starexec.data.to.Space, java.util.List" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int id = Integer.parseInt(request.getParameter("id"));
@@ -46,8 +47,8 @@
 				<tr id="queueName" class="noHover">
 					<td class="label"><p>queue name</p></td>
 					<td>
-						<input type="hidden" name="name" value="${queueName}"/>
-						<p>${queueName}</p></td>
+						<input type="hidden" name="name" value="${fn:escapeXml(queueName)}"/>
+						<p><c:out value="${queueName}"/></p></td>
 				</tr>
 				</tbody>
 			</table>
@@ -66,7 +67,7 @@
 						<td>
 							<input type="hidden" name="community"
 							       value="${c.id}"/>
-							<p>${c.name}</p>
+							<p><c:out value="${c.name}"/></p>
 						</td>
 					</tr>
 				</c:forEach>

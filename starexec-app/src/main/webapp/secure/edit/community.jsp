@@ -201,11 +201,11 @@
 			<c:forEach var="proc" items="${bench_proc}">
 				<tr id="proc_${proc.id}">
 					<td>
-						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}
+						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}"><c:out value="${proc.name}"/>
 							<span class="ext-link-icon"></span>
 						</a></td>
-					<td>${proc.description}</td>
-					<td>${proc.fileName}</td>
+					<td><c:out value="${proc.description}"/></td>
+					<td><c:out value="${proc.fileName}"/></td>
 				</tr>
 			</c:forEach>
 			</tbody>
@@ -278,7 +278,7 @@
 					        name="editPreProcess">
 						<option value=-1>none</option>
 						<c:forEach var="proc" items="${pre_proc}">
-							<option value="${proc.id}">${proc.name}</option>
+							<option value="${proc.id}"><c:out value="${proc.name}"/></option>
 						</c:forEach>
 					</select>
 				</td>
@@ -291,7 +291,7 @@
 					        name="editBenchProcess">
 						<option value=-1>none</option>
 						<c:forEach var="proc" items="${bench_proc}">
-							<option value="${proc.id}">${proc.name}</option>
+							<option value="${proc.id}"><c:out value="${proc.name}"/></option>
 						</c:forEach>
 					</select>
 				</td>
@@ -304,7 +304,7 @@
 					        name="editPostProcess">
 						<option value=-1>none</option>
 						<c:forEach var="proc" items="${post_proc}">
-							<option value="${proc.id}">${proc.name}</option>
+							<option value="${proc.id}"><c:out value="${proc.name}"/></option>
 						</c:forEach>
 					</select>
 				</td>
@@ -315,7 +315,7 @@
 					<select id="editUpdateProcess" name="editUpdateProcess">
 						<option value=-1>none</option>
 						<c:forEach var="proc" items="${update_proc}">
-							<option value="${proc.id}">${proc.name}</option>
+							<option value="${proc.id}"><c:out value="${proc.name}"/></option>
 						</c:forEach>
 					</select>
 				</td>
@@ -366,7 +366,7 @@
 			<c:forEach items="${defaultBenchmarks}" var="defaultBench">
 				<tr id="defaultBenchRow">
 					<td>default benchmark</td>
-					<td>${defaultBench.getName()}<span
+					<td><c:out value="${defaultBench.getName()}"/><span
 							class="selectPrim deleteBenchmark"
 							value="${defaultBench.id}">clear benchmark</span>
 					</td>
@@ -379,7 +379,7 @@
 			</tr>
 			<tr id="defaultSolverRow">
 				<td>default solver</td>
-				<td>${defaultSolver} <a href="${defaultSolverLink}"><span
+				<td><c:out value="${defaultSolver}"/> <a href="${defaultSolverLink}"><span
 						class="selectPrim">select solver</span></a></td>
 			</tr>
 			</tbody>
@@ -400,11 +400,11 @@
 			<c:forEach var="proc" items="${pre_proc}">
 				<tr id="proc_${proc.id}">
 					<td>
-						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}
+						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}"><c:out value="${proc.name}"/>
 							<span class="ext-link-icon"></span>
 						</a></td>
-					<td>${proc.description}</td>
-					<td>${proc.fileName}</td>
+					<td><c:out value="${proc.description}"/></td>
+					<td><c:out value="${proc.fileName}"/></td>
 				</tr>
 			</c:forEach>
 			</tbody>
@@ -475,10 +475,10 @@
 			<c:forEach var="proc" items="${post_proc}">
 				<tr id="proc_${proc.id}">
 					<td>
-						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}<span class="ext-link-icon"></span> </a>
+						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}"><c:out value="${proc.name}"/><span class="ext-link-icon"></span> </a>
 					</td>
-					<td>${proc.description}</td>
-					<td>${proc.fileName}</td>
+					<td><c:out value="${proc.description}"/></td>
+					<td><c:out value="${proc.fileName}"/></td>
 				</tr>
 			</c:forEach>
 			</tbody>
@@ -549,10 +549,10 @@
 			<c:forEach var="proc" items="${update_proc}">
 				<tr id="proc_${proc.id}">
 					<td>
-						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}<span class="ext-link-icon"></span> </a>
+						<a href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}"><c:out value="${proc.name}"/><span class="ext-link-icon"></span> </a>
 					</td>
-					<td>${proc.description}</td>
-					<td>${proc.fileName}</td>
+					<td><c:out value="${proc.description}"/></td>
+					<td><c:out value="${proc.fileName}"/></td>
 				</tr>
 			</c:forEach>
 			</tbody>

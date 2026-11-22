@@ -3,6 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int userId = SessionUtil.getUserId(request);
@@ -76,7 +77,7 @@
 	}
 %>
 
-<star:template title="Edit ${bench.name}"
+<star:template title="Edit ${fn:escapeXml(bench.name)}"
                js="lib/jquery.validate.min, edit/benchmark"
                css="edit/shared, edit/benchmark">
 	<form id="editBenchmarkForm">
@@ -95,14 +96,14 @@
 					<td class="label">name</td>
 					<td>
 						<input id="name" type="text" name="name"
-						       value="${bench.name}" pattern="${nameRegex}"
+						       value="${fn:escapeXml(bench.name)}" pattern="${nameRegex}"
 						       maxlength="${benchNameLen}"/>
 					</td>
 				</tr>
 				<tr>
 					<td class="label">description</td>
 					<td><textarea id="description" name="description"
-					              length="${benchDescLen}">${bench.description}</textarea>
+					              length="${benchDescLen}"><c:out value="${bench.description}"/></textarea>
 					</td>
 				</tr>
 				<tr>
@@ -113,10 +114,10 @@
 								<c:choose>
 									<c:when test="${type.id == bench.type.id}">
 										<option selected
-										        value="${type.id}">${type.name}</option>
+										        value="${type.id}"><c:out value="${type.name}"/></option>
 									</c:when>
 									<c:otherwise>
-										<option value="${type.id}">${type.name}</option>
+										<option value="${type.id}"><c:out value="${type.name}"/></option>
 									</c:otherwise>
 								</c:choose>
 							</c:forEach>

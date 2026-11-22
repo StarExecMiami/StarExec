@@ -2,6 +2,7 @@
 		import="org.starexec.constants.DB,org.starexec.constants.R,org.starexec.data.database.Spaces, org.starexec.data.security.GeneralSecurity, org.starexec.data.to.Permission, org.starexec.util.SessionUtil" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		// Validate and parse the space ID parameter
@@ -43,7 +44,7 @@
 	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
 %>
 
-<star:template title="Add Subspace to ${space.name}" css="add/space"
+<star:template title="Add Subspace to ${fn:escapeXml(space.name)}" css="add/space"
                js="lib/jquery.validate.min, add/space">
 	<form id="addForm" method="post" action="${pageContext.request.contextPath}/secure/add/space">
 		<input type="hidden" name="csrfToken" value="${csrfToken}"/>

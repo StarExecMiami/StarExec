@@ -3,6 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int userId = SessionUtil.getUserId(request);
@@ -35,11 +36,11 @@
 	}
 %>
 
-<star:template title="Edit ${queue.name}"
+<star:template title="Edit ${fn:escapeXml(queue.name)}"
                js="lib/jquery.validate.min, edit/queue"
                css="edit/shared, edit/queue">
 	<form id="editQueueForm">
-		<input id="name" type="hidden" name="name" value="${queue.name}">
+		<input id="name" type="hidden" name="name" value="${fn:escapeXml(queue.name)}">
 		<fieldset>
 			<legend>queue details</legend>
 			<table class="shaded">
@@ -69,7 +70,7 @@
 							<span id="descCharRemaining" ></span>
 						</div>
 					</td>
-					<td><textarea name="description" rows="4" cols="50" maxlength="200" id="descTextBox" oninput="onDescBoxUpdate()" value="" >${queue.getDesc()}</textarea>
+					<td><textarea name="description" rows="4" cols="50" maxlength="200" id="descTextBox" oninput="onDescBoxUpdate()" value="" ><c:out value="${queue.getDesc()}"/></textarea>
 				</tr>
 				</tbody>
 			</table>

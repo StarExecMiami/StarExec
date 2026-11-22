@@ -178,7 +178,7 @@
                 <select id="community" name="cm" class="form-select" required aria-required="true">
                   <option value="">Choose a community...</option>
                   <c:forEach var="com" items="${coms}">
-                    <option value="${com.id}">${com.name}</option>
+                    <option value="${com.id}"><c:out value="${com.name}"/></option>
                   </c:forEach>
                 </select>
               </div>

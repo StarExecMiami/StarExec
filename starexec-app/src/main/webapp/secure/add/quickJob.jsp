@@ -4,6 +4,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	StarLogger log = StarLogger.getLogger(CreateJob.class);
 
@@ -117,7 +118,7 @@
 								<option value=""></option>
 							</c:if>
 							<c:forEach var="setting" items="${defaultSettings}">
-								<option value="${setting.getId()}">${setting.name}</option>
+								<option value="${setting.getId()}"><c:out value="${setting.name}"/></option>
 							</c:forEach>
 						</select>
 					</td>
@@ -127,7 +128,7 @@
 					<td class="label"><p>job name</p></td>
 					<td><input length="${jobNameLen}" id="txtJobName" pattern="${namePattern}"
 					           name="name" type="text"
-					           value="${spaceName} <fmt:formatDate pattern="MM-dd-yyyy HH.mm" value="${now}" />"/>
+					           value="${fn:escapeXml(spaceName)} <fmt:formatDate pattern="MM-dd-yyyy HH.mm" value="${now}" />"/>
 					</td>
 				</tr>
 				<tr class="noHover"
@@ -160,7 +161,7 @@
 					<td class="label"><p>benchmark name</p></td>
 					<td><input length="${benchNameLen}" id="txtBenchName" pattern="${namePattern}"
 					           name="benchName" type="text"
-					           value="${spaceName} <fmt:formatDate pattern="MM-dd-yyyy HH.mm" value="${now}" />"/>
+					           value="${fn:escapeXml(spaceName)} <fmt:formatDate pattern="MM-dd-yyyy HH.mm" value="${now}" />"/>
 					</td>
 				</tr>
 				<tr class="noHover"
@@ -178,7 +179,7 @@
 						        name="preProcess">
 							<option value="-1" selected="selected">none</option>
 							<c:forEach var="proc" items="${preProcs}">
-								<option value="${proc.id}">${proc.name}
+								<option value="${proc.id}"><c:out value="${proc.name}"/>
 									(${proc.id})
 								</option>
 							</c:forEach>
@@ -192,7 +193,7 @@
 						<select class="benchProcessSetting" id="benchProcess"
 						        name="benchProcess">
 							<c:forEach var="proc" items="${benchProcs}">
-								<option value="${proc.id}">${proc.name}
+								<option value="${proc.id}"><c:out value="${proc.name}"/>
 									(${proc.id})
 								</option>
 							</c:forEach>
@@ -208,7 +209,7 @@
 						        name="postProcess">
 							<option value="-1" selected="selected">none</option>
 							<c:forEach var="proc" items="${postProcs}">
-								<option value="${proc.id}">${proc.name}
+								<option value="${proc.id}"><c:out value="${proc.name}"/>
 									(${proc.id})
 								</option>
 							</c:forEach>
@@ -227,7 +228,7 @@
 							<c:forEach var="q" items="${queues}">
 								<option cpumax="${q.cpuTimeout}"
 								        wallmax="${q.wallTimeout}"
-								        value="${q.id}">${q.name} (${q.id})
+								        value="${q.id}"><c:out value="${q.name}"/> (${q.id})
 								</option>
 							</c:forEach>
 						</select>

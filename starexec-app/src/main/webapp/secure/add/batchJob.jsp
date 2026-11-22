@@ -2,6 +2,7 @@
         import="org.starexec.data.database.Spaces,org.starexec.data.security.GeneralSecurity, org.starexec.data.to.Permission, org.starexec.util.SessionUtil" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		// Get parent space info for display
@@ -38,7 +39,7 @@
 	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
 %>
 
-<star:template title="Upload XML Configuration for ${space.name}"
+<star:template title="Upload XML Configuration for ${fn:escapeXml(space.name)}"
                css="common/delaySpinner, add/batchJob"
                js="common/delaySpinner, lib/jquery.validate.min, add/batchSpace">
 	<form method="POST" enctype="multipart/form-data"

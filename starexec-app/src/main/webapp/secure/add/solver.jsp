@@ -2,6 +2,7 @@
         import="org.starexec.constants.DB,org.starexec.constants.R,org.starexec.data.database.Settings,org.starexec.data.database.Spaces, org.starexec.data.security.GeneralSecurity, org.starexec.data.to.DefaultSettings, org.starexec.data.to.Permission, org.starexec.util.SessionUtil, java.util.List, org.starexec.app.RESTHelpers" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		if (RESTHelpers.freezePrimitives()) {
@@ -54,7 +55,7 @@
 	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
 %>
 
-<star:template title="Upload Solver to ${space.name}"
+<star:template title="Upload Solver to ${fn:escapeXml(space.name)}"
                css="common/delaySpinner, add/solver"
                js="common/delaySpinner ,lib/jquery.validate.min, add/solver">
 	<span id="defaultProfile" style="display:none"
@@ -163,7 +164,7 @@
 					<td>
 						<select name="setting" id="settingProfile">
 							<c:forEach var="setting" items="${defaultSettings}">
-								<option value="${setting.getId()}">${setting.name}</option>
+								<option value="${setting.getId()}"><c:out value="${setting.name}"/></option>
 							</c:forEach>
 						</select>
 					</td>

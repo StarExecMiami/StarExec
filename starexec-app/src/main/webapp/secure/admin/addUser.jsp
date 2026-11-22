@@ -79,7 +79,7 @@
 						<select id="community" name="cm" class="styled" required>
 							<option value="">-- select community --</option>
 							<c:forEach var="com" items="${coms}">
-								<option value="${com.id}">${com.name}</option>
+								<option value="${com.id}"><c:out value="${com.name}"/></option>
 							</c:forEach>
 						</select>
 					</td>

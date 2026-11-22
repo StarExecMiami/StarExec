@@ -2,6 +2,7 @@
         import="org.starexec.constants.DB,org.starexec.constants.R,org.starexec.data.database.Solvers,org.starexec.data.security.GeneralSecurity, org.starexec.data.to.Solver, org.starexec.util.SessionUtil, org.starexec.app.RESTHelpers" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		if (RESTHelpers.freezePrimitives()) {
@@ -46,7 +47,7 @@
 	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
 %>
 
-<star:template title="Add Configuration to ${solver.name}" css="add/configuration"
+<star:template title="Add Configuration to ${fn:escapeXml(solver.name)}" css="add/configuration"
                js="lib/jquery.validate.min, add/configuration">
 	<form method="POST" enctype="multipart/form-data"
 	      action="${starexecRoot}/secure/upload/configurations?csrfToken=${csrfToken}"

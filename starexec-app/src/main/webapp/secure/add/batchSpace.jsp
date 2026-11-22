@@ -2,6 +2,7 @@
         import="org.starexec.data.database.Spaces,org.starexec.data.security.GeneralSecurity, org.starexec.data.to.Permission, org.starexec.util.SessionUtil" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		// Get parent space info for display
@@ -39,7 +40,7 @@
 %>
 
 <star:template
-		title="upload XML representation of space hierarchy to ${space.name}"
+		title="upload XML representation of space hierarchy to ${fn:escapeXml(space.name)}"
 		css="common/delaySpinner, add/batchSpace"
 		js="common/delaySpinner, lib/jquery.validate.min, add/batchSpace">
 	<form method="POST" enctype="multipart/form-data"

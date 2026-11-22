@@ -312,7 +312,7 @@
 					<option class="settingOption" value="${setting.getId()}"
 					        data-type="${setting.getTypeString()}"
 					        ${isDefault ? 'selected="selected"' : ''}>
-						${setting.name}<c:if test="${isDefault}"> (default)</c:if>
+						<c:out value="${setting.name}"/><c:if test="${isDefault}"> (default)</c:if>
 					</option>
 				</c:forEach>
 			</select>
@@ -336,7 +336,7 @@
 						        name="editPreProcess" default="${defaultPreProcId}">
 							<option value="-1">None</option>
 							<c:forEach var="proc" items="${preProcs}">
-								<option value="${proc.id}">${proc.name}</option>
+								<option value="${proc.id}"><c:out value="${proc.name}"/></option>
 							</c:forEach>
 						</select>
 					</td>
@@ -352,7 +352,7 @@
 						        name="editBenchProcess" default="${defaultBPId}">
 							<option value="-1">None</option>
 							<c:forEach var="proc" items="${benchProcs}">
-								<option value="${proc.id}">${proc.name}</option>
+								<option value="${proc.id}"><c:out value="${proc.name}"/></option>
 							</c:forEach>
 						</select>
 					</td>
@@ -368,7 +368,7 @@
 						        name="editPostProcess" default="${defaultPPId}">
 							<option value="-1">None</option>
 							<c:forEach var="proc" items="${postProcs}">
-								<option value="${proc.id}">${proc.name}</option>
+								<option value="${proc.id}"><c:out value="${proc.name}"/></option>
 							</c:forEach>
 						</select>
 					</td>

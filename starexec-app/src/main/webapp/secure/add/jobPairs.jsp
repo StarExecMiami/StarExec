@@ -2,6 +2,7 @@
         import="org.starexec.data.database.Jobs, org.starexec.data.database.Solvers, org.starexec.data.database.Spaces, org.starexec.data.security.JobSecurity, org.starexec.data.security.ValidatorStatusCode, org.starexec.data.to.Solver, org.starexec.util.SessionUtil, org.starexec.util.Util, java.util.HashSet, java.util.List, java.util.Set" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int jobId = Integer.parseInt(request.getParameter("jobId"));
@@ -127,17 +128,17 @@
 								<br/>
 								<c:forEach var="c" items="${s.configurations}">
 									<c:if test="${configIdSet.contains(c.id)}">
-										<input class="config ${c.name}"
+										<input class="config ${fn:escapeXml(c.name)}"
 										       type="checkbox" name="configs"
 										       value="${c.id}"
-										       title="${c.description}"
-										       checked="checked">${c.name} </input><br />
+										       title="${fn:escapeXml(c.description)}"
+										       checked="checked"><c:out value="${c.name}"/> </input><br />
 									</c:if>
 									<c:if test="${!configIdSet.contains(c.id)}">
-										<input class="config ${c.name}"
+										<input class="config ${fn:escapeXml(c.name)}"
 										       type="checkbox" name="configs"
 										       value="${c.id}"
-										       title="${c.description}">${c.name} </input><br />
+										       title="${fn:escapeXml(c.description)}"><c:out value="${c.name}"/> </input><br />
 									</c:if>
 								</c:forEach>
 							</div>

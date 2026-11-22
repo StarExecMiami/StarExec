@@ -3,6 +3,7 @@
         session="true" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	final StarLogger log = StarLogger.getLogger(getClass());
 
@@ -40,7 +41,7 @@
 	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
 %>
 
-<star:template title="Join ${com.name}" css="add/to_community"
+<star:template title="Join ${fn:escapeXml(com.name)}" css="add/to_community"
                js="lib/jquery.validate.min, add/to_community">
 	<c:if test="${requestExists}">
 		<div class="pending-notice">
@@ -64,7 +65,7 @@
 				<tr>
 					<td class="label">community</td>
 					<td>
-						<p>${com.name}</p>
+						<p><c:out value="${com.name}"/></p>
 					</td>
 				</tr>
 				<tr>
@@ -73,7 +74,7 @@
 				</tr>
 				<tr>
 					<td class="label">notice</td>
-					<td><p>all community leaders of ${com.name} will be e-mailed
+					<td><p>all community leaders of <c:out value="${com.name}"/> will be e-mailed
 						your request to join their community</p></td>
 				</tr>
 				<tr>

@@ -2,6 +2,7 @@
         import="org.starexec.constants.DB, org.starexec.constants.R, org.starexec.data.database.Communities, org.starexec.data.database.Permissions, org.starexec.data.database.Spaces, org.starexec.data.security.GeneralSecurity, org.starexec.data.to.Permission, org.starexec.data.to.Space, org.starexec.util.SessionUtil" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int userId = SessionUtil.getUserId(request);
@@ -91,7 +92,7 @@
 		return;
 	}
 %>
-<star:template title="Edit ${space.name}"
+<star:template title="Edit ${fn:escapeXml(space.name)}"
                js="lib/jquery.validate.min, edit/space"
                css="edit/shared, edit/space">
 	<form id="editSpaceForm">
@@ -109,7 +110,7 @@
 				<tr>
 					<td class="label">space name</td>
 					<td><input id="name" type="text" name="name" pattern="${nameRegex}"
-					           value="${space.name}" length="${nameLength}">
+					           value="${fn:escapeXml(space.name)}" length="${nameLength}">
 					</td>
 				</tr>
 				<tr>

@@ -3,6 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		// Get parent space info for display
@@ -77,7 +78,7 @@
 	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
 %>
 
-<star:template title="Run Job in ${space.name}"
+<star:template title="Run Job in ${fn:escapeXml(space.name)}"
                css="common/delaySpinner, common/table, add/job"
                js="common/defaultSettings, common/delaySpinner, lib/jquery.validate.min, add/job, lib/jquery.dataTables.min, add/sharedSolverConfigTableFunctions">
 	<style>
@@ -169,7 +170,7 @@
 								<option value=""></option>
 							</c:if>
 							<c:forEach var="setting" items="${defaultSettings}">
-								<option value="${setting.getId()}">${setting.name}</option>
+								<option value="${setting.getId()}"><c:out value="${setting.name}"/></option>
 							</c:forEach>
 						</select>
 					</td>
@@ -179,7 +180,7 @@
 					<td class="label"><p>job name</p></td>
 					<td><input length="${jobNameLen}" id="txtJobName" pattern="${namePattern}"
 					           name="name" type="text" maxlength="${JOB_NAME_LEN}"
-					           value="${space.name} <fmt:formatDate pattern="yyyy-MM-dd HH.mm" value="${now}" />"/>
+					           value="${fn:escapeXml(space.name)} <fmt:formatDate pattern="yyyy-MM-dd HH.mm" value="${now}" />"/>
 					</td>
 				</tr>
 				<tr class="noHover"
@@ -197,7 +198,7 @@
 						        name="preProcess">
 							<option value="-1">none</option>
 							<c:forEach var="proc" items="${preProcs}">
-								<option value="${proc.id}">${proc.name}
+								<option value="${proc.id}"><c:out value="${proc.name}"/>
 									(${proc.id})
 								</option>
 							</c:forEach>
@@ -212,7 +213,7 @@
 						        name="postProcess">
 							<option value="-1">none</option>
 							<c:forEach var="proc" items="${postProcs}">
-								<option value="${proc.id}">${proc.name}
+								<option value="${proc.id}"><c:out value="${proc.name}"/>
 									(${proc.id})
 								</option>
 							</c:forEach>
@@ -230,7 +231,7 @@
 							<c:forEach var="q" items="${queues}">
 								<option cpumax="${q.cpuTimeout}"
 								        wallmax="${q.wallTimeout}"
-								        value="${q.id}">${q.name} (${q.id})
+								        value="${q.id}"><c:out value="${q.name}"/> (${q.id})
 								</option>
 							</c:forEach>
 						</select>
@@ -388,7 +389,7 @@
 					<td><input type="hidden" name="runChoice" value="choose"/>choose
 					</td>
 					<td>you will choose which solvers/configurations to run
-						from ${space.name} only.
+						from <c:out value="${space.name}"/> only.
 					</td>
 				</tr>
 				</tbody>
@@ -406,10 +407,10 @@
 				<tbody>
 				<tr id="allBenchInSpace">
 					<td><input type="hidden" name="benchChoice"
-					           value="runAllBenchInSpace"/>all in ${space.name}
+					           value="runAllBenchInSpace"/>all in <c:out value="${space.name}"/>
 					</td>
 					<td>this will run chosen solvers/configurations on all
-						benchmarks in ${space.name}</td>
+						benchmarks in <c:out value="${space.name}"/></td>
 				</tr>
 				<tr id="allBenchInHierarchy">
 					<td><input type="hidden" name="benchChoice"
@@ -422,7 +423,7 @@
 				<tr id="someBenchInSpace">
 					<td><input type="hidden" name="benchChoice"
 					           value="runChosenFromSpace"/>choose
-						in ${space.name}</td>
+						in <c:out value="${space.name}"/></td>
 					<td>this will run chosen solvers/configurations on your
 						selection of benchmarks in the hierarchy
 					</td>
@@ -458,10 +459,10 @@
 								</div>
 								<br/>
 								<c:forEach var="c" items="${s.configurations}">
-									<input class="config ${c.name}"
+									<input class="config ${fn:escapeXml(c.name)}"
 									       type="checkbox" name="configs"
 									       value="${c.id}"
-									       title="${c.description}">${c.name} </input><br />
+									       title="${fn:escapeXml(c.description)}"><c:out value="${c.name}"/> </input><br />
 								</c:forEach>
 							</div>
 						</td>

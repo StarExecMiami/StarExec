@@ -103,4 +103,33 @@ public class JspRequestParameterEscapingTests {
 		assertTrue(matrix.contains("title=\"${fn:escapeXml(job.name)}\""));
 		assertTrue(matrix.contains("<c:out value=\"${matrix.getTruncatedColumnHeader(headerIndex.getIndex())}\"/>"));
 	}
+
+	@Test
+	public void registrationAddAdminAndEditViewsEscapeEntityFields() throws IOException {
+		String registration = new String(
+				Files.readAllBytes(Paths.get("src/main/webapp/public/registration.jsp")),
+				StandardCharsets.UTF_8
+		);
+		assertTrue(registration.contains("<option value=\"${com.id}\"><c:out value=\"${com.name}\"/></option>"));
+
+		String addJob = read("add/job.jsp");
+		assertTrue(addJob.contains("title=\"Run Job in ${fn:escapeXml(space.name)}\""));
+		assertTrue(addJob.contains("<c:out value=\"${c.name}\"/>"));
+		assertFalse(addJob.contains("title=\"${c.description}\""));
+
+		String addUser = read("admin/addUser.jsp");
+		assertTrue(addUser.contains("<option value=\"${com.id}\"><c:out value=\"${com.name}\"/></option>"));
+
+		String permissions = read("admin/permissions.jsp");
+		assertTrue(permissions.contains("title=\"${fn:escapeXml(t_user.fullName)}\""));
+
+		String editBench = read("edit/benchmark.jsp");
+		assertTrue(editBench.contains("title=\"Edit ${fn:escapeXml(bench.name)}\""));
+		assertTrue(editBench.contains("<c:out value=\"${bench.description}\"/>"));
+
+		String editConfig = read("edit/configuration.jsp");
+		assertTrue(editConfig.contains("title=\"Edit ${fn:escapeXml(config.name)}\""));
+		assertFalse(editConfig.contains("<c:out value=\"${config.description}\"/>"));
+		assertFalse(editConfig.contains("<c:out value=\"${contents}\"/>"));
+	}
 }

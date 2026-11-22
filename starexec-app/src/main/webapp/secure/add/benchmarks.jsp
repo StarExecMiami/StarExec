@@ -3,6 +3,7 @@
 <%@page import="org.starexec.data.to.Permission, org.starexec.data.to.Processor, org.starexec.data.to.Space, org.starexec.data.to.enums.ProcessorType, org.starexec.util.SessionUtil, java.util.List" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		if (RESTHelpers.freezePrimitives()) {
@@ -62,7 +63,7 @@
 	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
 %>
 
-<star:template title="Upload Benchmarks to ${space.name}"
+<star:template title="Upload Benchmarks to ${fn:escapeXml(space.name)}"
                css="common/delaySpinner, add/benchmark"
                js="common/delaySpinner, lib/jquery.validate.min, add/benchmarks">
 	<form id="uploadForm" enctype="multipart/form-data" method="POST"
@@ -107,7 +108,7 @@
 							type="radio" name="upMethod" value="dump"/> <label
 							for="radioDump"
 							title="this method discards your archive's directory structure and simply extracts all files and adds them to the space you're uploading to.">place
-						all benchmarks in ${space.name}</label></td>
+						all benchmarks in <c:out value="${space.name}"/></label></td>
 				</tr>
 				<tr id="permRow"
 				    title="if StarExec expands your archive into spaces, the new spaces will have these default permissions">
@@ -165,7 +166,7 @@
 					<td><select id="benchType" name="benchType">
 						<c:forEach var="type" items="${types}">
 							<option ${type.id == defaultProc ? 'selected' : ''}
-									value="${type.id}">${type.name} ${type.id == defaultProc ? '(community default)' : ''}</option>
+									value="${type.id}"><c:out value="${type.name}"/> ${type.id == defaultProc ? '(community default)' : ''}</option>
 						</c:forEach>
 					</select></td>
 				</tr>
@@ -196,8 +197,8 @@
 					<td><select id="depRoot" name="depRoot">
 						<c:forEach var="uSp" items="${userSpaces}">
 							<option value="${uSp.id}"
-							        title="${uSp.description}"
-							        <c:if test="${uSp.id == space.id}">selected="selected"</c:if>>${uSp.name}
+							        title="${fn:escapeXml(uSp.description)}"
+							        <c:if test="${uSp.id == space.id}">selected="selected"</c:if>><c:out value="${uSp.name}"/>
 								(${uSp.id})
 							</option>
 						</c:forEach>

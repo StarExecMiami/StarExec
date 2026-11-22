@@ -56,10 +56,10 @@
 				<c:forEach var="proc" items="${procs}">
 					<tr>
 						<td><input name="pid" type="hidden" value="${proc.id}"/><a
-								href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}">${proc.name}
+								href="${starexecRoot}/secure/edit/processor.jsp?id=${proc.id}"><c:out value="${proc.name}"/>
 							<span class="ext-link-icon"></span>
 						</a></td>
-						<td>${proc.description}</td>
+						<td><c:out value="${proc.description}"/></td>
 					</tr>
 				</c:forEach>
 				</tbody>

@@ -2,6 +2,7 @@
         import="org.starexec.data.database.Jobs, org.starexec.data.security.JobSecurity, org.starexec.data.security.ValidatorStatusCode, org.starexec.data.to.Job, org.starexec.data.to.Status, org.starexec.util.SessionUtil, java.util.List" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int userId = SessionUtil.getUserId(request);
@@ -43,7 +44,7 @@
 		return;
 	}
 %>
-<star:template title="Rerun Pairs for ${job.name}"
+<star:template title="Rerun Pairs for ${fn:escapeXml(job.name)}"
                js="lib/jquery.dataTables.min, edit/resubmitPairs, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min"
                css="edit/resubmitPairs, common/table">
 	<p id="displayJobID" class="accent">id = ${jobId}</p>
@@ -58,7 +59,7 @@
 			<legend>select status</legend>
 			<select id="statusCodeSelect">
 				<c:forEach var="code" items="${codes}">
-					<option n="${code.getCount()}" value="${code.getVal()}">${code.getStatus()}
+					<option n="${code.getCount()}" value="${code.getVal()}"><c:out value="${code.getStatus()}"/>
 						(${code.getVal()})-- ${code.getCount()}</option>
 				</c:forEach>
 			</select>
