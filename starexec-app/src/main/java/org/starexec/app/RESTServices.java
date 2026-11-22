@@ -1183,6 +1183,11 @@ public class RESTServices {
 		responseBody.put("provenance", JobPairs.getManifestProvenanceName(manifest.provenance));
 		responseBody.put("schemaVersion", manifest.schemaVersion);
 		responseBody.put("manifestSha256", manifest.manifestSha256);
+		String manifestPayload = manifest.getVerifiedManifestJson();
+		responseBody.put("manifestBytesAvailable", manifestPayload != null);
+		if (manifestPayload != null) {
+			responseBody.put("manifestJson", manifestPayload);
+		}
 		responseBody.put("finalizedAt", manifest.finalizedAt == null ? null : manifest.finalizedAt.toInstant().toString());
 		responseBody.put("createdAt", manifest.createdAt == null ? null : manifest.createdAt.toInstant().toString());
 		responseBody.put("updatedAt", manifest.updatedAt == null ? null : manifest.updatedAt.toInstant().toString());

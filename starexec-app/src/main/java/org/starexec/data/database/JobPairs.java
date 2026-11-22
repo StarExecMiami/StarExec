@@ -3,6 +3,11 @@ package org.starexec.data.database;
 import com.google.common.collect.ImmutableSet;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import java.io.File;
 import java.io.IOException;
 import java.io.StringReader;
@@ -53,19 +58,21 @@ public class JobPairs {
         public final int provenance;
         public final int schemaVersion;
         public final String manifestJson;
+        private final String manifestPayload;
         public final String manifestSha256;
         public final Integer sourceStatusCode;
         public final Timestamp createdAt;
         public final Timestamp updatedAt;
         public final Timestamp finalizedAt;
 
-        private PairReproManifestResult(
+        PairReproManifestResult(
             int pairId,
             int attemptNo,
             int state,
             int provenance,
             int schemaVersion,
             String manifestJson,
+            String manifestPayload,
             String manifestSha256,
             Integer sourceStatusCode,
             Timestamp createdAt,
@@ -78,11 +85,20 @@ public class JobPairs {
             this.provenance = provenance;
             this.schemaVersion = schemaVersion;
             this.manifestJson = manifestJson;
+            this.manifestPayload = manifestPayload;
             this.manifestSha256 = manifestSha256;
             this.sourceStatusCode = sourceStatusCode;
             this.createdAt = createdAt;
             this.updatedAt = updatedAt;
             this.finalizedAt = finalizedAt;
+        }
+
+        /** JSON whose UTF-8 bytes match the digest, or null when they cannot be recovered. */
+        public String getVerifiedManifestJson() {
+            if (matchesManifestPayload(manifestPayload, manifestJson, manifestSha256)) {
+                return manifestPayload;
+            }
+            return recoverLegacyManifestPayload(manifestJson, manifestSha256);
         }
     }
 
@@ -4528,10 +4544,10 @@ public class JobPairs {
             String digest = getSha256(manifestJson);
 
             ps = con.prepareStatement(
-                "INSERT INTO starexec.job_pair_repro_manifests(pair_id, attempt_no, state, provenance, schema_version, manifest_json, manifest_sha256, created_at, updated_at) " +
-                    "VALUES (?, ?, ?, ?, 1, ?::jsonb, ?, NOW(), NOW()) " +
+                "INSERT INTO starexec.job_pair_repro_manifests(pair_id, attempt_no, state, provenance, schema_version, manifest_json, manifest_payload, manifest_sha256, created_at, updated_at) " +
+                    "VALUES (?, ?, ?, ?, 1, ?::jsonb, ?, ?, NOW(), NOW()) " +
                     "ON CONFLICT (pair_id, attempt_no) DO UPDATE SET manifest_json = EXCLUDED.manifest_json, " +
-                    "manifest_sha256 = EXCLUDED.manifest_sha256, updated_at = NOW() " +
+                    "manifest_payload = EXCLUDED.manifest_payload, manifest_sha256 = EXCLUDED.manifest_sha256, updated_at = NOW() " +
                     "WHERE starexec.job_pair_repro_manifests.state IN (0, 1, 4)"
             );
             ps.setInt(1, pairId);
@@ -4539,7 +4555,8 @@ public class JobPairs {
             ps.setInt(3, MANIFEST_STATE_COLLECTING);
             ps.setInt(4, MANIFEST_PROVENANCE_LIVE);
             ps.setString(5, manifestJson);
-            ps.setString(6, digest);
+            ps.setString(6, manifestJson);
+            ps.setString(7, digest);
             ps.executeUpdate();
 
             Common.endTransaction(con);
@@ -4600,25 +4617,26 @@ public class JobPairs {
 
             updatePs = con.prepareStatement(
                 "UPDATE starexec.job_pair_repro_manifests SET state=?, provenance=?, schema_version=1, " +
-                    "manifest_json=?::jsonb, manifest_sha256=?, source_status_code=?, finalized_at=NOW(), updated_at=NOW() " +
+                    "manifest_json=?::jsonb, manifest_payload=?, manifest_sha256=?, source_status_code=?, finalized_at=NOW(), updated_at=NOW() " +
                     "WHERE pair_id=? AND attempt_no=? AND state IN (0,1,4)"
             );
             updatePs.setInt(1, MANIFEST_STATE_FINAL);
             updatePs.setInt(2, MANIFEST_PROVENANCE_LIVE);
             updatePs.setString(3, manifestJson);
-            updatePs.setString(4, digest);
+            updatePs.setString(4, manifestJson);
+            updatePs.setString(5, digest);
             if (sourceStatusCode == null) {
-                updatePs.setNull(5, Types.INTEGER);
+                updatePs.setNull(6, Types.INTEGER);
             } else {
-                updatePs.setInt(5, sourceStatusCode);
+                updatePs.setInt(6, sourceStatusCode);
             }
-            updatePs.setInt(6, pairId);
-            updatePs.setInt(7, attemptNo);
+            updatePs.setInt(7, pairId);
+            updatePs.setInt(8, attemptNo);
             int updated = updatePs.executeUpdate();
 
             if (updated == 0) {
                 selectPs = con.prepareStatement(
-                    "SELECT state, manifest_sha256 FROM starexec.job_pair_repro_manifests WHERE pair_id=? AND attempt_no=?"
+                    "SELECT state, manifest_json::text AS manifest_json FROM starexec.job_pair_repro_manifests WHERE pair_id=? AND attempt_no=?"
                 );
                 selectPs.setInt(1, pairId);
                 selectPs.setInt(2, attemptNo);
@@ -4628,8 +4646,8 @@ public class JobPairs {
                     return false;
                 }
                 int state = rs.getInt("state");
-                String currentDigest = rs.getString("manifest_sha256");
-                if ((state == MANIFEST_STATE_FINAL || state == MANIFEST_STATE_FINAL_DERIVED) && digest.equals(currentDigest)) {
+                if ((state == MANIFEST_STATE_FINAL || state == MANIFEST_STATE_FINAL_DERIVED)
+                        && sameManifestContent(rs.getString("manifest_json"), manifestJson)) {
                     Common.endTransaction(con);
                     return true;
                 }
@@ -4708,7 +4726,7 @@ public class JobPairs {
         try {
             ps = con.prepareStatement(
                 "SELECT pair_id, attempt_no, state, provenance, schema_version, manifest_json::text AS manifest_json, " +
-                    "manifest_sha256, source_status_code, created_at, updated_at, finalized_at " +
+                    "manifest_payload, manifest_sha256, source_status_code, created_at, updated_at, finalized_at " +
                     "FROM starexec.job_pair_repro_manifests " +
                     "WHERE pair_id=? AND state IN (?, ?) ORDER BY attempt_no DESC LIMIT 1"
             );
@@ -4727,6 +4745,7 @@ public class JobPairs {
                 rs.getInt("provenance"),
                 rs.getInt("schema_version"),
                 rs.getString("manifest_json"),
+                rs.getString("manifest_payload"),
                 rs.getString("manifest_sha256"),
                 sourceStatusCode,
                 rs.getTimestamp("created_at"),
@@ -4751,19 +4770,20 @@ public class JobPairs {
 
             ps = con.prepareStatement(
                 "INSERT INTO starexec.job_pair_repro_manifests(pair_id, attempt_no, state, provenance, schema_version, " +
-                    "manifest_json, manifest_sha256, source_status_code, created_at, updated_at, finalized_at) " +
-                    "VALUES (?, ?, ?, ?, 1, ?::jsonb, ?, ?, NOW(), NOW(), NOW()) ON CONFLICT (pair_id, attempt_no) DO NOTHING"
+                    "manifest_json, manifest_payload, manifest_sha256, source_status_code, created_at, updated_at, finalized_at) " +
+                    "VALUES (?, ?, ?, ?, 1, ?::jsonb, ?, ?, ?, NOW(), NOW(), NOW()) ON CONFLICT (pair_id, attempt_no) DO NOTHING"
             );
             ps.setInt(1, pairId);
             ps.setInt(2, attemptNo);
             ps.setInt(3, MANIFEST_STATE_FINAL_DERIVED);
             ps.setInt(4, MANIFEST_PROVENANCE_DERIVED_LEGACY);
             ps.setString(5, manifestJson);
-            ps.setString(6, digest);
+            ps.setString(6, manifestJson);
+            ps.setString(7, digest);
             if (sourceStatusCode == null) {
-                ps.setNull(7, Types.INTEGER);
+                ps.setNull(8, Types.INTEGER);
             } else {
-                ps.setInt(7, sourceStatusCode);
+                ps.setInt(8, sourceStatusCode);
             }
             ps.executeUpdate();
             return true;
@@ -4778,7 +4798,7 @@ public class JobPairs {
         try {
             ps = con.prepareStatement(
                 "SELECT pair_id, attempt_no, state, provenance, schema_version, manifest_json::text AS manifest_json, " +
-                    "manifest_sha256, source_status_code, created_at, updated_at, finalized_at " +
+                    "manifest_payload, manifest_sha256, source_status_code, created_at, updated_at, finalized_at " +
                     "FROM starexec.job_pair_repro_manifests WHERE pair_id=? AND attempt_no=?"
             );
             ps.setInt(1, pairId);
@@ -4795,6 +4815,7 @@ public class JobPairs {
                 rs.getInt("provenance"),
                 rs.getInt("schema_version"),
                 rs.getString("manifest_json"),
+                rs.getString("manifest_payload"),
                 rs.getString("manifest_sha256"),
                 sourceStatusCode,
                 rs.getTimestamp("created_at"),
@@ -4902,6 +4923,103 @@ public class JobPairs {
         }
         manifest.put("warnings", warnings);
         return gson.toJson(manifest);
+    }
+
+    static boolean sameManifestContent(String stored, String requested) {
+        try {
+            JsonObject left = JsonParser.parseString(stored).getAsJsonObject();
+            JsonObject right = JsonParser.parseString(requested).getAsJsonObject();
+            left.getAsJsonObject("provenance").remove("generatedAt");
+            right.getAsJsonObject("provenance").remove("generatedAt");
+            return sameJsonContent(left, right);
+        } catch (RuntimeException invalid) {
+            return false;
+        }
+    }
+
+    private static boolean matchesManifestPayload(String payload, String document, String digest) {
+        if (payload == null || digest == null || !digest.equals(getSha256(payload))) {
+            return false;
+        }
+        try {
+            return sameJsonContent(JsonParser.parseString(payload), JsonParser.parseString(document));
+        } catch (RuntimeException invalid) {
+            return false;
+        }
+    }
+
+    /** Compare parsed values without rounding large JSON numbers through double. */
+    private static boolean sameJsonContent(JsonElement left, JsonElement right) {
+        if (left.isJsonNull() || right.isJsonNull()) {
+            return left.isJsonNull() && right.isJsonNull();
+        }
+        if (left.isJsonPrimitive() && right.isJsonPrimitive()) {
+            JsonPrimitive a = left.getAsJsonPrimitive();
+            JsonPrimitive b = right.getAsJsonPrimitive();
+            if (a.isNumber() && b.isNumber()) {
+                return a.getAsBigDecimal().compareTo(b.getAsBigDecimal()) == 0;
+            }
+            return a.equals(b);
+        }
+        if (left.isJsonArray() && right.isJsonArray()) {
+            JsonArray a = left.getAsJsonArray();
+            JsonArray b = right.getAsJsonArray();
+            if (a.size() != b.size()) return false;
+            for (int i = 0; i < a.size(); i++) {
+                if (!sameJsonContent(a.get(i), b.get(i))) return false;
+            }
+            return true;
+        }
+        if (left.isJsonObject() && right.isJsonObject()) {
+            JsonObject a = left.getAsJsonObject();
+            JsonObject b = right.getAsJsonObject();
+            if (!a.keySet().equals(b.keySet())) return false;
+            for (Entry<String, JsonElement> entry : a.entrySet()) {
+                if (!sameJsonContent(entry.getValue(), b.get(entry.getKey()))) return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /** Recover only the known v1 producer order, and never substitute a new digest. */
+    private static String recoverLegacyManifestPayload(String document, String digest) {
+        if (matchesManifestPayload(document, document, digest)) {
+            return document;
+        }
+        try {
+            JsonObject source = JsonParser.parseString(document).getAsJsonObject();
+            if (source.get("schemaVersion").getAsInt() != 1) {
+                return null;
+            }
+            JsonObject ordered = copyManifestFields(source, "manifestVersion", "schemaVersion",
+                    "pairId", "attemptNo", "jobId", "provenance", "execution", "inputs", "warnings");
+            ordered.add("provenance", copyManifestFields(source.getAsJsonObject("provenance"),
+                    "type", "generatedAt"));
+            ordered.add("execution", copyManifestFields(source.getAsJsonObject("execution"),
+                    "backendType", "pairStatusCode", "finalized", "sourceStatusCode",
+                    "benchmarkingFramework", "cpuTimeout", "wallclockTimeout", "maxMemory"));
+            ordered.add("inputs", copyManifestFields(source.getAsJsonObject("inputs"),
+                    "benchId", "benchName", "solverId", "solverName", "configId", "configName"));
+            String candidate = gson.toJson(ordered);
+            return matchesManifestPayload(candidate, document, digest) ? candidate : null;
+        } catch (RuntimeException unavailable) {
+            return null;
+        }
+    }
+
+    private static JsonObject copyManifestFields(JsonObject source, String... names) {
+        Set<String> known = new HashSet<>(Arrays.asList(names));
+        if (!known.containsAll(source.keySet())) {
+            throw new IllegalArgumentException("Unknown historical manifest fields");
+        }
+        JsonObject ordered = new JsonObject();
+        for (String name : names) {
+            if (source.has(name)) {
+                ordered.add(name, source.get(name));
+            }
+        }
+        return ordered;
     }
 
     private static String getSha256(String raw) {
