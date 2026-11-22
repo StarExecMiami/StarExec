@@ -31,6 +31,7 @@ var checkboxEnabled = {
 var jobId;
 var jobSpaceId;
 var stageNumber;
+var matrixTable = null;
 
 // =============================================================================
 // ENTRY POINT
@@ -44,21 +45,27 @@ $(document).ready(function() {
 
 	registerCheckboxEventHandlers();
 
-	var table = $('#jobMatrix').dataTable({
-		'bSort': false,
-		'scrollY': '220px',
-		'scrollX': '100%',
-		'scrollCollapse': true,
-		'paging': false
-	});
+	var $jobMatrix = $('#jobMatrix');
+	if ($jobMatrix.length) {
+		matrixTable = $jobMatrix.dataTable({
+			'bSort': false,
+			'scrollY': 'calc(100vh - 280px)',
+			'scrollX': '100%',
+			'scrollCollapse': true,
+			'paging': false
+		});
 
-	moveSearchControlToControls();
+		moveSearchControlToControls();
 
-	new $.fn.dataTable.FixedColumns(table);
+		new $.fn.dataTable.FixedColumns(matrixTable);
 
-	$(window).resize(function() {
-		table.fnDraw();
-	});
+		$(window).on('resize.jobMatrix', $.debounce(150, function() {
+			matrixTable.api().columns.adjust().draw(false);
+		}));
+
+		// Start polling for live updates
+		getFinishedJobPairsFromServer(false, matrixTable);
+	}
 
 	// Stage navigation
 	$('#selectStageButton').click(function() {
@@ -84,9 +91,6 @@ $(document).ready(function() {
 			$('#selectStageButton').click();
 		}
 	});
-
-	// Start polling for live updates
-	getFinishedJobPairsFromServer(false, table);
 });
 
 /**
@@ -128,18 +132,21 @@ function getFinishedJobPairsFromServer(done, dataTable) {
 function updateMatrix(jobPairData, dataTable) {
 	for (var key in jobPairData) {
 		if (jobPairData.hasOwnProperty(key)) {
-			var selector = '#' + key;
+			var $cell = $(document.getElementById(key));
+			if (!$cell.length) {
+				continue;
+			}
 			var pair = jobPairData[key];
 
-			$(selector + ' .wallclock').text(pair.wallclock);
-			$(selector + ' .memUsage').text(pair.memUsage);
-			$(selector + ' .cpuTime').text(pair.cpuTime);
-			$(selector).removeClass('incomplete');
-			$(selector).addClass(pair.status);
-			$(selector).attr('data-status', pair.status);
+			$cell.find('.wallclock').text(pair.wallclock);
+			$cell.find('.memUsage').text(pair.memUsage);
+			$cell.find('.cpuTime').text(pair.cpuTime);
+			$cell.removeClass('incomplete');
+			$cell.addClass(pair.status);
+			$cell.attr('data-status', pair.status);
 
 			// Update tooltip with new values
-			$(selector).attr('title',
+			$cell.attr('title',
 				'Wallclock: ' + pair.wallclock + 's | CPU: ' +
 				pair.cpuTime + 's | Memory: ' + pair.memUsage
 			);
@@ -190,6 +197,9 @@ function updateDividers() {
 function toggleCheckbox(checkboxClass) {
 	$(classControlledByCheckbox[checkboxClass]).toggle();
 	checkboxEnabled[checkboxClass] = !checkboxEnabled[checkboxClass];
+	if (matrixTable) {
+		matrixTable.api().columns.adjust();
+	}
 }
 
 /**

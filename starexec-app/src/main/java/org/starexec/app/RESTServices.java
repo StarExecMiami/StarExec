@@ -2341,10 +2341,6 @@ public class RESTServices {
 				String benchSolverConfigIdentifier = String.format(R.MATRIX_ELEMENT_ID_FORMAT, benchmark.getName(),
 						benchmark.getId(),
 						solver.getName(), solver.getId(), configuration.getName(), configuration.getId());
-				// Make it so the identifiers can be used in Jquery selectors.
-				benchSolverConfigIdentifier = benchSolverConfigIdentifier.replace("#", "\\#");
-				benchSolverConfigIdentifier = benchSolverConfigIdentifier.replace(".", "\\.");
-				benchSolverConfigIdentifier = benchSolverConfigIdentifier.replace(":", "\\:");
 				// Get the element associated with the job pair.
 				String status = Jobs.getStatusFromStage(stage);
 				String cpuTime = String.valueOf(stage.getCpuTime());

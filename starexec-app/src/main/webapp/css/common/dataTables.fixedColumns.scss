@@ -1,3 +1,6 @@
+@use "../global/colors" as c;
+
+// FixedColumns v3 selectors (kept for backward compatibility)
 table.DTFC_Cloned thead,
 table.DTFC_Cloned tfoot {
 	background-color: white;
@@ -16,4 +19,24 @@ div.DTFC_RightWrapper table.dataTable {
 div.DTFC_LeftWrapper table.dataTable.no-footer,
 div.DTFC_RightWrapper table.dataTable.no-footer {
 	border-bottom: none;
+}
+
+// FixedColumns v4 selectors (.dtfc-*)
+.dtfc-fixed-left,
+.dtfc-fixed-right {
+	background-color: c.$foreground-color;
+	z-index: 2;
+}
+
+thead .dtfc-fixed-left,
+thead .dtfc-fixed-right {
+	background-color: c.$background-color;
+	z-index: 3;
+}
+
+.dtfc-left-top-blocker,
+.dtfc-right-top-blocker,
+.dtfc-left-bottom-blocker,
+.dtfc-right-bottom-blocker {
+	background-color: transparent !important;
 }
