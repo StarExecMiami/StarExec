@@ -1629,28 +1629,8 @@ function userCanDeleteAll(dataTable) {
 	return allMatch;
 }
 
-/**
- * Updates a table by removing selected rows and updating the table's legend to match the new table size.
- *
- * @param dataTable the dataTable to update
- * @author Todd Elvers
- */
+// Reload from the server after removal. Reset paging because the last page
+// may no longer exist and use the returned total for the fieldset count.
 function updateTable(dataTable) {
-	var rowsToRemove = $(dataTable)
-	.children('tbody')
-	.children('tr.row_selected');
-	var rowsRemaining = $(dataTable)
-	.children('tbody')
-	.children(':not(tr.row_selected)');
-	$.each(rowsToRemove, function(i, row) {
-		dataTable.fnDeleteRow(row);
-	});
-	// closest(), not a parent() chain: the table sits inside wrapper divs.
-	$(dataTable)
-	.closest('fieldset')
-	.children('legend')
-	.children('span:first-child')
-	.text(rowsRemaining.length);
-
-	log('table updated. rows removed: ' + rowsToRemove.length + ' rows remaining: ' + rowsRemaining.length);
+	dataTable.api().draw();
 }
