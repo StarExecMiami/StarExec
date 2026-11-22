@@ -34,6 +34,20 @@ postgres:
     enabled: true
     storageClass: starexec-nfs-rwo
     size: 20Gi
+  # PGDATA already exists on the persistent volume, so runtime GUC tuning is passed as container args.
+  extraArgs:
+    - "-c"
+    - "shared_buffers=1GB"
+    - "-c"
+    - "effective_cache_size=3GB"
+    - "-c"
+    - "work_mem=16MB"
+    - "-c"
+    - "maintenance_work_mem=256MB"
+    - "-c"
+    - "jit=off"
+    - "-c"
+    - "max_parallel_workers_per_gather=1"
 
 backend:
   type: kubernetes
@@ -126,6 +140,13 @@ resources:
     limits:
       cpu: "4"
       memory: "8Gi"
+  postgres:
+    requests:
+      memory: "2Gi"
+      cpu: "500m"
+    limits:
+      memory: "4Gi"
+      cpu: "2"
 
 web:
   address: "quokka.acorn.miami.edu"

@@ -101,6 +101,8 @@ postgres:
     repository: docker.io/library/postgres
     pullPolicy: IfNotPresent
     tag: "15"
+  # Optional extra CLI arguments passed to the postgres:15 container (e.g. -c shared_buffers=1GB).
+  extraArgs: []
 
   # Connection configuration
   host: localhost
