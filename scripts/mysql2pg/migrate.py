@@ -410,7 +410,13 @@ def run_migration(
 
     try:
         if clear_seed:
-            clear_target_tables(pg_conn, schema, planned_tables)
+            tier4_tables = (
+                [dict(t, tier=4) for t in manifest.get("tiers", {}).get(4, {}).get("tables", [])]
+                if not any(t.get("tier") == 4 for t in planned_tables)
+                else []
+            )
+            # Clear Tier 4 telemetry/ephemeral tables first (analytics_users/logins use ON DELETE RESTRICT to users).
+            clear_target_tables(pg_conn, schema, list(planned_tables) + tier4_tables)
         elif resume_from:
             # Clear the resume boundary and all remaining tables so no prior partial rows collide.
             clear_target_tables(pg_conn, schema, tables_to_load)
