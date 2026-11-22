@@ -7,19 +7,23 @@ import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import org.starexec.constants.R;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Jobs;
+import org.starexec.data.database.Permissions;
 import org.starexec.data.database.Processors;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.BenchmarkSecurity;
+import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.security.JobSecurity;
 import org.starexec.data.security.ProcessorSecurity;
 import org.starexec.data.security.SpaceSecurity;
 import org.starexec.data.security.UserSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.Benchmark;
+import org.starexec.data.to.Permission;
 import org.starexec.data.to.Processor;
 import org.starexec.data.to.Space;
 import org.starexec.data.to.User;
@@ -536,6 +540,57 @@ public class RESTServicesTest {
 			assertFalse(msg.contains("23502"), "SQLSTATE must not reach the client");
 			assertFalse("User not found.".equals(msg),
 					"must not be classified as a missing user");
+		}
+	}
+
+	@Test
+	public void getUserSpacePermissionsChecksCallerPrivilegesOnCommunityAndDeniesOutsiders() {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Space community = new Space();
+		community.setId(5);
+		Permission adminPerm = new Permission(true);
+		adminPerm.setLeader(true);
+		List<Space> communities = java.util.Collections.singletonList(community);
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<Communities> communitiesDb = Mockito.mockStatic(Communities.class);
+			 MockedStatic<GeneralSecurity> generalSecurity = Mockito.mockStatic(GeneralSecurity.class);
+			 MockedStatic<Permissions> permissions = Mockito.mockStatic(Permissions.class)) {
+			communitiesDb.when(Communities::getAll).thenReturn(communities);
+			permissions.when(() -> Permissions.get(77, 5)).thenReturn(adminPerm);
+			generalSecurity.when(() -> GeneralSecurity.hasAdminWritePrivileges(1)).thenReturn(true);
+			generalSecurity.when(() -> GeneralSecurity.hasAdminWritePrivileges(42)).thenReturn(false);
+
+			// Non-admin caller querying an admin's community permissions must be denied
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(42);
+			ValidatorStatusCode denied = gson.fromJson(
+					new RESTServices().getUserSpacePermissions(5, 1, request),
+					ValidatorStatusCode.class);
+			assertFalse(denied.isSuccess());
+
+			// Public/unauthenticated caller querying public user permissions must be denied
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(R.PUBLIC_USER_ID);
+			ValidatorStatusCode publicDenied = gson.fromJson(
+					new RESTServices().getUserSpacePermissions(9, R.PUBLIC_USER_ID, request),
+					ValidatorStatusCode.class);
+			assertFalse(publicDenied.isSuccess());
+
+			// Non-leader querying another user's non-community space permissions must receive JSON error, not null
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(42);
+			sessionUtil.when(() -> SessionUtil.getPermission(request, 9)).thenReturn(new Permission(false));
+			ValidatorStatusCode spaceDenied = gson.fromJson(
+					new RESTServices().getUserSpacePermissions(9, 77, request),
+					ValidatorStatusCode.class);
+			assertFalse(spaceDenied.isSuccess());
+
+			permissions.verify(() -> Permissions.get(Mockito.anyInt(), Mockito.anyInt()), Mockito.never());
+
+			// Admin caller can inspect another user's community permissions
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(1);
+			Permission fetched = gson.fromJson(
+					new RESTServices().getUserSpacePermissions(5, 77, request),
+					Permission.class);
+			assertTrue(fetched.isLeader());
 		}
 	}
 }

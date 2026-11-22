@@ -3469,21 +3469,27 @@ public class RESTServices {
 	@Produces("application/json")
 	public String getUserSpacePermissions(@PathParam("spaceId") int spaceId, @PathParam("userId") int userId,
 			@Context HttpServletRequest request) {
-		Permission p = SessionUtil.getPermission(request, spaceId);
+		int callerId = SessionUtil.getUserId(request);
+		if (callerId == R.PUBLIC_USER_ID || callerId <= 0) {
+			return gson.toJson(ERROR_INVALID_PERMISSIONS);
+		}
 		List<Space> communities = Communities.getAll();
-		for (Space s : communities) {
-			if (spaceId == s.getId()) {
-				if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
-					return gson.toJson(Permissions.get(userId, spaceId));
+		if (communities != null) {
+			for (Space s : communities) {
+				if (spaceId == s.getId()) {
+					if (callerId == userId || GeneralSecurity.hasAdminWritePrivileges(callerId)) {
+						return gson.toJson(Permissions.get(userId, spaceId));
+					}
+					return gson.toJson(ERROR_INVALID_PERMISSIONS);
 				}
-				return gson.toJson(ERROR_INVALID_PERMISSIONS);
 			}
 		}
 
-		if (p != null && (SessionUtil.getUserId(request) == userId || p.isLeader())) {
+		Permission p = SessionUtil.getPermission(request, spaceId);
+		if (p != null && (callerId == userId || p.isLeader())) {
 			return gson.toJson(Permissions.get(userId, spaceId));
 		}
-		return null;
+		return gson.toJson(ERROR_INVALID_PERMISSIONS);
 	}
 
 	/**
