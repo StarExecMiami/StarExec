@@ -79,8 +79,8 @@ public class RebuildSolver extends HttpServlet {
 		}
 
 		List<Integer> spaces = Solvers.getAssociatedSpaceIds(solverId);
-		if (spaces == null) {
-			log.error(method, "spaces == null");
+		if (spaces == null || spaces.isEmpty()) {
+			log.error(method, "Solver has no associated spaces for solverId=" + solverId);
 			response.setStatus(404);
 			response.getWriter().write(
 				gson.toJson(new ValidatorStatusCode(false, "Cannot find solver's parent space"))
