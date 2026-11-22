@@ -52,6 +52,10 @@ public class UploadBenchmark extends HttpServlet {
 	private static final String FILE_URL = "url";
 	private static final String FILE_GIT = "git";
 	private static final String FILE_LOC = "localOrURLOrGit";
+	/** Why a Git source is refused; StarExecCommand reads this from the status cookie (#139). */
+	static final String UNSUPPORTED_GIT_SOURCE =
+			"Uploading benchmarks from a Git repository is not supported;"
+					+ " upload a .zip, .tar, or .tgz archive or provide an archive URL";
 	private static final String addSolver = "addSolver";
 	private static final String addBench = "addBench";
 	private static final String addUser = "addUser";
@@ -190,8 +194,8 @@ public class UploadBenchmark extends HttpServlet {
 				throw new IllegalArgumentException(Util.ARCHIVE_NAME_REQUIRED);
 			}
 		} else {
-			// Git uploads are the last step of #139 and still need a design decision.
-			throw new UnsupportedOperationException("Git uploads not yet supported in async mode");
+			// isRequestValid refuses Git and any unknown source with HTTP 400 before this is reached (#139).
+			throw new IllegalStateException("Unsupported benchmark upload source: " + localOrUrlOrGit);
 		}
 
 		// Nothing else would ever read or delete the directory of an upload that is not queued, so
@@ -903,7 +907,7 @@ public class UploadBenchmark extends HttpServlet {
 			// Check file location selection
 			String fileLoc = (String) form.get(FILE_LOC);
 			if (fileLoc == null || fileLoc.isEmpty()) {
-				return new ValidatorStatusCode(false, "Please select a file source (local, URL, or Git)");
+				return new ValidatorStatusCode(false, "Please select a file source (local or URL)");
 			}
 
 			String fileName = null;
@@ -929,17 +933,10 @@ public class UploadBenchmark extends HttpServlet {
 				}
 			}
 			else if (fileLoc.equals("Git")) {
-				fileName = (String) form.get(FILE_GIT);
-				String gitProblem = gitUrlProblem(fileName);
-				if (gitProblem != null) {
-					return new ValidatorStatusCode(false, gitProblem);
-				}
-				if (!Validator.isValidGitType(fileName.trim())) {
-					return new ValidatorStatusCode(false, "Uploaded Git URLs need to be .git");
-				}
+				return new ValidatorStatusCode(false, UNSUPPORTED_GIT_SOURCE);
 			}
 			else {
-				return new ValidatorStatusCode(false, "Please select a file source (local, URL, or Git)");
+				return new ValidatorStatusCode(false, "Please select a file source (local or URL)");
 			}
 
 			// Validate space parameter for permission check

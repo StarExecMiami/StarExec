@@ -84,18 +84,14 @@
 					<td>local file<input type="radio" id="radioLocal"
 					                     name="localOrURLOrGit" value="local" checked="checked"/>
               URL<input type=radio id="radioURL" name="localOrURLOrGit" value="URL"/>
-               Git <input type=radio id="radioGit"
-						                   name="localOrURLOrGit" value="Git"/>
           </td>
 				</tr>
-				<tr title="select the archive file, URL, or Git containing your benchmarks">
+				<tr title="select the archive file or URL containing your benchmarks">
 					<td><label for="typeFile">benchmarks</label></td>
 					<td><input name="benchFile" type="file"
 					           id="benchFile"/>
               <input name="url" type="text"
-					           id="fileURL" style="display:none"/>
-               <input name="git" type="text"
- 					           id="gitURL" style="display:none"/> </td>
+					           id="fileURL" style="display:none"/> </td>
 				</tr>
 				<tr>
 					<td class="label"><p>upload method</p></td>

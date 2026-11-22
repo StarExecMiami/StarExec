@@ -542,57 +542,22 @@ function attachFormValidation() {
 	$("#radioLocal").on("change", function() {
 		if ($("#radioLocal").is(":checked")) {
 			$("#fileURL").stop(true, true, true);
-			$("#gitURL").stop(true, true, true);
 			$("#fileURL").fadeOut('fast', function() {
 				if ($("#radioLocal").is(":checked")) {
 					$("#benchFile").fadeIn('fast');
 					$("#uploadForm").validate().element("#fileURL");
 				}
 			});
-			$("#gitURL").fadeOut('fast', function() {
-				if ($("#radioLocal").is(":checked")) {
-					$("#benchFile").fadeIn('fast');
-					$("#uploadForm").validate().element("#gitURL");
-				}
-			});
-
 		}
 	});
 
 	$("#radioURL").on("change", function() {
 		if ($("#radioURL").is(":checked")) {
 			$("#benchFile").stop(true, true, true);
-			$("#gitURL").stop(true, true, true);
 			$("#benchFile").fadeOut('fast', function() {
 				if ($("#radioURL").is(":checked")) {
 					$("#fileURL").fadeIn('fast');
 					$("#uploadForm").validate().element("#benchFile");
-				}
-			});
-			$("#gitURL").fadeOut('fast', function() {
-				if ($("#radioURL").is(":checked")) {
-					$("#fileURL").fadeIn('fast');
-					$("#uploadForm").validate().element("#gitURL");
-				}
-			});
-
-		}
-	});
-	//button for git
-	$("#radioGit").on("change", function() {
-		if ($("#radioGit").is(":checked")) {
-			$("#fileURL").stop(true, true, true);
-			$("#benchFile").stop(true, true, true);
-			$("#benchFile").fadeOut('fast', function() {
-				if ($("#radioGit").is(":checked")) {
-					$("#gitURL").fadeIn('fast');
-					$("#uploadForm").validate().element("#benchFile");
-				}
-			});
-			$("#fileURL").fadeOut('fast', function() {
-				if ($("#radioGit").is(":checked")) {
-					$("#gitURL").fadeIn('fast');
-					$("#uploadForm").validate().element("#fileURL");
 				}
 			});
 		}
@@ -603,9 +568,8 @@ function attachFormValidation() {
 		$("#benchFile").blur().focus();
 	});
 
-	//initially hide URL/Git inputs since local file is the default
+	//initially hide URL input since local file is the default
 	$('#fileURL').fadeOut(0);
-	$('#gitURL').fadeOut(0);
 
 	//initially hide dependency related fields
 	$('#depSpaces').fadeOut(0);
@@ -621,10 +585,6 @@ function attachFormValidation() {
 			url: {
 				required: "#radioURL:checked",
 				regex: "(\.tgz$)|(\.zip$)|(\.tar(\.gz)?$)"
-			},
-			git: {
-				required: "#radioGit:checked",
-				regex: "(\.git$)"
 			}
 		},
 		messages: {
@@ -635,10 +595,6 @@ function attachFormValidation() {
 			url: {
 				required: "please enter a URL",
 				regex: "URL must be .zip, .tar, or .tar.gz"
-			},
-			git: {
-				required: "please enter a URL of a Git repository ",
-				regex: "URL must be .git"
 			}
 		}
 	});
