@@ -334,7 +334,7 @@ build-fresh:
 
 build-prod:
 	@echo "Building production image"
-	@IMAGE_REGISTRY=$${IMAGE_REGISTRY:-ghcr.io/starExecmiami}; \
+	@IMAGE_REGISTRY=$${IMAGE_REGISTRY:-ghcr.io/starexecmiami}; \
 	IMAGE_VERSION=$${IMAGE_VERSION:-2.6.0}; \
 	$(PODMAN_CMD) build $(PODMAN_CGROUP_FLAG) --pull=missing -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
 	@echo "${GREEN}✓ Production image built successfully ${RESET}"
@@ -348,13 +348,13 @@ build-prod:
 #   node:24-alpine             Stage 1 - SCSS/CSS asset compilation
 #   alpine:3.24                Stage 2 - runsolver build
 #   maven:3.9-eclipse-temurin-17-alpine  Stage 3 & 4 - credential handler + app build
-#   eclipse-temurin:17-jre-alpine-3.24   Stage 5 - runtime
+#   eclipse-temurin:17-jre-noble         Stage 5 - runtime
 cache-images:
 	@echo "Pre-fetching base images for offline builds..."
 	$(PODMAN_CMD) pull docker.io/library/node:24-alpine
 	$(PODMAN_CMD) pull docker.io/library/alpine:3.24
 	$(PODMAN_CMD) pull docker.io/library/maven:3.9-eclipse-temurin-17-alpine
-	$(PODMAN_CMD) pull docker.io/library/eclipse-temurin:17-jre-alpine-3.24
+	$(PODMAN_CMD) pull docker.io/library/eclipse-temurin:17-jre-noble
 	@echo "${GREEN}✓ All base images cached. Offline builds now available via 'make build' or 'make build-offline'.${RESET}"
 
 # Build strictly from local cache. Fails immediately if any base image is absent
