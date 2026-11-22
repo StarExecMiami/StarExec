@@ -120,6 +120,7 @@
 				       href="${starexecRoot}/secure/add/batchJob.jsp"><span class="ui-icon ui-icon-arrowthick-1-n"></span> upload job
 					xml</a></li>
 			</ul>
+			<div id="job-removal-status" role="status"></div>
 			<table id="jobs">
 				<thead>
 				<tr>

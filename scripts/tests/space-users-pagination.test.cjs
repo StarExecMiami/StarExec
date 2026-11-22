@@ -14,12 +14,20 @@ function setup() {
   const actions = [];
   const timers = new Map();
   const jobRedraws = [];
+  const removalRequests = [];
+  const removalRedraws = [];
+  let removalStatus = '';
   let selectedJobRows = 0;
   let nextTimer = 0;
   let selection;
   const document = {};
   const $ = element => {
     if (element === document) return { ready() {} };
+    if (element === '#job-removal-status') return {
+      text(value) { removalStatus = value; },
+      empty() { removalStatus = ''; },
+    };
+    if (element === '#dialog-confirm-delete') return {dialog() {}};
     if (element === '#jobs tbody tr.row_selected') return {length: selectedJobRows};
     assert.equal(element, '#exploreList');
     return { jstree: () => ({ get_selected: () => selection ? [selection.spaceId] : [] }) };
@@ -32,6 +40,16 @@ function setup() {
       always(handler) { this.finish = handler; return this; },
     };
     calls.push(xhr);
+    return xhr;
+  };
+  $.post = (url, data, callback, dataType) => {
+    const xhr = {
+      url, data, dataType,
+      always(handler) { this.finish = handler; return this; },
+      done(handler) { this.resolve = handler; return this; },
+      fail(handler) { this.reject = handler; return this; },
+    };
+    removalRequests.push(xhr);
     return xhr;
   };
   const context = vm.createContext({
@@ -51,6 +69,7 @@ function setup() {
   context.initDraggable = table => actions.push(table);
   context.colorizeJobStatistics = () => actions.push('job colors');
   context.jobTable = {api: () => ({draw: reset => jobRedraws.push(reset)})};
+  context.updateTable = table => removalRedraws.push(table);
   const loadUsers = context.explorerTableAjax('users');
   const loadBenchmarks = context.explorerTableAjax('benchmarks');
   const loadJobs = context.explorerTableAjax('jobs');
@@ -61,7 +80,13 @@ function setup() {
     {draw, start: 10, length: 5, search: {value: 'Ada'}, order},
     page => pages.push(JSON.parse(JSON.stringify(page))));
   return {
-    select: spaceId => { context.EXP_SP.permissionSelection = selection = {spaceId}; },
+    select: spaceId => {
+      context.spaceId = spaceId;
+      context.EXP_SP.permissionSelection = selection = {spaceId};
+    },
+    removeJobs: (action, ids) => context.requestJobRemoval(action, ids),
+    getRemovalStatus: () => removalStatus,
+    removalRequests, removalRedraws,
     request: (draw, order = [{column: 1, dir: 'desc'}]) => requestPage(loadUsers, draw, order),
     requestBenchmarks: draw => requestPage(loadBenchmarks, draw, [{column: 0, dir: 'asc'}]),
     requestJobs: draw => requestPage(loadJobs, draw, []),
@@ -155,4 +180,37 @@ test('keeps creation order and only refreshes an unselected current jobs table',
   assert.deepEqual(jobRedraws, [false]);
   requestJobs(3);
   assert.equal(timers.size, 0);
+});
+
+test('job removal status clears on failure and remains visible for overlapping requests', () => {
+  const state = setup();
+  state.select('10');
+  state.removeJobs('remove', [42]);
+  state.removeJobs('deleteandremove', [43]);
+  const [unlink, remove] = state.removalRequests;
+  assert.equal(unlink.url, '/services/remove/job/10');
+  assert.equal(remove.url, '/services/deleteandremove/job/10');
+  assert.deepEqual(unlink.data.selectedIds, [42]);
+  assert.equal(unlink.dataType, 'json');
+  assert.match(state.getRemovalStatus(), /Processing/);
+  unlink.finish();
+  unlink.reject();
+  assert.equal(state.errors.length, 1);
+  assert.match(state.getRemovalStatus(), /Processing/);
+  remove.finish();
+  remove.resolve({success: true});
+  assert.equal(state.getRemovalStatus(), '');
+  assert.equal(state.removalRedraws.length, 1);
+});
+
+test('job removal does not redraw the jobs of a newly selected space', () => {
+  const state = setup();
+  state.select('10');
+  state.removeJobs('remove', [42]);
+  state.select('11');
+  const [removal] = state.removalRequests;
+  removal.finish();
+  removal.resolve({success: true});
+  assert.equal(state.getRemovalStatus(), '');
+  assert.equal(state.removalRedraws.length, 0);
 });

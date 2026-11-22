@@ -902,6 +902,33 @@ function removeSolvers(selectedSolvers, ownsAll) {
 	});
 }
 
+var pendingJobRemovals = 0;
+
+function requestJobRemoval(action, selectedJobs) {
+	var status = $('#job-removal-status');
+	var selection = EXP_SP.permissionSelection;
+	pendingJobRemovals++;
+	status.text('Processing job removal…');
+	$('#dialog-confirm-delete').dialog('close');
+
+	$.post(starexecRoot + 'services/' + action + '/job/' + spaceId,
+		{selectedIds: selectedJobs}, null, 'json')
+	.always(function() {
+		pendingJobRemovals--;
+		if (!pendingJobRemovals) {
+			status.empty();
+		}
+	})
+	.done(function(returnCode) {
+		if (parseReturnCode(returnCode) && EXP_SP.permissionSelection === selection) {
+			updateTable(jobTable);
+		}
+	})
+	.fail(function() {
+		showMessage('error', 'Internal error removing jobs', 5000);
+	});
+}
+
 /**
  * Handles removal of job(s) from a space
  * @author Todd Elvers
@@ -926,27 +953,7 @@ function removeJobs(selectedJobs, ownsAll) {
 						alert("Unlinking jobs hierarchically is not supported yet.")
 					}
 					else{
-						jobTable.fnProcessingIndicator();
-						log('user confirmed job deletion');
-						// If the user actually confirms, close the dialog right away
-						$('#dialog-confirm-delete').dialog('close');
-		
-						$.post(
-							starexecRoot + "services/remove/job/" + spaceId,
-							{selectedIds: selectedJobs},
-							function(returnCode) {
-								s = parseReturnCode(returnCode);
-								if (s) {
-									updateTable(jobTable);
-								}
-								jobTable.fnProcessingIndicator(false);
-							},
-							"json"
-						).fail(function() {
-							showMessage('error',
-								"Internal error removing jobs",
-								5000);
-						});
+						requestJobRemoval('remove', selectedJobs);
 					}
 				}
 			},
@@ -962,27 +969,7 @@ function removeJobs(selectedJobs, ownsAll) {
 						alert("Permanently deleting jobs hierarchically is not supported yet.")
 					}
 					else{
-						jobTable.fnProcessingIndicator();
-						log('user confirmed job deletion');
-						// If the user actually confirms, close the dialog right away
-						$('#dialog-confirm-delete').dialog('close');
-		
-						$.post(
-							starexecRoot + "services/deleteandremove/job/" + spaceId,
-							{selectedIds: selectedJobs},
-							function(returnCode) {
-								s = parseReturnCode(returnCode);
-								if (s) {
-									updateTable(jobTable);
-								}
-								jobTable.fnProcessingIndicator(false);
-							},
-							"json"
-						).fail(function() {
-							showMessage('error',
-								"Internal error removing jobs",
-								5000);
-						});
+						requestJobRemoval('deleteandremove', selectedJobs);
 					}
 				}
 			},
@@ -1179,8 +1166,6 @@ function colorizeJobStatistics() {
  */
 function initDataTables() {
 
-	addProcessingIndicator();
-
 	function initTable(name, options) {
 		return $('#' + name).dataTable(new star.DataTableConfig(Object.assign({
 			serverSide: true,
@@ -1291,14 +1276,6 @@ function linkButtons() {
 
 
 }
-/**
- * Returns the 'processing...' image with the loading gif which is used
- * on the jobs table when deleting/paginating
- */
-function getProcessingMessage() {
-	return "processing request";
-}
-
 function redrawAllTables() {
 	benchTable.api().draw();
 	jobTable.api().draw();
