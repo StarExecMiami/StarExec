@@ -2,6 +2,7 @@
 var EXP_SP = {
 	permissionSelection: {},
 	permissionRequest: null,
+	userPageDraw: null,
 	copySpaceDialog: '#dialog-confirm-space-copy',
 	copySpaceDialogText: '#dialog-confirm-space-copy-txt',
 	hierarchyDialogConfig: {
@@ -1053,8 +1054,6 @@ function makeRemoveSubspacesPost(selectedSubspaces, recyclePrims) {
  */
 function fnPaginationHandler(sSource, aoData, fnCallback) {
 	var tableName = $(this).attr('id');
-	var permissionSelection = EXP_SP.permissionSelection;
-
 	var tree = $('#exploreList').jstree(true);
 	var idOfSelectedSpace = tree && tree.get_selected()[0] || "1";
 
@@ -1074,10 +1073,6 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 		if (s) {
 			// Replace the current page with the newly received page
 			fnCallback(nextDataTablePage);
-			if (tableName === 'users' && permissionSelection === EXP_SP.permissionSelection
-				&& permissionSelection.spaceId === String(idOfSelectedSpace)) {
-				addSpacePermissionButtons(permissionSelection);
-			}
 
 			// If the primitive type is 'job', then color code the results appropriately
 			if ('j' == tableName[0]) {
@@ -1099,6 +1094,64 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 					jobTable.fnDraw(false);
 				}
 			}, 10000);
+		}
+	});
+}
+
+// DataTables supplies the draw number and paging parameters. The endpoint still
+// speaks the legacy pagination contract shared by the explorer tables.
+function loadUsersPage(request, draw) {
+	var selection = EXP_SP.permissionSelection;
+	var tree = $('#exploreList').jstree(true);
+	var selectedSpace = String(tree && tree.get_selected()[0] || '1');
+	var order = request.order[0] || {column: 0, dir: 'asc'};
+	EXP_SP.userPageDraw = request.draw;
+
+	function isCurrent() {
+		return EXP_SP.userPageDraw === request.draw && EXP_SP.permissionSelection === selection;
+	}
+
+	function showLoadError() {
+		if (isCurrent()) {
+			draw({draw: request.draw, recordsTotal: 0, recordsFiltered: 0, data: []});
+			showMessage('error', 'Could not load users for this space.', 5000);
+		}
+	}
+
+	return $.ajax({
+		type: 'POST',
+		url: starexecRoot + 'services/space/' + selectedSpace + '/users/pagination',
+		dataType: 'json',
+		data: {
+			sEcho: request.draw,
+			iDisplayStart: request.start,
+			iDisplayLength: request.length,
+			sSearch: request.search.value,
+			iSortCol_0: order.column,
+			sSortDir_0: order.dir
+		}
+	}).done(function(page) {
+		if (!isCurrent()) {
+			return;
+		}
+		if (!page || !parseReturnCode(page, false) || page.sEcho !== request.draw
+			|| !Array.isArray(page.aaData)) {
+			showLoadError();
+			return;
+		}
+		draw({
+			draw: page.sEcho,
+			recordsTotal: page.iTotalRecords,
+			recordsFiltered: page.iTotalDisplayRecords,
+			data: page.aaData
+		});
+		if (selection.spaceId === selectedSpace) {
+			addSpacePermissionButtons(selection);
+		}
+		initDraggable('#users');
+	}).fail(function(xhr, status) {
+		if (status !== 'abort') {
+			showLoadError();
 		}
 	});
 }
@@ -1172,7 +1225,10 @@ function initDataTables() {
 	});
 
 	// Setup the DataTable objects
-	userTable = $('#users').dataTable(dataTableConfig);
+	userTable = $('#users').dataTable(new star.DataTableConfig({
+		serverSide: true,
+		ajax: loadUsersPage
+	}));
 	solverTable = $('#solvers').dataTable(dataTableConfig);
 	benchTable = $('#benchmarks').dataTable(dataTableConfig);
 	spaceTable = $('#spaces').dataTable(dataTableConfig);
