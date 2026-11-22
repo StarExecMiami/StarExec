@@ -361,48 +361,44 @@ public class Benchmarks {
 	 * @throws Exception
 	 * @author Benton McCune
 	 */
+	private static final class BenchmarkValidationAbortException extends SQLException {
+		private static final long serialVersionUID = 1L;
+	}
+
 	protected static Benchmark add(Benchmark benchmark, Integer statusId, Connection con) {
-		PreparedStatement procedure = null;
-		ResultSet results = null;
-
 		try {
-			Common.beginTransaction(con);
+			return Common.runTransactional(con, txCon -> {
+				Map<String, String> attrs = benchmark.getAttributes();
+				try (PreparedStatement procedure = txCon.prepareStatement("SELECT AddBenchmark(?, ?, ?, ?, ?, ?, ?)")) {
+					procedure.setString(1, benchmark.getName());
+					procedure.setString(2, benchmark.getPath());
+					procedure.setBoolean(3, benchmark.isDownloadable());
+					procedure.setInt(4, benchmark.getUserId());
+					procedure.setInt(5, Benchmarks.isBenchValid(attrs) ? benchmark.getType().getId() : R.NO_TYPE_PROC_ID);
+					procedure.setLong(6, FileUtils.sizeOf(new File(benchmark.getPath())));
+					procedure.setString(7, benchmark.getDescription());
+					try (ResultSet results = procedure.executeQuery()) {
+						if (results.next()) {
+							benchmark.setId(results.getInt(1));
+						}
+					}
+				}
 
-			Map<String, String> attrs = benchmark.getAttributes();
-			// Setup normal information for the benchmark
-			procedure = con.prepareStatement("SELECT AddBenchmark(?, ?, ?, ?, ?, ?, ?)");
-			procedure.setString(1, benchmark.getName());
-			procedure.setString(2, benchmark.getPath());
-			procedure.setBoolean(3, benchmark.isDownloadable());
-			procedure.setInt(4, benchmark.getUserId());
-			procedure.setInt(5, Benchmarks.isBenchValid(attrs) ? benchmark.getType().getId() : R.NO_TYPE_PROC_ID);
-			procedure.setLong(6, FileUtils.sizeOf(new File(benchmark.getPath())));
-			procedure.setString(7, benchmark.getDescription());
-			results = procedure.executeQuery();
+				if (!addAttributeSetToDbIfValid(txCon, attrs, benchmark, statusId)) {
+					throw new BenchmarkValidationAbortException();
+				}
 
-			if (results.next()) {
-				benchmark.setId(results.getInt(1));
-			}
-
-			// If the benchmark is valid according to its processor...
-
-			if (!addAttributeSetToDbIfValid(con, attrs, benchmark, statusId)) {
-				return null;
-			}
-
-			// do previously validated dependencies here
-			for (BenchmarkDependency d : benchmark.getDependencies()) {
-				Benchmarks.addBenchDependency(benchmark.getId(), d.getSecondaryBench().getId(), d.getDependencyPath(),
-						con);
-			}
-			Common.endTransaction(con);// benchmarks should be in db now
-			return benchmark;
+				for (BenchmarkDependency d : benchmark.getDependencies()) {
+					Benchmarks.addBenchDependency(benchmark.getId(), d.getSecondaryBench().getId(),
+							d.getDependencyPath(), txCon);
+				}
+				return benchmark;
+			});
+		} catch (BenchmarkValidationAbortException e) {
+			return null;
 		} catch (Exception e) {
 			log.error("add", e);
-			Common.doRollback(con);
 			return null;
-		} finally {
-			Common.safeClose(procedure);
 		}
 	}
 

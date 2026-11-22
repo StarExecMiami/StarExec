@@ -824,19 +824,19 @@ public class Jobs {
      * @param spaceId the ID of the space we are making the association to
      * @author Tyler Jensen
      */
-    protected static void associate(Connection con, int jobId, int spaceId) {
-        PreparedStatement procedure = null;
-        try {
-            procedure = con.prepareStatement(
+    protected static void associate(Connection con, int jobId, int spaceId)
+        throws SQLException {
+        try (
+            PreparedStatement procedure = con.prepareStatement(
                 "SELECT starexec.AssociateJob(?, ?)"
-            );
+            )
+        ) {
             procedure.setInt(1, jobId);
             procedure.setInt(2, spaceId);
             procedure.execute();
-        } catch (Exception e) {
+        } catch (SQLException e) {
             log.error("associate", e);
-        } finally {
-            Common.safeClose(procedure);
+            throw e;
         }
     }
 
@@ -849,23 +849,15 @@ public class Jobs {
      * @author Tyler Jensen
      */
     public static boolean associate(List<Integer> jobIds, int spaceId) {
-        Connection con = null;
-
         try {
-            con = Common.getConnection();
-            Common.beginTransaction(con);
-
-            for (int jid : jobIds) {
-                Jobs.associate(con, jid, spaceId);
-            }
-
-            Common.endTransaction(con);
-            return true;
+            return Common.inTransaction(con -> {
+                for (int jid : jobIds) {
+                    Jobs.associate(con, jid, spaceId);
+                }
+                return true;
+            });
         } catch (Exception e) {
             log.error("associate", e);
-            Common.doRollback(con);
-        } finally {
-            Common.safeClose(con);
         }
 
         return false;

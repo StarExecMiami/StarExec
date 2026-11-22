@@ -192,36 +192,21 @@ public class AnonymousLinks {
 		final String methodName = "getAnonymousLinkCode";
 		log.entry(methodName);
 
-		Connection con = null;
-		PreparedStatement ps = null;
-		ResultSet results = null;
-
-		try {
-			con = Common.getConnection();
-			Common.beginTransaction(con);
-
-			// Setup the GetAnonymousLink function call.
-					// Setup the GetAnonymousLink function call.
-					ps = con.prepareStatement("SELECT * FROM starexec.GetAnonymousLink(?, ?, ?)");
-					ps.setString(1, primitiveType);
-					ps.setInt(2, primitiveId);
-					ps.setString(3, getPrimitivesToAnonymizeName(primitivesToAnonymize));
-			results = ps.executeQuery();
-					results = ps.executeQuery();
-			// If the code is in the database return it otherwise return an empty Optional.
-			if (results.next()) {
-				return Optional.of(results.getString("unique_id"));
-			} else {
+		try (Connection con = Common.getConnection();
+			 PreparedStatement ps = con.prepareStatement("SELECT * FROM starexec.GetAnonymousLink(?, ?, ?)")) {
+			ps.setString(1, primitiveType);
+			ps.setInt(2, primitiveId);
+			ps.setString(3, getPrimitivesToAnonymizeName(primitivesToAnonymize));
+			try (ResultSet results = ps.executeQuery()) {
+				// If the code is in the database return it otherwise return an empty Optional.
+				if (results.next()) {
+					return Optional.of(results.getString("unique_id"));
+				}
 				return Optional.empty();
 			}
 		} catch (SQLException e) {
 			log.error("Caught an exception while trying to get an anonymous link from database.", e);
-			Common.doRollback(con);
 			throw e;
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(ps);
-			Common.safeClose(results);
 		}
 	}
 

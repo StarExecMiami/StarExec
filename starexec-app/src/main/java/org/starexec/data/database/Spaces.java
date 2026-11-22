@@ -2253,23 +2253,13 @@ public class Spaces {
 	 * @author Todd Elvers
 	 */
 	public static boolean removeBenches(List<Integer> benchIds, int spaceId) {
-		Connection con = null;
 		try {
-			con = Common.getConnection();
-			// Instantiate a transaction so benchmarks in 'benchIds' get removed in an all-or-none fashion
-			Common.beginTransaction(con);
-
-			// Remove benchmarks using the created transaction
-			removeBenches(benchIds, spaceId, con);
-
-			// Commit changes to database
-			Common.endTransaction(con);
-			return true;
+			return Common.inTransaction(con -> {
+				removeBenches(benchIds, spaceId, con);
+				return true;
+			});
 		} catch (Exception e) {
 			log.error("removeBenches", e);
-			Common.doRollback(con);
-		} finally {
-			Common.safeClose(con);
 		}
 		log.error(benchIds.size() + " benchmark(s) were unsuccessfully removed from space " + spaceId);
 		return false;
@@ -2285,21 +2275,17 @@ public class Spaces {
 	 * @throws SQLException if an error occurs while removing benchmarks from the database
 	 * @author Todd Elvers
 	 */
-	protected static void removeBenches(List<Integer> benchIds, int spaceId, Connection con) {
-		PreparedStatement ps = null;
-		try {
-			ps = con.prepareStatement("SELECT starexec.RemoveBenchFromSpace(?, ?)");
-
+	protected static void removeBenches(List<Integer> benchIds, int spaceId, Connection con) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT starexec.RemoveBenchFromSpace(?, ?)")) {
 			for (int benchId : benchIds) {
 				ps.setInt(1, benchId);
 				ps.setInt(2, spaceId);
 				Common.executeAndDrain(ps);
 			}
 			log.info(benchIds.size() + " benchmark(s) were successfully removed from space " + spaceId);
-		} catch (Exception e) {
+		} catch (SQLException e) {
 			log.error("removeBenches", e);
-		} finally {
-			Common.safeClose(ps);
+			throw e;
 		}
 	}
 
@@ -2346,21 +2332,13 @@ public class Spaces {
 	 * @author Todd Elvers
 	 */
 	public static boolean removeJobs(List<Integer> jobIds, int spaceId) {
-		Connection con = null;
 		try {
-			con = Common.getConnection();
-
-			// Instantiate a transaction so jobs in 'jobIds' get removed in an all-or-none fashion
-			Common.beginTransaction(con);
-			removeJobs(jobIds, spaceId, con);
-			Common.endTransaction(con);
-
-			return true;
+			return Common.inTransaction(con -> {
+				removeJobs(jobIds, spaceId, con);
+				return true;
+			});
 		} catch (Exception e) {
 			log.error("removeJobs", e);
-			Common.doRollback(con);
-		} finally {
-			Common.safeClose(con);
 		}
 		log.error(jobIds.size() + " job(s) were unsuccessfully removed from space" + spaceId);
 		return false;
@@ -2375,20 +2353,17 @@ public class Spaces {
 	 * @throws SQLException if an error occurs while removing jobs from the database
 	 * @author Todd Elvers
 	 */
-	protected static void removeJobs(List<Integer> jobIds, int spaceId, Connection con) {
-		PreparedStatement ps = null;
-		try {
-			ps = con.prepareStatement("SELECT starexec.RemoveJobFromSpace(?, ?)");
+	protected static void removeJobs(List<Integer> jobIds, int spaceId, Connection con) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT starexec.RemoveJobFromSpace(?, ?)")) {
 			for (int jobId : jobIds) {
 				ps.setInt(1, jobId);
 				ps.setInt(2, spaceId);
 				Common.executeAndDrain(ps);
 			}
 			log.info(jobIds.size() + " job(s) were successfully removed from space " + spaceId);
-		} catch (Exception e) {
+		} catch (SQLException e) {
 			log.error("removeJobs", e);
-		} finally {
-			Common.safeClose(ps);
+			throw e;
 		}
 	}
 
@@ -2401,19 +2376,13 @@ public class Spaces {
 	 * @author Todd Elvers
 	 */
 	public static boolean removeSolvers(List<Integer> solverIds, int spaceId) {
-		Connection con = null;
 		try {
-			con = Common.getConnection();
-			// Instantiate a transaction so solvers in 'solverIds' get removed in an all-or-none fashion
-			Common.beginTransaction(con);
-			Spaces.removeSolvers(solverIds, spaceId, con);
-			Common.endTransaction(con);
-			return true;
+			return Common.inTransaction(con -> {
+				Spaces.removeSolvers(solverIds, spaceId, con);
+				return true;
+			});
 		} catch (Exception e) {
 			log.error("removeSolvers", e);
-			Common.doRollback(con);
-		} finally {
-			Common.safeClose(con);
 		}
 		log.error(solverIds.size() + " solver(s) were unsuccessfully removed from space " + spaceId);
 		return false;
@@ -2427,23 +2396,19 @@ public class Spaces {
 	 * with the given list of solver ids and see if any aren't referenced anywhere in StarExec
 	 * @param con the connection containing the existing transaction
 	 * @throws SQLException if an error occurs while removing solvers from the database
-	 * @throws IOException if an error occurs while removing solvers from disk
 	 * @author Todd Elvers
 	 */
-	protected static void removeSolvers(List<Integer> solverIds, int spaceId, Connection con) {
-		PreparedStatement ps = null;
-		try {
-			ps = con.prepareStatement("SELECT starexec.RemoveSolverFromSpace(?, ?)");
+	protected static void removeSolvers(List<Integer> solverIds, int spaceId, Connection con) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT starexec.RemoveSolverFromSpace(?, ?)")) {
 			for (int solverId : solverIds) {
 				ps.setInt(1, solverId);
 				ps.setInt(2, spaceId);
 				Common.executeAndDrain(ps);
 			}
 			log.info(solverIds.size() + " solver(s) were successfully removed from space " + spaceId);
-		} catch (Exception e) {
+		} catch (SQLException e) {
 			log.error("removeSolvers", e);
-		} finally {
-			Common.safeClose(ps);
+			throw e;
 		}
 	}
 
@@ -2478,21 +2443,15 @@ public class Spaces {
 	 * @author Skylar Stark
 	 */
 	public static boolean removeSolversFromHierarchy(List<Integer> solverIds, List<Space> subspaces) {
-		Connection con = null;
-
 		try {
-			con = Common.getConnection();
-			Common.beginTransaction(con);
-			for (Space space : subspaces) {
-				Spaces.removeSolvers(solverIds, space.getId(), con);
-			}
-			Common.endTransaction(con);
-			return true;
+			return Common.inTransaction(con -> {
+				for (Space space : subspaces) {
+					Spaces.removeSolvers(solverIds, space.getId(), con);
+				}
+				return true;
+			});
 		} catch (Exception e) {
 			log.error("removeSolversFromHierarchy", e);
-			Common.doRollback(con);
-		} finally {
-			Common.safeClose(con);
 		}
 		return false;
 	}
@@ -2541,9 +2500,6 @@ public class Spaces {
 	 * @author Todd Elvers
 	 */
 	public static boolean removeSubspaces(List<Integer> subspaceIds) throws StarExecDatabaseException {
-		Connection con = null;
-		PreparedStatement ps = null;
-
 		// Gather processor file paths BEFORE the DB transaction so we can
 		// clean up files after the cascade deletes processor rows.
 		// Without this, space deletion via FK cascade removes processor DB
@@ -2558,46 +2514,34 @@ public class Spaces {
 		}
 
 		try {
-			con = Common.getConnection();
-
-			// Instantiate a transaction so subspaces in 'subspaceIds' get removed in an all-or-none fashion
-			Common.beginTransaction(con);
-
-			// For each subspace in the list of subspaces to be deleted...
-			for (int subspaceId : subspaceIds) {
-				log.debug("subspaceId = " + subspaceId);
-
-				// Check if it has any subspaces itself, and if so delete them
-				Spaces.removeSubspaces(subspaceId, con);
-
-				if (ps == null) {
-					ps = con.prepareStatement("SELECT starexec.RemoveSubspace(?)");
+			Common.inTransaction(con -> {
+				try (PreparedStatement ps = con.prepareStatement("SELECT starexec.RemoveSubspace(?)")) {
+					for (int subspaceId : subspaceIds) {
+						log.debug("subspaceId = " + subspaceId);
+						Spaces.removeSubspaces(subspaceId, con);
+						ps.setInt(1, subspaceId);
+						Common.executeAndDrain(ps);
+						log.info("Space " + subspaceId + " has been deleted.");
+					}
 				}
-				ps.setInt(1, subspaceId);
-				Common.executeAndDrain(ps);
-				log.info("Space " + subspaceId + " has been deleted.");
-			}
-
-			// Commit changes to database
-			Common.endTransaction(con);
+				return null;
+			});
 
 			// After successful commit, clean up processor files that were
 			// cascade-deleted from the database.
 			cleanProcessorFiles(processorFilesToClean);
-
 			return true;
-		} catch (PSQLException e) {
-			if ("P0002".equals(e.getSQLState())) {
+		} catch (SQLException e) {
+			Throwable cause = e.getCause();
+			if (cause instanceof PSQLException && "P0002".equals(((PSQLException) cause).getSQLState())) {
+				throw new StarExecDatabaseException("Space not found: " + subspaceIds, cause);
+			}
+			if (e instanceof PSQLException && "P0002".equals(((PSQLException) e).getSQLState())) {
 				throw new StarExecDatabaseException("Space not found: " + subspaceIds, e);
 			}
 			log.error("removeSubspaces", e);
-			Common.doRollback(con);
 		} catch (Exception e) {
 			log.error("removeSubspaces", e);
-			Common.doRollback(con);
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(ps);
 		}
 		return false;
 	}
@@ -2681,19 +2625,16 @@ public class Spaces {
 	 * @param spaceId the id of the space to remove the users from
 	 * @author Skylar Stark
 	 */
-	private static void removeUsers(Connection con, List<Integer> userIds, int spaceId) {
-		PreparedStatement ps = null;
-		try {
-			ps = con.prepareStatement("SELECT starexec.LeaveSpace(?, ?)");
+	private static void removeUsers(Connection con, List<Integer> userIds, int spaceId) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT starexec.LeaveSpace(?, ?)")) {
 			for (int userId : userIds) {
 				ps.setInt(1, userId);
 				ps.setInt(2, spaceId);
 				Common.executeAndDrain(ps);
 			}
-		} catch (Exception e) {
+		} catch (SQLException e) {
 			log.error("removeUsers", e);
-		} finally {
-			Common.safeClose(ps);
+			throw e;
 		}
 	}
 
@@ -2706,25 +2647,17 @@ public class Spaces {
 	 * @author Todd Elvers
 	 */
 	public static boolean removeUsers(List<Integer> userIds, int commId) {
-		Connection con = null;
 		try {
-			con = Common.getConnection();
-			// Instantiate a transaction so users in 'userIds' get removed in an all-or-none fashion
-			Common.beginTransaction(con);
-
-			removeUsers(con, userIds, commId);
-
-			// Commit changes to database
-			Common.endTransaction(con);
+			Common.inTransaction(con -> {
+				removeUsers(con, userIds, commId);
+				return null;
+			});
 			org.starexec.util.SessionUtil.invalidateUsersPermissions(userIds);
 
 			log.info(userIds.size() + " user(s) were successfully removed from community " + commId);
 			return true;
 		} catch (Exception e) {
 			log.error("removeUsers", e);
-			Common.doRollback(con);
-		} finally {
-			Common.safeClose(con);
 		}
 
 		log.error(userIds.size() + " user(s) were unsuccessfully removed from community " + commId);
@@ -2741,24 +2674,18 @@ public class Spaces {
 	 * @author Skylar Stark
 	 */
 	public static boolean removeUsersFromHierarchy(List<Integer> userIds, List<Integer> subspaceIds) {
-		Connection con = null;
 		try {
-			con = Common.getConnection();
-			Common.beginTransaction(con);
-
-			for (int spaceId : subspaceIds) {
-				Spaces.removeUsers(con, userIds, spaceId);
-			}
-
-			Common.endTransaction(con);
+			Common.inTransaction(con -> {
+				for (int spaceId : subspaceIds) {
+					Spaces.removeUsers(con, userIds, spaceId);
+				}
+				return null;
+			});
 			org.starexec.util.SessionUtil.invalidateUsersPermissions(userIds);
 
 			return true;
 		} catch (Exception e) {
 			log.error("removeUsersFromHierarchy", e);
-			Common.doRollback(con);
-		} finally {
-			Common.safeClose(con);
 		}
 		return false;
 	}
@@ -3000,20 +2927,17 @@ public class Spaces {
 	 * @author Skylar Stark
 	 */
 	public static boolean updateDetails(int userId, Space s) throws StarExecDatabaseException {
-		Connection con = null;
-		boolean success = false;
 		try {
-			con = Common.getConnection();
-			Common.beginTransaction(con);
-			success = Spaces.updateDetails(s, con);
-			Common.endTransaction(con);
+			boolean success = Common.inTransaction(con -> Spaces.updateDetails(s, con));
 			log.info(String.format("Space with name [%s] successfully edited by user [%d].", s.getName(), userId));
 			return success;
+		} catch (SQLException e) {
+			if (e.getCause() instanceof StarExecDatabaseException) {
+				throw (StarExecDatabaseException) e.getCause();
+			}
+			log.error("updateDetails", e);
 		} catch (Exception e) {
 			log.error("updateDetails", e);
-		} finally {
-			Common.doRollback(con);
-			Common.safeClose(con);
 		}
 		return false;
 	}
