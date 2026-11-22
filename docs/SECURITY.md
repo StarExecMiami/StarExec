@@ -368,14 +368,9 @@ sudo quota -vs starexec
 - SQL injection prevention (prepared statements)
 - Path traversal prevention
 
-**Additional hardening:**
+**Servlet multipart limits:**
 
-```yaml
-# Limit upload size
-server:
-  max-file-size: 100MB
-  max-request-size: 105MB
-```
+Upload servlets enforce per-endpoint `@MultipartConfig` caps in `starexec-app/src/main/java/org/starexec/servlets/` (for example `UploadSolver.MAX_ARCHIVE_BYTES`, `ProcessorManager.MAX_ARCHIVE_BYTES`, and `10 MiB` in `UploadPicture`), alongside Tomcat's connector limits in `server.xml`.
 
 ### Private Upload Staging
 
@@ -411,34 +406,36 @@ if its helper benchmark cannot be created.
 
 **Current authentication:**
 
-- Database-backed user accounts
-- Session-based authentication
-- LDAP/AD integration (optional)
+- Database-backed user accounts (`starexec.users` + `starexec.user_roles`)
+- BCrypt password hashing (`tomcat-credential-handler` and `PasswordHasher`, with `{sha512}$2...` wrapping for migrated legacy accounts)
+- Container session-based authentication with database revalidation on every request (`SessionFilter`)
 
 **Hardening recommendations:**
 
-1. **Enable HTTPS** - Protect credentials in transit
+1. **Enable HTTPS** - Protect credentials and session cookies in transit
 2. **Set session timeout**
-3. **Implement 2FA** (future enhancement)
-4. **Rate limit login attempts**
+3. **Restrict administrative accounts** (`admin` role in `starexec.user_roles`)
+4. **Rate limit login attempts** at the ingress or reverse proxy
 
 ### CSRF Protection
 
 StarExec enforces Cross-Site Request Forgery (CSRF) protection via a centralized
 `CsrfFilter` registered in `WEB-INF/web.xml`.
 
-**Coverage:** All `POST` requests to `/secure/*`, `/public/registration/*`, and
-`/services/*`. This includes REST operations such as user deletion that are
-outside `/secure/*`.
+**Coverage:** All state-mutating **`POST`, `PUT`, `PATCH`, and `DELETE`** requests to
+`/secure/*`, `/public/registration/*`, and `/services/*`. This includes REST
+endpoints such as logout (`POST /services/session/logout`), profile picture removal,
+and user deletion.
 
 **How it works:**
 
 1. On page load, every JSP embeds a per-session token in a `<meta name="csrf-token">` tag.
 2. The global `master.js` reads that token and automatically:
-   - Injects an `X-CSRF-Token` header on all jQuery AJAX POST requests.
-   - Appends a hidden `csrfToken` field to every HTML form submission (including multipart).
-3. `CsrfFilter` validates the token using a constant-time comparison. Requests with a
-   missing or mismatched token receive **HTTP 403 Forbidden**.
+   - Injects an `X-CSRF-Token` header on jQuery AJAX requests.
+   - Appends a hidden `csrfToken` field to URL-encoded HTML forms.
+   - Appends `csrfToken` as a query parameter on `multipart/form-data` form actions so `CsrfFilter` can read it before multipart body parsing.
+3. `CsrfFilter` validates the token using constant-time comparison (`MessageDigest.isEqual`).
+   Requests with a missing or mismatched token receive **HTTP 403 Forbidden**.
 
 **API client exemption:**
 
@@ -478,10 +475,12 @@ grep -A5 "CsrfFilter" starexec-app/src/main/webapp/WEB-INF/web.xml
 
 ```sql
 -- Check user roles
-SELECT id, first_name, last_name, role FROM users;
+SELECT u.id, u.email, u.first_name, u.last_name, ur.role
+FROM starexec.users u
+LEFT JOIN starexec.user_roles ur ON ur.email = u.email;
 
--- Disable public access if not needed
-UPDATE users SET enabled = false WHERE email = 'public@starexec.org';
+-- Suspend an account (SessionFilter denies further requests on the next HTTP call)
+UPDATE starexec.user_roles SET role = 'suspended' WHERE email = 'user@example.com';
 ```
 
 ## Audit and Monitoring
@@ -491,8 +490,9 @@ UPDATE users SET enabled = false WHERE email = 'public@starexec.org';
 **Enable comprehensive logging:**
 
 ```xml
-<!-- logback.xml -->
-<logger name="org.starexec.security" level="INFO"/>
+<!-- starexec-app/src/main/resources/logback.xml -->
+<logger name="org.starexec.data.security" level="INFO"/>
+<logger name="org.starexec.app.CsrfFilter" level="INFO"/>
 <logger name="org.starexec.data" level="INFO"/>
 ```
 
@@ -709,9 +709,7 @@ sudo usermod -aG backup starexec
 
 ## Reporting Security Issues
 
-**Do not report security vulnerabilities in public issues.**
-
-Email security concerns to: security@starexec.org
+**Do not report security vulnerabilities in public issues.** Follow the policy in [SECURITY.md](../SECURITY.md) or email security concerns to `security@starexec.org`.
 
 Include:
 

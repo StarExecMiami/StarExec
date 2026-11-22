@@ -61,9 +61,7 @@ curl -c cookies.txt -b cookies.txt \
 
 ### Important Notes
 
-- **API Header**: All POST requests **must** include `-H "StarExecCommand: StarExecCommand"`.
-  This header identifies the client as a non-browser API caller and exempts it from CSRF
-  token validation. The `User-Agent` header is no longer used for API client detection.
+- **API Header**: All state-mutating requests (`POST`, `PUT`, `PATCH`, `DELETE`) to `/secure/*`, `/services/*`, and `/public/registration/*` require either `-H "StarExecCommand: StarExecCommand"` (for CLI/script callers) or a valid session `X-CSRF-Token` / `csrfToken` parameter (for browser callers). Without either, `CsrfFilter` returns HTTP 403. The `User-Agent` header is not used for API client detection.
 - **Cookies**: The JSESSIONID cookie must be sent with ALL subsequent requests
 - **Cookie Persistence**: Use a cookie jar (`-c cookies.txt -b cookies.txt` in curl)
 
@@ -433,15 +431,18 @@ echo "Done!"
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/public/health/liveness` | GET | Unauthenticated liveness probe (`200 OK`) |
+| `/public/health/readiness` | GET | Unauthenticated readiness probe (checks DB connectivity) |
 | `/secure/index.jsp` | GET | Homepage (for initial session) |
 | `/secure/j_security_check` | POST | Login authentication |
 | `/services/session/logged-in` | GET | Check login status |
-| `/services/session/logout` | POST | Logout |
+| `/services/session/logout` | POST | Logout (requires CSRF token or `StarExecCommand` header) |
 | `/secure/add/job` | POST | Create quick job |
 | `/secure/upload/jobXML` | POST | Upload job XML |
 | `/secure/upload/benchmarks` | POST | Upload benchmarks |
 | `/secure/upload/solvers` | POST | Upload solvers |
 | `/services/delete/{type}` | POST | Delete primitives |
+| `/services/delete/picture/{type}/{id}` | POST | Delete profile/space picture |
 
 ---
 
