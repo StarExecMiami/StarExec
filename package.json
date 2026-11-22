@@ -23,7 +23,7 @@
   },
   "overrides": {
     "colord": "2.9.7",
-    "fast-uri": "3.1.8",
+    "fast-uri": "3.1.9",
     "flatted": "3.4.2",
     "immutable": "4.3.9",
     "js-yaml": "4.3.2",
