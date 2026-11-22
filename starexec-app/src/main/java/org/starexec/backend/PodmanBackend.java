@@ -1582,20 +1582,25 @@ public class PodmanBackend implements Backend {
         List<String> entrypoint = List.of("/bin/bash");
         List<String> command = List.of(scriptPath);
         if (build != null) {
-            Path controls = Path.of(org.starexec.constants.R.CONFIG_PATH).resolve("sge");
-            privateBuild = PodmanPrivateBuild.prepare(dockerClient,build,imageName,containerSocketPath,
-                    new org.starexec.backend.storage.BuildExecutionMounts.Controls(Path.of(scriptPath),
-                            controls.resolve("functions.bash"),controls.resolve("status_codes.bash")));
-            jobName=privateBuild.creationName();
-            Map<Path,Path> providerSources = new LinkedHashMap<>();
-            for (var binding:privateBuild.mounts().bindings()) {
-                providerSources.put(binding.source(),Path.of(translateToHostPath(binding.source().toString())));
+            try {
+                Path controls = Path.of(org.starexec.constants.R.CONFIG_PATH).resolve("sge");
+                privateBuild = PodmanPrivateBuild.prepare(dockerClient,build,imageName,containerSocketPath,
+                        new org.starexec.backend.storage.BuildExecutionMounts.Controls(Path.of(scriptPath),
+                                controls.resolve("functions.bash"),controls.resolve("status_codes.bash")));
+                jobName=privateBuild.creationName();
+                Map<Path,Path> providerSources = new LinkedHashMap<>();
+                for (var binding:privateBuild.mounts().bindings()) {
+                    providerSources.put(binding.source(),Path.of(translateToHostPath(binding.source().toString())));
+                }
+                hostConfig = privateBuild.hostConfig(hostConfig,providerSources);
+                imageName = privateBuild.image();
+                workingDirectory = privateBuild.mounts().workingDirectory().toString();
+                entrypoint = privateBuild.entrypoint();
+                command = privateBuild.command();
+            } catch (IOException | java.sql.SQLException unavailable) {
+                log.warn("Private build preparation unavailable for pair " + pairId, unavailable);
+                throw new SubmissionDeferredException("Private build preparation unavailable; pair stays queued");
             }
-            hostConfig = privateBuild.hostConfig(hostConfig,providerSources);
-            imageName = privateBuild.image();
-            workingDirectory = privateBuild.mounts().workingDirectory().toString();
-            entrypoint = privateBuild.entrypoint();
-            command = privateBuild.command();
         } else if (pairId > 0) {
             try {
                 var writableRoots = new ArrayList<Path>();
@@ -1741,11 +1746,21 @@ public class PodmanBackend implements Backend {
             startContainerWithVerification(containerId);
         } else if (publishedInputs != null) {
             execIdToContainerId.put(execId,containerId);
+            boolean startInvoked = false;
             try {
                 publishedInputs.requireCreated(dockerClient.inspectContainerCmd(containerId).exec(),containerId,
                     pairId,attemptNo,execId,command);
+                startInvoked = true;
                 dockerClient.startContainerCmd(containerId).exec();
             } catch (Exception unresolved) {
+                if (unresolved instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                if (tryCancelUnstartedConsumerContainer(execId, containerId, !startInvoked)) {
+                    throw new SubmissionDeferredException(
+                        "Published solver consumer failed before starting; container removed and pair stays queued"
+                    );
+                }
                 log.error("Published solver consumer start is unresolved for execution " + execId
                     + "; container and capacity retained for observation",unresolved);
                 return execId;
@@ -1799,6 +1814,50 @@ public class PodmanBackend implements Backend {
                 containerId
         );
         return execId;
+    }
+
+    private boolean tryCancelUnstartedConsumerContainer(int execId, String containerId, boolean neverInvokedStart) {
+        try {
+            var inspection = (com.github.dockerjava.api.command.InspectContainerResponse) null;
+            try {
+                inspection = dockerClient.inspectContainerCmd(containerId).exec();
+            } catch (NotFoundException absent) {
+                if (observeExecutionSafety(execId) == KillOutcome.CONFIRMED_SAFE) {
+                    execIdToContainerId.remove(execId, containerId);
+                    containerIdToPairId.invalidate(containerId);
+                    return true;
+                }
+                return false;
+            }
+            var state = inspection == null ? null : inspection.getState();
+            boolean positivelyUnstarted = state != null
+                && !Boolean.TRUE.equals(state.getRunning())
+                && "created".equalsIgnoreCase(state.getStatus())
+                && (state.getPidLong() == null || state.getPidLong() == 0L);
+            if (!positivelyUnstarted) {
+                return false;
+            }
+            try {
+                dockerClient.removeContainerCmd(containerId).withForce(false).withRemoveVolumes(true).exec();
+            } catch (NotFoundException ignored) {
+                // Already removed.
+            }
+            try {
+                dockerClient.inspectContainerCmd(containerId).exec();
+                return false;
+            } catch (NotFoundException gone) {
+                if (observeExecutionSafety(execId) != KillOutcome.CONFIRMED_SAFE) {
+                    return false;
+                }
+                execIdToContainerId.remove(execId, containerId);
+                containerIdToPairId.invalidate(containerId);
+                return true;
+            }
+        } catch (Exception e) {
+            log.warn("Could not confirm never-started consumer cleanup for execId " + execId
+                + " (neverInvokedStart=" + neverInvokedStart + ")", e);
+            return false;
+        }
     }
 
     private boolean admitBuildBeforeStart(int execId, String containerId,
@@ -3540,7 +3599,7 @@ public class PodmanBackend implements Backend {
                 catch(java.sql.SQLException failure) {throw new IOException("Unreleased build ownership is unavailable",failure);}
             }
         }
-        if(!pendingCreationArtifacts.isEmpty()) {
+        if(!pendingCreationArtifacts.isEmpty() || !buildExecutions.isEmpty()) {
             synchronized(creationRecoveryLock) {
                 try {
                     int highest=reconcilePendingBuildCreations(new HashSet<>(),new HashSet<>());
@@ -3565,6 +3624,9 @@ public class PodmanBackend implements Backend {
                 rememberBuild(inspection, entry.getValue());
                 var state = inspection.getState();
                 if (state != null && Boolean.TRUE.equals(state.getRunning())) {
+                    activeIds.add(entry.getKey());
+                } else if (state != null && "created".equalsIgnoreCase(state.getStatus())) {
+                    // Unstarted container has not exited and is never matched by exited-only scans.
                     activeIds.add(entry.getKey());
                 } else {
                     // Container finished: it no longer holds a slot, but its result is
