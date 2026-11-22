@@ -13,15 +13,16 @@ fieldset {
 }
 
 #pairTblField #pairActions {
-	width:97%;
-    border: 0 none black;
-    border-bottom: 5px solid;
-    margin-top:0;
-	padding-top:0;
+	width: 97%;
+	border: 0;
+	border-bottom: 5px solid;
+	margin-top: 0;
+	margin-bottom: 10px;
+	padding-top: 0;
 }
 
 #pairActions > select {
-    width: 20%;
+	width: 20%;
 }
 
 @include m.mobile {
@@ -29,6 +30,11 @@ fieldset {
 	/* Base button styles come from global components/_button.scss */
 	#wrapper button {
 		margin: 0 0 5px 0;
+	}
+
+	#pairActions > select {
+		width: auto;
+		max-width: 100%;
 	}
 
 	#wrapper #pairTbl {
@@ -40,13 +46,7 @@ fieldset {
 	}
 
 	#pairTbl td, #pairTbl th {
-		width: 25%;
+		min-width: 85px;
 		text-align: center;
-	}
-	#pairTbl tr > *:nth-child(4) {
-		display: none;
-	}
-	#pairTbl tr > *:nth-child(6) {
-		display: none;
 	}
 }

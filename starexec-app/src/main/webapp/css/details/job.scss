@@ -273,13 +273,11 @@ table.panel {
 		}
 
 		#pairTbl {
-			tr > * {
-				&:nth-child(4), &:nth-child(6) {
-					display: none;
-				}
-			}
-
 			font-size: 12px;
+
+			th, td {
+				min-width: 85px;
+			}
 		}
 
 		#pairActions button {
