@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import org.starexec.backend.Backend;
 import org.starexec.constants.R;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.UploadJobQueue;
@@ -141,6 +142,32 @@ public class RESTErrorResponseHttpTest {
 
 		MockHttpResponse queuePageResp = request("/services/cluster/queues/1/pagination", R.PUBLIC_USER_ID);
 		assertEquals(404, queuePageResp.getStatus());
+	}
+
+	@Test
+	public void idleBackendQstatReturns200EmptyBody() throws Exception {
+		Backend previous = R.BACKEND;
+		try {
+			Backend mockBackend = Mockito.mock(Backend.class);
+			R.BACKEND = mockBackend;
+
+			Mockito.when(mockBackend.getRunningJobsStatus()).thenReturn("");
+			MockHttpResponse emptyResp = request("/services/cluster/qstat", 3);
+			assertEquals(200, emptyResp.getStatus());
+			assertEquals("", emptyResp.getContentAsString());
+
+			Mockito.when(mockBackend.getRunningJobsStatus()).thenReturn(null);
+			MockHttpResponse nullResp = request("/services/cluster/qstat", 3);
+			assertEquals(200, nullResp.getStatus());
+			assertEquals("", nullResp.getContentAsString());
+
+			Mockito.when(mockBackend.getRunningJobsStatus()).thenReturn("pair 12 running");
+			MockHttpResponse activeResp = request("/services/cluster/qstat", 3);
+			assertEquals(200, activeResp.getStatus());
+			assertEquals("pair 12 running", activeResp.getContentAsString());
+		} finally {
+			R.BACKEND = previous;
+		}
 	}
 
 	private MockHttpResponse request(String path, int userId) throws Exception {

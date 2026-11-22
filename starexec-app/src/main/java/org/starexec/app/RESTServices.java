@@ -465,9 +465,9 @@ public class RESTServices {
 		if (userId == R.PUBLIC_USER_ID || userId <= 0) {
 			throw RESTException.FORBIDDEN;
 		}
-		String qstat = R.BACKEND.getRunningJobsStatus();
+		String qstat = R.BACKEND == null ? null : R.BACKEND.getRunningJobsStatus();
 		if (Util.isNullOrEmpty(qstat)) {
-			throw RESTException.NOT_FOUND;
+			return "";
 		}
 		return qstat;
 	}
