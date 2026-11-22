@@ -716,6 +716,7 @@ function initUI() {
 							$notificationButton.removeClass("disabled").css("pointer-events", "");
 						},
 						error: function() {
+							$notificationButton.removeClass("disabled").css("pointer-events", "");
 							var message = "Unable to " +
 								$notificationButton.find(".btn-text").text();
 							showMessage("error", message, 5000);

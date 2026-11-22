@@ -76,7 +76,8 @@ function initUI() {
 					}
 
 				} else {
-					alert(data.message);
+					destroyDialog();
+					alert(data.message || "Unable to add or delete job pairs.");
 				}
 			}
 		}).fail(function() {
