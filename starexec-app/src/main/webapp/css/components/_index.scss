@@ -5,6 +5,8 @@
 // Maintain dependency order (utilities first, then base, then complex)
 // =============================================================================
 
+@use "sass:meta";
+
 // Foundation
 @import "variables";
 @import "mixins";
@@ -31,8 +33,8 @@
 // Complex components
 @import "accordion";
 @import "tab";
-@import "banner";
+@include meta.load-css("banner");
 
 // Compatibility layers
-@import "jquery-ui-dark";
-@import "ui-icons";
+@include meta.load-css("jquery-ui-dark");
+@include meta.load-css("ui-icons");

@@ -1,3 +1,5 @@
+@use "../global/icon-data";
+
 // =============================================================================
 // JQUERY UI ICONS
 // =============================================================================
@@ -83,6 +85,6 @@ $ui-icons: (
 @each $class, $icon in $ui-icons {
   .ui-icon-#{$class} {
     background-color: currentcolor;
-    mask-image: icon($icon);
+    mask-image: icon-data.icon($icon);
   }
 }
