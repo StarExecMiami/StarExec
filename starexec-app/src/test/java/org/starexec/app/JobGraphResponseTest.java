@@ -1,5 +1,6 @@
 package org.starexec.app;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.BeforeAll;
@@ -13,7 +14,6 @@ import org.starexec.util.SessionUtil;
 import org.starexec.util.Validator;
 
 import javax.servlet.http.HttpServletRequest;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -21,15 +21,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 
 /**
- * A job graph that cannot be drawn must be answered with a status the job page can show.
- *
- * <p>With no configuration selected, the space overview graph answered HTTP 500: makeSpaceOverviewChart
- * returns null for an empty selection, and the helper dereferenced the result before checking it. The
- * pairs-over-time graph did the same whenever drawing failed. The solver comparison graph reported an
- * internal database error when one configuration had no pair to plot, which is not a failure, and said
- * that a configuration compared with itself had none.
+ * Verifies structured JSON graph responses, error refusals, and route compatibility.
  */
 public class JobGraphResponseTest {
 
@@ -57,6 +52,8 @@ public class JobGraphResponseTest {
 					.thenReturn(new ValidatorStatusCode(true));
 			security.when(() -> JobSecurity.canUserSeeJob(anyInt(), anyInt()))
 					.thenReturn(new ValidatorStatusCode(true));
+			security.when(() -> JobSecurity.isAnonymousLinkAssociatedWithJobSpace(anyString(), anyInt()))
+					.thenReturn(new ValidatorStatusCode(true));
 			return request.run(statistics);
 		}
 	}
@@ -68,7 +65,7 @@ public class JobGraphResponseTest {
 	}
 
 	private static String comparison() {
-		return new RESTServices().getSolverComparisonGraph(STAGE, JOB_SPACE_ID, 1, 2, 300, "white",
+		return new RESTServices().getSolverComparisonGraph(STAGE, JOB_SPACE_ID, 1, 2,
 				Mockito.mock(HttpServletRequest.class));
 	}
 
@@ -77,6 +74,12 @@ public class JobGraphResponseTest {
 		assertFalse(response.get("success").getAsBoolean(),
 				"a graph that cannot be drawn must not be reported as drawn: " + json);
 		assertEquals(expectedMessage, response.get("message").getAsString(), json);
+	}
+
+	private static JsonObject errorData(String code) {
+		JsonObject error = new JsonObject();
+		error.addProperty("error", code);
+		return error;
 	}
 
 	@Test
@@ -91,41 +94,69 @@ public class JobGraphResponseTest {
 
 	@Test
 	public void anOverviewThatFailsToDrawAnswersADatabaseError() {
-		// makeSpaceOverviewChart returns null when its query fails.
 		String json = answer(statistics -> {
-			statistics.when(() -> Statistics.makeSpaceOverviewChart(anyInt(), anyBoolean(), anyBoolean(), anyList(),
+			statistics.when(() -> Statistics.makeSpaceOverviewChartData(anyInt(), anyBoolean(), anyBoolean(), anyList(),
 					anyInt(), any())).thenReturn(null);
 			return new RESTServices().getSpaceOverviewGraph(STAGE, JOB_SPACE_ID, overviewRequest("5"));
 		});
 		assertRefusedWith(RESTServices.ERROR_DATABASE.getMessage(), json);
 	}
 
-	/** The job page reads a drawn overview as the chart's path in plain text; that answer is unchanged. */
 	@Test
-	public void aDrawnOverviewIsStillAnsweredWithItsPath() {
+	public void anOversizedOverviewAnswersTooManyJobPairs() {
 		String json = answer(statistics -> {
-			statistics.when(() -> Statistics.makeSpaceOverviewChart(anyInt(), anyBoolean(), anyBoolean(), anyList(),
-					anyInt(), any())).thenReturn("/starexec/jobgraphs/overview");
+			statistics.when(() -> Statistics.makeSpaceOverviewChartData(anyInt(), anyBoolean(), anyBoolean(), anyList(),
+					anyInt(), any())).thenReturn(errorData(Statistics.OVERSIZED_GRAPH_ERROR));
+			return new RESTServices().getSpaceOverviewGraph(STAGE, JOB_SPACE_ID, overviewRequest("5"));
+		});
+		assertRefusedWith(RESTServices.ERROR_TOO_MANY_JOB_PAIRS.getMessage(), json);
+	}
+
+	@Test
+	public void aDrawnOverviewReturnsStructuredSeriesJson() {
+		JsonObject payload = new JsonObject();
+		payload.addProperty("chartType", "spaceOverview");
+		payload.add("series", new JsonArray());
+
+		String json = answer(statistics -> {
+			statistics.when(() -> Statistics.makeSpaceOverviewChartData(anyInt(), anyBoolean(), anyBoolean(), anyList(),
+					anyInt(), any())).thenReturn(payload);
 			return new RESTServices().getSpaceOverviewGraph(STAGE, JOB_SPACE_ID, overviewRequest("5", "6"));
 		});
-		assertEquals("/starexec/jobgraphs/overview", json);
+		JsonObject response = JsonParser.parseString(json).getAsJsonObject();
+		assertEquals("spaceOverview", response.get("chartType").getAsString());
 	}
 
 	@Test
 	public void aPairTimeGraphThatFailsToDrawAnswersADatabaseError() {
-		// makeJobTimeGraph returns null whenever drawing fails.
 		String json = answer(statistics -> {
-			statistics.when(() -> Statistics.makeJobTimeGraph(anyInt())).thenReturn(null);
+			statistics.when(() -> Statistics.makeJobTimeGraphData(anyInt())).thenReturn(null);
 			return new RESTServices().getPairTimeGraph(JOB_ID, Mockito.mock(HttpServletRequest.class));
 		});
 		assertRefusedWith(RESTServices.ERROR_DATABASE.getMessage(), json);
 	}
 
 	@Test
+	public void aDrawnPairTimeGraphReturnsStructuredPointsJson() {
+		JsonObject payload = new JsonObject();
+		payload.addProperty("chartType", "pairTime");
+		payload.addProperty("totalPairs", 4);
+		payload.add("points", new JsonArray());
+
+		String json = answer(statistics -> {
+			statistics.when(() -> Statistics.makeJobTimeGraphData(JOB_ID)).thenReturn(payload);
+			return new RESTServices().getPairTimeGraph(JOB_ID, Mockito.mock(HttpServletRequest.class));
+		});
+		JsonObject response = JsonParser.parseString(json).getAsJsonObject();
+		assertEquals("pairTime", response.get("chartType").getAsString());
+		assertEquals(4, response.get("totalPairs").getAsInt());
+	}
+
+	@Test
 	public void aComparisonWithNothingToPlotSaysSoInsteadOfADatabaseError() {
 		String json = answer(statistics -> {
-			statistics.when(() -> Statistics.makeSolverComparisonChart(anyInt(), anyInt(), anyInt(), anyInt(), any(),
-					anyInt(), any())).thenReturn(List.of(Statistics.NO_COMPARABLE_PAIRS_ERROR));
+			statistics.when(() -> Statistics.makeSolverComparisonChartData(anyInt(), anyInt(), anyInt(),
+					anyInt(), any())).thenReturn(errorData(Statistics.NO_COMPARABLE_PAIRS_ERROR));
 			return comparison();
 		});
 		assertRefusedWith(RESTHelpers.NO_COMPARABLE_PAIRS, json);
@@ -134,22 +165,17 @@ public class JobGraphResponseTest {
 	@Test
 	public void aComparisonThatFailsStillAnswersADatabaseError() {
 		String json = answer(statistics -> {
-			// Stubbed explicitly: an unstubbed static mock answers a List method with an empty list, not null.
-			statistics.when(() -> Statistics.makeSolverComparisonChart(anyInt(), anyInt(), anyInt(), anyInt(), any(),
+			statistics.when(() -> Statistics.makeSolverComparisonChartData(anyInt(), anyInt(), anyInt(),
 					anyInt(), any())).thenReturn(null);
 			return comparison();
 		});
 		assertRefusedWith(RESTServices.ERROR_DATABASE.getMessage(), json);
 	}
 
-	/**
-	 * The pairs are split by configuration, so one configuration chosen twice fills only one side of the
-	 * comparison, and the answer said that configuration had nothing to plot.
-	 */
 	@Test
 	public void aComparisonOfAConfigurationWithItselfAsksForTwoDifferentOnes() {
 		String json = answer(statistics -> {
-			String response = new RESTServices().getSolverComparisonGraph(STAGE, JOB_SPACE_ID, 5, 5, 300, "white",
+			String response = new RESTServices().getSolverComparisonGraph(STAGE, JOB_SPACE_ID, 5, 5,
 					Mockito.mock(HttpServletRequest.class));
 			statistics.verifyNoInteractions();
 			return response;
@@ -157,16 +183,34 @@ public class JobGraphResponseTest {
 		assertRefusedWith(RESTHelpers.SAME_CONFIGURATION_TWICE, json);
 	}
 
-	/** The job page reads a drawn comparison as JSON holding the chart's path and its image map. */
 	@Test
-	public void aDrawnComparisonIsStillAnsweredWithItsPathAndMap() {
+	public void aDrawnComparisonReturnsStructuredPointsOnBothNewAndLegacyRoutes() {
+		JsonObject payload = new JsonObject();
+		payload.addProperty("chartType", "solverComparison");
+		payload.addProperty("xLabel", "S1/c1 time(s)");
+		payload.addProperty("yLabel", "S2/c2 time(s)");
+		payload.add("points", new JsonArray());
+
 		String json = answer(statistics -> {
-			statistics.when(() -> Statistics.makeSolverComparisonChart(anyInt(), anyInt(), anyInt(), anyInt(), any(),
-					anyInt(), any())).thenReturn(List.of("/starexec/jobgraphs/comparison", "<map></map>"));
+			statistics.when(() -> Statistics.makeSolverComparisonChartData(anyInt(), anyInt(), anyInt(),
+					anyInt(), any())).thenReturn(payload);
 			return comparison();
 		});
+		String legacyJson = answer(statistics -> {
+			statistics.when(() -> Statistics.makeSolverComparisonChartData(anyInt(), anyInt(), anyInt(),
+					anyInt(), any())).thenReturn(payload);
+			return new RESTServices().getSolverComparisonGraph(STAGE, JOB_SPACE_ID, 1, 2, 300, "white",
+					Mockito.mock(HttpServletRequest.class));
+		});
+		String anonJson = answer(statistics -> {
+			statistics.when(() -> Statistics.makeSolverComparisonChartData(anyInt(), anyInt(), anyInt(),
+					anyInt(), any())).thenReturn(payload);
+			return new RESTServices().getAnonymousSolverComparisonGraph("anon-uuid", STAGE, JOB_SPACE_ID,
+					1, 2, "all", Mockito.mock(HttpServletRequest.class));
+		});
+		assertEquals(json, legacyJson);
+		assertEquals(json, anonJson);
 		JsonObject response = JsonParser.parseString(json).getAsJsonObject();
-		assertEquals("/starexec/jobgraphs/comparison", response.get("src").getAsString(), json);
-		assertEquals("<map></map>", response.get("map").getAsString(), json);
+		assertEquals("solverComparison", response.get("chartType").getAsString(), json);
 	}
 }

@@ -1,43 +1,16 @@
 package org.starexec.data.database;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import java.sql.ResultSetMetaData;
-import org.jfree.chart.ChartFactory;
-import org.jfree.chart.ChartRenderingInfo;
-//import org.jfree.chart.ChartUtilities; // Deprecated in newer versions, using ChartUtils
-import org.jfree.chart.ChartUtils;
-import org.jfree.chart.JFreeChart;
-import org.jfree.chart.axis.LogAxis;
-import org.jfree.chart.entity.StandardEntityCollection;
-import org.jfree.chart.imagemap.StandardToolTipTagFragmentGenerator;
-import org.jfree.chart.imagemap.StandardURLTagFragmentGenerator;
-import org.jfree.chart.labels.XYToolTipGenerator;
-import org.jfree.chart.plot.PiePlot;
-import org.jfree.chart.plot.PlotOrientation;
-import org.jfree.chart.plot.XYPlot;
-import org.jfree.chart.renderer.xy.SamplingXYLineRenderer;
-import org.jfree.chart.renderer.xy.XYLineAndShapeRenderer;
-import org.jfree.chart.title.LegendTitle;
-import org.jfree.chart.urls.XYURLGenerator;
-import org.jfree.data.Range;
-import org.jfree.data.general.DefaultPieDataset;
-import org.jfree.data.general.PieDataset;
-import org.jfree.data.xy.XYSeries;
-import org.jfree.data.xy.XYSeriesCollection;
 import org.starexec.constants.R;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
 import org.starexec.data.to.*;
 import org.starexec.data.to.pipelines.JoblineStage;
 import org.starexec.logger.StarLogger;
-import org.starexec.util.BenchmarkTooltipGenerator;
-import org.starexec.util.BenchmarkURLGenerator;
-import org.starexec.util.Util;
 import org.starexec.data.to.Queue;
 import org.starexec.data.to.QueueGraphData;
 
-import java.awt.*;
-import java.io.File;
-import java.io.IOException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -201,133 +174,105 @@ public class Statistics {
 		return map;
 	}
 
-	public static String makeJobTimeGraph(int jobId) {
-		final String methodName = "makeJobTimeGraph";
+	private static JsonObject errorChartData(String errorCode) {
+		JsonObject error = new JsonObject();
+		error.addProperty("error", errorCode);
+		return error;
+	}
+
+	/**
+	 * Builds structured cumulative completed-pairs-over-time data for client-side chart rendering.
+	 *
+	 * @param jobId The job ID to aggregate completion timestamps for
+	 * @return A JSON object containing sorted timestamp/count points and total pair count, or null on failure
+	 */
+	public static JsonObject makeJobTimeGraphData(int jobId) {
+		final String methodName = "makeJobTimeGraphData";
 		try {
 			log.entry(methodName);
 			List<Date> times = getPairTimes(jobId);
-			Collections.sort(times, new Comparator<Date>() {
-				@Override
-				public int compare(Date d1, Date d2) {
-					if (d1 == d2) {
-						return 0;
-					}
-					if (d1 == null) {
-						return 1;
-					}
-					if (d2 == null) {
-						return -1;
-					}
-					return Long.compare(d1.getTime(), d2.getTime());
+			if (times == null) {
+				return null;
+			}
+			times.sort((d1, d2) -> {
+				if (d1 == d2) {
+					return 0;
 				}
+				if (d1 == null) {
+					return 1;
+				}
+				if (d2 == null) {
+					return -1;
+				}
+				return Long.compare(d1.getTime(), d2.getTime());
 			});
 
-			// Times is now a list of dates ordered from earliest to latest, with all nulls
-			// at the end of the list.
-			XYSeries series = new XYSeries("Number of completed pairs");
+			JsonArray points = new JsonArray();
 			for (int i = 0; i < times.size(); i++) {
 				Date d = times.get(i);
 				if (d != null) {
-					series.add(d.getTime() / 1000, i + 1);
-
+					JsonObject point = new JsonObject();
+					point.addProperty("x", d.getTime());
+					point.addProperty("y", i + 1);
+					points.add(point);
 				}
 			}
 
-			XYSeriesCollection dataset = new XYSeriesCollection();
-			dataset.addSeries(series);
-			JFreeChart chart = ChartFactory.createXYLineChart("# Pairs Completed vs Time", "Time",
-					"# of Completed Pairs", dataset, PlotOrientation.VERTICAL, false, false, false);
-
-			chart.setBackgroundPaint(new Color(0, 0, 0, 0));
-			chart.getTitle().setPaint(new Color(255, 255, 255));
-			XYPlot plot = (XYPlot) chart.getXYPlot();
-			plot.getRangeAxis().setAutoRange(false);
-			plot.getRangeAxis().setRange(new Range(0, times.size()));
-			plot.getRangeAxis().setLabelPaint(new Color(255, 255, 255));
-			plot.getRangeAxis().setTickLabelPaint(new Color(255, 255, 255));
-			plot.getDomainAxis().setLabelPaint(new Color(255, 255, 255));
-			plot.getDomainAxis().setTickLabelsVisible(false);
-
-			XYLineAndShapeRenderer rend = new XYLineAndShapeRenderer();
-			rend.setSeriesShapesVisible(0, false);
-			plot.setRenderer(rend);
-
-			String fileName = UUID.randomUUID().toString() + ".png";
-			File dir = new File(R.STAREXEC_ROOT, R.CLUSTER_GRAPH_DIR);
-			if (!dir.exists()) {
-				dir.mkdirs();
-			}
-			File output = new File(dir, fileName);
-			ChartUtils.saveChartAsPNG(output, chart, 300, 300);
-
-			plot.getRangeAxis().setLabelPaint(new Color(0, 0, 0));
-			plot.getRangeAxis().setTickLabelPaint(new Color(0, 0, 0));
-			plot.getDomainAxis().setLabelPaint(new Color(0, 0, 0));
-			plot.getDomainAxis().setTickLabelsVisible(false);
-
-			output = new File(new File(R.STAREXEC_ROOT, R.CLUSTER_GRAPH_DIR), fileName + "800");
-			ChartUtils.saveChartAsPNG(output, chart, 800, 800);
-
-			return Util.docRoot(R.CLUSTER_GRAPH_DIR + "/" + fileName);
+			JsonObject data = new JsonObject();
+			data.addProperty("chartType", "pairTime");
+			data.addProperty("title", "# Pairs Completed vs Time");
+			data.addProperty("xLabel", "Time");
+			data.addProperty("yLabel", "# of Completed Pairs");
+			data.addProperty("totalPairs", times.size());
+			data.add("points", points);
+			return data;
 		} catch (Exception e) {
-			log.error("Error generating job pair chart for job_id=" + jobId, e);
+			log.error("Error generating job pair chart data for job_id=" + jobId, e);
 		}
 		return null;
 	}
 
 	/**
-	 * Creates a chart that compares the running times of two solver/configuration
-	 * pairs on benchmarks that they both
-	 * completed for a given job in a given space
+	 * Builds structured scatter-plot data comparing the running times of two solver/configuration
+	 * pairs on benchmarks that both completed for a given job space and stage.
 	 *
-	 * @param configId1          The first configuration ID (which is used to get
-	 *                           the first solver)
-	 * @param configId2          The second configuration ID (which is used to get
-	 *                           the second solver)
-	 * @param edgeLengthInPixels Side length of the graph, which is square
-	 * @param axisColor          The color to make the axis titles and labels
-	 * @param jobSpaceId         The ID of the space containing all the jobs
-	 * @param stageNumber        The stage to analyze for all the pairs in this
-	 *                           graph.
-	 * @return A list of strings of size 2, where the first string is the path to
-	 *         the new graph and the second
-	 *         string is
-	 *         an HTML image map. When there is no chart to draw, returns a list
-	 *         holding only OVERSIZED_GRAPH_ERROR or NO_COMPARABLE_PAIRS_ERROR.
-	 *         Returns null on failure.
-	 * @author Eric Burns
+	 * @param configId1             The first configuration ID
+	 * @param configId2             The second configuration ID
+	 * @param jobSpaceId            The ID of the space containing the job pairs
+	 * @param stageNumber           The stage to analyze
+	 * @param primitivesToAnonymize Which primitives to anonymize in axis labels and points
+	 * @return Structured chart data, an error payload holding OVERSIZED_GRAPH_ERROR or
+	 *         NO_COMPARABLE_PAIRS_ERROR, or null on failure
 	 */
-
-	public static List<String> makeSolverComparisonChart(
-			int configId1, int configId2, int jobSpaceId, int edgeLengthInPixels, Color axisColor, int stageNumber,
+	public static JsonObject makeSolverComparisonChartData(
+			int configId1, int configId2, int jobSpaceId, int stageNumber,
 			PrimitivesToAnonymize primitivesToAnonymize) {
-		final String methodName = "makeSolverComparisonChart";
+		final String methodName = "makeSolverComparisonChartData";
 		log.entry(methodName);
 
 		try {
-			List<Integer> configIds = new ArrayList<>();
-			configIds.add(configId1);
-			configIds.add(configId2);
+			List<Integer> configIds = List.of(configId1, configId2);
 			List<List<JobPair>> pairs = Jobs.getJobPairsForSolverComparisonGraph(jobSpaceId, configIds, stageNumber,
 					primitivesToAnonymize);
+			if (pairs == null || pairs.size() < 2) {
+				return null;
+			}
 
 			List<JobPair> pairs1 = pairs.get(0);
 			List<JobPair> pairs2 = pairs.get(1);
-
-			if ((pairs1.size()) > R.MAXIMUM_DATA_POINTS || pairs2.size() > R.MAXIMUM_DATA_POINTS) {
-				List<String> answer = new ArrayList<>();
-				answer.add(Statistics.OVERSIZED_GRAPH_ERROR);
-				return answer;
+			if (pairs1 == null || pairs2 == null) {
+				return null;
 			}
-			// Both lists hold only the pairs this graph plots. The chart below returns null
+
+			if (pairs1.size() > R.MAXIMUM_DATA_POINTS || pairs2.size() > R.MAXIMUM_DATA_POINTS) {
+				return errorChartData(OVERSIZED_GRAPH_ERROR);
+			}
+			// Both lists hold only the pairs this graph plots. The builder below returns null
 			// when one is empty, which callers cannot tell apart from a failure.
 			if (pairs1.isEmpty() || pairs2.isEmpty()) {
-				List<String> answer = new ArrayList<>();
-				answer.add(Statistics.NO_COMPARABLE_PAIRS_ERROR);
-				return answer;
+				return errorChartData(NO_COMPARABLE_PAIRS_ERROR);
 			}
-			return makeSolverComparisonChart(pairs1, pairs2, jobSpaceId, edgeLengthInPixels, axisColor, stageNumber,
-					primitivesToAnonymize);
+			return makeSolverComparisonChartData(pairs1, pairs2, jobSpaceId, stageNumber, primitivesToAnonymize);
 		} catch (Exception e) {
 			log.error(methodName + e.getMessage(), e);
 		}
@@ -335,33 +280,24 @@ public class Statistics {
 	}
 
 	/**
-	 * Given two lists of job pairs, each list representing a single
-	 * solver/configuration pair, creates a .png image
-	 * file comparing the running times of the two pairs on all benchmarks that they
-	 * both solved.
+	 * Builds structured scatter-plot data comparing two solver/configuration pair lists.
 	 *
-	 * @param pairs1             A list of job pairs from a single
-	 *                           solver/configuration pair
-	 * @param pairs2             A list of job pairs from a single
-	 *                           solver/configuration pair
-	 * @param edgeLengthInPixels Side length of the graph, which is square
-	 * @param axisColor          The color to make the axis titles and labels
-	 * @param stageNumber        Stage number to get data for
-	 * @return A size 2 List of String objects, with the first string being the path
-	 *         to the new graph and the second
-	 *         string being an HTML image map for the graph. Returns null on error
-	 * @author Eric Burns
+	 * @param pairs1                Job pairs from the first configuration
+	 * @param pairs2                Job pairs from the second configuration
+	 * @param jobSpaceId            Job space ID used for solver anonymization lookups
+	 * @param stageNumber           Stage number to analyze
+	 * @param primitivesToAnonymize Which primitives to anonymize
+	 * @return Structured JSON chart data, or null if either input list is empty or an error occurs
 	 */
-	public static List<String> makeSolverComparisonChart(
-			List<JobPair> pairs1, List<JobPair> pairs2, int jobSpaceId, int edgeLengthInPixels, Color axisColor,
-			int stageNumber, PrimitivesToAnonymize primitivesToAnonymize) {
+	public static JsonObject makeSolverComparisonChartData(
+			List<JobPair> pairs1, List<JobPair> pairs2, int jobSpaceId, int stageNumber,
+			PrimitivesToAnonymize primitivesToAnonymize) {
 		try {
-
-			// there are no points if either list of pairs is empty
-			if (pairs1.isEmpty() || pairs2.isEmpty()) {
+			if (pairs1 == null || pairs2 == null || pairs1.isEmpty() || pairs2.isEmpty()) {
 				log.debug("An input list has no jobpairs, returning null");
 				return null;
 			}
+
 			HashMap<Integer, JobPair> pairs2Map = new HashMap<>();
 			for (JobPair jp : pairs2) {
 				pairs2Map.put(jp.getBench().getId(), jp);
@@ -369,14 +305,10 @@ public class Statistics {
 			JoblineStage stage1 = pairs1.get(0).getStageFromNumber(stageNumber);
 			JoblineStage stage2 = pairs2.get(0).getStageFromNumber(stageNumber);
 
-			log.debug("making solver comparison chart");
-
-			String xAxisName = null;
-			String yAxisName = null;
-
+			String xAxisName;
+			String yAxisName;
 			if (AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
 				int jobId = Spaces.getJobSpace(jobSpaceId).getJobId();
-				// Use anonymous solver names for the axis titles.
 				Map<Integer, String> solverIdToAnonymizedName = AnonymousLinks.getAnonymizedSolverNames(jobId,
 						stageNumber);
 				xAxisName = solverIdToAnonymizedName.get(stage1.getSolver().getId()) + " time(s)";
@@ -385,277 +317,161 @@ public class Statistics {
 				xAxisName = stage1.getSolver().getName() + "/" + stage1.getConfiguration().getName() + " time(s)";
 				yAxisName = stage2.getSolver().getName() + "/" + stage2.getConfiguration().getName() + " time(s)";
 			}
-			// data in these hashmaps is needed to create the image map
-			HashMap<String, Integer> urls = new HashMap<>();
-			HashMap<String, String> names = new HashMap<>();
-			int series = 0;
-			int item = 0;
-			XYSeries d = new XYSeries("points", false);
-			XYSeriesCollection dataset = new XYSeriesCollection();
-			// for now, we are not including error pairs in this chart
-			int debugItem = 0;
-			int debugSeries = 0;
+
+			boolean benchmarksAnonymized = AnonymousLinks.areBenchmarksAnonymized(primitivesToAnonymize);
 			Map<Integer, String> benchmarkIdToAnonymizedName = null;
-			if (AnonymousLinks.areBenchmarksAnonymized(primitivesToAnonymize)) {
+			if (benchmarksAnonymized) {
 				List<Benchmark> benchmarks = new ArrayList<>();
 				for (JobPair p : pairs1) {
 					benchmarks.add(p.getBench());
 				}
 				benchmarkIdToAnonymizedName = AnonymousLinks.getAnonymizedBenchmarkNames(benchmarks);
 			}
+
+			JsonArray points = new JsonArray();
+			double maxCoord = 0.0;
 			for (JobPair jp : pairs1) {
 				JobPair jp2 = pairs2Map.get(jp.getBench().getId());
-				if (jp.getStatus().getCode().statComplete()) {
-					// if we can find a second pair with this benchmark
-					if (jp2 != null && jp2.getStatus().getCode().statComplete()) {
-						// points are identified by their series and item number
-						String key = series + ":" + item;
+				if (jp.getStatus().getCode().statComplete() && jp2 != null && jp2.getStatus().getCode().statComplete()) {
+					stage1 = jp.getStageFromNumber(stageNumber);
+					stage2 = jp2.getStageFromNumber(stageNumber);
+					double x = stage1.getWallclockTime();
+					double y = stage2.getWallclockTime();
+					maxCoord = Math.max(maxCoord, Math.max(x, y));
 
-						// put the id in urls so we can link to the benchmark details page
-						urls.put(key, jp.getBench().getId());
-
-						// put the name in names so we can create a tooltip of the name
-						// when hovering over the point in the image map
-						if (AnonymousLinks.areBenchmarksAnonymized(primitivesToAnonymize)
-								&& benchmarkIdToAnonymizedName != null) {
-							names.put(key, benchmarkIdToAnonymizedName.get(jp.getBench().getId()));
-						} else {
-							names.put(key, jp.getBench().getName());
+					JsonObject point = new JsonObject();
+					point.addProperty("x", x);
+					point.addProperty("y", y);
+					if (benchmarksAnonymized && benchmarkIdToAnonymizedName != null) {
+						point.addProperty("name", benchmarkIdToAnonymizedName.get(jp.getBench().getId()));
+					} else {
+						point.addProperty("name", jp.getBench().getName());
+						if (!benchmarksAnonymized) {
+							point.addProperty("benchmarkId", jp.getBench().getId());
 						}
-						item += 1;
-
-						stage1 = jp.getStageFromNumber(stageNumber);
-						stage2 = jp2.getStageFromNumber(stageNumber);
-
-						d.add(stage1.getWallclockTime(), stage2.getWallclockTime());
 					}
+					points.add(point);
 				}
 			}
 
-			dataset.addSeries(d);
-
-			{ // I don't know what this is trying to debug
-				final String key = debugSeries + ":" + debugItem;
-				final Integer value = urls.get(key);
-				if (value != null) {
-					log.debug(value.toString());
-				}
-			}
-
-			JFreeChart chart = ChartFactory.createScatterPlot("Solver Comparison Plot", xAxisName, yAxisName, dataset,
-					PlotOrientation.VERTICAL, true, true, false);
-			Color color = new Color(0, 0, 0, 0); // makes the background clear
-			chart.setBackgroundPaint(color);
-			chart.getTitle().setPaint(new Color(255, 255, 255)); // makes the title white
-			XYPlot plot = (XYPlot) chart.getPlot();
-
-			// make both axes identical, and make them span from 0
-			// to 110% of the maximum value
-			double maxX = dataset.getDomainUpperBound(false) * 1.1;
-			double maxY = dataset.getRangeUpperBound(false) * 1.1;
-			Range range = new Range(0, Math.max(0.1, Math.max(maxX, maxY)));
-
-			XYLineAndShapeRenderer renderer = (XYLineAndShapeRenderer) plot.getRenderer();
-
-			XYURLGenerator customURLGenerator = new BenchmarkURLGenerator(urls);
-			if (!AnonymousLinks.areBenchmarksAnonymized(primitivesToAnonymize)) {
-				renderer.setURLGenerator(customURLGenerator);
-			}
-
-			XYToolTipGenerator tooltips = new BenchmarkTooltipGenerator(names);
-			renderer.setSeriesToolTipGenerator(0, tooltips);
-
-			LegendTitle legend = chart.getLegend();
-			legend.setVisible(false);
-
-			plot.getDomainAxis().setAutoRange(false);
-			plot.getDomainAxis().setRange(range);
-			plot.getRangeAxis().setAutoRange(false);
-			plot.getRangeAxis().setRange(range);
-
-			String filename = UUID.randomUUID().toString() + ".png";
-			log.debug("The filename for the graph is: " + filename);
-			File dir = new File(R.STAREXEC_ROOT, R.JOBGRAPH_FILE_DIR);
-			if (!dir.exists()) {
-				dir.mkdirs();
-			}
-			File output = new File(dir, filename);
-
-			ChartRenderingInfo info = new ChartRenderingInfo(new StandardEntityCollection());
-			// we're displaying the small graph on black, so we want white axes
-			plot.getDomainAxis().setTickLabelPaint(axisColor);
-			plot.getDomainAxis().setLabelPaint(axisColor);
-			plot.getRangeAxis().setTickLabelPaint(axisColor);
-			plot.getRangeAxis().setLabelPaint(axisColor);
-			ChartUtils.saveChartAsPNG(output, chart, edgeLengthInPixels, edgeLengthInPixels, info);
-			StandardURLTagFragmentGenerator url = new StandardURLTagFragmentGenerator();
-			StandardToolTipTagFragmentGenerator tag = new StandardToolTipTagFragmentGenerator();
-			String map;
-
-			// Don't include the links to the benchmark pages if we're sending this to an
-			// anonymous page.
-			if (AnonymousLinks.areBenchmarksAnonymized(primitivesToAnonymize)) {
-				map = ChartUtils.getImageMap("solverComparisonMap" + edgeLengthInPixels, info);
-			} else {
-				map = ChartUtils.getImageMap("solverComparisonMap" + edgeLengthInPixels, info, tag, url);
-			}
-
-			log.debug("solver comparison chart created succesfully, returning filepath ");
-			List<String> answer = new ArrayList<>();
-			answer.add(Util.docRoot(R.JOBGRAPH_FILE_DIR + "/" + filename));
-			answer.add(map);
-			return answer;
+			JsonObject data = new JsonObject();
+			data.addProperty("chartType", "solverComparison");
+			data.addProperty("title", "Solver Comparison Plot");
+			data.addProperty("xLabel", xAxisName);
+			data.addProperty("yLabel", yAxisName);
+			data.addProperty("maxAxis", Math.max(0.1, maxCoord * 1.1));
+			data.addProperty("benchmarksAnonymized", benchmarksAnonymized);
+			data.add("points", points);
+			return data;
 		} catch (Exception e) {
-			log.error("makeSolverComparisonChart", e);
+			log.error("makeSolverComparisonChartData", e);
 		}
 		return null;
 	}
 
 	/**
-	 * Draws a graph comparing solvers operating in a single job in a single space,
-	 * saves the chart as a png file, and
-	 * returns a string containing the absolute filepath of the chart
+	 * Builds structured cactus/overview series comparing solvers operating in a single job space.
 	 *
-	 * @param jobSpaceId  The space that should contain all of the job pairs to
-	 *                    compare
-	 * @param logX        Whether to use a log scale on the X axis
-	 * @param logY        Whether to use a log scale on the Y axis
-	 * @param configIds   The IDs of the configurations that should be included in
-	 *                    this graph
-	 * @param stageNumber the stage to analyze for all job pairs in the graph
-	 * @return A String filepath to the newly created graph, or null if there was an
-	 *         error. Returns the string
-	 *         Statistics.OVERSIZED_GRAPH_ERROR if there are too many job pairs to
-	 *         display
-	 * @author Eric Burns
+	 * @param jobSpaceId            The space containing the job pairs
+	 * @param logX                  Whether to use a log scale on the X axis
+	 * @param logY                  Whether to use a log scale on the Y axis
+	 * @param configIds             The configuration IDs to include
+	 * @param stageNumber           The stage number to analyze
+	 * @param primitivesToAnonymize Which primitives to anonymize
+	 * @return Structured chart data, an error payload holding OVERSIZED_GRAPH_ERROR, or null on failure
 	 */
-
-	public static String makeSpaceOverviewChart(
+	public static JsonObject makeSpaceOverviewChartData(
 			int jobSpaceId, boolean logX, boolean logY, List<Integer> configIds, int stageNumber,
 			PrimitivesToAnonymize primitivesToAnonymize) {
-
 		try {
-			if (configIds.isEmpty()) {
+			if (configIds == null || configIds.isEmpty()) {
 				return null;
 			}
 
 			List<List<JobPair>> pairLists = Jobs.getJobPairsForSolverComparisonGraph(jobSpaceId, configIds, stageNumber,
 					primitivesToAnonymize);
+			if (pairLists == null) {
+				return null;
+			}
 			List<JobPair> pairs = new ArrayList<>();
 			for (List<JobPair> pairList : pairLists) {
 				pairs.addAll(pairList);
 			}
 			if (pairs.size() > R.MAXIMUM_DATA_POINTS) {
-				return OVERSIZED_GRAPH_ERROR;
+				return errorChartData(OVERSIZED_GRAPH_ERROR);
 			}
 
 			log.debug("Number of pairs after add all for primitivesToAnonymize=" +
 					AnonymousLinks.getPrimitivesToAnonymizeName(primitivesToAnonymize) + ": " + pairs.size());
-			return makeSpaceOverviewChart(pairs, logX, logY, stageNumber, primitivesToAnonymize);
+			return makeSpaceOverviewChartData(pairs, logX, logY, stageNumber, primitivesToAnonymize);
 		} catch (Exception e) {
-			log.error("makeSpaceOverviewChart", e);
+			log.error("makeSpaceOverviewChartData", e);
 		}
-
 		return null;
 	}
 
 	/**
-	 * Creates a graph for plotting the peformance of solvers against a set of job
-	 * pairs
+	 * Builds structured space overview series from an explicit list of job pairs.
 	 *
-	 * @param pairs                 The pairs to plot results of
+	 * @param pairs                 The pairs to plot
 	 * @param logX                  Whether to use a log scale for the X axis
 	 * @param logY                  Whether to use a log scale for the Y axis
-	 * @param stageNumber           The stage number of analyze for all the job
-	 *                              pairs
-	 * @param primitivesToAnonymize an enum describing which (if any) primitives to
-	 *                              anonymize.
-	 * @return The absolute filepath to the chart that was created
+	 * @param stageNumber           The stage number to analyze
+	 * @param primitivesToAnonymize Which primitives to anonymize
+	 * @return Structured JSON chart data, or null on failure
 	 */
-	public static String makeSpaceOverviewChart(
+	public static JsonObject makeSpaceOverviewChartData(
 			List<JobPair> pairs, boolean logX, boolean logY, int stageNumber,
 			PrimitivesToAnonymize primitivesToAnonymize) {
 		try {
-			log.debug("Making space overview chart with logX = " + logX + " and logY = " + logY + " and pair # = " +
+			if (pairs == null) {
+				return null;
+			}
+			log.debug("Making space overview chart data with logX = " + logX + " and logY = " + logY + " and pair # = " +
 					pairs.size());
 			HashMap<Solver, HashMap<Configuration, List<Double>>> data = processJobPairData(pairs, stageNumber);
-			XYSeries d;
-			XYSeriesCollection dataset = new XYSeriesCollection();
+			TreeMap<String, JsonArray> sortedSeries = new TreeMap<>();
+			double maxY = 0.0;
+			boolean solversAnonymized = AnonymousLinks.areSolversAnonymized(primitivesToAnonymize);
 			for (Solver s : data.keySet()) {
 				for (Configuration c : data.get(s).keySet()) {
-					String label = null;
-					if (AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
-						label = s.getName() + " config = " + c.getName();
-					} else {
-						label = s.getName() + "(" + s.getId() + ") config = " + c.getName();
-					}
-					d = new XYSeries(label);
+					String label = solversAnonymized
+							? s.getName() + " config = " + c.getName()
+							: s.getName() + "(" + s.getId() + ") config = " + c.getName();
+					JsonArray points = new JsonArray();
 					int counter = 1;
 					for (Double time : data.get(s).get(c)) {
-						d.add(counter, time);
+						JsonObject point = new JsonObject();
+						point.addProperty("x", counter);
+						point.addProperty("y", time);
+						points.add(point);
+						maxY = Math.max(maxY, time);
 						counter++;
 					}
-					dataset.addSeries(d);
+					sortedSeries.put(label, points);
 				}
 			}
 
-			log.debug("making space overview template");
-			JFreeChart chart = ChartFactory
-					.createScatterPlot("Space Overview Plot", "# solved", "time (s)", dataset, PlotOrientation.VERTICAL,
-							true, true, false);
-			Color color = new Color(0, 0, 0, 0); // makes the background clear
-			chart.setBackgroundPaint(color);
-			chart.getTitle().setPaint(new Color(255, 255, 255)); // makes the title white
-
-			XYPlot plot = (XYPlot) chart.getPlot();
-			if (logX) {
-				LogAxis xAxis = new LogAxis("# solved");
-				plot.setDomainAxis(xAxis);
-			}
-			// logarithmic axes and manually-set ranges seem to be incompatible
-			if (logY) {
-				LogAxis yAxis = new LogAxis("time (s)");
-				plot.setRangeAxis(yAxis);
-			} else {
-				plot.getRangeAxis().setAutoRange(false);
-				plot.getRangeAxis().setRange(new Range(0, Math.max(0.1, dataset.getRangeUpperBound(false) * 1.1)));
+			JsonArray series = new JsonArray();
+			for (Map.Entry<String, JsonArray> entry : sortedSeries.entrySet()) {
+				JsonObject item = new JsonObject();
+				item.addProperty("label", entry.getKey());
+				item.add("points", entry.getValue());
+				series.add(item);
 			}
 
-			plot.getDomainAxis().setTickLabelPaint(new Color(255, 255, 255));
-
-			plot.getRangeAxis().setTickLabelPaint(new Color(255, 255, 255));
-			plot.getDomainAxis().setLabelPaint(new Color(255, 255, 255));
-			plot.getRangeAxis().setLabelPaint(new Color(255, 255, 255));
-			if (pairs.size() > 100) {
-				SamplingXYLineRenderer renderer = new SamplingXYLineRenderer();
-				plot.setRenderer(renderer);
-			} else {
-				XYLineAndShapeRenderer renderer = new XYLineAndShapeRenderer();
-				renderer.setSeriesLinesVisible(0, true);
-				plot.setRenderer(renderer);
-			}
-
-			String filename = UUID.randomUUID().toString() + ".png";
-			File dir = new File(R.STAREXEC_ROOT, R.JOBGRAPH_FILE_DIR);
-			if (!dir.exists()) {
-				dir.mkdirs();
-			}
-			File output = new File(dir, filename);
-			log.debug("saving smaller space overview chart");
-			ChartUtils.saveChartAsPNG(output, chart, 300, 300);
-
-			plot.getDomainAxis().setTickLabelPaint(new Color(0, 0, 0));
-			plot.getRangeAxis().setTickLabelPaint(new Color(0, 0, 0));
-			plot.getDomainAxis().setLabelPaint(new Color(0, 0, 0));
-			plot.getRangeAxis().setLabelPaint(new Color(0, 0, 0));
-			output = new File(new File(R.STAREXEC_ROOT, R.JOBGRAPH_FILE_DIR), filename + "800");
-			log.debug("saving larger space overview chart");
-			ChartUtils.saveChartAsPNG(output, chart, 800, 800);
-
-			log.debug("Chart created succesfully, returning filepath ");
-			return Util.docRoot(R.JOBGRAPH_FILE_DIR + "/" + filename);
-		} catch (IOException e) {
-			log.error("makeSpaceOverviewChart", e);
+			JsonObject result = new JsonObject();
+			result.addProperty("chartType", "spaceOverview");
+			result.addProperty("title", "Space Overview Plot");
+			result.addProperty("xLabel", "# solved");
+			result.addProperty("yLabel", "time (s)");
+			result.addProperty("logX", logX);
+			result.addProperty("logY", logY);
+			result.addProperty("maxY", Math.max(0.1, maxY * 1.1));
+			result.add("series", series);
+			return result;
+		} catch (Exception e) {
+			log.error("makeSpaceOverviewChartData", e);
 		}
 		return null;
 	}

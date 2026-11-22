@@ -1,5 +1,6 @@
 package org.starexec.test.integration.database;
 
+import com.google.gson.JsonObject;
 import org.starexec.constants.R;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
 import org.starexec.data.database.JobPairs;
@@ -12,8 +13,6 @@ import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
 import org.junit.jupiter.api.Assertions;
 
-import java.awt.*;
-import java.io.File;
 import java.util.HashMap;
 import java.util.List;
 
@@ -35,16 +34,16 @@ public class StatisticsTests extends TestSequence {
 	
 	@StarexecTest
 	private void makeSpaceOverviewTest() {
-		String filepath = Statistics.makeSpaceOverviewChart(spaceOverviewPairs, false, false, 1, PrimitivesToAnonymize.NONE);
-		File f = new File(new File(R.STAREXEC_ROOT).getParent(), filepath);
-		Assertions.assertTrue(f.exists());
+		JsonObject data = Statistics.makeSpaceOverviewChartData(spaceOverviewPairs, false, false, 1, PrimitivesToAnonymize.NONE);
+		Assertions.assertNotNull(data);
+		Assertions.assertEquals("spaceOverview", data.get("chartType").getAsString());
 	}
 	@StarexecTest
 	private void makeSolverComparisonTest() {
-		String filepath = Statistics.makeSolverComparisonChart(spaceOverviewPairs, spaceOverviewPairs, job.getPrimarySpace(), 
-				100, Color.BLACK, 1, PrimitivesToAnonymize.NONE).get(0);
-		File f = new File(new File(R.STAREXEC_ROOT).getParent(), filepath);
-		Assertions.assertTrue(f.exists());
+		JsonObject data = Statistics.makeSolverComparisonChartData(spaceOverviewPairs, spaceOverviewPairs, job.getPrimarySpace(), 
+				1, PrimitivesToAnonymize.NONE);
+		Assertions.assertNotNull(data);
+		Assertions.assertEquals("solverComparison", data.get("chartType").getAsString());
 	}
 	
 	@StarexecTest

@@ -2862,10 +2862,30 @@ public class RESTServices {
 	 * @param edgeLengthInPixels        Size of edge of square graph
 	 * @param axisColor                 String color for axis labels. Must
 	 *                                  correspond to some java Color.
-	 * @param primitivesToAnonymizeName Represents which primitive types to
-	 *                                  anonymize in the graph
-	 * @return A json string containing the path to the newly created png chart as
-	 *         well as an image map linking points to benchmarks
+	/**
+	 * Handles a request for anonymized solver comparison scatter-plot data without legacy
+	 * pixel-size/color parameters.
+	 */
+	@POST
+	@Path("/jobs/anonymousLink/{anonymousLinkUuid}/{jobSpaceId}/graphs/solverComparison/{config1}/{config2}/{stageNum}/{primitivesToAnonymizeName}")
+	@Produces("application/json")
+	public String getAnonymousSolverComparisonGraph(
+			@PathParam("anonymousLinkUuid") String anonymousLinkUuid,
+			@PathParam("stageNum") int stageNumber,
+			@PathParam("jobSpaceId") int jobSpaceId,
+			@PathParam("config1") int config1,
+			@PathParam("config2") int config2,
+			@PathParam("primitivesToAnonymizeName") String primitivesToAnonymizeName,
+			@Context HttpServletRequest request) {
+		return getAnonymousSolverComparisonGraph(
+				anonymousLinkUuid, stageNumber, jobSpaceId, config1, config2, 0, "",
+				primitivesToAnonymizeName, request);
+	}
+
+	/**
+	 * Compatibility endpoint accepting legacy pixel-size and axis-color path segments (ignored
+	 * now that charts render client-side).
+	 *
 	 * @author Albert Giegerich
 	 */
 	@POST
@@ -2890,9 +2910,7 @@ public class RESTServices {
 					"\tstageNumber: " + stageNumber + "\n" +
 					"\tjobSpaceId: " + jobSpaceId + "\n" +
 					"\tconfig1: " + config1 + "\n" +
-					"\tconfig2: " + config2 + "\n" +
-					"\tedgeLengthInPixels: " + edgeLengthInPixels + "\n" +
-					"\taxisColor: " + axisColor + "\n");
+					"\tconfig2: " + config2 + "\n");
 			ValidatorStatusCode status = JobSecurity.isAnonymousLinkAssociatedWithJobSpace(anonymousLinkUuid,
 					jobSpaceId);
 
@@ -2903,7 +2921,7 @@ public class RESTServices {
 			PrimitivesToAnonymize primitivesToAnonymize = AnonymousLinks
 					.createPrimitivesToAnonymize(primitivesToAnonymizeName);
 			return RESTHelpers.getSolverComparisonGraphJson(
-					jobSpaceId, config1, config2, edgeLengthInPixels, axisColor, stageNumber, primitivesToAnonymize);
+					jobSpaceId, config1, config2, stageNumber, primitivesToAnonymize);
 		} catch (RuntimeException e) {
 			log.error(methodName, "Caught a runtime exception: ", e);
 			return gson.toJson(ERROR_INTERNAL_SERVER);
@@ -2911,20 +2929,22 @@ public class RESTServices {
 	}
 
 	/**
-	 * Handles a request to get a solver comparison graph for a job details page
-	 * 
-	 * @param jobSpaceId         The job space the chart is for
-	 * @param config1            The ID of the first configuration to handle
-	 * @param config2            The ID of the second configuration to handle
-	 * @param stageNumber        the stage to get job pair data for
-	 * @param edgeLengthInPixels Number of pixels along the perimeter of the square
-	 *                           graph.
-	 * @param request            Object containing other request information
-	 * @param axisColor          The color to make the axis labels. Must be a string
-	 *                           that corresponds to some java Color
-	 * @return A json string containing the path to the newly created png chart as
-	 *         well as
-	 *         an image map linking points to benchmarks
+	 * Handles a request for solver comparison scatter-plot data without legacy pixel-size/color
+	 * parameters.
+	 */
+	@POST
+	@Path("/jobs/{jobSpaceId}/graphs/solverComparison/{config1}/{config2}/{stageNum}")
+	@Produces("application/json")
+	public String getSolverComparisonGraph(@PathParam("stageNum") int stageNumber,
+			@PathParam("jobSpaceId") int jobSpaceId,
+			@PathParam("config1") int config1, @PathParam("config2") int config2,
+			@Context HttpServletRequest request) {
+		return getSolverComparisonGraph(stageNumber, jobSpaceId, config1, config2, 0, "", request);
+	}
+
+	/**
+	 * Compatibility endpoint accepting legacy pixel-size and axis-color path segments (ignored
+	 * now that charts render client-side).
 	 */
 	@POST
 	@Path("/jobs/{jobSpaceId}/graphs/solverComparison/{config1}/{config2}/{edgeLengthInPixels}/{axisColor}/{stageNum}")
@@ -2936,13 +2956,11 @@ public class RESTServices {
 			@Context HttpServletRequest request) {
 		final String methodName = "getSolverComparisonGraph";
 		log.entry(methodName);
-		log.debug(methodName, "Got request to get an anonymous solver comparison graph with parameters:\n" +
+		log.debug(methodName, "Got request to get a solver comparison graph with parameters:\n" +
 				"\tstageNumber: " + stageNumber + "\n" +
 				"\tjobSpaceId: " + jobSpaceId + "\n" +
 				"\tconfig1: " + config1 + "\n" +
-				"\tconfig2: " + config2 + "\n" +
-				"\tedgeLengthInPixels: " + edgeLengthInPixels + "\n" +
-				"\taxisColor: " + axisColor + "\n");
+				"\tconfig2: " + config2 + "\n");
 
 		int userId = SessionUtil.getUserId(request);
 
@@ -2951,8 +2969,7 @@ public class RESTServices {
 			return gson.toJson(status);
 		} else {
 			return RESTHelpers.getSolverComparisonGraphJson(
-					jobSpaceId, config1, config2, edgeLengthInPixels, axisColor, stageNumber,
-					PrimitivesToAnonymize.NONE);
+					jobSpaceId, config1, config2, stageNumber, PrimitivesToAnonymize.NONE);
 		}
 	}
 

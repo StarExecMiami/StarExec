@@ -33,7 +33,6 @@ import org.starexec.util.*;
 //import org.starexec.data.database.Common;
 
 import javax.servlet.http.HttpServletRequest;
-import java.awt.*;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -343,29 +342,34 @@ public class RESTHelpers {
 	/** The answer to a solver comparison request that names one configuration twice. */
 	static final String SAME_CONFIGURATION_TWICE = "Choose two different configurations to compare.";
 
-	/**
-	 * Gets the graph of completed pairs over time for a given job.
-	 *
-	 * @param jobId the job to get the graph for.
-	 */
-	protected static String getPairTimeGraphJson(int jobId) {
-		String chartPath = Statistics.makeJobTimeGraph(jobId);
-		if (chartPath == null) {
-			return gson.toJson(RESTServices.ERROR_DATABASE);
+	private static String extractGraphError(JsonObject chartData) {
+		if (chartData != null && chartData.has("error") && chartData.get("error").isJsonPrimitive()) {
+			return chartData.get("error").getAsString();
 		}
-		if (chartPath.equals(Statistics.OVERSIZED_GRAPH_ERROR)) {
-			return gson.toJson(RESTServices.ERROR_TOO_MANY_JOB_PAIRS);
-		}
-
-		log.debug("chartPath = " + chartPath);
-		return chartPath;
+		return null;
 	}
 
 	/**
-	 * Gets the space overview graph for a given jobspace.
+	 * Gets the structured pair-completion timeline data for a given job.
+	 *
+	 * @param jobId the job to get the graph data for.
+	 */
+	protected static String getPairTimeGraphJson(int jobId) {
+		JsonObject chartData = Statistics.makeJobTimeGraphData(jobId);
+		if (chartData == null) {
+			return gson.toJson(RESTServices.ERROR_DATABASE);
+		}
+		if (Statistics.OVERSIZED_GRAPH_ERROR.equals(extractGraphError(chartData))) {
+			return gson.toJson(RESTServices.ERROR_TOO_MANY_JOB_PAIRS);
+		}
+		return gson.toJson(chartData);
+	}
+
+	/**
+	 * Gets the space overview chart data for a given jobspace.
 	 *
 	 * @param stageNumber           which stage to filter solvers by.
-	 * @param jobSpaceId            the jobSpace to get the graph for.
+	 * @param jobSpaceId            the jobSpace to get the graph data for.
 	 * @param request               the HTTP request that is requesting the graph.
 	 * @param primitivesToAnonymize a PrimitivesToAnonymize enum describing which
 	 *                              primitives to anonymize for the graph.
@@ -386,25 +390,22 @@ public class RESTHelpers {
 			}
 		}
 		if (configIds.isEmpty()) {
-			// makeSpaceOverviewChart returns null for an empty selection, which used to end in a 500.
+			// An empty selection previously dereferenced a null response and answered HTTP 500.
 			return gson.toJson(new ValidatorStatusCode(false, NO_CONFIGURATION_SELECTED));
 		}
-		String chartPath = null;
-		if (configIds.size() <= R.MAXIMUM_SOLVER_CONFIG_PAIRS) {
-			chartPath = Statistics.makeSpaceOverviewChart(jobSpaceId, logX, logY, configIds, stageNumber,
-					primitivesToAnonymize);
-			if (chartPath == null) {
-				return gson.toJson(RESTServices.ERROR_DATABASE);
-			}
-			if (chartPath.equals(Statistics.OVERSIZED_GRAPH_ERROR)) {
-				return gson.toJson(RESTServices.ERROR_TOO_MANY_JOB_PAIRS);
-			}
-		} else {
+		if (configIds.size() > R.MAXIMUM_SOLVER_CONFIG_PAIRS) {
 			return gson.toJson(RESTServices.ERROR_TOO_MANY_SOLVER_CONFIG_PAIRS);
 		}
 
-		log.debug("chartPath = " + chartPath);
-		return chartPath;
+		JsonObject chartData = Statistics.makeSpaceOverviewChartData(jobSpaceId, logX, logY, configIds, stageNumber,
+				primitivesToAnonymize);
+		if (chartData == null) {
+			return gson.toJson(RESTServices.ERROR_DATABASE);
+		}
+		if (Statistics.OVERSIZED_GRAPH_ERROR.equals(extractGraphError(chartData))) {
+			return gson.toJson(RESTServices.ERROR_TOO_MANY_JOB_PAIRS);
+		}
+		return gson.toJson(chartData);
 	}
 
 	/**
@@ -2395,41 +2396,34 @@ public class RESTHelpers {
 	}
 
 	protected static String getSolverComparisonGraphJson(int jobSpaceId, int config1, int config2,
-			int edgeLengthInPixels, String axisColor, int stageNumber, PrimitivesToAnonymize primitivesToAnonymize) {
-
-		List<String> chartPath = null;
-
-		Color c = Util.getColorFromString(axisColor);
-		if (c == null) {
-			return gson.toJson(new ValidatorStatusCode(false, "The given color is not valid"));
-		}
-		if (edgeLengthInPixels <= 0 || edgeLengthInPixels > 2000) {
-			return gson.toJson(new ValidatorStatusCode(false,
-					"The given size is not valid: please choose an integer from 1-2000"));
-
-		}
+			int stageNumber, PrimitivesToAnonymize primitivesToAnonymize) {
 		if (config1 == config2) {
 			// The pairs are split by configuration, so a configuration given twice fills only one side,
 			// and the answer would wrongly say that it has no pairs to plot.
 			return gson.toJson(new ValidatorStatusCode(false, SAME_CONFIGURATION_TWICE));
 		}
 
-		chartPath = Statistics.makeSolverComparisonChart(config1, config2, jobSpaceId, edgeLengthInPixels, c,
+		JsonObject chartData = Statistics.makeSolverComparisonChartData(config1, config2, jobSpaceId,
 				stageNumber, primitivesToAnonymize);
-		if (chartPath == null) {
+		if (chartData == null) {
 			return gson.toJson(RESTServices.ERROR_DATABASE);
 		}
-		if (chartPath.get(0).equals(Statistics.OVERSIZED_GRAPH_ERROR)) {
+		String error = extractGraphError(chartData);
+		if (Statistics.OVERSIZED_GRAPH_ERROR.equals(error)) {
 			return gson.toJson(RESTServices.ERROR_TOO_MANY_JOB_PAIRS);
 		}
-		if (chartPath.get(0).equals(Statistics.NO_COMPARABLE_PAIRS_ERROR)) {
+		if (Statistics.NO_COMPARABLE_PAIRS_ERROR.equals(error)) {
 			return gson.toJson(new ValidatorStatusCode(false, NO_COMPARABLE_PAIRS));
 		}
-		JsonObject json = new JsonObject();
-		json.addProperty("src", chartPath.get(0));
-		json.addProperty("map", chartPath.get(1));
+		return gson.toJson(chartData);
+	}
 
-		return gson.toJson(json);
+	/**
+	 * Compatibility overload ignoring legacy image dimensions and axis color parameters.
+	 */
+	protected static String getSolverComparisonGraphJson(int jobSpaceId, int config1, int config2,
+			int edgeLengthInPixels, String axisColor, int stageNumber, PrimitivesToAnonymize primitivesToAnonymize) {
+		return getSolverComparisonGraphJson(jobSpaceId, config1, config2, stageNumber, primitivesToAnonymize);
 	}
 
 	protected static String getJobSpacesJson(int parentId, int jobId, boolean makeSpaceTree) {
