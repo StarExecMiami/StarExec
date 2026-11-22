@@ -14,6 +14,10 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 
 /**
  * Controller for the job matrix view. Loads job and matrix data in the servlet layer
@@ -78,7 +82,22 @@ public class JobMatrixViewController extends HttpServlet {
 			}
 
 			Matrix matrix = Matrix.getMatrixForJobSpaceFromJobAndStageNumber(job, jobSpaceId, stageNumber);
+			boolean isEmpty = matrix.getSolverConfigsByColumn().isEmpty()
+					|| matrix.getInternalMatrixRepresentation().isEmpty();
+			List<JobSpace> childSpaces = Collections.emptyList();
+			if (isEmpty) {
+				List<JobSpace> fetched = Spaces.getSubSpacesForJob(jobSpaceId, false);
+				if (fetched != null) {
+					childSpaces = new ArrayList<>(fetched);
+					childSpaces.sort(Comparator.comparing(
+							JobSpace::getName,
+							Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)));
+				}
+			}
 			request.setAttribute("matrix", matrix);
+			request.setAttribute("isMatrixEmpty", isEmpty);
+			request.setAttribute("childSpaces", childSpaces);
+			request.setAttribute("hasChildSpaces", !childSpaces.isEmpty());
 			request.setAttribute("job", job);
 			request.setAttribute("jobSpaceId", jobSpaceId);
 			request.setAttribute("stage", stageNumber);

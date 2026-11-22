@@ -6,6 +6,7 @@
 // _typography.scss, and _design-tokens.scss.
 // =============================================================================
 
+@use "sass:color";
 @use "../global/colors" as c;
 @use "../global/spacing" as s;
 @use "../global/typography" as t;
@@ -588,11 +589,112 @@ a:hover .ext-link-icon {
 }
 
 // =============================================================================
-// FIXED COLUMNS WRAPPER (DataTables FixedColumns plugin)
+// FIXED COLUMNS WRAPPER (DataTables FixedColumns v4 plugin)
 // =============================================================================
 
-.DTFC_LeftBodyWrapper {
+.dataTable th.dtfc-fixed-left,
+.dataTable td.dtfc-fixed-left {
   background-color: c.$foreground-color;
+  z-index: 2;
+}
+
+.matrixHeaderRow th.dtfc-fixed-left {
+  background-color: c.$background-color;
+  border-right: 1px solid color.adjust(c.$foreground-color, $lightness: 8%);
+  z-index: 3;
+}
+
+.matrixBodyRow:nth-child(even) th.dtfc-fixed-left {
+  background-color: color.adjust(c.$foreground-color, $lightness: 3%);
+}
+
+.matrixBodyRow:hover th.dtfc-fixed-left {
+  background-color: color.adjust(c.$foreground-color, $lightness: 6%);
+}
+
+// Override DataTables FixedColumns inline white background on the top-right blocker
+.dtfc-right-top-blocker {
+  background-color: transparent !important;
+}
+
+// =============================================================================
+// EMPTY STATE
+// =============================================================================
+
+.matrixEmptyState {
+  margin: s.$spacing-md 0;
+  padding: s.$spacing-lg;
+  background-color: c.$foreground-color;
+  border: 1px solid color.adjust(c.$foreground-color, $lightness: 10%);
+  border-radius: 6px;
+  color: c.$text-main-color;
+}
+
+.matrixEmptyState__message {
+  margin: 0 0 s.$spacing-xs;
+  font-size: t.$font-size-base;
+  font-weight: t.$font-weight-medium;
+}
+
+.matrixEmptyState__hint {
+  margin: 0 0 s.$spacing-xs;
+  font-size: t.$font-size-sm;
+  color: c.$text-accent-color;
+}
+
+.matrixEmptyState__subspaceList {
+  list-style: disc;
+  margin: 0 0 s.$spacing-sm;
+  padding-left: s.$spacing-lg;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.matrixEmptyState__subspaceItem {
+  margin: s.$spacing-2xs 0;
+}
+
+.matrixEmptyState__subspaceLink {
+  color: c.$accent-orange;
+  text-decoration: none;
+  font-size: t.$font-size-sm;
+
+  &:visited {
+    color: color.adjust(c.$accent-orange, $lightness: -12%);
+  }
+
+  &:hover {
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    @include m.focus-ring;
+  }
+}
+
+.matrixEmptyState__overflow {
+  margin: 0 0 s.$spacing-sm;
+  font-size: t.$font-size-sm;
+  color: c.$text-accent-color;
+}
+
+.matrixEmptyState__actions {
+  margin: 0;
+}
+
+.matrixEmptyState__backLink {
+  color: c.$accent-orange;
+  text-decoration: none;
+  font-size: t.$font-size-sm;
+  font-weight: t.$font-weight-medium;
+
+  &:hover {
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    @include m.focus-ring;
+  }
 }
 
 // Override generic DataTables body padding for this table

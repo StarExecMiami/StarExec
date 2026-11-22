@@ -69,70 +69,111 @@
 			</c:if>
 		</div>
 
-		<%-- Matrix table --%>
-		<table id="jobMatrix" role="grid"
-		       aria-label="Solver results matrix for job space ${fn:escapeXml(matrix.getJobSpaceName())}">
-			<thead>
-			<tr class="matrixHeaderRow">
-				<th class="solverHeader benchmarksColumnHeader" scope="col">
-					Benchmark
-				</th>
-				<c:forEach var="solverConfig" varStatus="headerIndex"
-				           items="${matrix.getSolverConfigsByColumn()}">
-					<th class="solverHeader" scope="col"
-					    title="${fn:escapeXml(solverConfig.getLeft().getName())} (${fn:escapeXml(solverConfig.getRight().getName())})">
-						<a href="${starexecRoot}/secure/details/solver.jsp?id=${solverConfig.getLeft().getId()}"
-						   target="_blank"
-						   rel="noopener noreferrer">
-							<c:out value="${matrix.getTruncatedColumnHeader(headerIndex.getIndex())}"/>
-							<span class="sr-only">(opens in new tab)</span>
+		<%-- Matrix table or empty state --%>
+		<c:choose>
+			<c:when test="${isMatrixEmpty}">
+				<div class="matrixEmptyState" role="status">
+					<p class="matrixEmptyState__message">
+						No job pairs in this space for stage <c:out value="${stage}"/>.
+					</p>
+					<c:if test="${not empty childSpaces}">
+						<p class="matrixEmptyState__hint">
+							This space has no pairs of its own. Pairs may be in these subspaces:
+						</p>
+						<nav aria-label="Child job spaces">
+							<ul class="matrixEmptyState__subspaceList">
+								<c:forEach var="child" items="${childSpaces}" end="49">
+									<li class="matrixEmptyState__subspaceItem">
+										<c:url var="childMatrixUrl" value="/secure/details/jobMatrixView.jsp">
+											<c:param name="stage" value="${stage}"/>
+											<c:param name="jobSpaceId" value="${child.id}"/>
+										</c:url>
+										<a class="matrixEmptyState__subspaceLink"
+										   href="${fn:escapeXml(childMatrixUrl)}">${fn:escapeXml(child.name)}</a>
+									</li>
+								</c:forEach>
+							</ul>
+						</nav>
+						<c:if test="${fn:length(childSpaces) > 50}">
+							<p class="matrixEmptyState__overflow">
+								and ${fn:length(childSpaces) - 50} more. Use the job details page to browse them.
+							</p>
+						</c:if>
+					</c:if>
+					<p class="matrixEmptyState__actions">
+						<a class="matrixEmptyState__backLink"
+						   href="${starexecRoot}/secure/details/job.jsp?id=${job.id}">
+							&larr; Back to job details
 						</a>
-					</th>
-				</c:forEach>
-			</tr>
-			</thead>
-			<tbody>
-			<c:forEach var="matrixRow" varStatus="rowIndex"
-			           items="${matrix.getInternalMatrixRepresentation()}">
-				<tr class="matrixBodyRow">
-					<th class="benchmarkHeader row${rowIndex.getIndex()}" scope="row">
-						<a href="${starexecRoot}/secure/details/benchmark.jsp?id=${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getId()}"
-						   target="_blank"
-						   rel="noopener noreferrer"
-						   title="${fn:escapeXml(matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getName())}">
-							<c:out value="${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getName()}"/>
-							<span class="sr-only">(opens in new tab)</span>
-						</a>
-					</th>
-					<c:forEach var="matrixElement" varStatus="columnIndex"
-					           items="${matrixRow}">
-						<c:choose>
-							<c:when test="${matrixElement != null}">
-								<td id="${matrixElement.getUniqueIdentifier()}"
-								    class="jobMatrixCell ${matrixElement.getStatus()} row${rowIndex.getIndex()} column${columnIndex.getIndex()}"
-								    data-status="${matrixElement.getStatus()}"
-								    title="Wallclock: ${matrixElement.getWallclock()}s | CPU: ${matrixElement.getCpuTime()}s | Memory: ${matrixElement.getMemUsage()}">
-									<a href="${starexecRoot}/secure/details/pair.jsp?id=${matrixElement.getJobPairId()}">
-										<span class="statusIcon" aria-hidden="true"></span>
-										<span class="wallclock">${matrixElement.getWallclock()}</span>
-										<span class="cpuTimeWallclockDivider"> / </span>
-										<span class="memUsageWallclockDivider"
-										      hidden> / </span>
-										<span class="cpuTime">${matrixElement.getCpuTime()}</span>
-										<span class="cpuTimeMemUsageDivider"> / </span>
-										<span class="memUsage">${matrixElement.getMemUsage()}</span>
-									</a>
-								</td>
-							</c:when>
-							<c:otherwise>
-								<td class="jobMatrixCell"
-								    aria-label="No data"></td>
-							</c:otherwise>
-						</c:choose>
+					</p>
+				</div>
+			</c:when>
+			<c:otherwise>
+				<table id="jobMatrix" role="grid"
+				       aria-label="Solver results matrix for job space ${fn:escapeXml(matrix.getJobSpaceName())}">
+					<thead>
+					<tr class="matrixHeaderRow">
+						<th class="solverHeader benchmarksColumnHeader" scope="col">
+							Benchmark
+						</th>
+						<c:forEach var="solverConfig" varStatus="headerIndex"
+						           items="${matrix.getSolverConfigsByColumn()}">
+							<th class="solverHeader" scope="col"
+							    title="${fn:escapeXml(solverConfig.getLeft().getName())} (${fn:escapeXml(solverConfig.getRight().getName())})">
+								<a href="${starexecRoot}/secure/details/solver.jsp?id=${solverConfig.getLeft().getId()}"
+								   target="_blank"
+								   rel="noopener noreferrer">
+									<c:out value="${matrix.getTruncatedColumnHeader(headerIndex.getIndex())}"/>
+									<span class="sr-only">(opens in new tab)</span>
+								</a>
+							</th>
+						</c:forEach>
+					</tr>
+					</thead>
+					<tbody>
+					<c:forEach var="matrixRow" varStatus="rowIndex"
+					           items="${matrix.getInternalMatrixRepresentation()}">
+						<tr class="matrixBodyRow">
+							<th class="benchmarkHeader row${rowIndex.getIndex()}" scope="row">
+								<a href="${starexecRoot}/secure/details/benchmark.jsp?id=${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getId()}"
+								   target="_blank"
+								   rel="noopener noreferrer"
+								   title="${fn:escapeXml(matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getName())}">
+									<c:out value="${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getName()}"/>
+									<span class="sr-only">(opens in new tab)</span>
+								</a>
+							</th>
+							<c:forEach var="matrixElement" varStatus="columnIndex"
+							           items="${matrixRow}">
+								<c:choose>
+									<c:when test="${matrixElement != null}">
+										<td id="${fn:escapeXml(matrixElement.getUniqueIdentifier())}"
+										    class="jobMatrixCell ${matrixElement.getStatus()} row${rowIndex.getIndex()} column${columnIndex.getIndex()}"
+										    data-status="${matrixElement.getStatus()}"
+										    title="Wallclock: ${matrixElement.getWallclock()}s | CPU: ${matrixElement.getCpuTime()}s | Memory: ${matrixElement.getMemUsage()}">
+											<a href="${starexecRoot}/secure/details/pair.jsp?id=${matrixElement.getJobPairId()}">
+												<span class="statusIcon" aria-hidden="true"></span>
+												<span class="wallclock">${matrixElement.getWallclock()}</span>
+												<span class="cpuTimeWallclockDivider"> / </span>
+												<span class="memUsageWallclockDivider"
+												      hidden> / </span>
+												<span class="cpuTime">${matrixElement.getCpuTime()}</span>
+												<span class="cpuTimeMemUsageDivider"> / </span>
+												<span class="memUsage">${matrixElement.getMemUsage()}</span>
+											</a>
+										</td>
+									</c:when>
+									<c:otherwise>
+										<td class="jobMatrixCell"
+										    aria-label="No data"></td>
+									</c:otherwise>
+								</c:choose>
+							</c:forEach>
+						</tr>
 					</c:forEach>
-				</tr>
-			</c:forEach>
-			</tbody>
-		</table>
+					</tbody>
+				</table>
+			</c:otherwise>
+		</c:choose>
 	</div>
 </star:template>
