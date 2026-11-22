@@ -74,7 +74,7 @@
 	<span style="display:none" id="configId1" value="${configId}"> </span>
 	<span style="display:none" id="configId2" value="${configId2}"> </span>
 
-	<fieldset id="#comparisonTblField">
+	<fieldset id="comparisonTblField">
 		<legend>comparison</legend>
 		<fieldset id="actions" class="tableActions">
 			<button class="changeTime">Use CPU Time</button>

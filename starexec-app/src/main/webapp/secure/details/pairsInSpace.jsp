@@ -66,7 +66,7 @@
 		title="Job Pairs for ${fn:escapeXml(solver.name)} in ${fn:escapeXml(jobspace.name)} hierarchy"
 		js="util/sortButtons, util/jobDetailsUtilityFunctions, util/datatablesUtility, lib/jquery.dataTables.min, common/delaySpinner, details/shared, details/pairsInSpace, lib/jquery.ba-throttle-debounce.min"
 		css="common/table, details/shared, details/pairsInSpace">
-	<fieldset id="#pairTblField">
+	<fieldset id="pairTblField">
 		<legend>job pairs</legend>
 		<fieldset id="pairActions" class="tableActions">
 			<button class="changeTime">Use CPU Time</button>
