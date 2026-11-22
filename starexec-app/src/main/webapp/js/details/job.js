@@ -19,6 +19,12 @@ var getPanelTableInitializer;
 // be aborted, as they will no longer be useful.
 var openAjaxRequests = [];
 var includeUnknown = false;
+var solverComparisonPendingLoad = false;
+
+function isGraphPanelVisible() {
+	var $graphField = $("#graphField");
+	return $graphField.length > 0 && $graphField.is(":visible");
+}
 
 function getResponsiveDialogConfig(preferredWidth) {
 	var viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
@@ -220,6 +226,7 @@ function refreshPanels() {
 function refreshStats(id) {
 	var updateGraphs = function() {
 		if (summaryTable.api().page.info().recordsTotal == 0) {
+			solverComparisonPendingLoad = false;
 			$("#graphField").hide();
 		} else {
 			/* This is can be one of the most intense loops on this page,
@@ -272,8 +279,14 @@ function refreshStats(id) {
 				$("#solverChoice2")
 				.children("option:nth-child(2)")
 				.prop("selected", true);
-				updateSolverComparison(300, "white");
+				if (isGraphPanelVisible()) {
+					solverComparisonPendingLoad = false;
+					updateSolverComparison(300, "white");
+				} else {
+					solverComparisonPendingLoad = true;
+				}
 			} else {
+				solverComparisonPendingLoad = false;
 				$("#solverComparison").hide();
 				$("#solverComparisonOptionField").hide();
 			}
@@ -372,6 +385,7 @@ function reloadTables(id) {
 			pairTable.fnClearTable();
 
 			//clear out the graphs
+			solverComparisonPendingLoad = false;
 			$("#solverChoice1").empty();
 			$("#solverChoice2").empty();
 			$("#spaceOverviewSelections").empty();
@@ -664,6 +678,10 @@ function initUI() {
 			$("#spaceOverviewOptionField").hide();
                         $("#pairTimeOptionField").hide();
                         $("#solverComparisonOptionField").show();
+                        if (solverComparisonPendingLoad && isGraphPanelVisible()) {
+                                solverComparisonPendingLoad = false;
+                                updateSolverComparison(300, "white");
+                        }
                 });
                 $("#selectPairTimeGraph")
                 .click(function() {
@@ -681,6 +699,7 @@ function initUI() {
 		});
 		$("#solverComparisonUpdate")
 		.click(function() {
+			solverComparisonPendingLoad = false;
 			updateSolverComparison(300, "white", true);
 		});
 		$("#pairTimeUpdate")
@@ -1224,6 +1243,11 @@ function updateSpaceOverviewGraph(announce) {
 //comparison that cannot be drawn says why; the draw that follows each statistics load passes nothing.
 //isLatest: passed only by the small chart's request for the large one, which belongs to its request.
 function updateSolverComparison(size, color, announce, isLatest) {
+	if (announce !== true && !isGraphPanelVisible()) {
+		solverComparisonPendingLoad = true;
+		return;
+	}
+	solverComparisonPendingLoad = false;
 	isLatest = isLatest || startGraphRequest("solverComparison");
 	var config1 = $("#solverChoice1 option:selected").attr("value");
 	var config2 = $("#solverChoice2 option:selected").attr("value");
