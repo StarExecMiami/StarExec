@@ -461,8 +461,12 @@ public class ArchiveExtractor {
     }
 
     private static Path validateTargetPath(Path extractDir, String entryName) throws IOException {
-        Path targetPath = extractDir.resolve(entryName).normalize();
-        if (!targetPath.startsWith(extractDir.normalize())) {
+        if (entryName == null || entryName.isEmpty() || entryName.indexOf('\0') >= 0) {
+            throw new SecurityException("Archive contains invalid entry name: " + entryName);
+        }
+        Path normalizedBase = extractDir.toAbsolutePath().normalize();
+        Path targetPath = normalizedBase.resolve(entryName).normalize();
+        if (!targetPath.startsWith(normalizedBase)) {
             throw new SecurityException("Entry attempts path traversal: " + entryName);
         }
         return targetPath;
