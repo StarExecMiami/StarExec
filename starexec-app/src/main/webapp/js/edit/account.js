@@ -125,7 +125,9 @@ function initUI() {
         }
       },
       "json"
-    );
+    ).fail(function () {
+      showMessage("error", "Internal error removing profile picture", 5000);
+    });
   });
 
   $("#showPicture").on("keydown", function (event) {
@@ -265,7 +267,9 @@ function initUI() {
         }
       },
       "json"
-    );
+    ).fail(function () {
+      showMessage("error", "Internal error clearing default profile", 5000);
+    });
   });
 
   //delete the selected DefaultSettings profile
@@ -378,7 +382,9 @@ function sendDeleteUserRequest(userId) {
       window.location.replace(starexecRoot);
     },
     "json"
-  );
+  ).fail(function () {
+    showMessage("error", "Internal error deleting user", 5000);
+  });
 }
 
 function fnSolverPaginationHandler(sSource, aoData, fnCallback) {
@@ -403,7 +409,9 @@ function fnPaginationHandler(sSource, aoData, fnCallback, prim) {
       }
     },
     "json"
-  );
+  ).fail(function () {
+    showMessage("error", "Internal error populating table", 5000);
+  });
 }
 
 /**
@@ -477,7 +485,9 @@ function attachWebsiteMonitor() {
         }
       },
       "json"
-    );
+    ).fail(function () {
+      showMessage("error", "Internal error adding website", 5000);
+    });
   });
 }
 
@@ -513,7 +523,9 @@ function attachPasswordMonitor() {
           }
         },
         "json"
-      );
+      ).fail(function () {
+        showMessage("error", "Internal error changing password", 5000);
+      });
     }
   });
 }

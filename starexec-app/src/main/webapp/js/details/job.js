@@ -458,7 +458,9 @@ function initUI() {
 					$.post(
 						starexecRoot + "services/cache/clear/stats/" + jobId + "/",
 						parseReturnCode
-					);
+					).fail(function() {
+						showMessage("error", "Internal error clearing job stats cache", 5000);
+					});
 				},
 				"cancel": function() {
 					$(this).dialog("close");
@@ -472,7 +474,9 @@ function initUI() {
 		$.get(
 			starexecRoot + "services/recompile/" + jobId,
 			parseReturnCode
-		);
+		).fail(function() {
+			showMessage("error", "Internal error recompiling spaces", 5000);
+		});
 	});
 
 	$("#downloadJobPageButton")
@@ -853,7 +857,9 @@ function setupDeleteJobButton() {
 							}
 						},
 						"json"
-					);
+					).fail(function() {
+						showMessage("error", "Internal error deleting job", 5000);
+					});
 				},
 				"cancel": function() {
 					log('user canceled job deletion');
@@ -918,7 +924,9 @@ function setupSetHighPriorityButton() {
 				}
 			},
 			'json'
-		);
+		).fail(function() {
+			showMessage("error", "Internal error setting high priority", 5000);
+		});
 	});
 }
 
@@ -938,7 +946,9 @@ function setupSetLowPriorityButton() {
 				}
 			},
 			'json'
-		);
+		).fail(function() {
+			showMessage("error", "Internal error setting low priority", 5000);
+		});
 	});
 }
 
@@ -996,7 +1006,10 @@ function setupResumeJobButton() {
 				}
 			},
 			"json"
-		);
+		).fail(function() {
+			destroyDialog();
+			showMessage("error", "Internal error resuming job", 5000);
+		});
 	});
 }
 
@@ -1026,7 +1039,9 @@ function setupChangeQueueButton() {
 							}
 						},
 						"json"
-					);
+					).fail(function() {
+						showMessage("error", "Internal error changing job queue", 5000);
+					});
 				},
 				"cancel": function() {
 					$(this).dialog("close");
@@ -1056,7 +1071,9 @@ function setupPostProcessButton() {
 						.val() + "/" + getSelectedStage(),
 						parseReturnCode,
 						"json"
-					);
+					).fail(function() {
+						showMessage("error", "Internal error post-processing job", 5000);
+					});
 				},
 				"cancel": function() {
 					$(this).dialog("close");
@@ -1373,10 +1390,14 @@ function setupEverythingForUnknownStatusWrapper() {
 
 	} else if (DETAILS_JOB.isAnonymousPage) {
 		$.getJSON(starexecRoot + "services/space/anonymousLink/" + DETAILS_JOB.anonymousLinkUuid + "/jobspaces/false/" + DETAILS_JOB.primitivesToAnonymize + "?id=" + curSpaceId,
-		setupEverythingForUnknownStatus);
+		setupEverythingForUnknownStatus).fail(function() {
+			showMessage("error", "Internal error loading subspace status", 5000);
+		});
 	} else {
 		$.getJSON(starexecRoot + "services/space/" + jobId + "/jobspaces/false?id=" + curSpaceId,
-		setupEverythingForUnknownStatus);
+		setupEverythingForUnknownStatus).fail(function() {
+			showMessage("error", "Internal error loading subspace status", 5000);
+		});
 	}
 }
 
