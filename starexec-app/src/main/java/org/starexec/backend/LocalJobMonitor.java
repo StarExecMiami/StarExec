@@ -73,6 +73,8 @@ public class LocalJobMonitor {
 
     // Handle for the currently scheduled poll (for cancellation on interval change)
     private volatile ScheduledFuture<?> scheduledPoll;
+    private final Object pollScheduleLock = new Object();
+    private long pollGeneration = 0;
 
     // One entry per pair, keyed by pair ID.
     //
@@ -485,22 +487,12 @@ public class LocalJobMonitor {
      * </p>
      */
     private void cancelAndRescheduleNow() {
-        if (!running) {
-            return;
-        }
-
-        ScheduledFuture<?> currentPoll = scheduledPoll;
-        if (currentPoll != null) {
-            // Cancel without interrupting if already running - let it complete gracefully
-            boolean cancelled = currentPoll.cancel(false);
-            if (cancelled) {
-                log.debug(
-                        "Cancelled pending poll to apply immediate interval reset");
+        synchronized (pollScheduleLock) {
+            if (!running) {
+                return;
             }
+            scheduleNextPollLocked();
         }
-
-        // Schedule a new poll with the (now reset) base interval
-        scheduleNextPoll();
     }
 
     /**
@@ -555,13 +547,15 @@ public class LocalJobMonitor {
     }
 
     public void start() {
-        if (running) {
-            log.warn("LocalJobMonitor already running");
-            return;
-        }
+        synchronized (pollScheduleLock) {
+            if (running) {
+                log.warn("LocalJobMonitor already running");
+                return;
+            }
 
-        running = true;
-        scheduleNextPoll();
+            running = true;
+            scheduleNextPollLocked();
+        }
 
         log.info(
                 "LocalJobMonitor started with adaptive polling: " +
@@ -570,30 +564,42 @@ public class LocalJobMonitor {
 
     /**
      * Schedules the next poll based on the current adaptive interval.
+     * Caller must hold {@link #pollScheduleLock}.
      */
-    private void scheduleNextPoll() {
+    private void scheduleNextPollLocked() {
         if (!running) {
             return;
         }
 
+        if (scheduledPoll != null && !scheduledPoll.isDone()) {
+            scheduledPoll.cancel(false);
+        }
+
+        long expectedGen = ++pollGeneration;
         long interval = pollInterval.getCurrentInterval();
         scheduledPoll = scheduler.schedule(
-                this::pollAndReschedule,
+                () -> pollAndReschedule(expectedGen),
                 interval,
                 TimeUnit.MILLISECONDS);
     }
 
     /**
-     * Executes a poll and schedules the next one.
+     * Executes a poll and schedules the next one if this generation is still active.
      * This method is called by the scheduler.
      */
-    private void pollAndReschedule() {
+    private void pollAndReschedule(long expectedGen) {
+        synchronized (pollScheduleLock) {
+            if (!running || expectedGen != pollGeneration) {
+                return;
+            }
+        }
         try {
             checkCompletedJobs();
         } finally {
-            // Always reschedule, even if an exception occurred
-            if (running) {
-                scheduleNextPoll();
+            synchronized (pollScheduleLock) {
+                if (running && expectedGen == pollGeneration) {
+                    scheduleNextPollLocked();
+                }
             }
         }
     }
@@ -602,11 +608,13 @@ public class LocalJobMonitor {
      * Stops the monitor.
      */
     public void stop() {
-        running = false;
-
-        // Cancel any pending poll
-        if (scheduledPoll != null) {
-            scheduledPoll.cancel(false);
+        synchronized (pollScheduleLock) {
+            running = false;
+            pollGeneration++;
+            if (scheduledPoll != null) {
+                scheduledPoll.cancel(false);
+                scheduledPoll = null;
+            }
         }
 
         scheduler.shutdown();
