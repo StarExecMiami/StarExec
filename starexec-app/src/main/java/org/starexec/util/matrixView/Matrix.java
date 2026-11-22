@@ -138,7 +138,7 @@ public class Matrix {
 			Integer pairJobSpaceId = pair.getJobSpaceId();
 			log.debug(method, "job space id="+pairJobSpaceId);
 			// Filter by jobSpaceId
-			if (pairJobSpaceId == jobSpaceId) {
+			if (Integer.valueOf(jobSpaceId).equals(pairJobSpaceId)) {
 				jobPairsInJobSpace.add(pair);
 			}
 		}

@@ -110,23 +110,47 @@ function moveSearchControlToControls() {
 // LIVE POLLING — Fetches updated job pair data from the server
 // =============================================================================
 
-function getFinishedJobPairsFromServer(done, dataTable) {
-	if (!done) {
-		$.get(
-			starexecRoot + 'services/matrix/finished/' + jobSpaceId + '/' + stageNumber,
-			'',
-			function(data) {
-				log(data);
-				setTimeout(function() {
-					updateMatrix(data.benchSolverConfigElementMap, dataTable);
-					getFinishedJobPairsFromServer(data.done, dataTable);
-				}, 5000);
-			},
-			'json'
-		).fail(function() {
-			showMessage('error', 'Failed to refresh job matrix status', 5000);
-		});
+var MATRIX_POLL_INTERVAL_MS = 5000;
+var MATRIX_POLL_MAX_DELAY_MS = 60000;
+var MATRIX_POLL_MAX_RETRIES = 5;
+
+function getFinishedJobPairsFromServer(done, dataTable, retryCount) {
+	if (done) {
+		return;
 	}
+	var failures = retryCount || 0;
+	$.get(
+		starexecRoot + 'services/matrix/finished/' + jobSpaceId + '/' + stageNumber,
+		'',
+		function(data) {
+			log(data);
+			if (!data || typeof data.done !== 'boolean') {
+				showMessage('error', 'Failed to refresh job matrix status', 5000);
+				return;
+			}
+			updateMatrix(data.benchSolverConfigElementMap || {}, dataTable);
+			if (!data.done) {
+				setTimeout(function() {
+					getFinishedJobPairsFromServer(false, dataTable, 0);
+				}, MATRIX_POLL_INTERVAL_MS);
+			}
+		},
+		'json'
+	).fail(function() {
+		var nextFailures = failures + 1;
+		if (failures === 0) {
+			showMessage('error', 'Failed to refresh job matrix status', 5000);
+		}
+		if (nextFailures <= MATRIX_POLL_MAX_RETRIES) {
+			var delay = Math.min(
+				MATRIX_POLL_INTERVAL_MS * Math.pow(2, nextFailures - 1),
+				MATRIX_POLL_MAX_DELAY_MS
+			);
+			setTimeout(function() {
+				getFinishedJobPairsFromServer(false, dataTable, nextFailures);
+			}, delay);
+		}
+	});
 }
 
 function updateMatrix(jobPairData, dataTable) {
