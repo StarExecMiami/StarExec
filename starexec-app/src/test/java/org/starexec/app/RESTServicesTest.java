@@ -2,17 +2,23 @@ package org.starexec.app;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
+import org.starexec.data.database.Analytics;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Jobs;
+import org.starexec.data.database.Notifications;
 import org.starexec.data.database.Permissions;
 import org.starexec.data.database.Processors;
+import org.starexec.data.database.Queues;
+import org.starexec.data.database.RunscriptErrors;
+import org.starexec.data.database.Solvers;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.BenchmarkSecurity;
@@ -22,8 +28,14 @@ import org.starexec.data.security.ProcessorSecurity;
 import org.starexec.data.security.SpaceSecurity;
 import org.starexec.data.security.UserSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.AnalyticsResults;
 import org.starexec.data.to.Benchmark;
+import org.starexec.data.to.Configuration;
+import org.starexec.data.to.Job;
+import org.starexec.data.to.JobPair;
+import org.starexec.data.to.JobStatus;
 import org.starexec.data.to.Permission;
+import org.starexec.data.to.Solver;
 import org.starexec.data.to.Processor;
 import org.starexec.data.to.Space;
 import org.starexec.data.to.User;
@@ -47,6 +59,7 @@ import java.util.TreeMap;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RESTServicesTest {
@@ -591,6 +604,134 @@ public class RESTServicesTest {
 					new RESTServices().getUserSpacePermissions(5, 77, request),
 					Permission.class);
 			assertTrue(fetched.isLeader());
+		}
+	}
+
+	@Test
+	public void queueJobsFiltersPrivateJobsForNonAdminUsers() {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Job visibleJob = new Job();
+		visibleJob.setId(10);
+		visibleJob.setName("visible-job");
+		visibleJob.setUserId(42);
+		visibleJob.setCreateTime(new Timestamp(1000L));
+		java.util.HashMap<String, Integer> stats = new java.util.HashMap<>();
+		stats.put("totalPairs", 5);
+		stats.put("pendingPairs", 2);
+		visibleJob.setLiteJobPairStats(stats);
+
+		Job hiddenJob = new Job();
+		hiddenJob.setId(11);
+		hiddenJob.setName("secret-job");
+		hiddenJob.setUserId(99);
+		hiddenJob.setCreateTime(new Timestamp(1000L));
+
+		User owner = new User();
+		owner.setId(42);
+		owner.setFirstName("Alice");
+		owner.setLastName("Smith");
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class);
+			 MockedStatic<GeneralSecurity> generalSecurity = Mockito.mockStatic(GeneralSecurity.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(42);
+			generalSecurity.when(() -> GeneralSecurity.hasAdminReadPrivileges(42)).thenReturn(false);
+			jobs.when(() -> Jobs.getByQueueId(1)).thenReturn(java.util.Arrays.asList(visibleJob, hiddenJob));
+			jobs.when(() -> Jobs.getJobStatus(Mockito.anyInt())).thenReturn(JobStatus.RUNNING);
+			jobSecurity.when(() -> JobSecurity.canUserSeeJob(10, 42)).thenReturn(new ValidatorStatusCode(true));
+			jobSecurity.when(() -> JobSecurity.canUserSeeJob(11, 42)).thenReturn(new ValidatorStatusCode(false));
+			users.when(() -> Users.get(42)).thenReturn(owner);
+
+			JsonObject json = JsonParser.parseString(new RESTServices().getQueueJobs(1, request)).getAsJsonObject();
+			JsonArray data = json.getAsJsonArray("data");
+			assertEquals(1, data.size());
+			assertEquals(10, data.get(0).getAsJsonObject().get("id").getAsInt());
+		}
+
+		JobPair visiblePair = new JobPair();
+		visiblePair.setId(1);
+		visiblePair.setJobId(10);
+		JobPair hiddenPair = new JobPair();
+		hiddenPair.setId(2);
+		hiddenPair.setJobId(11);
+		try (MockedStatic<GeneralSecurity> generalSecurity = Mockito.mockStatic(GeneralSecurity.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class)) {
+			generalSecurity.when(() -> GeneralSecurity.hasAdminReadPrivileges(42)).thenReturn(false);
+			jobSecurity.when(() -> JobSecurity.canUserSeeJob(10, 42)).thenReturn(new ValidatorStatusCode(true));
+			jobSecurity.when(() -> JobSecurity.canUserSeeJob(11, 42)).thenReturn(new ValidatorStatusCode(false));
+
+			List<JobPair> filtered = RESTHelpers.filterVisibleClusterPairs(
+					java.util.Arrays.asList(visiblePair, hiddenPair), 42);
+			assertEquals(1, filtered.size());
+			assertEquals(1, filtered.get(0).getId());
+		}
+	}
+
+	@Test
+	public void jobNotificationsRequireJobVisibilityAndAuthenticatedUser() {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Notifications> notifications = Mockito.mockStatic(Notifications.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(42);
+			jobSecurity.when(() -> JobSecurity.canUserSeeJob(99, 42)).thenReturn(new ValidatorStatusCode(false));
+
+			assertThrows(RESTException.class, () -> new RESTServices().subscribeUserToJob(99, request));
+			assertThrows(RESTException.class, () -> new RESTServices().unsubscribeUserToJob(99, request));
+			notifications.verifyNoInteractions();
+		}
+	}
+
+	@Test
+	public void addJobPairsConfirmationRejectsUnauthorizedAndSkipsMissingConfigs() {
+		HttpServletRequest unauthorizedReq = Mockito.mock(HttpServletRequest.class);
+		Mockito.when(unauthorizedReq.getParameter("jobId")).thenReturn("77");
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(unauthorizedReq)).thenReturn(42);
+			jobSecurity.when(() -> JobSecurity.canUserAddJobPairs(77, 42))
+					.thenReturn(new ValidatorStatusCode(false));
+
+			JsonObject res = JsonParser.parseString(
+					new RESTServices().getNumberOfPairsToBeAddedAndDeleted(unauthorizedReq)).getAsJsonObject();
+			assertFalse(res.get("success").getAsBoolean());
+			jobs.verifyNoInteractions();
+		}
+
+		HttpServletRequest authorizedReq = Mockito.mock(HttpServletRequest.class);
+		Mockito.when(authorizedReq.getParameter("jobId")).thenReturn("77");
+		Mockito.when(authorizedReq.getParameterValues("configs")).thenReturn(new String[]{"500"});
+		Mockito.when(authorizedReq.getParameterValues("addToAll")).thenReturn(new String[]{"8"});
+		Mockito.when(authorizedReq.getParameterValues("addToPaired")).thenReturn(null);
+		User u = new User();
+		u.setId(42);
+		u.setPairQuota(100);
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Solvers> solvers = Mockito.mockStatic(Solvers.class);
+			 MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(authorizedReq)).thenReturn(42);
+			jobSecurity.when(() -> JobSecurity.canUserAddJobPairs(77, 42))
+					.thenReturn(new ValidatorStatusCode(true));
+			solvers.when(() -> Solvers.getConfigIdSetByJob(77)).thenReturn(new java.util.HashSet<>());
+			solvers.when(() -> Solvers.getConfiguration(500)).thenReturn(null);
+			jobs.when(() -> Jobs.getJobPairsToBeDeletedFromConfigIds(Mockito.eq(77), Mockito.anySet()))
+					.thenReturn(java.util.Collections.emptyList());
+			jobs.when(() -> Jobs.countJobPairsToBeAddedFromConfigIdsForPairedBenchmarks(
+					Mockito.eq(77), Mockito.anySet(), Mockito.anySet())).thenReturn(0);
+			jobs.when(() -> Jobs.countJobPairsToBeAddedFromConfigIdsForAllBenchmarks(
+					Mockito.eq(77), Mockito.anySet(), Mockito.anySet())).thenReturn(0);
+			users.when(() -> Users.get(42)).thenReturn(u);
+			jobs.when(() -> Jobs.countPairsByUser(42)).thenReturn(10);
+
+			JsonObject res = JsonParser.parseString(
+					new RESTServices().getNumberOfPairsToBeAddedAndDeleted(authorizedReq)).getAsJsonObject();
+			assertTrue(res.get("success").getAsBoolean());
+			assertEquals(90, res.get("remainingQuota").getAsInt());
 		}
 	}
 }

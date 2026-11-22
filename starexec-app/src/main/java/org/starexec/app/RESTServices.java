@@ -461,6 +461,10 @@ public class RESTServices {
 	@Path("/cluster/qstat")
 	@Produces("text/plain")
 	public String getQstatOutput(@Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0) {
+			throw RESTException.FORBIDDEN;
+		}
 		String qstat = R.BACKEND.getRunningJobsStatus();
 		if (Util.isNullOrEmpty(qstat)) {
 			throw RESTException.NOT_FOUND;
@@ -2057,9 +2061,24 @@ public class RESTServices {
 	@Path("/cluster/queues/jobs/{id}")
 	@Produces("application/json")
 	public String getQueueJobs(@PathParam("id") int id, @Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0) {
+			throw RESTException.FORBIDDEN;
+		}
 		final JsonObject out = new JsonObject();
 		try {
-			final List<Job> jobsToDisplay = Jobs.getByQueueId(id);
+			List<Job> jobsToDisplay = Jobs.getByQueueId(id);
+			if (jobsToDisplay == null) {
+				jobsToDisplay = Collections.emptyList();
+			} else if (!GeneralSecurity.hasAdminReadPrivileges(userId)) {
+				List<Job> visibleJobs = new ArrayList<>();
+				for (Job job : jobsToDisplay) {
+					if (job != null && JobSecurity.canUserSeeJob(job.getId(), userId).isSuccess()) {
+						visibleJobs.add(job);
+					}
+				}
+				jobsToDisplay = visibleJobs;
+			}
 			out.add("data", RESTHelpers.convertJobsToJsonArray(jobsToDisplay));
 		} catch (SQLException e) {
 			return gson.toJson(ERROR_DATABASE);
@@ -3026,6 +3045,11 @@ public class RESTServices {
 		try {
 			final int userId = SessionUtil.getUserId(request);
 			final int jobId = Integer.parseInt(request.getParameter(jobIdParam));
+			if (userId == R.PUBLIC_USER_ID || userId <= 0 || !JobSecurity.canUserAddJobPairs(jobId, userId).isSuccess()) {
+				Map<String, Object> unauthorized = new HashMap<>();
+				unauthorized.put("success", false);
+				return gson.toJson(unauthorized);
+			}
 
 			Set<Integer> selectedConfigIds = new HashSet<>(
 					Util.toIntegerList(request.getParameterValues(configsParam)));
@@ -3047,6 +3071,9 @@ public class RESTServices {
 			Set<Integer> configIdsToAddToPaired = new HashSet<>();
 			for (Integer configId : selectedConfigIds) {
 				Configuration config = Solvers.getConfiguration(configId);
+				if (config == null) {
+					continue;
+				}
 				if (solverIdsToAddToAll.contains(config.getSolverId())) {
 					configIdsToAddToAll.add(configId);
 				} else if (solverIdsToAddToPaired.contains(config.getSolverId())) {
@@ -3064,8 +3091,15 @@ public class RESTServices {
 					jobPairIdsToBeDeleted);
 			log.debug("allBenchmarkCount: " + allBenchmarkCount);
 
+			User user = Users.get(userId);
+			if (user == null) {
+				Map<String, Object> missingUser = new HashMap<>();
+				missingUser.put("success", false);
+				return gson.toJson(missingUser);
+			}
+
 			jsonObject.put("pairsToBeAdded", pairedBenchmarkCount + allBenchmarkCount);
-			jsonObject.put("remainingQuota", Users.get(userId).getPairQuota() - Jobs.countPairsByUser(userId));
+			jsonObject.put("remainingQuota", user.getPairQuota() - Jobs.countPairsByUser(userId));
 
 			jsonObject.put("success", true);
 			return gson.toJson(jsonObject);
@@ -3099,8 +3133,10 @@ public class RESTServices {
 	@Produces("application/json")
 	public String getNodeJobPairs(@PathParam("id") int id, @Context HttpServletRequest request) {
 		int userId = SessionUtil.getUserId(request);
-		JsonObject nextDataTablesPage = null;
-		nextDataTablesPage = RESTHelpers.getNextDataTablesPageCluster("node", id, userId, request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0) {
+			throw RESTException.FORBIDDEN;
+		}
+		JsonObject nextDataTablesPage = RESTHelpers.getNextDataTablesPageCluster("node", id, userId, request);
 
 		return nextDataTablesPage == null ? gson.toJson(ERROR_DATABASE) : gson.toJson(nextDataTablesPage);
 	}
@@ -3117,6 +3153,9 @@ public class RESTServices {
 	@Produces("application/json")
 	public String getQueueJobPairs(@PathParam("id") int id, @Context HttpServletRequest request) {
 		int userId = SessionUtil.getUserId(request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0) {
+			throw RESTException.FORBIDDEN;
+		}
 		JsonObject nextDataTablesPage = null;
 		try {
 			nextDataTablesPage = RESTHelpers.getNextDataTablesPageCluster("queue", id, userId, request);
@@ -7791,6 +7830,9 @@ public class RESTServices {
 	public String subscribeUserToJob(@FormParam("id") int jobId, @Context HttpServletRequest request)
 			throws SQLException {
 		int userId = SessionUtil.getUserId(request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0 || !JobSecurity.canUserSeeJob(jobId, userId).isSuccess()) {
+			throw RESTException.FORBIDDEN;
+		}
 		Notifications.subscribeUserToJob(userId, jobId);
 		return "{}";
 	}
@@ -7806,6 +7848,9 @@ public class RESTServices {
 	public String unsubscribeUserToJob(@FormParam("id") int jobId, @Context HttpServletRequest request)
 			throws SQLException {
 		int userId = SessionUtil.getUserId(request);
+		if (userId == R.PUBLIC_USER_ID || userId <= 0 || !JobSecurity.canUserSeeJob(jobId, userId).isSuccess()) {
+			throw RESTException.FORBIDDEN;
+		}
 		Notifications.unsubscribeUserToJob(userId, jobId);
 		return "{}";
 	}
@@ -7817,7 +7862,11 @@ public class RESTServices {
 	@Path("/analytics")
 	@Produces("application/json")
 	public String analytics(@QueryParam("start") @DefaultValue("2017-04-01") java.sql.Date startDate,
-			@QueryParam("end") @DefaultValue("2030-04-01") java.sql.Date endDate) {
+			@QueryParam("end") @DefaultValue("2030-04-01") java.sql.Date endDate,
+			@Context HttpServletRequest request) {
+		if (!GeneralSecurity.hasAdminReadPrivileges(SessionUtil.getUserId(request))) {
+			throw RESTException.FORBIDDEN;
+		}
 		org.starexec.data.database.Analytics.saveToDB();
 		return gson.toJson(org.starexec.data.to.AnalyticsResults.getAllEvents(startDate, endDate));
 	}
@@ -7829,7 +7878,11 @@ public class RESTServices {
 	@Path("/jobpairErrors")
 	@Produces("application/json")
 	public String jobpairErrors(@QueryParam("start") java.sql.Date startDate,
-			@QueryParam("end") @DefaultValue("2030-04-01") java.sql.Date endDate) {
+			@QueryParam("end") @DefaultValue("2030-04-01") java.sql.Date endDate,
+			@Context HttpServletRequest request) {
+		if (!GeneralSecurity.hasAdminReadPrivileges(SessionUtil.getUserId(request))) {
+			throw RESTException.FORBIDDEN;
+		}
 		if (startDate == null) {
 			final Calendar cal = Calendar.getInstance();
 			cal.add(Calendar.DATE, -1);

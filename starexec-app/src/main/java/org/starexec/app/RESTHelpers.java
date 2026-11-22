@@ -1006,6 +1006,9 @@ public class RESTHelpers {
 	 */
 	public static JsonObject getNextDataTablesPageCluster(String type, int id, int userId, HttpServletRequest request) {
 		try {
+			if (userId == R.PUBLIC_USER_ID || userId <= 0) {
+				return null;
+			}
 			// Parameter validation
 			DataTablesQuery query = RESTHelpers.getAttrMap(Primitive.NODE, request);
 			if (query == null) {
@@ -1023,6 +1026,7 @@ public class RESTHelpers {
 							+ id);
 					jobPairsToDisplay = new java.util.ArrayList<>();
 				}
+				jobPairsToDisplay = filterVisibleClusterPairs(jobPairsToDisplay, userId);
 				query.setTotalRecords(Queues.getCountOfEnqueuedPairsByQueue(id));
 				// there is no filter function on this table, so this is always equal to the
 				// above
@@ -1036,6 +1040,7 @@ public class RESTHelpers {
 					log.warn("getNextDataTablesPageCluster - getPairsRunningOnNode returned null for nodeId=" + id);
 					jobPairsToDisplay = new java.util.ArrayList<>();
 				}
+				jobPairsToDisplay = filterVisibleClusterPairs(jobPairsToDisplay, userId);
 				query.setTotalRecords(jobPairsToDisplay.size());
 				// there is no filter function on this table, so this is always equal to the
 				// above
@@ -1048,6 +1053,27 @@ public class RESTHelpers {
 		}
 		return null;
 
+	}
+
+	static List<JobPair> filterVisibleClusterPairs(List<JobPair> pairs, int userId) {
+		if (GeneralSecurity.hasAdminReadPrivileges(userId)) {
+			return pairs;
+		}
+		Map<Integer, Boolean> visibilityCache = new HashMap<>();
+		List<JobPair> visiblePairs = new ArrayList<>();
+		for (JobPair pair : pairs) {
+			if (pair == null) {
+				continue;
+			}
+			boolean canSee = visibilityCache.computeIfAbsent(
+					pair.getJobId(),
+					jid -> JobSecurity.canUserSeeJob(jid, userId).isSuccess()
+			);
+			if (canSee) {
+				visiblePairs.add(pair);
+			}
+		}
+		return visiblePairs;
 	}
 
 	/**

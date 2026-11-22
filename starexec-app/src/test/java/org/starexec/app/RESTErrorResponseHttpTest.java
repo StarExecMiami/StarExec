@@ -116,6 +116,33 @@ public class RESTErrorResponseHttpTest {
 		assertEquals("daily report ok", RESTServices.readPastReport("2026-01-01.txt", 3, reportsDir));
 	}
 
+	@Test
+	public void nonAdminAnalyticsAndErrorsAndPublicClusterEndpointsReturn404() throws Exception {
+		try (MockedStatic<GeneralSecurity> generalSecurity = Mockito.mockStatic(GeneralSecurity.class)) {
+			generalSecurity.when(() -> GeneralSecurity.hasAdminReadPrivileges(4)).thenReturn(false);
+
+			MockHttpResponse analyticsResp = request("/services/analytics", 4);
+			assertEquals(404, analyticsResp.getStatus());
+			assertEquals("not available", analyticsResp.getContentAsString());
+
+			MockHttpResponse errorsResp = request("/services/jobpairErrors", 4);
+			assertEquals(404, errorsResp.getStatus());
+			assertEquals("not available", errorsResp.getContentAsString());
+		}
+
+		MockHttpResponse qstatResp = request("/services/cluster/qstat", R.PUBLIC_USER_ID);
+		assertEquals(404, qstatResp.getStatus());
+
+		MockHttpResponse queueJobsResp = request("/services/cluster/queues/jobs/1", R.PUBLIC_USER_ID);
+		assertEquals(404, queueJobsResp.getStatus());
+
+		MockHttpResponse nodePageResp = request("/services/cluster/nodes/1/pagination", R.PUBLIC_USER_ID);
+		assertEquals(404, nodePageResp.getStatus());
+
+		MockHttpResponse queuePageResp = request("/services/cluster/queues/1/pagination", R.PUBLIC_USER_ID);
+		assertEquals(404, queuePageResp.getStatus());
+	}
+
 	private MockHttpResponse request(String path, int userId) throws Exception {
 		HttpServletRequest servletRequest = Mockito.mock(HttpServletRequest.class);
 		try (MockedStatic<SessionUtil> session = Mockito.mockStatic(SessionUtil.class)) {
