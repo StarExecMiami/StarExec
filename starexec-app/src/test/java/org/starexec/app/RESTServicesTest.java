@@ -734,4 +734,52 @@ public class RESTServicesTest {
 			assertEquals(90, res.get("remainingQuota").getAsInt());
 		}
 	}
+
+	@Test
+	public void adminEditingOtherUserDoesNotMutateAdminSessionUser() throws Exception {
+		User adminSessionUser = new User();
+		adminSessionUser.setId(1);
+		adminSessionUser.setFirstName("Admin");
+		adminSessionUser.setPairQuota(50);
+
+		HttpServletRequest req = Mockito.mock(HttpServletRequest.class);
+		byte[] body = "{\"attribute\":\"pairquota\",\"value\":\"250\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		Mockito.when(req.getInputStream()).thenReturn(new javax.servlet.ServletInputStream() {
+			private int idx = 0;
+			@Override public boolean isFinished() { return idx >= body.length; }
+			@Override public boolean isReady() { return true; }
+			@Override public void setReadListener(javax.servlet.ReadListener readListener) {}
+			@Override public int read() { return idx < body.length ? (body[idx++] & 0xff) : -1; }
+		});
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<UserSecurity> userSecurity = Mockito.mockStatic(UserSecurity.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(req)).thenReturn(1);
+			sessionUtil.when(() -> SessionUtil.getUser(req)).thenReturn(adminSessionUser);
+			userSecurity.when(() -> UserSecurity.canUpdateData(99, 1, "pairquota", "250"))
+					.thenReturn(new ValidatorStatusCode(true));
+			users.when(() -> Users.setPairQuota(99, 250)).thenReturn(true);
+
+			JsonObject res = JsonParser.parseString(new RESTServices().editUserInfoFromBody(99, req)).getAsJsonObject();
+			assertTrue(res.get("success").getAsBoolean());
+			assertEquals(50, adminSessionUser.getPairQuota(), "Admin session pair quota must remain unchanged");
+			assertEquals("Admin", adminSessionUser.getFirstName());
+		}
+	}
+
+	@Test
+	public void userSecurityRejectsOutOfRangeOrNegativePairQuota() {
+		try (MockedStatic<GeneralSecurity> generalSecurity = Mockito.mockStatic(GeneralSecurity.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			generalSecurity.when(() -> GeneralSecurity.hasAdminWritePrivileges(1)).thenReturn(true);
+			users.when(() -> Users.isPublicUser(1)).thenReturn(false);
+
+			assertFalse(UserSecurity.canUpdateData(2, 1, "pairquota", "3000000000").isSuccess());
+			assertFalse(UserSecurity.canUpdateData(2, 1, "pairquota", "-1").isSuccess());
+			assertFalse(UserSecurity.canUpdateData(2, 1, "diskquota", "-1").isSuccess());
+			assertTrue(UserSecurity.canUpdateData(2, 1, "pairquota", "500").isSuccess());
+			assertTrue(UserSecurity.canUpdateData(2, 1, "diskquota", "3000000000").isSuccess());
+		}
+	}
 }

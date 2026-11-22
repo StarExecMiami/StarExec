@@ -3908,10 +3908,14 @@ public class RESTServices {
 			return gson.toJson(new ValidatorStatusCode(true, EMAIL_CHANGE_GENERIC_MESSAGE));
 		}
 
-		// Admin changing another user's email: apply immediately, no verification needed
+		// Admin changing a user's email: apply immediately, no verification needed
 		if (adminDirectChange) {
 			try {
 				Users.updateEmail(userId, newEmail);
+				User sessionUser = SessionUtil.getUser(request);
+				if (sessionUser != null && sessionUser.getId() == userId) {
+					sessionUser.setEmail(newEmail);
+				}
 				return gson.toJson(new ValidatorStatusCode(true, "Email address updated successfully"));
 			} catch (StarExecDatabaseException e) {
 				log.error("Admin direct email update failed for userId=" + userId, e);
@@ -3941,12 +3945,16 @@ public class RESTServices {
 	private String editUserInfoInternal(String attribute, int userId, String newValue, HttpServletRequest request) {
 		boolean success = false;
 		String messageToUser = null;
+		User sessionUser = SessionUtil.getUser(request);
+		boolean editingOwnProfile = sessionUser != null && sessionUser.getId() == userId;
 		switch (attribute) {
 			case "firstname":
 				try {
 					success = Users.updateFirstName(userId, newValue);
 					if (success) {
-						SessionUtil.getUser(request).setFirstName(newValue);
+						if (editingOwnProfile) {
+							sessionUser.setFirstName(newValue);
+						}
 						messageToUser = "Edit successful.";
 					}
 				} catch (StarExecDatabaseException e) {
@@ -3959,7 +3967,9 @@ public class RESTServices {
 				try {
 					success = Users.updateLastName(userId, newValue);
 					if (success) {
-						SessionUtil.getUser(request).setLastName(newValue);
+						if (editingOwnProfile) {
+							sessionUser.setLastName(newValue);
+						}
 						messageToUser = "Edit successful.";
 					}
 				} catch (StarExecDatabaseException e) {
@@ -3972,7 +3982,9 @@ public class RESTServices {
 				try {
 					success = Users.updateInstitution(userId, newValue);
 					if (success) {
-						SessionUtil.getUser(request).setInstitution(newValue);
+						if (editingOwnProfile) {
+							sessionUser.setInstitution(newValue);
+						}
 						messageToUser = "Edit successful.";
 					}
 				} catch (StarExecDatabaseException e) {
@@ -3982,17 +3994,35 @@ public class RESTServices {
 				}
 				break;
 			case "diskquota":
-				success = Users.setDiskQuota(userId, Long.parseLong(newValue));
-				if (success) {
-					SessionUtil.getUser(request).setDiskQuota(Long.parseLong(newValue));
-					messageToUser = "Edit successful.";
+				try {
+					long diskQuota = Long.parseLong(newValue);
+					success = Users.setDiskQuota(userId, diskQuota);
+					if (success) {
+						if (editingOwnProfile) {
+							sessionUser.setDiskQuota(diskQuota);
+						}
+						messageToUser = "Edit successful.";
+					}
+				} catch (NumberFormatException e) {
+					log.error("Invalid number format for disk quota for user " + userId + ": " + newValue, e);
+					messageToUser = "Invalid number entered for disk quota.";
+					success = false;
 				}
 				break;
 			case "pairquota":
-				success = Users.setPairQuota(userId, Integer.parseInt(newValue));
-				if (success) {
-					SessionUtil.getUser(request).setPairQuota(Integer.parseInt(newValue));
-					messageToUser = "Edit successful.";
+				try {
+					int pairQuota = Integer.parseInt(newValue);
+					success = Users.setPairQuota(userId, pairQuota);
+					if (success) {
+						if (editingOwnProfile) {
+							sessionUser.setPairQuota(pairQuota);
+						}
+						messageToUser = "Edit successful.";
+					}
+				} catch (NumberFormatException e) {
+					log.error("Invalid number format for pair quota for user " + userId + ": " + newValue, e);
+					messageToUser = "Invalid number entered for pair quota.";
+					success = false;
 				}
 				break;
 			case "pagesize":
