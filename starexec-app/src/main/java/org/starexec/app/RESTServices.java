@@ -3278,10 +3278,11 @@ public class RESTServices {
 				return gson.toJson(status);
 			}
 		} catch (SQLException e) {
-			return gson.toJson(new ValidatorStatusCode(false, e.getMessage()));
+			log.error(methodName, e.getMessage(), e);
+			return gson.toJson(new ValidatorStatusCode(false, "Database error generating anonymous link."));
 		} catch (RuntimeException e) {
 			log.error(methodName, e.getMessage(), e);
-			return gson.toJson(new ValidatorStatusCode(false, e.getMessage()));
+			return gson.toJson(new ValidatorStatusCode(false, "Internal error generating anonymous link."));
 		}
 	}
 
@@ -3416,7 +3417,8 @@ public class RESTServices {
 				Jobs.setJobDescription(jobId, newDescription);
 				status = new ValidatorStatusCode(true, "Description changed successfully.");
 			} catch (Exception e) {
-				status = new ValidatorStatusCode(false, e.getMessage());
+				log.error("editJobDescription failed", e);
+				status = new ValidatorStatusCode(false, "Failed to update job description.");
 			}
 		} else {
 			status = new ValidatorStatusCode(false, "You do not have permission to change this job's description.");

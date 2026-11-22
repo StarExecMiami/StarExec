@@ -718,7 +718,7 @@ public class RESTHelpers {
 					"Successfully copied processor to StarDev");
 		} catch (IOException e) {
 			log.warn("Could not copy solver to sandbox for copying to StarDev.", e);
-			return new ValidatorStatusCode(false, "Could not copy processor.", Util.getStackTrace(e));
+			return new ValidatorStatusCode(false, "Could not copy processor.");
 		} finally {
 			deleteSandbox(sandbox);
 		}

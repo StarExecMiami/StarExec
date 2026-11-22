@@ -798,4 +798,81 @@ public class RESTServicesTest {
 			jobs.verifyNoInteractions();
 		}
 	}
+
+	@Test
+	public void getAnonymousLinkForPrimitiveSanitizesDatabaseAndRuntimeExceptions() {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<GeneralSecurity> generalSecurity = Mockito.mockStatic(GeneralSecurity.class);
+			 MockedStatic<org.starexec.data.database.AnonymousLinks> anonLinks = Mockito.mockStatic(
+					 org.starexec.data.database.AnonymousLinks.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(7);
+			generalSecurity.when(() -> GeneralSecurity.canUserGetAnonymousLinkForPrimitive(7, R.JOB, 12))
+					.thenReturn(new ValidatorStatusCode(true));
+			anonLinks.when(() -> org.starexec.data.database.AnonymousLinks.createPrimitivesToAnonymize("none"))
+					.thenReturn(org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize.NONE);
+			anonLinks.when(() -> org.starexec.data.database.AnonymousLinks.getAnonymousLinkCode(
+					R.JOB, 12, org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize.NONE))
+					.thenThrow(new java.sql.SQLException("FATAL: password authentication failed for internal user"));
+
+			ValidatorStatusCode dbErr = gson.fromJson(
+					new RESTServices().getAnonymousLinkForPrimitive(R.JOB, 12, "none", request),
+					ValidatorStatusCode.class);
+			assertFalse(dbErr.isSuccess());
+			assertEquals("Database error generating anonymous link.", dbErr.getMessage());
+
+			anonLinks.when(() -> org.starexec.data.database.AnonymousLinks.createPrimitivesToAnonymize("bad"))
+					.thenThrow(new IllegalStateException("internal-enum-token-123"));
+
+			ValidatorStatusCode runtimeErr = gson.fromJson(
+					new RESTServices().getAnonymousLinkForPrimitive(R.JOB, 12, "bad", request),
+					ValidatorStatusCode.class);
+			assertFalse(runtimeErr.isSuccess());
+			assertEquals("Internal error generating anonymous link.", runtimeErr.getMessage());
+		}
+	}
+
+	@Test
+	public void editJobDescriptionSanitizesUnexpectedExceptions() {
+		Validator.initialize();
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(7);
+			jobSecurity.when(() -> JobSecurity.userOwnsJobOrIsAdmin(12, 7)).thenReturn(true);
+			jobs.when(() -> Jobs.setJobDescription(12, "valid desc"))
+					.thenThrow(new RuntimeException("jdbc:postgresql://secret/starexec"));
+
+			ValidatorStatusCode status = gson.fromJson(
+					new RESTServices().editJobDescription(12, "valid desc", request),
+					ValidatorStatusCode.class);
+			assertFalse(status.isSuccess());
+			assertEquals("Failed to update job description.", status.getMessage());
+		}
+	}
+
+	@Test
+	public void copyProcessorToStarDevDoesNotReturnStackTraceInDevMessage(
+			@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
+		Processor proc = new Processor();
+		proc.setId(55);
+		proc.setType(org.starexec.data.to.enums.ProcessorType.POST);
+		proc.setPath(tempDir.resolve("nonexistent-processor-path").toString());
+
+		java.io.File sandbox = tempDir.resolve("sandbox").toFile();
+		java.nio.file.Files.createDirectories(sandbox.toPath());
+		org.starexec.command.Connection conn = Mockito.mock(org.starexec.command.Connection.class);
+
+		try (MockedStatic<Processors> processors = Mockito.mockStatic(Processors.class);
+			 MockedStatic<Util> util = Mockito.mockStatic(Util.class)) {
+			processors.when(() -> Processors.get(55)).thenReturn(proc);
+			util.when(Util::getRandomSandboxDirectory).thenReturn(sandbox);
+
+			ValidatorStatusCode status = RESTHelpers.copyProcessorToStarDev(conn, 55, 1);
+			assertFalse(status.isSuccess());
+			assertEquals("Could not copy processor.", status.getMessage());
+			assertEquals(null, status.getDevMessage());
+		}
+	}
 }
