@@ -104,7 +104,7 @@ public class UploadSolver extends HttpServlet {
 					form = Util.parseMultipartRequest(request);
 				} catch (Exception ex) {
 					log.error("Exception while parsing multipart request", ex);
-					response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Failed to parse multipart request: "+ex.getMessage());
+					response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Failed to parse multipart request");
 					return;
 				}
 
@@ -152,9 +152,20 @@ public class UploadSolver extends HttpServlet {
 																   "&msg=No configurations for the new solver"));
 					} else {
 						if (runTestJob) {
-							int settingsId = Communities.getDefaultSettings(spaceId).getId();
+							Integer settingsId = null;
 							if (form.containsKey(SETTING_ID)) {
 								settingsId = Integer.parseInt((String) form.get(SETTING_ID));
+							} else {
+								org.starexec.data.to.DefaultSettings defaults = Communities.getDefaultSettings(spaceId);
+								if (defaults != null) {
+									settingsId = defaults.getId();
+								}
+							}
+							if (settingsId == null) {
+								response.sendRedirect(Util.docRoot(
+										"secure/details/solver.jsp?id=" + result.solverId +
+												"&msg=Default settings not found-- solver uploaded successfully"));
+								break;
 							}
 
 							int jobId = CreateJob.buildSolverTestJob(result.solverId, spaceId, userId, settingsId);
@@ -192,7 +203,11 @@ public class UploadSolver extends HttpServlet {
 			}
 		} catch (Exception e) {
 			log.error("Caught Exception in UploadSolver.doPost", e);
-			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+			String clientMessage = (e instanceof IllegalStateException
+					&& "Could not find the user uploading this solver".equals(e.getMessage()))
+					? e.getMessage()
+					: "Failed to upload solver";
+			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, clientMessage);
 		}
 	}
 

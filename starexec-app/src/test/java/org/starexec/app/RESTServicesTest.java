@@ -782,4 +782,20 @@ public class RESTServicesTest {
 			assertTrue(UserSecurity.canUpdateData(2, 1, "diskquota", "3000000000").isSuccess());
 		}
 	}
+
+	@Test
+	public void editJobNameValidatesJobNameFormatBeforeUpdatingDatabase() {
+		org.starexec.util.Validator.initialize();
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(7);
+			JsonObject invalid = JsonParser.parseString(
+					new RESTServices().editJobName(12, "", request)).getAsJsonObject();
+			assertFalse(invalid.get("success").getAsBoolean());
+			jobSecurity.verifyNoInteractions();
+			jobs.verifyNoInteractions();
+		}
+	}
 }

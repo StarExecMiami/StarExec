@@ -3350,12 +3350,15 @@ public class RESTServices {
 		int userId = SessionUtil.getUserId(request);
 
 		ValidatorStatusCode status = null;
-		if (JobSecurity.userOwnsJobOrIsAdmin(jobId, userId)) {
+		if (!Validator.isValidJobName(newName)) {
+			status = new ValidatorStatusCode(false, "The new job name is not in the proper format.");
+		} else if (JobSecurity.userOwnsJobOrIsAdmin(jobId, userId)) {
 			try {
 				Jobs.setJobName(jobId, newName);
 				status = new ValidatorStatusCode(true, "Name changed successfully.");
 			} catch (Exception e) {
-				status = new ValidatorStatusCode(false, e.getMessage());
+				log.error(method, "Failed to update job name for job " + jobId, e);
+				status = new ValidatorStatusCode(false, "Failed to update job name.");
 			}
 		} else {
 			status = new ValidatorStatusCode(false, "You do not have permission to change this job's name.");
@@ -3640,8 +3643,8 @@ public class RESTServices {
 
 			return gson.toJson(benchmarkStatus);
 		} catch (IOException e) {
-			log.error("Caught IOException while trying to get community ID.");
-			return gson.toJson(new ValidatorStatusCode(false, "Failed to upload benchmark.", Util.getStackTrace(e)));
+			log.error("Caught IOException while trying to get community ID.", e);
+			return gson.toJson(new ValidatorStatusCode(false, "Failed to upload benchmark."));
 		}
 	}
 

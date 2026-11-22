@@ -128,7 +128,7 @@ public class ProcessorManager extends HttpServlet {
 			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
-			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to add new processor.");
 		}
 	}
 
