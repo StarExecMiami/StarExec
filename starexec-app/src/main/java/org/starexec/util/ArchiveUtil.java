@@ -3,6 +3,7 @@ package org.starexec.util;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.*;
 import org.apache.commons.compress.archivers.ArchiveEntry;
 import org.apache.commons.compress.archivers.ArchiveInputStream;
@@ -272,6 +273,7 @@ public class ArchiveUtil {
                 Path targetPath = resolveSafeTargetPath(destDir, entryName);
                 if (entry.isDirectory()) {
                     Files.createDirectories(targetPath);
+                    applyPosixPermissions(targetPath, entry.getUnixMode());
                     continue;
                 }
                 Path parent = targetPath.getParent();
@@ -284,6 +286,7 @@ public class ArchiveUtil {
                 try (InputStream is = zipFile.getInputStream(entry)) {
                     totalWritten += copyBounded(is, targetPath.toFile(), totalWritten, maxTotalBytes, entryName);
                 }
+                applyPosixPermissions(targetPath, entry.getUnixMode());
             }
         }
     }
@@ -309,6 +312,7 @@ public class ArchiveUtil {
                 Path targetPath = resolveSafeTargetPath(destDir, entryName);
                 if (entry.isDirectory()) {
                     Files.createDirectories(targetPath);
+                    applyPosixPermissions(targetPath, entry.getMode());
                     continue;
                 }
                 Path parent = targetPath.getParent();
@@ -319,6 +323,41 @@ public class ArchiveUtil {
                     throw new SecurityException("Target path is a symbolic link: " + entryName);
                 }
                 totalWritten += copyBounded(tis, targetPath.toFile(), totalWritten, maxTotalBytes, entryName);
+                applyPosixPermissions(targetPath, entry.getMode());
+            }
+        }
+    }
+
+    /**
+     * Restores standard 0777 POSIX permission bits (including executable bits) without setuid/setgid/sticky.
+     */
+    static void applyPosixPermissions(Path targetPath, int unixMode) throws IOException {
+        if (Files.isSymbolicLink(targetPath)) {
+            return;
+        }
+        int masked = unixMode & 0777;
+        if (masked == 0) {
+            return;
+        }
+        int safeMode = masked | 0600;
+        if (Files.isDirectory(targetPath)) {
+            safeMode |= 0700;
+        }
+        Set<PosixFilePermission> perms = EnumSet.noneOf(PosixFilePermission.class);
+        if ((safeMode & 0400) != 0) perms.add(PosixFilePermission.OWNER_READ);
+        if ((safeMode & 0200) != 0) perms.add(PosixFilePermission.OWNER_WRITE);
+        if ((safeMode & 0100) != 0) perms.add(PosixFilePermission.OWNER_EXECUTE);
+        if ((safeMode & 0040) != 0) perms.add(PosixFilePermission.GROUP_READ);
+        if ((safeMode & 0020) != 0) perms.add(PosixFilePermission.GROUP_WRITE);
+        if ((safeMode & 0010) != 0) perms.add(PosixFilePermission.GROUP_EXECUTE);
+        if ((safeMode & 0004) != 0) perms.add(PosixFilePermission.OTHERS_READ);
+        if ((safeMode & 0002) != 0) perms.add(PosixFilePermission.OTHERS_WRITE);
+        if ((safeMode & 0001) != 0) perms.add(PosixFilePermission.OTHERS_EXECUTE);
+        try {
+            Files.setPosixFilePermissions(targetPath, perms);
+        } catch (UnsupportedOperationException ignored) {
+            if ((safeMode & 0100) != 0) {
+                targetPath.toFile().setExecutable(true, (safeMode & 0011) == 0);
             }
         }
     }

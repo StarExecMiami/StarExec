@@ -17,7 +17,10 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.Arrays;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -185,6 +188,71 @@ public class ArchiveUtilExtractArchiveTest {
 		File bombDest = newFolder(tmp, "dest-bomb");
 		assertFalse(ArchiveUtil.extractArchive(bombTgz.getAbsolutePath(), bombDest.getAbsolutePath()));
 		assertFalse(Files.exists(bombDest.toPath().resolve("zeros.bin")));
+	}
+
+	@Test
+	public void tarTgzTarGzAndZipPreserveExecutableBitsAndStripSpecialModeBits() throws IOException {
+		File tarFile = new File(newFolder(tmp, "exec-tar"), "solver.tar");
+		try (TarArchiveOutputStream tos = new TarArchiveOutputStream(Files.newOutputStream(tarFile.toPath()))) {
+			addTarEntryWithMode(tos, "bin/starexec_run_default", "#!/bin/sh\n", 0104755);
+			addTarEntryWithMode(tos, "bin/readme.txt", "doc\n", 0100644);
+			tos.finish();
+		}
+		File tarDest = newFolder(tmp, "dest-tar");
+		assertTrue(ArchiveUtil.extractArchive(tarFile.getAbsolutePath(), tarDest.getAbsolutePath()));
+		Path tarBin = tarDest.toPath().resolve("bin/starexec_run_default");
+		Path tarDoc = tarDest.toPath().resolve("bin/readme.txt");
+		assertTrue(Files.isExecutable(tarBin));
+		assertFalse(Files.isExecutable(tarDoc));
+		assertEquals(0755, ((Integer) Files.getAttribute(tarBin, "unix:mode")) & 07777);
+
+		for (String ext : new String[]{".tgz", ".tar.gz"}) {
+			File tgzFile = new File(newFolder(tmp, "exec-" + ext.replace(".", "")), "solver" + ext);
+			try (GzipCompressorOutputStream gz = new GzipCompressorOutputStream(Files.newOutputStream(tgzFile.toPath()));
+				 TarArchiveOutputStream tos = new TarArchiveOutputStream(gz)) {
+				addTarEntryWithMode(tos, "bin/starexec_run_default", "#!/bin/sh\n", 0100755);
+				tos.finish();
+			}
+			File tgzDest = newFolder(tmp, "dest-" + ext.replace(".", ""));
+			assertTrue(ArchiveUtil.extractArchive(tgzFile.getAbsolutePath(), tgzDest.getAbsolutePath()));
+			Set<PosixFilePermission> perms = Files.getPosixFilePermissions(
+					tgzDest.toPath().resolve("bin/starexec_run_default"));
+			assertTrue(perms.contains(PosixFilePermission.OWNER_EXECUTE), "Missing +x for " + ext);
+		}
+
+		File zipFile = new File(newFolder(tmp, "exec-zip"), "solver.zip");
+		try (ZipArchiveOutputStream zos = new ZipArchiveOutputStream(Files.newOutputStream(zipFile.toPath()))) {
+			ZipArchiveEntry exec = new ZipArchiveEntry("bin/solver");
+			exec.setUnixMode(UnixStat.FILE_FLAG | 04755);
+			byte[] execBytes = "#!/bin/sh\n".getBytes(StandardCharsets.UTF_8);
+			zos.putArchiveEntry(exec);
+			zos.write(execBytes);
+			zos.closeArchiveEntry();
+
+			ZipArchiveEntry doc = new ZipArchiveEntry("bin/notes.txt");
+			doc.setUnixMode(UnixStat.FILE_FLAG | 0644);
+			zos.putArchiveEntry(doc);
+			zos.write("notes\n".getBytes(StandardCharsets.UTF_8));
+			zos.closeArchiveEntry();
+		}
+		File zipDest = newFolder(tmp, "dest-zip");
+		assertTrue(ArchiveUtil.extractArchive(zipFile.getAbsolutePath(), zipDest.getAbsolutePath()));
+		Path zipBin = zipDest.toPath().resolve("bin/solver");
+		Path zipDoc = zipDest.toPath().resolve("bin/notes.txt");
+		assertTrue(Files.isExecutable(zipBin));
+		assertFalse(Files.isExecutable(zipDoc));
+		assertEquals(0755, ((Integer) Files.getAttribute(zipBin, "unix:mode")) & 07777);
+	}
+
+	private static void addTarEntryWithMode(TarArchiveOutputStream tos, String name, String content, int mode)
+			throws IOException {
+		byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+		TarArchiveEntry entry = new TarArchiveEntry(name);
+		entry.setSize(bytes.length);
+		entry.setMode(mode);
+		tos.putArchiveEntry(entry);
+		tos.write(bytes);
+		tos.closeArchiveEntry();
 	}
 
 	private static byte[] tarGzWithEntry(String name, String linkName, byte linkFlag, String content) throws IOException {
