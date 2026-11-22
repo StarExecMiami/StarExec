@@ -92,6 +92,8 @@ export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
 | `STAREXEC_UPLOAD_CLEANUP_INTERVAL_SECONDS` | `900` | No | `300` | Interval between upload artifact cleanup sweeps. |
 | `STAREXEC_UPLOAD_CLEANUP_BATCH_SIZE` | `100` | No | `50` | Maximum upload artifacts claimed per cleanup sweep. |
 | `STAREXEC_UPLOAD_ARTIFACT_RETENTION_HOURS` | `168` | No | `72` | Retry/artifact retention window for upload source archives before cleanup and retry expiry. |
+| `STAREXEC_VALIDATE_AT_STARTUP` | `false` (`true` in K8s/prod templates) | No | `true` | Validates required DB credentials and startup invariants before serving traffic. |
+| `STAREXEC_URL_DOWNLOAD_ALLOW_PRIVATE_NETWORKS` | `false` | No | `false` | Blocks SSRF to loopback/private/link-local addresses on URL uploads unless explicitly enabled. |
 
 #### Async benchmark upload extraction
 
@@ -230,7 +232,7 @@ backend:
 # values-prod.yaml
 image:
   repository: ghcr.io/starexecmiami/starexec
-  tag: v1.0.0
+  tag: 2.6.0  # Or immutable sha-<full-git-sha> + image.digest
   pullPolicy: IfNotPresent
 
 postgres:

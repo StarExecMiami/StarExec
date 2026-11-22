@@ -115,7 +115,7 @@ StarExec uses [Flyway](https://flywaydb.org/) for database schema management:
 V0001__baseline_schema.sql      # Version 1
 V0002__seed_minimal_data.sql    # Version 2
 V0003__schema_change_1_1.sql    # Version 3
-V0117__automatic_rerun_is_atomic.sql  # Version 117
+V0137__ordinary_output_reservations.sql  # Latest migration in v2.6.0
 ```
 
 ### Notable Migrations
@@ -190,11 +190,11 @@ make stop && make start
    touch starexec-app/src/main/resources/db/migration/V{next_version}__Description.sql
    ```
 
-2. Add SQL statements:
+2. Add SQL statements (schema-qualified under `starexec`):
    ```sql
-   -- V0027__Add_job_priority.sql
-   ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0;
-   CREATE INDEX idx_jobs_priority ON jobs(priority);
+   -- V0138__Add_job_priority.sql
+   ALTER TABLE starexec.jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+   CREATE INDEX idx_jobs_priority ON starexec.jobs(priority);
    ```
 
    Migrations must not use `CREATE INDEX CONCURRENTLY`: it deadlocks against
@@ -299,11 +299,9 @@ LEFT JOIN starexec.user_roles ur ON ur.email = u.email;
 -- Reset user password (hash required from application)
 -- Use application UI or API instead
 
--- Disable user
-UPDATE users SET enabled = false WHERE email = 'user@example.com';
-
--- Enable user
-UPDATE users SET enabled = true WHERE email = 'user@example.com';
+-- Suspend / restore user (`starexec.users` has no `enabled` column; roles live in `starexec.user_roles`)
+UPDATE starexec.user_roles SET role = 'suspended' WHERE email = 'user@example.com';
+UPDATE starexec.user_roles SET role = 'user' WHERE email = 'user@example.com';
 
 -- Check admin users
 SELECT u.id, u.email

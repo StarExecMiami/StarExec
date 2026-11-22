@@ -46,7 +46,7 @@ SELECT 1;
 |-----------|---------------|
 | Application | `make logs-app` or `podman logs starexec-app` |
 | PostgreSQL | `make logs-postgres` or `podman logs starexec-postgres` |
-| Job containers | `podman logs starexec-job-<pair_id>` |
+| Job containers | `podman ps --filter "name=starexec-"` then `podman logs <container_name>` |
 | Combined | `make logs` |
 
 #### Kubernetes Deployment
@@ -85,27 +85,15 @@ StarExec uses Logback for logging. Configure in `logback.xml`:
 </root>
 
 <!-- Package-specific levels -->
-<logger name="org.starexec" level="INFO"/>
-<logger name="org.starexec.backend" level="DEBUG"/>
-<logger name="org.starexec.data" level="INFO"/>
-<logger name="org.starexec.jobs" level="DEBUG"/>
-
-<!-- SQL logging (verbose) -->
-<logger name="org.hibernate.SQL" level="DEBUG"/>
-<logger name="org.hibernate.type" level="TRACE"/>
+<logger name="org.starexec" level="DEBUG"/>
+<logger name="org.starexec.app.SessionFilter" level="INFO"/>
+<logger name="org.starexec.util.SessionUtil" level="INFO"/>
+<logger name="org.starexec.data.database.Permissions" level="INFO"/>
 ```
 
-### Changing Log Level at Runtime
+### Changing Log Level
 
-```bash
-# Via environment variable
-export LOGGING_LEVEL_ORG_STAREXEC=DEBUG
-make stop && make start
-
-# Edit logback.xml and restart
-podman exec starexec-app vi /WEB-INF/classes/logback.xml
-podman restart starexec-app
-```
+`org.starexec` is already set to `DEBUG` in `starexec-app/src/main/resources/logback.xml`. Because `logback.xml` is packaged inside the WAR at `/opt/tomcat/webapps/starexec/WEB-INF/classes/logback.xml` and no `LOGGING_LEVEL_ORG_STAREXEC` environment variable is read, change logger levels in `starexec-app/src/main/resources/logback.xml` and rebuild the image (or copy an edited `logback.xml` into `/opt/tomcat/webapps/starexec/WEB-INF/classes/logback.xml` and restart the container for temporary debugging).
 
 ### Log Format
 
@@ -118,7 +106,7 @@ Default format:
 Example log entries:
 
 ```
-2025-01-15 10:30:45.123 [main] INFO  o.s.app.StarExec - StarExec starting...
+2025-01-15 10:30:45.123 [main] INFO  o.s.app.Starexec - StarExec starting...
 2025-01-15 10:30:46.456 [main] INFO  o.s.backend.PodmanBackend - Backend initialized
 2025-01-15 10:30:47.789 [job-worker-1] DEBUG o.s.jobs.JobManager - Submitting job pair 12345
 2025-01-15 10:30:48.012 [monitor] INFO  o.s.backend.ContainerJobMonitor - Job 12345 completed
@@ -126,19 +114,19 @@ Example log entries:
 
 ### Log Rotation
 
-Configure log rotation in `logback.xml`:
+Configured in `starexec-app/src/main/resources/logback.xml`:
 
 ```xml
-<appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-  <file>/var/log/starexec/starexec.log</file>
+<appender name="STAREXEC" class="ch.qos.logback.core.rolling.RollingFileAppender">
+  <file>${STAREXEC_LOG_DIR:-/var/log/starexec}/starexec.log</file>
   <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-    <fileNamePattern>/var/log/starexec/starexec-%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+    <fileNamePattern>${STAREXEC_LOG_DIR:-/var/log/starexec}/starexec.log.%d.%i</fileNamePattern>
     <maxFileSize>100MB</maxFileSize>
-    <maxHistory>30</maxHistory>
-    <totalSizeCap>3GB</totalSizeCap>
+    <maxHistory>14</maxHistory>
+    <totalSizeCap>1GB</totalSizeCap>
   </rollingPolicy>
   <encoder>
-    <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+    <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{40} - %msg%n%rEx%n</pattern>
   </encoder>
 </appender>
 ```
@@ -147,21 +135,16 @@ Configure log rotation in `logback.xml`:
 
 ## Debugging
 
-### Debug Mode
+### Debug Logs
 
-Enable comprehensive debugging:
+`org.starexec` logs at `DEBUG` by default inside `starexec-app`. Tail filtered diagnostic output with:
 
 ```bash
-# Set environment
-export STAREXEC_DEBUG=true
-export LOGGING_LEVEL_ORG_STAREXEC=DEBUG
-
-# Restart
-make stop && make start
-
-# Tail logs
+# Tail debug/warn/error logs
 make logs-app | grep -E "(DEBUG|ERROR|WARN)"
 ```
+
+*(Note: `STAREXEC_DEBUG=1` only enables shell trace output inside job-runner containers via `docker/job-entrypoint.sh`; it does not change Java logging inside `starexec-app`.)*
 
 ### Common Debug Scenarios
 
@@ -208,8 +191,9 @@ A pending pair (code 1) is never dispatched while its job's queue is not `ACTIVE
 # Check container status
 podman ps | grep starexec-job
 
-# Check container logs
-podman logs starexec-job-<pair_id>
+# Check job containers (containers use starexec-job-<ts> or starexec-pair-<pairId>-attempt-<n>)
+podman ps --filter "name=starexec-"
+podman logs <container_name>
 
 # Check monitor is running
 make logs-app | grep ContainerJobMonitor
@@ -228,7 +212,7 @@ make logs-app | grep "Creating container"
 podman events --filter type=container | head -50
 
 # Inspect failed container
-podman inspect starexec-job-<pair_id>
+podman inspect <container_name>
 
 # Check resource limits
 podman stats --no-stream
@@ -252,10 +236,12 @@ echo $STAREXEC_DB_PASSWORD
 
 ### Enabling SQL Query Logging
 
-```xml
-<!-- In logback.xml -->
-<logger name="org.hibernate.SQL" level="DEBUG"/>
-<logger name="org.hibernate.type.descriptor.sql.BasicBinder" level="TRACE"/>
+StarExec uses direct JDBC (`Common.java`), not Hibernate, so query logging is controlled on PostgreSQL rather than Hibernate loggers:
+
+```sql
+-- Enable temporary SQL logging in PostgreSQL (via make db-shell)
+ALTER SYSTEM SET log_statement = 'all';
+SELECT pg_reload_conf();
 ```
 
 Or via JDBC URL:
@@ -266,29 +252,22 @@ jdbc:postgresql://host:5432/starexec?loggerLevel=DEBUG
 
 ### Thread Dump
 
+The runtime container uses `eclipse-temurin:17-jre-noble` (which omits JDK tools like `jstack`/`jmap`) and runs `/usr/bin/tini` as PID 1. Send `SIGQUIT` to the Java Tomcat process so the JVM writes a full thread dump to standard output (`make logs-app`):
+
 ```bash
-# Get Java thread dump
-podman exec starexec-app jstack 1 > thread-dump.txt
+# Find Tomcat Java PID inside the container and trigger thread dump
+JAVA_PID=$(podman exec starexec-app pgrep -f 'org.apache.catalina.startup.Bootstrap')
+podman exec starexec-app kill -QUIT "$JAVA_PID"
+podman logs --tail=200 starexec-app > thread-dump.txt
 
-# Find blocked threads
+# Find blocked or waiting threads
 grep -A 20 "BLOCKED" thread-dump.txt
-
-# Find waiting threads
 grep -A 20 "WAITING" thread-dump.txt
 ```
 
-### Heap Dump
+### Heap Diagnostics
 
-```bash
-# Generate heap dump
-podman exec starexec-app jmap -dump:format=b,file=/tmp/heap.hprof 1
-
-# Copy out of container
-podman cp starexec-app:/tmp/heap.hprof ./heap.hprof
-
-# Analyze with Eclipse MAT, VisualVM, or jhat
-jhat heap.hprof
-```
+For heap capture in production containers, add `-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/starexec` to `JAVA_OPTS` in your Helm values `env:` map, or attach `jcmd` when running inside a JDK-equipped development environment.
 
 ---
 
@@ -402,9 +381,7 @@ exit 0
 
 ### Built-in Metrics
 
-Query via the `getStats()` method on backends. These statistics are internal to
-the application and are not currently exposed over HTTP (there is no
-`/services/admin/backend-stats` endpoint).
+`LocalBackend.getStats()` and `ContainerJobMonitor.getStats()` / `LocalJobMonitor.getStats()` expose internal runtime metrics to logs/diagnostics, and are not currently exposed over HTTP (there is no `/services/admin/backend-stats` endpoint).
 
 LocalBackend stats:
 - `activeJobs`: Currently running + queued
@@ -515,9 +492,8 @@ make db-shell
 SELECT * FROM jobs WHERE id = $JOB_ID;
 SELECT * FROM job_pairs WHERE job_id = $JOB_ID;
 
-# 3. Check container (if running)
-podman ps | grep $JOB_ID
-podman logs starexec-job-$JOB_ID
+# 3. Check container (if running; containers use starexec-job-<ts> or starexec-pair-<pairId>-attempt-<n>)
+podman ps --filter "name=starexec-"
 
 # 4. Check output files
 ls -la /starexec/output/$JOB_ID/

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Added root [SECURITY.md](SECURITY.md) vulnerability disclosure policy and expanded the Diátaxis index in [README.md](README.md) and [CONTRIBUTING.md](CONTRIBUTING.md) so all guides (including `LEGACY_DATA_MIGRATION.md`, `EXECUTION_STORAGE.md`, `SOLVER_ARTIFACTS.md`, `MICROK8S_SINGLE_NODE.md`, and `v2.6.0` release notes) are discoverable.
+- Updated `docs/ARCHITECTURE.md`, `docs/DEVELOPER.md`, `docs/LEGACY.md`, `docs/QUICKSTART.md`, `docs/DEPLOYMENT.md`, `docs/LEGACY_DATA_MIGRATION.md`, `docs/SECURITY.md`, `docs/DATABASE.md`, `docs/OBSERVABILITY.md`, `docs/API_GUIDE.md`, and `docs/CONFIGURATION.md` to match the `v2.6.0` runtime (`eclipse-temurin:17-jre-noble`, Tomcat `9.0.124`, Node 24 LTS), Helm single-replica/chart-retention rules, `scripts/mysql2pg` workflow, `starexec.user_roles` SQL schema, CSRF mutating-method coverage, and `kill -QUIT` thread diagnostics.
+
 ## [2.6.0] - 2026-11-22
 
 ### Added
