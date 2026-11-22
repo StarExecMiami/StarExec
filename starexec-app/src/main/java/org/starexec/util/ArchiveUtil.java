@@ -607,6 +607,9 @@ public class ArchiveUtil {
     ) throws IOException {
         long maxTime = earlyDate;
         final File[] files = srcFile.listFiles();
+        if (files == null) {
+            return maxTime;
+        }
         for (File file : files) {
             final long t;
             final String fileName =

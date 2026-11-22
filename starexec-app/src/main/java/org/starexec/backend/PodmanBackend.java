@@ -677,15 +677,22 @@ public class PodmanBackend implements Backend {
                     @Override
                     public void onError(Throwable throwable) {
                         log.error("Container event listener error", throwable);
+                        if (shuttingDown) {
+                            return;
+                        }
                         // Re-subscribe on error after delay
-                        new Thread(() -> {
+                        Thread reconnect = new Thread(() -> {
                             try {
                                 Thread.sleep(5000);
-                                startContainerEventListener();
+                                if (!shuttingDown) {
+                                    startContainerEventListener();
+                                }
                             } catch (InterruptedException ie) {
                                 Thread.currentThread().interrupt();
                             }
-                        }).start();
+                        }, "podman-events-reconnect");
+                        reconnect.setDaemon(true);
+                        reconnect.start();
                     }
                 });
             log.info("Subscribed to container event stream");
