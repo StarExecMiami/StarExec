@@ -79,6 +79,9 @@ function initUI() {
 					alert(data.message);
 				}
 			}
+		}).fail(function() {
+			destroyDialog();
+			showMessage('error', "Internal error checking job pair confirmation", 5000);
 		});
 
 		e.preventDefault();

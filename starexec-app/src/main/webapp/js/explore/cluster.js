@@ -511,7 +511,9 @@ function loadQstatOutput() {
 			$("#qstatOutput").val(data);
 		},
 		"text"
-	);
+	).fail(function() {
+		showMessage('error', "Internal error loading queue status", 5000);
+	});
 }
 
 function loadQueueLoads() {
@@ -522,7 +524,9 @@ function loadQueueLoads() {
 			$("#loadOutput").val(data);
 		},
 		"text"
-	);
+	).fail(function() {
+		showMessage('error', "Internal error loading queue loads", 5000);
+	});
 }
 
 /**

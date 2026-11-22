@@ -50,7 +50,9 @@ function determineIfUserIsDeveloper() {
 			userIsDeveloper = data;
 		},
 		'json'
-	);
+	).fail(function() {
+		userIsDeveloper = false;
+	});
 }
 
 /**

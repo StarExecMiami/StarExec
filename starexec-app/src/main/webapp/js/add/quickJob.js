@@ -296,7 +296,9 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 			}
 		},
 		"json"
-	);
+	).fail(function() {
+		showMessage('error', "Internal error populating table", 5000);
+	});
 }
 
 function showNoSolversWarning() {
