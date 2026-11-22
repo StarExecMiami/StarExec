@@ -672,6 +672,9 @@ public class Queues {
 	 */
 	public static boolean developerJobsExist() {
 		List<Queue> queues = Queues.getAllActive();
+		if (queues == null || queues.isEmpty()) {
+			return false;
+		}
 		for (Queue q : queues) {
 			int queueId = q.getId();
 			Connection con = null;

@@ -33,6 +33,9 @@ public class SpaceSecurity {
 			}
 			// Validate name uniqueness
 			Space os = Spaces.get(spaceId);
+			if (os == null) {
+				return new ValidatorStatusCode(false, "The given space could not be found");
+			}
 			if (!os.getName().equals(name)) {
 				int parentId = Spaces.getParentSpace(os.getId());
 				if (Spaces.notUniquePrimitiveName(name, parentId)) {
@@ -53,6 +56,9 @@ public class SpaceSecurity {
 		}
 
 		Space os = Spaces.get(spaceId);
+		if (os == null) {
+			return new ValidatorStatusCode(false, "The given space could not be found");
+		}
 		if (!os.getName().equals(name)) {
 			int parentId = Spaces.getParentSpace(os.getId());
 			if (Spaces.notUniquePrimitiveName(name, parentId)) {
@@ -161,6 +167,9 @@ public class SpaceSecurity {
 
 	// NOTE: To remove a space hierarchy, the caller must have canRemoveSpace on the parent and be a leader of the target space and every subspace.
 	public static ValidatorStatusCode canUserRemoveSpace(int userId, List<Integer> subspaceIds) {
+		if (subspaceIds == null) {
+			return new ValidatorStatusCode(false, "No subspaces were selected");
+		}
 		for (Integer sid : subspaceIds) {
 			Space subspace = Spaces.get(sid);
 			if (subspace == null) {
@@ -168,6 +177,9 @@ public class SpaceSecurity {
 			}
 
 			Integer parent = Spaces.getParentSpace(sid);
+			if (parent == null || parent <= 0) {
+				return new ValidatorStatusCode(false, "Cannot remove root or community spaces here");
+			}
 			Permission perm = Permissions.get(userId, parent);
 			if (null == perm || !perm.canRemoveSpace()) {
 				return new ValidatorStatusCode(false, "You do not have permission to remove subspaces from this " +
@@ -179,11 +191,14 @@ public class SpaceSecurity {
 			}
 
 
-			for (Space subspace2 : Spaces.getSubSpaceHierarchy(sid)) {
-				// Ensure the user is the leader of that space
-				p = Permissions.get(userId, subspace2.getId());
-				if (p == null || !p.isLeader()) {
-					return new ValidatorStatusCode(false, "You cannot remove spaces that you are not a leader of");
+			List<Space> hierarchy = Spaces.getSubSpaceHierarchy(sid);
+			if (hierarchy != null) {
+				for (Space subspace2 : hierarchy) {
+					// Ensure the user is the leader of that space
+					p = Permissions.get(userId, subspace2.getId());
+					if (p == null || !p.isLeader()) {
+						return new ValidatorStatusCode(false, "You cannot remove spaces that you are not a leader of");
+					}
 				}
 			}
 		}
@@ -310,7 +325,11 @@ public class SpaceSecurity {
 			return new ValidatorStatusCode(true);
 		}
 		// And the space the user is being copied from must not be locked
-		if (Spaces.get(spaceId).isLocked()) {
+		Space sourceSpace = Spaces.get(spaceId);
+		if (sourceSpace == null) {
+			return new ValidatorStatusCode(false, "The space you are trying to copy from could not be found");
+		}
+		if (sourceSpace.isLocked()) {
 			return new ValidatorStatusCode(false, "The space you are trying to copy from is locked");
 		}
 
@@ -1082,7 +1101,7 @@ public class SpaceSecurity {
 		}
 
 		Permission p = Permissions.get(userIdOfCaller, spaceId);
-		if (!p.canAddJob() || !p.canAddBenchmark() || !p.canAddSolver()) {
+		if (p == null || !p.canAddJob() || !p.canAddBenchmark() || !p.canAddSolver()) {
 			return new ValidatorStatusCode(false, "You do not have permissions to add primitives to the space");
 		}
 		return new ValidatorStatusCode(true);
@@ -1120,13 +1139,19 @@ public class SpaceSecurity {
 	public static ValidatorStatusCode canUpdateSettings(int spaceId, String attribute, String newValue, int userId) {
 		log.debug("canUpdateSettings called: spaceId=" + spaceId + ", userId=" + userId + ", attribute=" + attribute);
 		
+		if (attribute == null) {
+			return new ValidatorStatusCode(false, "The given attribute does not exist");
+		}
 		// Check if user is admin first - admins can update any space
 		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
 			log.debug("User " + userId + " has admin write privileges, allowing update");
 			// Still validate the input even for admins
 			if (attribute.equals("name")) {
 				Space s = Spaces.get(spaceId);
-				if (s != null && !s.getName().equals(newValue)) {
+				if (s == null) {
+					return new ValidatorStatusCode(false, "The given space could not be found");
+				}
+				if (!s.getName().equals(newValue)) {
 					if (Spaces.notUniquePrimitiveName(newValue, spaceId)) {
 						return new ValidatorStatusCode(false, "The new name needs to be unique in the space");
 					}
@@ -1150,6 +1175,9 @@ public class SpaceSecurity {
 		}
 
 		Space s = Spaces.get(spaceId);
+		if (s == null) {
+			return new ValidatorStatusCode(false, "The given space could not be found");
+		}
 		// Go through all the cases, depending on what attribute we are changing.
 		if (attribute.equals("name")) {
 

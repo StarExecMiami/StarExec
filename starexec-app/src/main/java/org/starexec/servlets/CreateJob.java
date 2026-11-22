@@ -670,15 +670,15 @@ public class CreateJob extends HttpServlet {
 			// In any other case, we automatically get them so we don't have to pass them
 			// as part of the request.
 			if (request.getParameter(run).equals("choose")) {
-
+				String selectedBenchChoice = request.getParameter(benchChoice);
 				// Check to see if we have a valid list of benchmark ids
-				if (request.getParameter(benchChoice).equals("runChosenFromSpace")) {
+				if ("runChosenFromSpace".equals(selectedBenchChoice)) {
 					if (!Validator.isValidIntegerList(request.getParameterValues(R.BENCHMARK))) {
 						return new ValidatorStatusCode(false, "All selected benchmark IDs need to be valid integers");
 					}
 				}
 				List<Integer> benchmarkIds = Util.toIntegerList(request.getParameterValues(R.BENCHMARK));
-				if (request.getParameter(benchChoice).equals("runChosenFromSpace") && benchmarkIds.isEmpty()) {
+				if ("runChosenFromSpace".equals(selectedBenchChoice) && benchmarkIds.isEmpty()) {
 					return new ValidatorStatusCode(false, "You need to chose at least one benchmark to run a job");
 				}
 				// Make sure the user is using benchmarks they can see
@@ -699,7 +699,11 @@ public class CreateJob extends HttpServlet {
 
 				Set<Integer> solverIds = new HashSet<>();
 				for (Integer cid : Util.toIntegerList(request.getParameterValues(configs))) {
-					solverIds.add(Solvers.getSolverByConfig(cid, false).getId());
+					Solver solver = Solvers.getSolverByConfig(cid, false);
+					if (solver == null) {
+						return new ValidatorStatusCode(false, "One or more selected configurations could not be found");
+					}
+					solverIds.add(solver.getId());
 				}
 				
 				// Make sure the user is using solvers they can see

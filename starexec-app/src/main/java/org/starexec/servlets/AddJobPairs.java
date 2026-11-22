@@ -132,6 +132,9 @@ public class AddJobPairs extends HttpServlet {
 			Set<Integer> configIdsToAddToPaired = new HashSet<>();
 			for (Integer configId : selectedConfigIds) {
 				Configuration config = Solvers.getConfiguration(configId);
+				if (config == null) {
+					continue;
+				}
 				if (solverIdsToAddToAll.contains(config.getSolverId())) {
 					configIdsToAddToAll.add(configId);
 				} else if (solverIdsToAddToPaired.contains(config.getSolverId())) {
@@ -157,13 +160,15 @@ public class AddJobPairs extends HttpServlet {
 			response.sendRedirect(Util.docRoot("secure/details/job.jsp?id=" + jobId));
 		} catch (Exception e) {
 			log.warn(methodName, "Caught exception while doing post for AddJobPairs: " + e.getMessage(), e);
-			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, Util.getStackTrace(e));
+			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to add job pairs");
 		}
 	}
 
 	private ValidatorStatusCode validateRequest(HttpServletRequest request) {
 		if (!Util.paramExists(jobIdParam, request)) {
 			return new ValidatorStatusCode(false, "Could not find a job ID parameter in request.");
+		} else if (!org.starexec.util.Validator.isValidPosInteger(request.getParameter(jobIdParam))) {
+			return new ValidatorStatusCode(false, "The given job ID is not a valid integer.");
 		} else {
 			return new ValidatorStatusCode(true);
 		}

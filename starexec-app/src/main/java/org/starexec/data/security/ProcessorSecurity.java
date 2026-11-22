@@ -28,6 +28,9 @@ public class ProcessorSecurity {
 		}
 
 		Processor p = Processors.get(procId);
+		if (p == null) {
+			return new ValidatorStatusCode(false, "The given processor could not be found");
+		}
 		Permission perm = Permissions.get(userId, p.getCommunityId());
 		if (perm == null || !perm.isLeader()) {
 			return new ValidatorStatusCode(false, "You do not have permission modify the selected processor");
@@ -45,6 +48,9 @@ public class ProcessorSecurity {
 	 * otherwise If the user lacks the necessary permissions for even one solver, a status code will be returned
 	 */
 	public static ValidatorStatusCode doesUserOwnProcessors(List<Integer> procIds, int userId) {
+		if (procIds == null) {
+			return new ValidatorStatusCode(false, "No processors were selected");
+		}
 		for (Integer id : procIds) {
 			ValidatorStatusCode status = doesUserOwnProcessor(id, userId);
 			if (!status.isSuccess()) {
@@ -85,6 +91,9 @@ public class ProcessorSecurity {
 		}
 
 		Processor p = Processors.get(procId);
+		if (p == null) {
+			return new ValidatorStatusCode(false, "The given processor could not be found");
+		}
 		Permission perm = Permissions.get(userId, p.getCommunityId());
 		if (perm == null || !perm.isLeader()) {
 			return new ValidatorStatusCode(false, "You do not have permission edit the selected processor");
