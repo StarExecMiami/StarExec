@@ -5,7 +5,7 @@
 > competitions, it provides a web UI, job submission, multiple scheduling
 > backends, and integrated data and user management.
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/StarExecMiami/StarExec/build-and-publish.yml?branch=containerised)](https://github.com/StarExecMiami/StarExec/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/StarExecMiami/StarExec/maven-test.yml?branch=containerised)](https://github.com/StarExecMiami/StarExec/actions/workflows/maven-test.yml)
 [![License](https://img.shields.io/github/license/StarExecMiami/StarExec)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/StarExecMiami/StarExec?label=repo%20version)](https://github.com/StarExecMiami/StarExec/releases)
 
@@ -39,28 +39,40 @@ Documentation is organized using the [Diátaxis](https://diataxis.fr) framework.
 The list below is the canonical public documentation set.
 
 ### Tutorial — Learning by doing
-- **[Quick Start Guide](docs/QUICKSTART.md)** - Get running in 10 minutes (Docker Compose, Podman, or Kubernetes)
+- **[Quick Start Guide](docs/QUICKSTART.md)** - Get running in 10-30 minutes (Docker Compose, Podman, or Kubernetes)
 
 ### How-to — Accomplish specific goals
-- **[Deployment Guide](docs/DEPLOYMENT.md)** - Detailed deployment instructions
+- **[Deployment Guide](docs/DEPLOYMENT.md)** - Detailed deployment instructions across Docker Compose, Podman, and Kubernetes
 - **[Kubernetes Deployment Automation](docs/KUBERNETES_AUTO_DEPLOYMENT.md)** - Automated Kubernetes setup and deployment workflow
+- **[MicroK8s Single-Node Deployment](docs/MICROK8S_SINGLE_NODE.md)** - Single-node MicroK8s runbook with Kubernetes-native backend
+- **[Legacy Data Migration](docs/LEGACY_DATA_MIGRATION.md)** - Migrating data from legacy MariaDB/MySQL to Flyway PostgreSQL (`scripts/mysql2pg`)
 - **[Volume Management](docs/VOLUMES.md)** - Backup, restore, and volume operations
-- **[Database Management](docs/DATABASE.md)** - Migrations, backups, and troubleshooting
+- **[Database Management](docs/DATABASE.md)** - PostgreSQL administration, Flyway migrations, backups, and troubleshooting
 - **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** - Common issues and solutions
-- **[Security Guide](docs/SECURITY.md)** - Security best practices and considerations
-- **[Performance Tuning](docs/PERFORMANCE.md)** - Capacity and optimization
-- **[Observability](docs/OBSERVABILITY.md)** - Logging and debugging
-- **[Developer Guide](docs/DEVELOPER.md)** - Setting up development environment
-- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute
+- **[Security Guide](docs/SECURITY.md)** - Operational security hardening, CSRF protection, and incident response
+- **[Security Policy](SECURITY.md)** - Supported versions and private vulnerability reporting
+- **[Performance Tuning](docs/PERFORMANCE.md)** - Capacity planning and optimization
+- **[Observability](docs/OBSERVABILITY.md)** - Logging, health probes, and debugging
+- **[Developer Guide](docs/DEVELOPER.md)** - Setting up a development environment and running tests
+- **[Contributing Guide](CONTRIBUTING.md)** - Contribution rules, style, and pre-PR verification
 
 ### Reference — Consult while working
 - **[Configuration Reference](docs/CONFIGURATION.md)** - All environment variables and Helm values
-- **[Backend Configuration](docs/BACKENDS.md)** - Local, Podman, Kubernetes, SGE, OAR reference
-- **[API Guide](docs/API_GUIDE.md)** - REST API endpoints and usage
+- **[Backend Configuration](docs/BACKENDS.md)** - Local, Podman, Kubernetes, SGE, and OAR reference
+- **[API Guide](docs/API_GUIDE.md)** - REST/servlet API endpoints, session auth, SSE streaming, and CLI header contract
+- **[Database Standards](docs/DATABASE_STANDARDS.md)** - Foreign key conventions and Flyway migration rules
+- **[Helm Chart Notes](charts/starexec/README.md)** - Credential guards and chart linting profiles
+- **[Test Resources](docs/test-resources.md)** - Maven test profiles and test-data fixtures
+- **[Release Notes (v2.6.0)](docs/release-notes/v2.6.0.md)** - Cumulative v2.6.0 release notes and upgrade guidance
 
 ### Explanation — Understand why
-- **[Architecture Overview](docs/ARCHITECTURE.md)** - System design and components
-- **[Legacy Documentation](docs/LEGACY.md)** - Ant/Tomcat-based setup history
+- **[Architecture Overview](docs/ARCHITECTURE.md)** - System design, components, and data flow
+- **[Execution Storage Isolation](docs/EXECUTION_STORAGE.md)** - Bounded ext4 execution storage, leases, and runtime boundary
+- **[Solver Build Artifacts](docs/SOLVER_ARTIFACTS.md)** - Managed solver build publication and cleanup lifecycle
+- **[Reproducibility Manifest Contract](docs/REPRO_MANIFEST_CONTRACT.md)** - Per-attempt pair reproducibility manifest state model
+- **[CPU Partition Scheduling](docs/cpu-partition-scheduling.md)** - SMT-aware Podman CPU pinning and NUMA partitioning
+- **[Kubernetes Execution Identity](docs/k8s-execution-identity.md)** - Per-attempt Kubernetes job identity and fencing
+- **[Legacy Documentation](docs/LEGACY.md)** - Historical Ant/MySQL/Tomcat 7 background and migration notes
 
 ## Features
 
@@ -79,19 +91,19 @@ See [Architecture Overview](docs/ARCHITECTURE.md) for detailed system design.
 
 ## System Requirements
 
-- **Java:** 17+ (for local builds)
+- **Java:** 17+ (for local builds; runtime container uses `eclipse-temurin:17-jre-noble` / `glibc`)
 - **Maven:** 3.8+
 - **PostgreSQL:** 15+
 - **Container runtime:** Podman (recommended) or Docker
-- **Optional:** Node.js 20+ (SCSS compilation), Helm (Kubernetes)
+- **Optional:** Node.js 24 LTS (SCSS compilation and frontend regression tests; handled automatically inside Docker/Maven builds), Helm 3.8+ (Kubernetes)
 
 See [Developer Guide](docs/DEVELOPER.md#prerequisites) for complete requirements.
 
 ## Support
 
 - **Issues:** [GitHub Issues](https://github.com/StarExecMiami/StarExec/issues)
-- **Releases:** [CHANGELOG.md](CHANGELOG.md)
-- **User Manual:** [StarExec Help](https://starexec.ccs.miami.edu/starexec/public/help.jsp)
+- **Releases & Changelog:** [CHANGELOG.md](CHANGELOG.md) and [v2.6.0 Release Notes](docs/release-notes/v2.6.0.md)
+- **User Manual:** [StarExec Help](https://starexec.ccs.miami.edu/starexec/public/help.jsp) (also served at `/starexec/public/help.jsp` on your local instance)
 
 ## License
 
