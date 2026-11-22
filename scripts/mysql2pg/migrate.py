@@ -342,17 +342,26 @@ def collect_deferred_backfills(
 
 
 def clear_target_tables(pg_conn, schema: str, planned_tables: Sequence[Dict[str, Any]]) -> None:
-    """Clear target tables via DELETE in reverse FK order.
+    """Clear target tables via DELETE + VACUUM in reverse FK order.
 
     DELETE is used instead of TRUNCATE ... CASCADE because Flyway V0135+
     attaches immutability BEFORE TRUNCATE triggers on execution history tables.
+    VACUUM after each DELETE prevents parent deletes from scanning dead child
+    tuples on unindexed FK columns (e.g. bench_dependency, bench_assoc).
     """
-    with pg_conn.cursor() as cur:
-        for spec in reversed(planned_tables):
-            table = spec["name"]
-            cur.execute(f"DELETE FROM {_quote_ident(schema)}.{_quote_ident(table)}")
+    prev_autocommit = pg_conn.autocommit
     pg_conn.commit()
-    print(f"[clear-seed] cleared {len(planned_tables)} target tables via DELETE")
+    try:
+        pg_conn.autocommit = True
+        with pg_conn.cursor() as cur:
+            for spec in reversed(planned_tables):
+                table = spec["name"]
+                fq = f"{_quote_ident(schema)}.{_quote_ident(table)}"
+                cur.execute(f"DELETE FROM {fq}")
+                cur.execute(f"VACUUM {fq}")
+    finally:
+        pg_conn.autocommit = prev_autocommit
+    print(f"[clear-seed] cleared {len(planned_tables)} target tables via DELETE+VACUUM")
 
 
 def run_migration(
