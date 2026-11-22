@@ -439,7 +439,7 @@ table.dataTable {
   }
   
   // Empty state
-  td.dataTables_empty {
+  td:is(.dataTables_empty, .dt-empty) {
     text-align: center;
     color: $table-text-muted;
     background-color: $table-bg-empty;
@@ -454,7 +454,7 @@ table.dataTable {
 tbody tr.row_selected {
   background-color: $table-bg-selected !important;
   
-  td.dataTables_empty {
+  td:is(.dataTables_empty, .dt-empty) {
     background-color: $table-bg-empty;
   }
 }
@@ -463,18 +463,18 @@ tbody tr.row_selected {
 // DATATABLE WRAPPER DARK THEME
 // =============================================================================
 
-.dataTables_wrapper {
+:is(.dataTables_wrapper, .dt-container) {
   // Info text
-  .dataTables_length,
-  .dataTables_filter,
-  .dataTables_info,
+  :is(.dataTables_length, .dt-length),
+  :is(.dataTables_filter, .dt-search),
+  :is(.dataTables_info, .dt-info),
   .dataTables_processing,
-  .dataTables_paginate {
+  :is(.dataTables_paginate, .dt-paging) {
     color: $table-text-color;
   }
   
   // Filter input
-  .dataTables_filter input {
+  :is(.dataTables_filter, .dt-search) input {
     background-color: $input-background;
     border: 1px solid $table-border-color;
     color: $input-text;
@@ -490,7 +490,7 @@ tbody tr.row_selected {
   }
   
   // Length select
-  .dataTables_length select {
+  :is(.dataTables_length, .dt-length) select {
     background-color: $input-background;
     border: 1px solid $table-border-color;
     color: $input-text;
@@ -506,7 +506,7 @@ tbody tr.row_selected {
   }
   
   // Pagination buttons
-  .dataTables_paginate .paginate_button {
+  :is(.dataTables_paginate, .dt-paging) :is(.paginate_button, .dt-paging-button) {
     color: $table-text-color !important;
     background-color: transparent;
     border-color: transparent;
@@ -657,7 +657,33 @@ td .stat {
 // TABLE BOTTOM / FOOTER AREA
 // =============================================================================
 
-.bottom {
+.dt-layout-row:not(.dt-layout-table) {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0 $table-cell-padding-x;
+  min-width: 0;
+
+  .dt-layout-cell {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .dt-layout-end {
+    margin-inline-start: auto;
+  }
+
+  @include mobile {
+    justify-content: center;
+
+    .dt-layout-end {
+      margin-inline-start: 0;
+    }
+  }
+}
+
+.bottom,
+.dt-layout-table + .dt-layout-row {
   border-top: $table-border;
   padding-top: $table-cell-padding-y;
   margin-top: $table-cell-padding-y;
@@ -683,7 +709,7 @@ table.dataTable {
     min-width: 100% !important;
   }
   
-  .dataTables_wrapper {
+  :is(.dataTables_wrapper, .dt-container) {
     width: 100% !important;
     min-width: 100% !important;
   }
@@ -712,7 +738,7 @@ fieldset {
     min-width: 100% !important;
   }
   
-  .dataTables_wrapper {
+  :is(.dataTables_wrapper, .dt-container) {
     width: 100% !important;
   }
 }

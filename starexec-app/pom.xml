@@ -438,6 +438,16 @@
                                 <include>throbber.gif</include>
                             </includes>
                         </resource>
+                        <resource>
+                            <directory>${project.basedir}/../node_modules/datatables.net/js</directory>
+                            <targetPath>js/lib</targetPath>
+                            <includes><include>dataTables.min.js</include></includes>
+                        </resource>
+                        <resource>
+                            <directory>${project.basedir}/../node_modules/datatables.net</directory>
+                            <targetPath>js/lib/datatables</targetPath>
+                            <includes><include>License.txt</include></includes>
+                        </resource>
                     </webResources>
                     <!-- Java resources already enter WEB-INF/classes through build/resources. -->
                     <containerConfigXML

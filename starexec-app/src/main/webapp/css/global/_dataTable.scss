@@ -47,7 +47,7 @@ table.dataTable {
 
 	// Sort indicator, drawn in the header's text colour inside its right padding.
 	thead {
-		.sorting, .sorting_asc, .sorting_desc, .sorting_asc_disabled, .sorting_desc_disabled {
+		.sorting, .sorting_asc, .sorting_desc, .sorting_asc_disabled, .sorting_desc_disabled, .dt-orderable-asc, .dt-orderable-desc {
 			position: relative;
 
 			&::after {
@@ -64,19 +64,19 @@ table.dataTable {
 			}
 		}
 
-		.sorting, .sorting_asc, .sorting_desc {
+		.sorting, .sorting_asc, .sorting_desc, .dt-orderable-asc, .dt-orderable-desc {
 			cursor: pointer;
 		}
 
-		.sorting_asc::after, .sorting_asc_disabled::after {
+		.sorting_asc::after, .sorting_asc_disabled::after, .dt-ordering-asc::after {
 			mask-image: icon("chevron-up");
 		}
 
-		.sorting_desc::after, .sorting_desc_disabled::after {
+		.sorting_desc::after, .sorting_desc_disabled::after, .dt-ordering-desc::after {
 			mask-image: icon("chevron-down");
 		}
 
-		.sorting_asc::after, .sorting_desc::after {
+		.sorting_asc::after, .sorting_desc::after, .dt-ordering-asc::after, .dt-ordering-desc::after {
 			opacity: 1;
 		}
 
@@ -346,7 +346,7 @@ table.dataTable {
 		}
 	}
 
-	td.dataTables_empty {
+	td:is(.dataTables_empty, .dt-empty) {
 		@extend %text-align-center;
 	}
 
@@ -433,7 +433,7 @@ table.dataTable {
 
 // Control feature layout
 
-.dataTables_wrapper {
+:is(.dataTables_wrapper, .dt-container) {
 	position: relative;
 	clear: both;
 	zoom: 1;
@@ -443,11 +443,11 @@ table.dataTable {
 	width: 100%;
 	min-width: 0; // Prevent flex container collapse
 
-	.dataTables_length {
+	:is(.dataTables_length, .dt-length) {
 		float: left;
 	}
 
-	.dataTables_filter {
+	:is(.dataTables_filter, .dt-search) {
 		float: right;
 
 		@extend %text-align-right;
@@ -460,20 +460,20 @@ table.dataTable {
 		}
 	}
 
-	.dataTables_info {
+	:is(.dataTables_info, .dt-info) {
 		clear: both;
 		float: left;
 		padding-top: 0.755em;
 	}
 
-	.dataTables_paginate {
+	:is(.dataTables_paginate, .dt-paging) {
 		float: right;
 
 		@extend %text-align-right;
 
 		padding-top: 0.25em;
 
-		.paginate_button {
+		:is(.paginate_button, .dt-paging-button) {
 			@extend %rounded-corners;
 
 			box-sizing: border-box;
@@ -546,7 +546,7 @@ table.dataTable {
 
 	}
 
-	.dataTables_length, .dataTables_filter, .dataTables_info, .dataTables_processing, .dataTables_paginate {
+	:is(.dataTables_length, .dt-length), :is(.dataTables_filter, .dt-search), :is(.dataTables_info, .dt-info), .dataTables_processing, :is(.dataTables_paginate, .dt-paging) {
 		color: #333333;
 	}
 
@@ -587,13 +587,13 @@ table.dataTable {
 }
 
 @include mobile {
-	.dataTables_wrapper {
-		.dataTables_info {
+	:is(.dataTables_wrapper, .dt-container) {
+		:is(.dataTables_info, .dt-info) {
 			float: none;
 			text-align: center;
 		}
 
-		.dataTables_paginate {
+		:is(.dataTables_paginate, .dt-paging) {
 			float: none;
 			text-align: center;
 			margin-top: 0.5em;
@@ -602,13 +602,13 @@ table.dataTable {
 }
 
 @media screen and (max-width: 640px) {
-	.dataTables_wrapper {
-		.dataTables_length {
+	:is(.dataTables_wrapper, .dt-container) {
+		:is(.dataTables_length, .dt-length) {
 			float: none;
 			text-align: center;
 		}
 
-		.dataTables_filter {
+		:is(.dataTables_filter, .dt-search) {
 			float: none;
 			text-align: center;
 			margin-top: 0.5em;

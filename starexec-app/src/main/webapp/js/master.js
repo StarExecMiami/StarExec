@@ -425,15 +425,18 @@ jQuery(function ($) {
    */
   $(document).on("draw.dt", function (e, settings) {
     var that = $(e.target);
-    var info = new $.fn.dataTable.Api(settings).page.info();
+    var table = new $.fn.dataTable.Api(settings);
+    var info = table.page.info();
 
     /* This is a somewhat conservative approach to traversing the DOM
      * We might be able to get away with `.next()` instead, but this is
      *   more robust of the order of elements ever changes in the future
      */
     var container = that.parents(".expdContainer");
-    var footer = container.find(".dataTables_length, .dataTables_filter");
-    var searchTerm = container.find(".dataTables_filter input").val();
+    var controls = $(table.table().container());
+    var footer = controls.find(".dataTables_length, .dataTables_filter, .dt-length, .dt-search");
+    var searchTerm = controls.find(".dataTables_filter input, .dt-search input").val();
+    controls.find(".dt-paging").toggle(info.pages > 1);
     var selectAll = container.find(".selectWrap");
 
     // Hide "Show 10 items" and search box if there are fewer than 10 items

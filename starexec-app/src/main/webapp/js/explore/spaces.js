@@ -1169,6 +1169,16 @@ function initDataTables() {
 	function initTable(name, options) {
 		return $('#' + name).dataTable(new star.DataTableConfig(Object.assign({
 			serverSide: true,
+			sDom: null,
+			layout: {
+				topStart: null,
+				topEnd: null,
+				bottomStart: 'pageLength',
+				bottomEnd: 'search',
+				bottom2Start: 'info',
+				bottom2End: {paging: {type: 'full_numbers'}}
+			},
+			columnDefs: [{targets: '_all', orderSequence: ['asc', 'desc']}],
 			searchDelay: 400,
 			ajax: explorerTableAjax(name)
 		}, options)));
