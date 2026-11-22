@@ -34,8 +34,9 @@
 	<star:head title="${title}" css="${css}" js="${js}"/>
 	<body>
 		<div id="wrapper">
+			<a class="skip-nav" href="#content">Skip to main content</a>
 			<star:header />
-			<div id="content" class="round">
+			<div id="content" class="round" tabindex="-1">
 				<div id="mainHeaderWrapper">
 					<h1 style="width:100%; word-wrap:break-word;" id="mainTemplateHeader">${title}</h1>
 				</div>

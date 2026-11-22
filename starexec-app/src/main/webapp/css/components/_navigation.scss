@@ -28,14 +28,15 @@ $nav-border-radius: 3px !default;
 
 // Colors
 $nav-bg: $foreground-color !default;
-$nav-bg-hover: $accent-red !default;
+$nav-bg-hover: #b91c1c !default;              // 6.09:1 contrast with #f8f8f8
 $nav-bg-focus: $accent-orange !default;
 $nav-text-color: $text-main-color !default;
-$nav-text-shadow: 0 0 12px rgba(0, 0, 0, 0.8) !default;
+$nav-text-shadow: none !default;
 
 // Dropdown
-$nav-dropdown-bg: $text-accent-color !default;
-$nav-dropdown-bg-hover: $soft-red !default;
+$nav-dropdown-bg: $surface-secondary !default;      // 13.15:1 contrast with #f8f8f8
+$nav-dropdown-bg-hover: $surface-tertiary !default; // 10.87:1 contrast with #f8f8f8
+$nav-dropdown-border: $surface-tertiary !default;
 $nav-dropdown-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !default;
 $nav-dropdown-z-index: 100 !default;
 
@@ -186,6 +187,7 @@ $nav-transition-timing: ease-out !default;
     padding: $nav-space-xs 0;
     list-style: none;
     background-color: $nav-dropdown-bg;
+    border: 1px solid $nav-dropdown-border;
     border-radius: 0 0 $nav-border-radius $nav-border-radius;
     box-shadow: $nav-dropdown-shadow;
     z-index: $nav-dropdown-z-index;
@@ -296,15 +298,16 @@ $nav-transition-timing: ease-out !default;
 // ACCESSIBILITY ENHANCEMENTS
 // =============================================================================
 
-// Skip navigation link (add to HTML for full accessibility)
+// Skip navigation link
 .skip-nav {
   position: absolute;
   top: -100%;
   left: 50%;
   transform: translateX(-50%);
   padding: $nav-space-sm $nav-space-lg;
-  background-color: $nav-bg-focus;
-  color: $nav-text-color;
+  background-color: $button-orange;
+  color: $button-text;
+  font-weight: 600;
   text-decoration: none;
   border-radius: 0 0 $nav-border-radius $nav-border-radius;
   z-index: $nav-dropdown-z-index + 1;
@@ -329,6 +332,7 @@ $nav-transition-timing: ease-out !default;
       > li {
         flex: 1 1 auto;
         min-width: 80px;
+        min-height: 44px;
         
         // Stack dropdowns below on mobile
         > .nav-dropdown,
@@ -340,6 +344,14 @@ $nav-transition-timing: ease-out !default;
           box-shadow: none;
           border-radius: $nav-border-radius;
           margin-top: $nav-space-xs;
+
+          a,
+          .menu-button {
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            box-sizing: border-box;
+          }
         }
       }
     }

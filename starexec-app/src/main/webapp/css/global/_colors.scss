@@ -55,3 +55,9 @@ $success: $button-green;      // Use darker green for better contrast
 $warning: $accent-orange;
 $error: $accent-red;
 $info: $accent-blue;
+
+// --- Accessible Status Text Colors (WCAG 2.1 AA >= 4.5:1 on tinted dark surfaces) ---
+$text-success: #34d399;       // >= 5.7:1 on tinted #1f1f1f / #2c2c2c
+$text-warning: #fdba74;       // 8.01:1 on tinted #1f1f1f, 6.83:1 on tinted #2c2c2c
+$text-error: #f87171;         // 5.47:1 on tinted #1f1f1f, 4.75:1 on tinted #2c2c2c
+$text-info: #93c5fd;          // 7.59:1 on tinted #1f1f1f, 6.47:1 on tinted #2c2c2c

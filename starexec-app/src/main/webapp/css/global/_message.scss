@@ -62,21 +62,25 @@
     // DEPRECATED: Use .alert--error instead
     &.error {
         background-color: $accent-red;
+        color: $button-text;
     }
 
     // DEPRECATED: Use .alert--warning instead
     &.warn {
         background-color: $accent-orange;
+        color: $button-text;
     }
 
     // DEPRECATED: Use .alert--info instead
     &.info {
         background-color: $accent-blue;
+        color: $button-text;
     }
 
     // DEPRECATED: Use .alert--success instead
     &.success {
         background-color: $accent-green;
+        color: $button-text;
     }
 
     // DEPRECATED: Use .alert__close button instead

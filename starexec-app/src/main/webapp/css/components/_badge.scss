@@ -13,21 +13,21 @@
   
   &--success {
     background: rgba(c.$success, 0.15);
-    color: c.$success;
+    color: c.$text-success;
   }
   
   &--warning {
     background: rgba(c.$warning, 0.15);
-    color: c.$warning;
+    color: c.$text-warning;
   }
   
   &--error {
     background: rgba(c.$error, 0.15);
-    color: c.$error;
+    color: c.$text-error;
   }
   
   &--info {
     background: rgba(c.$info, 0.15);
-    color: c.$info;
+    color: c.$text-info;
   }
 }

@@ -364,7 +364,7 @@ html .ui-button.ui-state-disabled:active,
 /* ========== Danger Button (for destructive actions) ========== */
 .btn-danger {
 	background-color: $button-red;
-	color: $text-main-color; // White text on red is more universal
+	color: $button-text; // #0a0a0a on #ef4444 = 5.26:1 WCAG AA contrast
 	border-color: $button-red;
 
 	&:hover:not(:disabled) {

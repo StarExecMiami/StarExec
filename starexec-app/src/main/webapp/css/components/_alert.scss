@@ -107,13 +107,13 @@
     color: inherit;
     opacity: 0.7;
     cursor: pointer;
-    // Proper sizing for touch target (minimum 44px recommended)
+    // Proper sizing for touch target (minimum 44x44px per WCAG)
     padding: $spacing-xs;
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 36px;
-    min-height: 36px;
+    min-width: 44px;
+    min-height: 44px;
     border-radius: 4px;
     flex-shrink: 0;
     margin: 0;
@@ -143,9 +143,9 @@
     color: inherit;
     opacity: 0.7;
     cursor: pointer;
-    // Explicit sizing for proper hit target (36px × 36px)
-    width: 36px;
-    height: 36px;
+    // Explicit sizing for proper hit target (44px x 44px)
+    width: 44px;
+    height: 44px;
     padding: 0;
     display: flex;
     align-items: center;
@@ -178,41 +178,41 @@
 
 .alert--success {
     background: rgba($success, 0.15);
-    color: $success;
+    color: $text-success;
     border: 1px solid rgba($success, 0.3);
 
     .alert__icon {
-        color: $success;
+        color: $text-success;
     }
 }
 
 .alert--error {
     background: rgba($error, 0.15);
-    color: $error;
+    color: $text-error;
     border: 1px solid rgba($error, 0.3);
 
     .alert__icon {
-        color: $error;
+        color: $text-error;
     }
 }
 
 .alert--warning {
     background: rgba($warning, 0.15);
-    color: $warning;
+    color: $text-warning;
     border: 1px solid rgba($warning, 0.3);
 
     .alert__icon {
-        color: $warning;
+        color: $text-warning;
     }
 }
 
 .alert--info {
     background: rgba($info, 0.15);
-    color: $info;
+    color: $text-info;
     border: 1px solid rgba($info, 0.3);
 
     .alert__icon {
-        color: $info;
+        color: $text-info;
     }
 }
 

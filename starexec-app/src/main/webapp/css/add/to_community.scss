@@ -60,12 +60,12 @@ tr .label {
 table .styled {
     width: 212px;
     height: 28px;
-    border: 1px solid #13a5e1;
+    border: 1px solid $accent-blue;
     font-size: 16px;
 }
 
 table .styled.error {
-    border: solid 1px #ae0000;
+    border: solid 1px $button-red;
 }
 
 textarea#reason {

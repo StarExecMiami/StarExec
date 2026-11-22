@@ -33,6 +33,10 @@
 	// widening the page.
 	overflow-wrap: break-word;
 
+	&:focus:not(:focus-visible) {
+		outline: none;
+	}
+
 	@include mobile {
 		min-height: auto;
 	}
