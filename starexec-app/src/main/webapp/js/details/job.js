@@ -421,7 +421,7 @@ function makeJobDescriptionUneditable() {
 function initUI() {
 	$("#errorField").hide();
 	$("#statsErrorField").hide();
-	$(".cpuTime").hide();
+	$("#pairTblField").toggleClass("show-cpu-time", !useWallclock);
 	$("#clearPairFilter").hide();
 	$("#pairFilterStatus").text("");
 
@@ -563,13 +563,7 @@ function initUI() {
 	$(".changeTime")
 	.click(function() {
 		useWallclock = !useWallclock;
-		if (useWallclock) {
-			$('.cpuTime').hide();
-			$('.wallclockTime').show();
-		} else {
-			$('.cpuTime').show();
-			$('.wallclockTime').hide();
-		}
+		$("#pairTblField").toggleClass("show-cpu-time", !useWallclock);
 		setTimeButtonText();
 		refreshPanels();
 		if (!isLocalJobPage) {

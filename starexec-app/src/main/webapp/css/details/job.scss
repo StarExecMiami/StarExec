@@ -97,8 +97,24 @@ thead {
 	cursor: pointer;
 }
 
-.offline-pair-table tbody tr:has(.offline-pair-link) {
-	cursor: pointer;
+.offline-pair-table {
+	.cpuTime {
+		display: none;
+	}
+
+	tbody tr:has(.offline-pair-link) {
+		cursor: pointer;
+	}
+}
+
+.show-cpu-time .offline-pair-table {
+	.wallclockTime {
+		display: none;
+	}
+
+	.cpuTime {
+		display: inline;
+	}
 }
 
 #solverChoice1 {
