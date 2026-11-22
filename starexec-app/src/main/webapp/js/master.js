@@ -495,6 +495,23 @@ jQuery(function ($) {
     };
     $.extend(true, this, config, overrides);
   };
+
+  star.DataTable2Config = function (overrides) {
+    var config = {
+      layout: {
+        topStart: null,
+        topEnd: null,
+        bottomStart: "pageLength",
+        bottomEnd: "search",
+        bottom2Start: "info",
+        bottom2End: { paging: { type: "full_numbers" } },
+      },
+      pageLength: defaultPageSize,
+      columnDefs: [{ targets: "_all", orderSequence: ["asc", "desc"] }],
+      language: { processing: "processing request" },
+    };
+    $.extend(true, this, config, overrides);
+  };
 });
 
 function checkForHelpFile() {

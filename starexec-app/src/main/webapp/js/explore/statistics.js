@@ -44,8 +44,7 @@ function setActiveCompareBtn(type) {
 }
 
 jQuery(function($) {
-	statsTable = $('#statsTable').dataTable(new star.DataTableConfig({
-		"columnDefs": {"searchable": false, "type": "num"},
+	statsTable = $('#statsTable').dataTable(new star.DataTable2Config({
 		"columns": [
 			{"searchable": true, "type": "string"},
 			null,
@@ -53,7 +52,7 @@ jQuery(function($) {
 			null,
 			null,
 			null,
-			{"sortable": false, "type": "num-fmt"}
+			{"orderable": false, "type": "num-fmt"}
 		]
 	}));
 

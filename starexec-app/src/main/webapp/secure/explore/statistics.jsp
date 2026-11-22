@@ -1,7 +1,7 @@
 <%@page contentType="text/html" pageEncoding="UTF-8" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <star:template title="Community Statistics"
-               js="common/delaySpinner, lib/jquery.dataTables.min, lib/chart.min, explore/statistics"
+               js="common/delaySpinner, lib/dataTables.min, lib/chart.min, explore/statistics"
                css="common/delaySpinner, common/table, details/shared, explore/common, explore/statistics">
 	<div id="mainPanel">
 		<fieldset id="statistics">
