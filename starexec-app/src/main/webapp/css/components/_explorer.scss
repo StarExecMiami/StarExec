@@ -231,7 +231,7 @@ $tree-node-icons: (
   position: fixed;
   background-color: $text-main-color;
   color: $background-color;
-  z-index: 999;
+  z-index: var(--z-index-popover, 600);
   text-align: center;
   padding: $space-sm;
   border-radius: $tree-node-border-radius;
