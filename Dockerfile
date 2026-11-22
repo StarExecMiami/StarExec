@@ -238,7 +238,6 @@ RUN cd /tmp && \
     mkdir -p ${STAREXEC_DATA_DIR} ${STAREXEC_LOG_DIR} && \
     mkdir -p /app/backend /app/work /app/data /app/sandbox && \
     mkdir -p /app/data/jobin /app/data/jobout /app/data/pictures && \
-    # Create jobgraphs under the expanded webapp (will be created during WAR expansion)
     # Avoid creating a top-level /starexec directory here so we can create a top-level
     # symlink to the webapp at /starexec later during WAR expansion.
     # Set permissions
@@ -277,8 +276,6 @@ RUN cd ${CATALINA_HOME}/webapps && \
     cd starexec && \
     unzip -q ../starexec.war && \
     rm ../starexec.war && \
-    # Create clustergraphs directory for chart images
-    mkdir -p secure/clustergraphs && \
     # Create symlink for STAREXEC_ROOT
     ln -sf ${CATALINA_HOME}/webapps/starexec /starexec && \
     chown -R starexec:starexec ${CATALINA_HOME}/webapps/starexec /starexec

@@ -303,8 +303,6 @@ public class Util {
         file.mkdir();
         File downloadDir = new File(R.STAREXEC_ROOT, R.DOWNLOAD_FILE_DIR);
         downloadDir.mkdirs();
-        File graphDir = new File(R.STAREXEC_ROOT, R.JOBGRAPH_FILE_DIR);
-        graphDir.mkdirs();
     }
 
     /**

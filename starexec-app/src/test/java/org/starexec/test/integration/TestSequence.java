@@ -172,7 +172,6 @@ public abstract class TestSequence {
 		StarLogger.getLogger("com.sun").setLevel(StarLevel.OFF);
 
 		StarLogger.getLogger("com.keypoint").setLevel(StarLevel.OFF);
-		StarLogger.getLogger("org.jfree").setLevel(StarLevel.OFF);
 
 		StarLogger.getLogger("netscape.javascript").setLevel(StarLevel.OFF);
 		StarLogger.getLogger("net.sourceforge").setLevel(StarLevel.OFF);

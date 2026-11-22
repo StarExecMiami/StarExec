@@ -97,13 +97,6 @@ class PeriodicTasks {
             TimeUnit.HOURS
         ),
         CLEAR_JOB_LOG(false, CLEAR_JOB_LOG_TASK, 0, () -> 7, TimeUnit.DAYS),
-        CLEAR_JOB_GRAPHS(
-            false,
-            CLEAR_JOB_GRAPHS_TASK,
-            0,
-            () -> 7,
-            TimeUnit.DAYS
-        ),
         FIND_BROKEN_NODES(
             true,
             FIND_BROKEN_NODES_TASK,
@@ -490,22 +483,6 @@ class PeriodicTasks {
             Util.clearOldFiles(
                 R.JOB_LOG_DIRECTORY,
                 R.CLEAR_JOB_LOG_PERIOD,
-                true
-            );
-        }
-    };
-    /*  Create a task that deletes job graphs older than 7 days */
-    private static final String clearJobGraphsTaskName = "clearJobGraphsTask";
-    private static final Runnable CLEAR_JOB_GRAPHS_TASK = new RobustRunnable(
-        clearJobGraphsTaskName
-    ) {
-        @Override
-        protected void dorun() {
-            // Statistics writes graphs under the web root; R.JOBGRAPH_FILE_DIR alone is "/jobgraphs" at the
-            // filesystem root, which does not exist, so the task used to delete nothing.
-            Util.clearOldFiles(
-                new File(R.STAREXEC_ROOT, R.JOBGRAPH_FILE_DIR).getAbsolutePath(),
-                7,
                 true
             );
         }

@@ -512,14 +512,6 @@ public class EnvironmentConfig {
         return getEnv("STAREXEC_URL_PREFIX", "http");
     }
 
-    public static String getJobGraphFileDir() {
-        return getEnv("STAREXEC_JOB_GRAPH_DIR", "/jobgraphs");
-    }
-
-    public static String getClusterGraphDir() {
-        return getEnv("STAREXEC_CLUSTER_GRAPH_DIR", "/secure/clustergraphs");
-    }
-
     public static String getJobSolverCacheClearLogDirectory() {
         return getEnv(
             "STAREXEC_JOB_SOLVER_CACHE_CLEAR_LOG_DIR",

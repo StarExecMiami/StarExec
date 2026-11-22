@@ -1,7 +1,6 @@
 package org.starexec.data.to;
 
 import com.google.gson.annotations.Expose;
-import org.jfree.util.Log;
 import org.starexec.constants.R;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.to.Status.StatusCode;
@@ -210,7 +209,7 @@ public class Job extends Identifiable implements Iterable<JobPair>, Nameable {
 				}
 			}
 		}
-		Log.debug("Returning " + attrs.size() + " unique attr names");
+		log.debug("Returning " + attrs.size() + " unique attr names");
 		return attrs;
 	}
 
