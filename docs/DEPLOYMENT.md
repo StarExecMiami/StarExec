@@ -377,10 +377,7 @@ helm upgrade starexec ./charts/starexec -n starexec \
   --set-string image.digest=sha256:<digest>
 ```
 
-The chart's version is always `0.1.0`, and each publish to the chart
-repository replaces everything published before, so `--version` cannot select
-another chart. To deploy an older StarExec, check out that commit and deploy
-its chart.
+The chart version in `charts/starexec/Chart.yaml` (`0.2.0`, `appVersion: "2.6.0"`) is decoupled from the container image tag (`check-chart-image-reference.py`), and `scripts/helm-repo-prepare.sh` retains previously published `.tgz` packages in `index.yaml` across chart releases. Always pass explicit `image.tag` and `image.digest` values when upgrading, or check out the matching Git commit if you need an earlier chart template layout.
 
 ### Uninstalling
 
@@ -435,27 +432,17 @@ kubectl delete namespace starexec
 
 See [Security Guide](SECURITY.md) for complete security recommendations.
 
-### High Availability (Kubernetes)
+### Single-Replica Scheduling and Resilience (Kubernetes)
 
-For production Kubernetes deployments:
+`charts/starexec/templates/deployment.yaml` enforces `replicaCount: 1` because StarExec currently supports only a single application replica (in-memory job monitors and local/backend state are single-instance). Keep `replicaCount: 1`, and use node scheduling constraints and a `PodDisruptionBudget` if you need controlled node placement or eviction protection:
 
 ```yaml
 # my-values.yaml
-replicaCount: 2
+replicaCount: 1
 
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
-
-affinity:
-  podAntiAffinity:
-    preferredDuringSchedulingIgnoredDuringExecution:
-      - weight: 100
-        podAffinityTerm:
-          labelSelector:
-            matchLabels:
-              app: starexec
-          topologyKey: kubernetes.io/hostname
 ```
 
 ### Resource Sizing
@@ -691,6 +678,8 @@ See [Troubleshooting Guide](TROUBLESHOOTING.md) for more solutions.
 | `STAREXEC_DB_USER` | `starexec` | Database username |
 | `STAREXEC_DB_PASSWORD` | *(empty)* | Database password (**required**) |
 | `STAREXEC_BACKEND_TYPE` | `local` | Backend: local, podman, kubernetes, k8s, kubernetes-native, sge, oar (legacy). Runtime fallback default is `local`, but `make start` deploys Podman by default. |
+| `STAREXEC_UPLOAD_STAGING_DIR` | *(empty; `/var/lib/starexec/uploads-private` in official containers/Helm/Compose)* | Application-owned `0700` directory required for XML archive uploads (fails closed when unset) |
+| `STAREXEC_BUILD_ARTIFACT_DIR` | *(empty)* | Application-owned `0700` directory required for managed solver build publication |
 | `ENV` | `dev` | Environment: dev, ci, prod |
 | `APP_PORT` | `7827` | Application port (Podman) |
 

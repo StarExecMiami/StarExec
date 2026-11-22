@@ -188,12 +188,13 @@ See [Troubleshooting Guide](TROUBLESHOOTING.md#podman-issues) for more help.
    helm repo update
    ```
 
-2. Install StarExec (the chart refuses to render without credentials — use an
-   existing secret or set the development credentials explicitly):
+2. Install StarExec (the chart refuses to render without an existing secret or
+   `postgres.allowInsecureDevCredentials=true` for explicit dev/test credentials):
    ```bash
    helm install starexec starexec/starexec \
      --create-namespace \
      -n starexec \
+     --set postgres.allowInsecureDevCredentials=true \
      --set postgres.password="$(openssl rand -base64 32)" \
      --set postgres.rootPassword="$(openssl rand -base64 32)"
    ```
@@ -267,7 +268,7 @@ kubectl get pods -n starexec
 
 ### 3. Test Job Submission
 
-Follow the [User Manual](https://starexec.ccs.miami.edu/starexec/public/help.jsp) to submit your first benchmark job.
+Follow the in-app manual (`/starexec/public/help.jsp`, or the [hosted User Manual](https://starexec.ccs.miami.edu/starexec/public/help.jsp)) to submit your first benchmark job.
 
 ## Next Steps
 
