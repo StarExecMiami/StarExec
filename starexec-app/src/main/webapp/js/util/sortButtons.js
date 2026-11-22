@@ -8,8 +8,7 @@ function setSortTable(tbl) {
 	theSortTable = tbl;
 }
 
-function attachSortButtonFunctions(tbl) {
-	theSortTabe = tbl;
+function attachSortButtonFunctions() {
 	$(".sortButton").button({
 		icons: {
 			primary: "ui-icon-arrowthick-2-n-s"
@@ -44,7 +43,7 @@ function attachSortButtonFunctions(tbl) {
 
 			sortOverride = $(this).attr("value");
 		}
-		theSortTable.fnDraw(false);
+		theSortTable.api().draw(false);
 
 	});
 
