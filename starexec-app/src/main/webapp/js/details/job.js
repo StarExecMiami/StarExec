@@ -41,7 +41,7 @@ $(document).ready(function() {
 	if (!isLocalJobPage) {
 		//update the tables every 30 seconds
 		star.startPagePolling(function() {
-			pairTable.fnDraw(false);
+			pairTable.api().draw(false);
 		}, 30000);
 	}
 	//puts data into the data tables
@@ -133,7 +133,7 @@ function clearPairFilter(shouldRedraw) {
 	curSolverName = null;
 	updatePairFilterUI();
 	if (shouldRedraw && pairTable) {
-		pairTable.fnDraw(false);
+		pairTable.api().draw(false);
 	}
 }
 
@@ -151,7 +151,7 @@ function applyPairFilterForSelectedSolver(rowData) {
 	}
 	updatePairFilterUI();
 	if (pairTable) {
-		pairTable.fnDraw(false);
+		pairTable.api().draw(false);
 	}
 }
 
@@ -219,7 +219,7 @@ function refreshPanels() {
 
 function refreshStats(id) {
 	var updateGraphs = function() {
-		if (summaryTable.fnSettings().fnRecordsTotal() == 0) {
+		if (summaryTable.api().page.info().recordsTotal == 0) {
 			$("#graphField").hide();
 		} else {
 			/* This is can be one of the most intense loops on this page,
@@ -229,7 +229,7 @@ function refreshStats(id) {
 			 */
 			var $spaceOverviewSelections = $("#spaceOverviewSelections"),
 				solverOptions = document.createDocumentFragment(),
-				rows = summaryTable.fnGetData();
+				rows = summaryTable.api().data().toArray();
 			for (var i = 0; i < rows.length; ++i) {
 				var row = rows[i],
 					solverName = row[2],
@@ -264,7 +264,7 @@ function refreshStats(id) {
 			lastValidSelectOption = $spaceOverviewSelections.val();
 			// updateSpaceOverviewGraph();
 			// updatePairJobTimeGraph();
-			if (summaryTable.fnSettings().fnRecordsTotal() > 1) {
+			if (summaryTable.api().page.info().recordsTotal > 1) {
 				$("#solverComparison").show();
 				$("#solverChoice1")
 				.children("option:first")
@@ -515,7 +515,7 @@ function initUI() {
 		//just change the sync results boolean and update the button text.
 		syncResults = !syncResults;
 		setSyncResultsText();
-		pairTable.fnDraw(false);
+		pairTable.api().draw(false);
 	});
 
 	$("#clearPairFilter")
@@ -570,7 +570,7 @@ function initUI() {
 		refreshPanels();
 		if (!isLocalJobPage) {
 			refreshStats(curSpaceId);
-			pairTable.fnDraw(false);
+			pairTable.api().draw(false);
 		}
 		else {
 			refreshPanels();
@@ -645,7 +645,7 @@ function initUI() {
 			//set the value of all .stageSelectors to this one to sync them.
 			//this does not trigger the change event, which is good because it would loop forever
 			$(".stageSelector").val($(this).val());
-			pairTable.fnDraw(false);
+			pairTable.api().draw(false);
 			refreshPanels();
 			refreshStats(curSpaceId);
 		});
@@ -1516,7 +1516,7 @@ function initDataTables() {
 		if (!isLocalJobPage && !DETAILS_JOB.isAnonymousPage) {
 			var $primarySelection = $solveTbl.find(".first_selected").first();
 			if ($primarySelection.length > 0) {
-				applyPairFilterForSelectedSolver(summaryTable.fnGetData($primarySelection[0]));
+				applyPairFilterForSelectedSolver(summaryTable.api().row($primarySelection[0]).data() || null);
 			} else {
 				clearPairFilter(true);
 			}
@@ -1995,7 +1995,7 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 				pairTable.fnProcessingIndicator(false);
 				fnCallback(nextDataTablePage);
 				$("#errorField").hide();
-				if (pairTable.fnSettings().fnRecordsTotal() == 0) {
+				if (pairTable.api().page.info().recordsTotal == 0) {
 					$("#pairTblField").hide();
 				} else {
 					$("#pairTblField").show();
