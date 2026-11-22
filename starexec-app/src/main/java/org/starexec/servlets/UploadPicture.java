@@ -23,6 +23,10 @@ import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
 
 /**
@@ -60,6 +64,10 @@ public class UploadPicture extends HttpServlet {
 		try {
 			// Extract data from the multipart request
 			HashMap<String, Object> form = Util.parseMultipartRequest(request);
+			if (form == null) {
+				response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed multipart request.");
+				return;
+			}
 
 			String rawPrimId = (String) form.get(UploadPicture.ID);
 			int primId = 0;
@@ -96,8 +104,8 @@ public class UploadPicture extends HttpServlet {
 					}
 				} catch (Exception e) {
 					log.error("Failed to upload picture for user " + userIdOfCaller + ": " + e.getMessage(), e);
-					response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, "Picture upload failed: " + e.getMessage()));
-					response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Picture upload failed: " + e.getMessage());
+					response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, "Picture upload failed. Please check server logs."));
+					response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Picture upload failed");
 				}
 			} else {
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
@@ -107,6 +115,9 @@ public class UploadPicture extends HttpServlet {
 			}
 		} catch (Exception e) {
 			log.warn("Caught Exception in UploadPicture.doPost", e);
+			if (!response.isCommitted()) {
+				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Picture upload failed");
+			}
 		}
 	}
 
@@ -146,26 +157,54 @@ public class UploadPicture extends HttpServlet {
 		// Ensure parent directories exist with proper error handling
 		File archiveFile = new File(filenameupload);
 		File parentDir = archiveFile.getParentFile();
-		if (!parentDir.exists()) {
-			log.debug("Creating parent directory: " + parentDir.getAbsolutePath());
-			if (!parentDir.mkdirs()) {
-				throw new IOException("Failed to create directory: " + parentDir.getAbsolutePath());
+		if (parentDir != null && !parentDir.exists() && !parentDir.mkdirs() && !parentDir.exists()) {
+			throw new IOException("Failed to create directory: " + parentDir.getAbsolutePath());
+		}
+
+		String fileNameThumbnail = PictureFiles.thumbnail(type, primId).getPath();
+		File thumbnailFile = new File(fileNameThumbnail);
+		File thumbParentDir = thumbnailFile.getParentFile();
+		if (thumbParentDir != null && !thumbParentDir.exists() && !thumbParentDir.mkdirs() && !thumbParentDir.exists()) {
+			throw new IOException("Failed to create directory: " + thumbParentDir.getAbsolutePath());
+		}
+
+		Path tempOriginal = null;
+		Path tempThumb = null;
+		try {
+			tempOriginal = Files.createTempFile(parentDir.toPath(), ".upload-", ".tmp");
+			tempThumb = Files.createTempFile(thumbParentDir.toPath(), ".thumb-", ".jpg.tmp");
+
+			log.debug("Staging picture file: " + tempOriginal.toAbsolutePath());
+			item.write(tempOriginal.toFile());
+
+			log.debug("Thumbnail file path: " + fileNameThumbnail);
+			log.debug("Creating thumbnail with dimensions 320x320");
+			scale(tempOriginal.toString(), 320, 320, tempThumb.toString());
+
+			moveReplacing(tempOriginal, archiveFile.toPath());
+			tempOriginal = null;
+			moveReplacing(tempThumb, thumbnailFile.toPath());
+			tempThumb = null;
+			log.debug("Picture and thumbnail committed successfully");
+		} finally {
+			if (tempOriginal != null) {
+				Files.deleteIfExists(tempOriginal);
+			}
+			if (tempThumb != null) {
+				Files.deleteIfExists(tempThumb);
 			}
 		}
 
-		log.debug("Writing picture file: " + archiveFile.getAbsolutePath());
-		item.write(archiveFile);
-		log.debug("Picture file written successfully");
-
-String fileNameThumbnail = PictureFiles.thumbnail(type, primId).getPath();
-
-		log.debug("Thumbnail file path: " + fileNameThumbnail);
-		log.debug("Creating thumbnail with dimensions 320x320");
-		scale(filenameupload, 320, 320, fileNameThumbnail);
-		log.debug("Thumbnail created successfully");
-
 		log.info("Picture upload completed successfully for userId=" + userId);
 		return redir;
+	}
+
+	private static void moveReplacing(Path source, Path target) throws IOException {
+		try {
+			Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+		} catch (AtomicMoveNotSupportedException e) {
+			Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+		}
 	}
 
 	/**
@@ -215,10 +254,15 @@ String fileNameThumbnail = PictureFiles.thumbnail(type, primId).getPath();
 
 		BufferedImage dest = new BufferedImage(destWidth, destHeight, BufferedImage.TYPE_INT_RGB);
 		Graphics2D g = dest.createGraphics();
-		AffineTransform at = AffineTransform
-				.getScaleInstance((double) destWidth / src.getWidth(), (double) destHeight / src.getHeight());
-
-		g.drawRenderedImage(src, at);
-		ImageIO.write(dest, "JPG", new File(destFile));
+		try {
+			AffineTransform at = AffineTransform
+					.getScaleInstance((double) destWidth / src.getWidth(), (double) destHeight / src.getHeight());
+			g.drawRenderedImage(src, at);
+		} finally {
+			g.dispose();
+		}
+		if (!ImageIO.write(dest, "JPG", new File(destFile))) {
+			throw new IOException("Failed to write scaled JPEG thumbnail");
+		}
 	}
 }
