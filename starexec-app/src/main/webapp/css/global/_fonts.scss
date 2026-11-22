@@ -1,4 +1,6 @@
+@import "typography";
+
 %heading {
-	font-family: Century Gothic, sans-serif;
-	font-weight: lighter;
+	font-family: $font-family-base;
+	font-weight: $font-weight-normal;
 }

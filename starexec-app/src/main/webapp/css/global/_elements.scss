@@ -8,6 +8,7 @@ body {
 
 	background-color: $background-color;
 	color: $text-main-color;
+	line-height: 1.5;
 
 	html, & {
 		@include mobile {
@@ -21,6 +22,9 @@ body {
 
 h1, h2, h3, h4, h5, h6 {
 	@extend %heading;
+
+	font-weight: $font-weight-semibold;
+	line-height: 1.25;
 }
 
 a:link, a:visited {

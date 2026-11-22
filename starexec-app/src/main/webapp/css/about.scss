@@ -1,8 +1,12 @@
+@import "global/colors";
+@import "global/typography";
+
 #content {
 	h2 {
-		font-family: Verdana, Geneva, Arial, Helvetica, sans-serif;
-		font-size: 16pt;
-		color: gray;
+		font-family: $font-family-base;
+		font-size: $font-size-xl;
+		font-weight: $font-weight-semibold;
+		color: $text-accent-color;
 		padding-top: 6px;
 		padding-bottom: 10px;
 	}
@@ -19,7 +23,7 @@
 		}
 
 		&:hover {
-			color: white;
+			color: $text-main-color;
 		}
 	}
 
