@@ -20,6 +20,24 @@ var getPanelTableInitializer;
 var openAjaxRequests = [];
 var includeUnknown = false;
 var solverComparisonPendingLoad = false;
+var suppressNextComparisonDialog = false;
+var jobChartInstances = {};
+var latestChartData = {
+	pairTime: null,
+	spaceOverview: null,
+	solverComparison: null
+};
+var JOB_CHART_SERIES_COLORS = ['#fa621b', '#3b82f6', '#10b981', '#8b5cf6', '#f39c12'];
+var JOB_CHART_THEME = {
+	text: '#f8f8f8',
+	axis: '#999999',
+	grid: '#2d2d2d',
+	tooltipBg: 'rgba(31, 31, 31, 0.94)',
+	tooltipBorder: '#404040',
+	accent: '#fa621b',
+	accentFill: 'rgba(250, 98, 27, 0.2)',
+	scatterPointBg: 'rgba(250, 98, 27, 0.78)'
+};
 
 function isGraphPanelVisible() {
 	var $graphField = $("#graphField");
@@ -281,7 +299,7 @@ function refreshStats(id) {
 				.prop("selected", true);
 				if (isGraphPanelVisible()) {
 					solverComparisonPendingLoad = false;
-					updateSolverComparison(300, "white");
+					updateSolverComparison();
 				} else {
 					solverComparisonPendingLoad = true;
 				}
@@ -389,10 +407,7 @@ function reloadTables(id) {
 			$("#solverChoice1").empty();
 			$("#solverChoice2").empty();
 			$("#spaceOverviewSelections").empty();
-			$("#spaceOverview")
-			.attr("src", starexecRoot + "images/loadingGraph.svg");
-			$("#solverComparison")
-			.attr("src", starexecRoot + "images/loadingGraph.svg");
+			resetAllChartsToLoading();
 
 			//tell the tables to display a "loading" indicator
 			summaryTable.fnProcessingIndicator(true);
@@ -680,7 +695,7 @@ function initUI() {
                         $("#solverComparisonOptionField").show();
                         if (solverComparisonPendingLoad && isGraphPanelVisible()) {
                                 solverComparisonPendingLoad = false;
-                                updateSolverComparison(300, "white");
+                                updateSolverComparison();
                         }
                 });
                 $("#selectPairTimeGraph")
@@ -700,7 +715,7 @@ function initUI() {
 		$("#solverComparisonUpdate")
 		.click(function() {
 			solverComparisonPendingLoad = false;
-			updateSolverComparison(300, "white", true);
+			updateSolverComparison(true);
 		});
 		$("#pairTimeUpdate")
 		.click(function() {
@@ -814,29 +829,16 @@ function initUI() {
 		}
 	});
 
-	$("#solverComparison300").click(function() {
-		$('#dialog-solverComparison').dialog({
-			modal: true,
-			width: 850,
-			height: 850
+	bindChartDialogTrigger("#solverComparison300", "#dialog-solverComparison", "#solverComparison800",
+		"solverComparison", renderSolverComparisonChart, function() {
+			return !suppressNextComparisonDialog;
 		});
-	});
 
-	$("#spaceOverview").click(function() {
-		$('#dialog-spaceOverview').dialog({
-			modal: true,
-			width: 850,
-			height: 850
-		});
-	});
+	bindChartDialogTrigger("#spaceOverview", "#dialog-spaceOverview", "#bigSpaceOverview",
+		"spaceOverview", renderSpaceOverviewChart);
 
-	$("#pairTimeGraph").click(function() {
-		$('#dialog-pairTimeGraph').dialog({
-			modal: true,
-			width: 850,
-			height: 850
-		});
-	});
+	bindChartDialogTrigger("#pairTimeGraph", "#dialog-pairTimeGraph", "#bigPairTimeGraph",
+		"pairTime", renderPairTimeChart);
 
 	setTimeButtonText();
 }
@@ -1097,10 +1099,11 @@ function setupPostProcessButton() {
 	});
 }
 
-// The graph services answer a chart as text (a path, or JSON holding the path and an image map),
-// and a refusal as a JSON status code. Given the text, parseReturnCode finds no "success" field
-// and reports success, so a refusal showed no message and left a broken or stale chart.
+// Parses structured JSON chart responses (or status refusals returned by the REST endpoints).
 function parseGraphResponse(text) {
+	if (text && typeof text === "object") {
+		return text;
+	}
 	if (typeof text === "string" && text.charAt(0) === "{") {
 		try {
 			return JSON.parse(text);
@@ -1140,18 +1143,411 @@ function onGraphRequestError(isLatest, clearGraph, announce) {
 	};
 }
 
+function setChartState($container, state) {
+	if (!$container || !$container.length) {
+		return;
+	}
+	$container.removeClass("is-loading is-empty is-ready").addClass("is-" + state);
+	var $stateImg = $container.find(".job-chart__state");
+	if ($stateImg.length) {
+		if (state === "loading") {
+			$stateImg.attr("src", starexecRoot + "images/loadingGraph.svg");
+		} else if (state === "empty") {
+			$stateImg.attr("src", starexecRoot + "images/noDisplayGraph.svg");
+		}
+	}
+}
+
+function destroyChartForContainer($container) {
+	if (!$container || !$container.length) {
+		return;
+	}
+	var $canvas = $container.find("canvas");
+	if (!$canvas.length) {
+		return;
+	}
+	var canvasId = $canvas[0].id || $container[0].id;
+	if (canvasId && jobChartInstances[canvasId]) {
+		jobChartInstances[canvasId].destroy();
+		delete jobChartInstances[canvasId];
+	}
+}
+
+function renderChartIntoContainer(containerSelector, buildConfig, data, isDialog) {
+	var $container = $(containerSelector);
+	if (!$container.length) {
+		return null;
+	}
+	if (!data) {
+		destroyChartForContainer($container);
+		setChartState($container, "empty");
+		return null;
+	}
+	var config = buildConfig(data, isDialog === true);
+	destroyChartForContainer($container);
+	var $canvas = $container.find("canvas");
+	var canvas = $canvas.length ? $canvas[0] : null;
+	setChartState($container, "ready");
+	if (typeof Chart === "undefined" || !canvas || typeof canvas.getContext !== "function") {
+		return config;
+	}
+	var ctx = canvas.getContext("2d");
+	var canvasId = canvas.id || containerSelector;
+	jobChartInstances[canvasId] = new Chart(ctx, config);
+	return jobChartInstances[canvasId];
+}
+
+function resetAllChartsToLoading() {
+	latestChartData.pairTime = null;
+	latestChartData.spaceOverview = null;
+	latestChartData.solverComparison = null;
+	destroyChartForContainer($("#spaceOverview"));
+	destroyChartForContainer($("#bigSpaceOverview"));
+	destroyChartForContainer($("#solverComparison300"));
+	destroyChartForContainer($("#solverComparison800"));
+	destroyChartForContainer($("#pairTimeGraph"));
+	destroyChartForContainer($("#bigPairTimeGraph"));
+	setChartState($("#spaceOverview"), "loading");
+	setChartState($("#solverComparison300"), "loading");
+	setChartState($("#pairTimeGraph"), "loading");
+	setChartState($("#bigSpaceOverview"), "empty");
+	setChartState($("#solverComparison800"), "empty");
+	setChartState($("#bigPairTimeGraph"), "empty");
+}
+
+function bindChartDialogTrigger(triggerSelector, dialogSelector, bigContainerSelector, chartKey, renderFn, shouldOpenFn) {
+	function openChartDialog() {
+		if (typeof shouldOpenFn === "function" && !shouldOpenFn()) {
+			return;
+		}
+		var cfg = getResponsiveDialogConfig(850);
+		$(dialogSelector).dialog({
+			modal: true,
+			width: cfg.width,
+			maxWidth: cfg.maxWidth,
+			height: Math.min(820, cfg.maxHeight),
+			maxHeight: cfg.maxHeight,
+			open: function() {
+				var cached = latestChartData[chartKey];
+				if (cached) {
+					renderFn(bigContainerSelector, cached, true);
+				} else {
+					destroyChartForContainer($(bigContainerSelector));
+					setChartState($(bigContainerSelector), $(triggerSelector).hasClass("is-loading") ? "loading" : "empty");
+				}
+			}
+		});
+	}
+
+	$(triggerSelector).click(openChartDialog).on("keydown", function(event) {
+		if (event.key === "Enter" || event.key === " ") {
+			event.preventDefault();
+			openChartDialog();
+		}
+	});
+}
+
+function baseChartPlugins(titleText, showLegend, legendPosition) {
+	return {
+		title: {
+			display: Boolean(titleText),
+			text: titleText || "",
+			color: JOB_CHART_THEME.text,
+			font: { size: 14, weight: "600" }
+		},
+		legend: {
+			display: Boolean(showLegend),
+			position: legendPosition || "bottom",
+			labels: {
+				color: JOB_CHART_THEME.text,
+				boxWidth: 12
+			}
+		},
+		tooltip: {
+			backgroundColor: JOB_CHART_THEME.tooltipBg,
+			titleColor: JOB_CHART_THEME.text,
+			bodyColor: JOB_CHART_THEME.text,
+			borderColor: JOB_CHART_THEME.tooltipBorder,
+			borderWidth: 1
+		}
+	};
+}
+
+function buildPairTimeChartConfig(data) {
+	var points = Array.isArray(data.points) ? data.points : [];
+	var plugins = baseChartPlugins(data.title || "# Pairs Completed vs Time", false);
+	plugins.tooltip.callbacks = {
+		title: function(items) {
+			if (!items || !items.length) {
+				return "";
+			}
+			var x = items[0].parsed.x;
+			return typeof x === "number" ? new Date(x).toLocaleString() : "";
+		},
+		label: function(ctx) {
+			return "Completed pairs: " + ctx.parsed.y;
+		}
+	};
+	return {
+		type: "line",
+		data: {
+			datasets: [{
+				label: data.yLabel || "# of Completed Pairs",
+				data: points,
+				borderColor: JOB_CHART_THEME.accent,
+				backgroundColor: JOB_CHART_THEME.accentFill,
+				fill: true,
+				tension: 0,
+				borderWidth: 2,
+				pointRadius: points.length > 100 ? 0 : 2.5,
+				pointHoverRadius: 4,
+				pointHitRadius: 6
+			}]
+		},
+		options: {
+			responsive: true,
+			maintainAspectRatio: false,
+			animation: false,
+			color: JOB_CHART_THEME.text,
+			plugins: plugins,
+			scales: {
+				x: {
+					type: "linear",
+					title: {
+						display: true,
+						text: data.xLabel || "Time",
+						color: JOB_CHART_THEME.axis
+					},
+					ticks: { display: false },
+					grid: { color: JOB_CHART_THEME.grid }
+				},
+				y: {
+					type: "linear",
+					min: 0,
+					max: Math.max(1, data.totalPairs || points.length || 1),
+					title: {
+						display: true,
+						text: data.yLabel || "# of Completed Pairs",
+						color: JOB_CHART_THEME.axis
+					},
+					ticks: { color: JOB_CHART_THEME.axis },
+					grid: { color: JOB_CHART_THEME.grid }
+				}
+			}
+		}
+	};
+}
+
+function renderPairTimeChart(containerSelector, data, isDialog) {
+	return renderChartIntoContainer(containerSelector, buildPairTimeChartConfig, data, isDialog);
+}
+
+function buildSpaceOverviewChartConfig(data, isDialog) {
+	var series = Array.isArray(data.series) ? data.series : [];
+	var totalPoints = 0;
+	for (var i = 0; i < series.length; i++) {
+		totalPoints += Array.isArray(series[i].points) ? series[i].points.length : 0;
+	}
+	var pointRadius = totalPoints > 100 ? 0 : 2.5;
+	var datasets = series.map(function(entry, idx) {
+		var color = JOB_CHART_SERIES_COLORS[idx % JOB_CHART_SERIES_COLORS.length];
+		return {
+			label: entry.label || ("Series " + (idx + 1)),
+			data: Array.isArray(entry.points) ? entry.points : [],
+			borderColor: color,
+			backgroundColor: color,
+			fill: false,
+			showLine: true,
+			tension: 0,
+			borderWidth: 2,
+			pointRadius: pointRadius,
+			pointHoverRadius: 4,
+			pointHitRadius: 6
+		};
+	});
+	var yScale = {
+		type: data.logY ? "logarithmic" : "linear",
+		title: {
+			display: true,
+			text: data.yLabel || "time (s)",
+			color: JOB_CHART_THEME.axis
+		},
+		ticks: { color: JOB_CHART_THEME.axis },
+		grid: { color: JOB_CHART_THEME.grid }
+	};
+	if (!data.logY) {
+		yScale.min = 0;
+		yScale.suggestedMax = data.maxY || 0.1;
+	}
+	var xScale = {
+		type: data.logX ? "logarithmic" : "linear",
+		title: {
+			display: true,
+			text: data.xLabel || "# solved",
+			color: JOB_CHART_THEME.axis
+		},
+		ticks: { color: JOB_CHART_THEME.axis },
+		grid: { color: JOB_CHART_THEME.grid }
+	};
+	if (!data.logX) {
+		xScale.min = 0;
+	}
+	return {
+		type: "line",
+		data: { datasets: datasets },
+		options: {
+			responsive: true,
+			maintainAspectRatio: false,
+			animation: false,
+			color: JOB_CHART_THEME.text,
+			plugins: baseChartPlugins(data.title || "Space Overview Plot", true, isDialog ? "top" : "bottom"),
+			scales: {
+				x: xScale,
+				y: yScale
+			}
+		}
+	};
+}
+
+function renderSpaceOverviewChart(containerSelector, data, isDialog) {
+	return renderChartIntoContainer(containerSelector, buildSpaceOverviewChartConfig, data, isDialog);
+}
+
+function getClickableBenchmarkId(point, data) {
+	if (!data || data.benchmarksAnonymized || !point || point.benchmarkId === undefined || point.benchmarkId === null) {
+		return null;
+	}
+	return point.benchmarkId;
+}
+
+function buildSolverComparisonChartConfig(data, isDialog) {
+	var points = Array.isArray(data.points) ? data.points : [];
+	var maxAxis = typeof data.maxAxis === "number" && data.maxAxis > 0 ? data.maxAxis : 0.1;
+	var plugins = baseChartPlugins(data.title || "Solver Comparison Plot", false);
+	plugins.tooltip.callbacks = {
+		title: function(items) {
+			if (!items || !items.length) {
+				return "";
+			}
+			var raw = items[0].raw;
+			return raw && raw.name ? raw.name : "";
+		},
+		label: function(ctx) {
+			var lines = ["x: " + ctx.parsed.x + " s, y: " + ctx.parsed.y + " s"];
+			if (getClickableBenchmarkId(ctx.raw, data) !== null) {
+				lines.push("Click to open benchmark");
+			}
+			return lines;
+		}
+	};
+	return {
+		type: "scatter",
+		data: {
+			datasets: [{
+				label: "Benchmarks",
+				data: points,
+				backgroundColor: JOB_CHART_THEME.scatterPointBg,
+				borderColor: JOB_CHART_THEME.accent,
+				borderWidth: 1,
+				pointRadius: isDialog ? 4.5 : 3.5,
+				pointHoverRadius: isDialog ? 7 : 6,
+				pointHitRadius: 5
+			}]
+		},
+		options: {
+			responsive: true,
+			maintainAspectRatio: true,
+			aspectRatio: 1,
+			animation: false,
+			color: JOB_CHART_THEME.text,
+			plugins: plugins,
+			onHover: function(event, elements, chart) {
+				if (!chart || !chart.canvas) {
+					return;
+				}
+				var hasLink = false;
+				if (elements && elements.length > 0) {
+					var el = elements[0];
+					var raw = chart.data.datasets[el.datasetIndex].data[el.index];
+					hasLink = getClickableBenchmarkId(raw, data) !== null;
+				}
+				chart.canvas.style.cursor = hasLink ? "pointer" : (isDialog ? "default" : "zoom-in");
+			},
+			onClick: function(event, elements, chart) {
+				if (!elements || !elements.length || !chart) {
+					return;
+				}
+				var el = elements[0];
+				var raw = chart.data.datasets[el.datasetIndex].data[el.index];
+				var benchmarkId = getClickableBenchmarkId(raw, data);
+				if (benchmarkId === null) {
+					return;
+				}
+				suppressNextComparisonDialog = true;
+				setTimeout(function() {
+					suppressNextComparisonDialog = false;
+				}, 0);
+				if (event && event.native && typeof event.native.stopPropagation === "function") {
+					event.native.stopPropagation();
+				}
+				window.location.assign(starexecRoot + "secure/details/benchmark.jsp?id=" + encodeURIComponent(benchmarkId));
+			},
+			scales: {
+				x: {
+					type: "linear",
+					min: 0,
+					max: maxAxis,
+					title: {
+						display: true,
+						text: data.xLabel || "",
+						color: JOB_CHART_THEME.axis
+					},
+					ticks: { color: JOB_CHART_THEME.axis },
+					grid: { color: JOB_CHART_THEME.grid }
+				},
+				y: {
+					type: "linear",
+					min: 0,
+					max: maxAxis,
+					title: {
+						display: true,
+						text: data.yLabel || "",
+						color: JOB_CHART_THEME.axis
+					},
+					ticks: { color: JOB_CHART_THEME.axis },
+					grid: { color: JOB_CHART_THEME.grid }
+				}
+			}
+		}
+	};
+}
+
+function renderSolverComparisonChart(containerSelector, data, isDialog) {
+	return renderChartIntoContainer(containerSelector, buildSolverComparisonChartConfig, data, isDialog);
+}
+
 function clearPairTimeGraph() {
-	$("#pairTimeGraph, #bigPairTimeGraph").attr("src", starexecRoot + "images/noDisplayGraph.svg");
+	latestChartData.pairTime = null;
+	destroyChartForContainer($("#pairTimeGraph"));
+	destroyChartForContainer($("#bigPairTimeGraph"));
+	setChartState($("#pairTimeGraph"), "empty");
+	setChartState($("#bigPairTimeGraph"), "empty");
 }
 
 function clearSpaceOverviewGraph() {
-	$("#spaceOverview, #bigSpaceOverview").attr("src", starexecRoot + "images/noDisplayGraph.svg");
+	latestChartData.spaceOverview = null;
+	destroyChartForContainer($("#spaceOverview"));
+	destroyChartForContainer($("#bigSpaceOverview"));
+	setChartState($("#spaceOverview"), "empty");
+	setChartState($("#bigSpaceOverview"), "empty");
 }
 
-// Clears both sizes and their image maps, so that no link points at a benchmark of an earlier chart.
 function clearSolverComparison() {
-	$("#solverComparison300, #solverComparison800").attr("src", starexecRoot + "images/noDisplayGraph.svg");
-	$("#solverComparisonMap300, #solverComparisonMap800").remove();
+	latestChartData.solverComparison = null;
+	destroyChartForContainer($("#solverComparison300"));
+	destroyChartForContainer($("#solverComparison800"));
+	setChartState($("#solverComparison300"), "empty");
+	setChartState($("#solverComparison800"), "empty");
 }
 
 // announce: true when the user pressed Update, so that a graph that cannot be drawn says why.
@@ -1165,6 +1561,7 @@ function updatePairJobTimeGraph(announce) {
 	}
 	log('updatePairJobTimeGraph postUrl: ' + postUrl);
 
+	setChartState($("#pairTimeGraph"), "loading");
 	var isLatest = startGraphRequest("pairTime");
 	var xhr = $.post(
 			postUrl,
@@ -1173,10 +1570,14 @@ function updatePairJobTimeGraph(announce) {
 				if (!isLatest()) {
 					return;
 				}
-				var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
-				if(s) {
-					$("#pairTimeGraph").attr("src", returnCode);
-					$("#bigPairTimeGraph").attr("src", returnCode + "800");
+				var parsed = parseGraphResponse(returnCode);
+				var s = parseReturnCode(parsed, announce === true);
+				if (s && parsed && typeof parsed === "object" && parsed.chartType === "pairTime") {
+					latestChartData.pairTime = parsed;
+					renderPairTimeChart("#pairTimeGraph", parsed, false);
+					if ($("#dialog-pairTimeGraph").is(":visible")) {
+						renderPairTimeChart("#bigPairTimeGraph", parsed, true);
+					}
 				} else {
 					clearPairTimeGraph();
 				}
@@ -1208,6 +1609,7 @@ function updateSpaceOverviewGraph(announce) {
 	}
 	log('updateSpaceOverviewGraph postUrl: ' + postUrl);
 
+	setChartState($("#spaceOverview"), "loading");
 	var isLatest = startGraphRequest("spaceOverview");
 	var xhr = $.post(
 		postUrl,
@@ -1216,18 +1618,19 @@ function updateSpaceOverviewGraph(announce) {
 			if (!isLatest()) {
 				return;
 			}
-			var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
-			if (s) {
+			var parsed = parseGraphResponse(returnCode);
+			var s = parseReturnCode(parsed, announce === true);
+			if (s && parsed && typeof parsed === "object" && parsed.chartType === "spaceOverview") {
 				var currentConfigs = [];
 				$("#spaceOverviewSelections option:selected").each(function() {
 					currentConfigs.push($(this).attr("value"));
 				});
-				//we only want to update the graph if the request we made still matches what the user has put in
-				//it is possible the user changed their selections and sent out a new request which has returned already
-				//also, equality checking doesn't work on arrays, but less than and greater than do
 				if (!(currentConfigs > configs) && !(currentConfigs < configs)) {
-					$("#spaceOverview").attr("src", returnCode);
-					$("#bigSpaceOverview").attr("src", returnCode + "800");
+					latestChartData.spaceOverview = parsed;
+					renderSpaceOverviewChart("#spaceOverview", parsed, false);
+					if ($("#dialog-spaceOverview").is(":visible")) {
+						renderSpaceOverviewChart("#bigSpaceOverview", parsed, true);
+					}
 				}
 			} else {
 				clearSpaceOverviewGraph();
@@ -1239,27 +1642,27 @@ function updateSpaceOverviewGraph(announce) {
 	openAjaxRequests.push(xhr);
 }
 
-//size is in pixels and color is a string. announce: true when the user pressed Update, so that a
-//comparison that cannot be drawn says why; the draw that follows each statistics load passes nothing.
-//isLatest: passed only by the small chart's request for the large one, which belongs to its request.
-function updateSolverComparison(size, color, announce, isLatest) {
+// announce: true when the user pressed Update, so that a comparison that cannot be drawn says why;
+// the draw that follows each statistics load passes nothing and waits until #graphField is visible.
+function updateSolverComparison(announce) {
 	if (announce !== true && !isGraphPanelVisible()) {
 		solverComparisonPendingLoad = true;
 		return;
 	}
 	solverComparisonPendingLoad = false;
-	isLatest = isLatest || startGraphRequest("solverComparison");
+	var isLatest = startGraphRequest("solverComparison");
 	var config1 = $("#solverChoice1 option:selected").attr("value");
 	var config2 = $("#solverChoice2 option:selected").attr("value");
 
 	var postUrl = '';
 	if (DETAILS_JOB.isAnonymousPage) {
 		postUrl = starexecRoot + "services/jobs/anonymousLink/" + DETAILS_JOB.anonymousLinkUuid + "/" + curSpaceId + "/graphs/solverComparison/" + config1 +
-			"/" + config2 + "/" + size + "/" + color + "/" + getSelectedStage() + "/" + DETAILS_JOB.primitivesToAnonymize;
+			"/" + config2 + "/" + getSelectedStage() + "/" + DETAILS_JOB.primitivesToAnonymize;
 	} else {
-		postUrl = starexecRoot + "services/jobs/" + curSpaceId + "/graphs/solverComparison/" + config1 + "/" + config2 + "/" + size + "/" + color + "/" + getSelectedStage();
+		postUrl = starexecRoot + "services/jobs/" + curSpaceId + "/graphs/solverComparison/" + config1 + "/" + config2 + "/" + getSelectedStage();
 	}
 
+	setChartState($("#solverComparison300"), "loading");
 	var xhr = $.post(
 		postUrl,
 		{},
@@ -1267,18 +1670,13 @@ function updateSolverComparison(size, color, announce, isLatest) {
 			if (!isLatest()) {
 				return;
 			}
-			var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
-			if (s) {
-				var jsonObject = JSON.parse(returnCode);
-				var src = jsonObject.src;
-				var map = jsonObject.map;
-				$("#solverComparison" + size).attr("src", src);
-				$("#solverComparisonMap" + size).remove();
-				if (size == 800) {
-					$("#dialog-solverComparison").append(map);
-				} else {
-					$("#graphField").append(map);
-					updateSolverComparison(800, "black", announce, isLatest);
+			var parsed = parseGraphResponse(returnCode);
+			var s = parseReturnCode(parsed, announce === true);
+			if (s && parsed && typeof parsed === "object" && parsed.chartType === "solverComparison") {
+				latestChartData.solverComparison = parsed;
+				renderSolverComparisonChart("#solverComparison300", parsed, false);
+				if ($("#dialog-solverComparison").is(":visible")) {
+					renderSolverComparisonChart("#solverComparison800", parsed, true);
 				}
 			} else {
 				clearSolverComparison();

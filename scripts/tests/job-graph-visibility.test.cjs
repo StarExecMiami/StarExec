@@ -41,6 +41,10 @@ function createHarness(initiallyVisible) {
       click(fn) { handlers[selector] = fn; return stub; },
       on() { return stub; },
       off() { return stub; },
+      addClass() { return stub; },
+      removeClass() { return stub; },
+      hasClass() { return false; },
+      find() { return makeElement(''); },
       expandable() { return stub; },
       toggleClass() { return stub; },
     };
@@ -112,11 +116,11 @@ test('explicitly selecting or updating solverComparison requests it once #graphF
   h.handlers['#selectSolverComparison']();
   assert.equal(h.posts.length, 0);
 
-  // Once panel becomes visible, switching to Solver Comparison triggers the deferred load once.
+  // Once panel becomes visible, switching to Solver Comparison triggers a single deferred load.
   h.setGraphVisible(true);
   h.handlers['#selectSolverComparison']();
   assert.equal(h.posts.length, 1);
-  assert.match(h.posts[0], /\/services\/jobs\/42\/graphs\/solverComparison\/10\/10\/300\/white\/0$/);
+  assert.match(h.posts[0], /\/services\/jobs\/42\/graphs\/solverComparison\/10\/10\/0$/);
 
   // Revisiting the tab after loading does not re-request automatically.
   h.handlers['#selectSolverComparison']();

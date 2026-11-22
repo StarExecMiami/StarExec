@@ -23,7 +23,7 @@
 	}
 %>
 <star:template title="${fn:escapeXml(pageTitle)}"
-               js="util/sortButtons, util/jobDetailsUtilityFunctions, util/datatablesUtility, common/delaySpinner, lib/jstree.min, util/tree, lib/jquery.dataTables.min, details/shared, details/job, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min"
+               js="${'true' eq param.localJobPage ? '' : 'lib/chart.min, '}util/sortButtons, util/jobDetailsUtilityFunctions, util/datatablesUtility, common/delaySpinner, lib/jstree.min, util/tree, lib/jquery.dataTables.min, details/shared, details/job, lib/jquery.ba-throttle-debounce.min, lib/jquery.heatcolor.0.0.1.min"
                css="jstree/default-dark/style.min, common/table, common/delaySpinner, explore/common, details/shared, details/job">
 	<script>
 		star = star || {};
@@ -234,14 +234,27 @@
 					<button id="selectSolverComparison" class="btn btn-secondary" type="button"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> Show Solver Comparison</button>
 					<button id="selectPairTimeGraph" class="btn btn-secondary" type="button"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> Show Pairs vs. Time</button>
 				</fieldset>
-				<img id="spaceOverview"
-			     		src="${starexecRoot}/images/loadingGraph.svg" width="300"
-			     		height="300" alt="Space overview chart"/>
-				<img id="solverComparison300" width="300" height="300"
-			     		src="${starexecRoot}/images/loadingGraph.svg"
-			     		usemap="#solverComparisonMap300" alt="Solver comparison chart"/>
-				<img id="pairTimeGraph" width="300" height="300" 
-			     		src="${starexecRoot}/images/loadingGraph.svg" alt="Completed pairs vs time chart"/>
+				<div id="spaceOverview" class="job-chart is-loading" role="button" tabindex="0"
+				     aria-label="Space overview chart, click to enlarge">
+					<canvas id="spaceOverviewCanvas" class="job-chart__canvas"
+					        aria-label="Space overview chart"></canvas>
+					<img class="job-chart__state" src="${starexecRoot}/images/loadingGraph.svg"
+					     alt="Space overview chart status"/>
+				</div>
+				<div id="solverComparison300" class="job-chart is-loading" role="button" tabindex="0"
+				     aria-label="Solver comparison chart, click to enlarge">
+					<canvas id="solverComparison300Canvas" class="job-chart__canvas"
+					        aria-label="Solver comparison chart"></canvas>
+					<img class="job-chart__state" src="${starexecRoot}/images/loadingGraph.svg"
+					     alt="Solver comparison chart status"/>
+				</div>
+				<div id="pairTimeGraph" class="job-chart is-loading" role="button" tabindex="0"
+				     aria-label="Completed pairs vs time chart, click to enlarge">
+					<canvas id="pairTimeGraphCanvas" class="job-chart__canvas"
+					        aria-label="Completed pairs vs time chart"></canvas>
+					<img class="job-chart__state" src="${starexecRoot}/images/loadingGraph.svg"
+					     alt="Completed pairs vs time chart status"/>
+				</div>
 				<br>
 				<fieldset id="optionField">
 					<legend>options</legend>
@@ -591,9 +604,12 @@
 			</div>
 			<div id="dialog-solverComparison" title="solver comparison chart"
 			     class="hiddenDialog">
-				<img src="" id="solverComparison800"
-				     usemap="#solverComparisonMap800" alt="Solver comparison chart (large)"/>
-				<map id="solverComparisonMap800"></map>
+				<div id="solverComparison800" class="job-chart job-chart--dialog is-empty">
+					<canvas id="solverComparison800Canvas" class="job-chart__canvas"
+					        aria-label="Solver comparison chart (large)"></canvas>
+					<img class="job-chart__state" src="${starexecRoot}/images/noDisplayGraph.svg"
+					     alt="Solver comparison chart status"/>
+				</div>
 			</div>
 			<div id="dialog-warning" title="warning" class="hiddenDialog">
 				<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
@@ -634,11 +650,21 @@
 			</div>
 			<div id="dialog-spaceOverview" title="space overview chart"
 			     class="hiddenDialog">
-				<img src="" id="bigSpaceOverview" alt="Space overview chart (large)"/>
+				<div id="bigSpaceOverview" class="job-chart job-chart--dialog is-empty">
+					<canvas id="bigSpaceOverviewCanvas" class="job-chart__canvas"
+					        aria-label="Space overview chart (large)"></canvas>
+					<img class="job-chart__state" src="${starexecRoot}/images/noDisplayGraph.svg"
+					     alt="Space overview chart status"/>
+				</div>
 			</div>
 			<div id="dialog-pairTimeGraph" title="completed pairs vs time chart"
 			     class="hiddenDialog">
-				<img src="" id="bigPairTimeGraph" alt="Completed pairs vs time chart (large)"/>
+				<div id="bigPairTimeGraph" class="job-chart job-chart--dialog is-empty">
+					<canvas id="bigPairTimeGraphCanvas" class="job-chart__canvas"
+					        aria-label="Completed pairs vs time chart (large)"></canvas>
+					<img class="job-chart__state" src="${starexecRoot}/images/noDisplayGraph.svg"
+					     alt="Completed pairs vs time chart status"/>
+				</div>
 			</div>
 			<div id="dialog-show-anonymous-link" title="anonymous link"
 			     class="hiddenDialog">
