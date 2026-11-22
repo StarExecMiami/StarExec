@@ -13,20 +13,22 @@ public class ClearCacheManager {
 	private static final StarLogger log = StarLogger.getLogger(ClearCacheManager.class);
 
 	private static String scriptTemplate=null;
-	protected static void initScriptTemplateIf() {
+	protected static void initScriptTemplateIf() throws IOException {
 		if (scriptTemplate == null) {
 			// Read in the job script template and format it for this global configuration
 			File f = new File(R.CONFIG_PATH, "sge/clearCacheScript");
+			final String loadedTemplate;
 			try {
-				scriptTemplate = FileUtils.readFileToString(f, StandardCharsets.UTF_8);
+				loadedTemplate = FileUtils.readFileToString(f, StandardCharsets.UTF_8);
 			}
 			catch (IOException e) {
 				log.error("Error reading the clearCacheScript at " + f + " — cache clearing will be unavailable", e);
-				return;
+				throw e;
 			}
-			scriptTemplate = scriptTemplate.replace("$$SANDBOX_USER_ONE$$", R.SANDBOX_USER_ONE);
-			scriptTemplate = scriptTemplate.replace("$$WORKING_DIR_BASE$$", R.BACKEND_WORKING_DIR);
-			scriptTemplate = scriptTemplate.replace("$$MAX_WRITE$$", String.valueOf(R.MAX_PAIR_FILE_WRITE));
+			scriptTemplate = loadedTemplate
+					.replace("$$SANDBOX_USER_ONE$$", R.SANDBOX_USER_ONE)
+					.replace("$$WORKING_DIR_BASE$$", R.BACKEND_WORKING_DIR)
+					.replace("$$MAX_WRITE$$", String.valueOf(R.MAX_PAIR_FILE_WRITE));
 		}
 	}
 

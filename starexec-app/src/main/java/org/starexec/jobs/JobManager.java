@@ -198,15 +198,19 @@ public abstract class JobManager {
 	 * @author Aaron Stump
 	 */
 	protected static void initMainTemplateIf() {
-		// Read in the job script template and format it for this global configuration
-		File f = new File(R.CONFIG_PATH, "sge/jobscript");
-		try {
-			mainTemplate = FileUtils.readFileToString(f, StandardCharsets.UTF_8);
-		} catch (IOException e) {
-			log.error("Error reading the jobscript at " + f + " — job submission will be unavailable", e);
+		if (mainTemplate != null) {
 			return;
 		}
-		mainTemplate = mainTemplate.replace("$$DB_NAME$$", R.POSTGRES_DATABASE);
+		// Read in the job script template and format it for this global configuration
+		File f = new File(R.CONFIG_PATH, "sge/jobscript");
+		final String loadedTemplate;
+		try {
+			loadedTemplate = FileUtils.readFileToString(f, StandardCharsets.UTF_8);
+		} catch (IOException e) {
+			log.error("Error reading the jobscript at " + f + " — job submission will be unavailable", e);
+			throw new IllegalStateException("Jobscript template is unavailable at " + f, e);
+		}
+		mainTemplate = loadedTemplate.replace("$$DB_NAME$$", R.POSTGRES_DATABASE);
 
 		// The generated jobscript is written world-readable into the shared data volume
 		// (see writeJobScript below) and its exports are inherited by every child of the
@@ -348,6 +352,9 @@ public abstract class JobManager {
 	 */
 	private static SchedulingState selectHighPriorityJob(int userId, List<SchedulingState> usersHighPriorityStates,
 			Map<Integer, Integer> usersHighPriorityJobBalance) throws StarExecException {
+		if (usersHighPriorityStates == null || usersHighPriorityStates.isEmpty()) {
+			throw new StarExecException("No active high priority states remain for userId=" + userId);
+		}
 
 		// Check if all the high priority jobs have been selected an equal number of
 		// times.
@@ -359,7 +366,7 @@ public abstract class JobManager {
 			// randomly pick one to use.
 			Random random = new Random();
 			SchedulingState selectedState = usersHighPriorityStates.get(random.nextInt(usersHighPriorityStates.size()));
-			Integer currentBalanceForState = usersHighPriorityJobBalance.get(selectedState.job.getId());
+			int currentBalanceForState = usersHighPriorityJobBalance.getOrDefault(selectedState.job.getId(), 0);
 			usersHighPriorityJobBalance.put(selectedState.job.getId(), currentBalanceForState + 1);
 			return selectedState;
 		}
@@ -373,6 +380,7 @@ public abstract class JobManager {
 		// minimum number of times.
 		for (SchedulingState state : usersHighPriorityStates) {
 			if (state.job.getId() == minEntry.getKey()) {
+				usersHighPriorityJobBalance.put(state.job.getId(), minEntry.getValue() + 1);
 				return state;
 			}
 		}
@@ -603,12 +611,20 @@ public abstract class JobManager {
 
 						// Replace the high priority states with the filtered ones.
 						userToHighPriorityStates.put(currentStateUserId, highPriorityStates);
+						Map<Integer, Integer> balanceForUser = highPriorityJobBalance.get(currentStateUserId);
+						if (balanceForUser != null) {
+							Set<Integer> activeHighPriorityIds = highPriorityStates.stream()
+									.map(state -> state.job.getId())
+									.collect(Collectors.toSet());
+							balanceForUser.keySet().retainAll(activeHighPriorityIds);
+						}
 
 						if (highPriorityStates.isEmpty()) {
 							log.trace(methodName, "No high priority states with pairs left.");
 							// Remove the user from the map if they don't have any high priority jobs left
 							// to look at.
 							userToHighPriorityStates.remove(currentStateUserId);
+							highPriorityJobBalance.remove(currentStateUserId);
 
 							// Leave the current scheduling state as is.
 						} else {
