@@ -115,6 +115,15 @@ public class MailFailureReportedTest {
 		verify(redirect.session).setAttribute("regSuccess", true);
 	}
 
+	@Test
+	public void aRegistrationWithWeakPasswordIsRejected() {
+		HttpServletRequest request = registrationRequest();
+		when(request.getParameter(Registration.USER_PASSWORD)).thenReturn("weak");
+		ValidatorStatusCode status = Registration.validateRequest(request);
+		assertEquals(false, status.isSuccess());
+		assertTrue(status.getMessage().contains("password"), status.getMessage());
+	}
+
 	private static String resetRedirect(boolean sent) throws Exception {
 		HttpServletRequest request = mock(HttpServletRequest.class);
 		HttpServletResponse response = mock(HttpServletResponse.class);
