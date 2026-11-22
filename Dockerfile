@@ -126,8 +126,11 @@ RUN mvn clean install -DskipTests -Dmaven.test.skip=true -Dskip.sass=true -B -V 
 # ==============================================================================
 # Stage 5: Runtime - Tomcat with Security Hardening
 # ==============================================================================
-# Use the same Alpine release as the runsolver builder for musl and libstdc++.
-FROM docker.io/library/eclipse-temurin:17-jre-alpine-3.24
+# Use a glibc-based JRE runtime: OpenJDK built against musl (Alpine) does not
+# enable SecureDirectoryStream, which DescriptorDirectory requires for
+# symlink/TOCTOU-safe stage status ingestion. Stage 2's runsolver is statically
+# linked so runsolver-parity with docker/job-runner.Dockerfile is preserved.
+FROM docker.io/library/eclipse-temurin:17-jre-noble
 
 LABEL maintainer="StarExec Team" \
     org.opencontainers.image.title="StarExec" \
@@ -136,21 +139,9 @@ LABEL maintainer="StarExec Team" \
 
 # Rebuild the package layer on every CI build.
 #
-# `apk upgrade --no-cache` below cannot keep this image patched on its own: --no-cache is
-# apk's *index* cache, not Docker's *layer* cache. This layer's cache key is the base
-# image digest plus the command text, and neither changes when Alpine publishes a security
-# update -- so a cached layer keeps shipping whatever package versions were current when
-# it was first built, indefinitely.
-#
-# That is not hypothetical. On 2026-09-06 the Container Publish scan failed with 203 HIGH
-# findings (8 CVEs across the util-linux family) against an image built from source that
-# had not changed since the previous green run: the cached layer held util-linux
-# 2.42.1-r0 while the same Alpine 3.24 repositories were serving the patched 2.42.3-r1.
-# A build with the cache cold produced 2.42.3-r1 and scanned clean.
-#
-# The workflow passes a fresh BUILD_DATE for every run, so referencing it here changes the
-# key each CI build and the packages are genuinely re-resolved. Local builds leave it at
-# the default and keep their layer cache, so `docker compose up --build` stays fast.
+# Refreshing the apt index and running upgrade with a BUILD_DATE-keyed marker
+# avoids shipping stale package versions from a cached runtime layer when
+# Ubuntu security updates publish after the previous CI run.
 ARG BUILD_DATE=unknown
 
 # Install runtime dependencies
@@ -166,12 +157,13 @@ ARG BUILD_DATE=unknown
 # - procps: Provides ps command with -p option for process monitoring
 # - sudo: Required by job execution scripts to switch to sandbox users
 # - file: Required by Util.isBinaryFile(), used by the configuration details page
-# - libstdc++: C++ standard library (required by runsolver)
-# - libgcc: GCC runtime library (required by runsolver)
-# - gcompat: glibc compatibility layer for musl (required by solver binaries compiled against glibc)
+# - libstdc++6: C++ standard library (required by dynamically linked solvers)
+# - libgcc-s1: GCC runtime library
 RUN echo "package layer built for ${BUILD_DATE}" > /etc/starexec-package-layer && \
-    apk upgrade --no-cache && \
-    apk add --no-cache \
+    export DEBIAN_FRONTEND=noninteractive && \
+    apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
     bash \
     curl \
     ca-certificates \
@@ -179,17 +171,20 @@ RUN echo "package layer built for ${BUILD_DATE}" > /etc/starexec-package-layer &
     tini \
     tcsh \
     unzip \
+    tar \
+    gzip \
+    git \
     util-linux \
     postgresql-client \
     procps \
     sudo \
     file \
-    libstdc++ \
-    libgcc \
-    gcompat && \
+    libstdc++6 \
+    libgcc-s1 && \
     # Restore legacy tcsh behavior: don't error on non-matching globs
     echo "set nonomatch" > /etc/csh.env && \
-    rm -rf /var/cache/apk/*
+    echo "set nonomatch" >> /etc/csh.cshrc && \
+    rm -rf /var/lib/apt/lists/*
 
 # Verify critical tools for job execution
 RUN which flock lscpu psql ps sudo file && \
@@ -210,9 +205,11 @@ RUN echo "Verifying PostgreSQL client tools for migrations..." && \
 # which uses flyway-core from the Maven dependency (included in WEB-INF/lib).
 # This approach keeps the container image smaller and avoids bundling the Flyway CLI.
 
-# Create non-root user and group
-RUN addgroup -g 1000 starexec && \
-    adduser -D -u 1000 -G starexec starexec
+# Create non-root user and group (replace Noble's pre-created UID/GID 1000 ubuntu account)
+RUN if id -u ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi && \
+    if getent group ubuntu >/dev/null 2>&1; then groupdel ubuntu; fi && \
+    groupadd -g 1000 starexec && \
+    useradd -m -u 1000 -g starexec -s /bin/bash starexec
 
 # Set environment variables
 ENV CATALINA_HOME=/opt/tomcat \
@@ -314,10 +311,10 @@ COPY --chown=starexec:starexec docker/sync-sge-scripts.sh /usr/local/bin/sync-sg
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/migrations.sh /usr/local/bin/sync-sge-scripts.sh
 
 # Create sandbox users for job execution
-RUN addgroup -g 2001 starexec1 && \
-    adduser -D -u 2001 -G starexec1 starexec1 && \
-    addgroup -g 2002 starexec2 && \
-    adduser -D -u 2002 -G starexec2 starexec2
+RUN groupadd -g 2001 starexec1 && \
+    useradd -M -u 2001 -g starexec1 -s /bin/bash starexec1 && \
+    groupadd -g 2002 starexec2 && \
+    useradd -M -u 2002 -g starexec2 -s /bin/bash starexec2
 
 # Configure sudo for passwordless execution (required for job execution)
 # Restrictions applied:
@@ -334,8 +331,8 @@ RUN chmod 0440 /etc/sudoers.d/starexec && \
 
 # Set proper permissions for sandbox directory so all users can access it
 # Add sandbox users to starexec group to allow shared access
-RUN addgroup starexec1 starexec && \
-    addgroup starexec2 starexec && \
+RUN usermod -a -G starexec starexec1 && \
+    usermod -a -G starexec starexec2 && \
     chmod g+rwxs /app/sandbox && \
     chmod g+rwxs /app/work && \
     # Set group-based permissions for /home/starexec (sandbox users need access to bin/)
@@ -372,7 +369,7 @@ USER starexec
 WORKDIR ${CATALINA_HOME}
 
 # Use tini as init process (handles signals properly)
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
 
 # Start with entrypoint script
 CMD ["/usr/local/bin/entrypoint.sh"]
