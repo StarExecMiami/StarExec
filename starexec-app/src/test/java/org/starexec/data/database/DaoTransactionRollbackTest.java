@@ -22,10 +22,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -156,6 +159,69 @@ public class DaoTransactionRollbackTest {
 			assertTrue(autoCommit.get());
 			verify(con, times(2)).rollback();
 			verify(con, never()).commit();
+		}
+	}
+
+	@Test
+	public void commonUpdateAndRunInTransactionDoNotSwallowCommitOrPoisonPoolOnRestoreFailure() throws Exception {
+		AtomicBoolean autoCommit = new AtomicBoolean(true);
+		Connection con = statefulConnection(autoCommit);
+		java.sql.CallableStatement cs = mock(java.sql.CallableStatement.class);
+		when(con.prepareCall(anyString())).thenReturn(cs);
+		doThrow(new SQLException("commit failed")).when(con).commit();
+
+		try (MockedStatic<Common> common = Mockito.mockStatic(Common.class, Mockito.CALLS_REAL_METHODS)) {
+			common.when(Common::getConnection).thenReturn(con);
+
+			assertThrows(SQLException.class, () -> Common.update("{CALL test_proc()}", stmt -> {}));
+			verify(con, times(1)).rollback();
+			assertTrue(autoCommit.get());
+		}
+
+		// Commit succeeds, then setAutoCommit(true) fails -> connection must be aborted (discarded) and NOT rolled back
+		AtomicBoolean autoCommit2 = new AtomicBoolean(true);
+		Connection con2 = mock(Connection.class);
+		doAnswer(inv -> {
+			boolean target = inv.getArgument(0);
+			if (target && !autoCommit2.get()) {
+				throw new SQLException("restore autoCommit failed");
+			}
+			autoCommit2.set(target);
+			return null;
+		}).when(con2).setAutoCommit(anyBoolean());
+		when(con2.getAutoCommit()).thenAnswer(inv -> autoCommit2.get());
+
+		try (MockedStatic<Common> common = Mockito.mockStatic(Common.class, Mockito.CALLS_REAL_METHODS)) {
+			common.when(Common::getConnection).thenReturn(con2);
+
+			String res = Common.runInTransaction(c -> "ok");
+			assertEquals("ok", res);
+			verify(con2, times(1)).commit();
+			verify(con2, never()).rollback();
+			verify(con2, times(1)).abort(any());
+		}
+	}
+
+	@Test
+	public void uploadChunksAndPairStatusPropagateCommitFailuresInsteadOfReturningTrue() throws Exception {
+		AtomicBoolean autoCommit = new AtomicBoolean(true);
+		Connection con = statefulConnection(autoCommit);
+		PreparedStatement ps = mock(PreparedStatement.class);
+		when(ps.getUpdateCount()).thenReturn(-1);
+		when(ps.executeUpdate()).thenReturn(1);
+		when(con.prepareStatement(anyString())).thenReturn(ps);
+		doThrow(new SQLException("commit failed")).when(con).commit();
+
+		try (MockedStatic<Common> common = Mockito.mockStatic(Common.class, Mockito.CALLS_REAL_METHODS)) {
+			common.when(Common::getConnection).thenReturn(con);
+
+			assertFalse(UploadSessions.recordChunkIfAbsent(55L, 0, 1024));
+			assertTrue(autoCommit.get());
+			verify(con, times(1)).rollback();
+
+			assertFalse(JobPairs.setPairStatus(77, 1));
+			assertTrue(autoCommit.get());
+			verify(con, times(2)).rollback();
 		}
 	}
 }

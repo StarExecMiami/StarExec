@@ -466,30 +466,26 @@ public class JobPairs {
 
     public static void addJobPairs(int jobId, List<JobPair> pairs) {
         final String methodName = "addJobPairs";
-
-        Connection con = null;
+        log.entry(methodName);
         try {
-            con = Common.getConnection();
-            Common.beginTransaction(con);
-            log.entry(methodName);
-            boolean success = incrementTotalJobPairsForJob(
-                jobId,
-                pairs.size(),
-                con
-            );
-            if (!success) {
-                log.error(
-                    methodName,
-                    "Failed to increment total job pairs for jobId: " + jobId
+            Common.inTransaction(con -> {
+                boolean success = incrementTotalJobPairsForJob(
+                    jobId,
+                    pairs.size(),
+                    con
                 );
-                return;
-            }
-            log.debug(
-                methodName,
-                "Successfully incremented total job pairs for jobId: " + jobId
-            );
-
-            addJobPairs(con, jobId, pairs);
+                if (!success) {
+                    throw new SQLException("Failed to increment total job pairs for jobId: " + jobId);
+                }
+                log.debug(
+                    methodName,
+                    "Successfully incremented total job pairs for jobId: " + jobId
+                );
+                if (!addJobPairs(con, jobId, pairs)) {
+                    throw new SQLException("Failed to add job pairs for jobId: " + jobId);
+                }
+                return null;
+            });
             log.exit(methodName);
         } catch (SQLException e) {
             log.error(
@@ -498,9 +494,6 @@ public class JobPairs {
                     jobId,
                 e
             );
-        } finally {
-            Common.endTransaction(con);
-            Common.safeClose(con);
         }
     }
 
@@ -540,12 +533,12 @@ public class JobPairs {
                 stmt.setString(6, pair.getBench().getName());
                 // The function will return the pair's new ID
                 stmt.setInt(7, pair.getPrimaryStageNumber());
-                rs = stmt.executeQuery();
-                rs.next();
-
-                // Update the pair's ID so it can be used outside this method
-                int newPairId = rs.getInt(1);
-                pair.setId(newPairId);
+                try (ResultSet entryRs = stmt.executeQuery()) {
+                    entryRs.next();
+                    // Update the pair's ID so it can be used outside this method
+                    int newPairId = entryRs.getInt(1);
+                    pair.setId(newPairId);
+                }
                 pairsProcessed += 1;
                 if (pairsProcessed % 1000 == 0) {
                     log.debug(methodName, "Pairs Processed: " + pairsProcessed);
@@ -690,23 +683,18 @@ public class JobPairs {
     public static void deleteJobPairs(List<JobPair> jobPairs)
         throws SQLException {
         final String methodName = "deleteJobPairs";
-        Connection con = null;
-
         try {
-            con = Common.getConnection();
-            Common.beginTransaction(con);
-            log.debug("beginning to delete pairs");
-            for (JobPair pair : jobPairs) {
-                deleteJobPair(con, pair);
-                log.debug("pair deleted");
-            }
+            Common.inTransaction(con -> {
+                log.debug("beginning to delete pairs");
+                for (JobPair pair : jobPairs) {
+                    deleteJobPair(con, pair);
+                    log.debug("pair deleted");
+                }
+                return null;
+            });
         } catch (SQLException e) {
             log.debug(methodName, "Caught an SQLException, database failed.");
-            Common.doRollback(con);
             throw e;
-        } finally {
-            Common.endTransaction(con);
-            Common.safeClose(con);
         }
     }
 
@@ -748,34 +736,29 @@ public class JobPairs {
         int stageNumber,
         int processorId
     ) {
-        Connection con = null;
         try {
             Properties props = runPostProcessorOnPair(
                 pairId,
                 stageNumber,
                 processorId
             );
-            con = Common.getConnection();
-            Common.beginTransaction(con);
-            JobPairs.addJobPairAttributes(pairId, stageNumber, props, con);
-            JobPairs.setPairStatus(
-                pairId,
-                StatusCode.STATUS_COMPLETE.getVal(),
-                con
-            );
-            JobPairs.setPairStageStatus(
-                pairId,
-                StatusCode.STATUS_COMPLETE.getVal(),
-                stageNumber,
-                con
-            );
-            Common.endTransaction(con);
+            Common.inTransaction(con -> {
+                JobPairs.addJobPairAttributes(pairId, stageNumber, props, con);
+                JobPairs.setPairStatus(
+                    pairId,
+                    StatusCode.STATUS_COMPLETE.getVal(),
+                    con
+                );
+                JobPairs.setPairStageStatus(
+                    pairId,
+                    StatusCode.STATUS_COMPLETE.getVal(),
+                    stageNumber,
+                    con
+                );
+                return null;
+            });
         } catch (Exception e) {
-            Common.doRollback(con);
             log.error("postProcessPair", e);
-        } finally {
-            Common.endTransaction(con);
-            Common.safeClose(con);
         }
     }
 
@@ -2434,39 +2417,37 @@ public class JobPairs {
      * @param statusCode
      * @return True on success and false otherwise
      */
+    private static final class PairStatusAbortException extends SQLException {
+        private static final long serialVersionUID = 1L;
+    }
+
     public static boolean setStatusForPairAndStages(
         int pairId,
         int statusCode
     ) {
-        Connection con = null;
-        boolean success = false;
-        Integer attemptNoForFinalize = null;
         try {
-            con = Common.getConnection();
-            Common.beginTransaction(con);
-            success = (
-                setPairStatus(pairId, statusCode, con) &&
-                setAllPairStageStatus(pairId, statusCode, con)
-            );
-            if (!success) {
-                Common.doRollback(con);
-                return false;
-            }
-            if (success && isTerminalStatusCode(statusCode)) {
-                attemptNoForFinalize = getOrCreateCurrentAttemptNo(con, pairId, true);
-            }
-            Common.endTransaction(con);
-            return success;
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
-            Common.doRollback(con);
-        } finally {
-            Common.safeClose(con);
-            if (success && isTerminalStatusCode(statusCode) && attemptNoForFinalize != null) {
+            Integer attemptNoForFinalize = Common.inTransaction(con -> {
+                boolean updated =
+                    setPairStatus(pairId, statusCode, con) &&
+                    setAllPairStageStatus(pairId, statusCode, con);
+                if (!updated) {
+                    throw new PairStatusAbortException();
+                }
+                if (isTerminalStatusCode(statusCode)) {
+                    return getOrCreateCurrentAttemptNo(con, pairId, true);
+                }
+                return null;
+            });
+            if (isTerminalStatusCode(statusCode) && attemptNoForFinalize != null) {
                 finalizePairManifest(pairId, attemptNoForFinalize, statusCode);
             }
+            return true;
+        } catch (PairStatusAbortException e) {
+            return false;
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+            return false;
         }
-        return false;
     }
 
     /**
@@ -3053,34 +3034,26 @@ public class JobPairs {
      * @return True if the operation was a success, false otherwise
      */
     public static boolean setPairStatus(int pairId, int statusCode) {
-        Connection con = null;
-        boolean success = false;
-        Integer attemptNoForFinalize = null;
-
         try {
-            con = Common.getConnection();
-            Common.beginTransaction(con);
-            success = setPairStatus(pairId, statusCode, con);
-            if (!success) {
-                Common.doRollback(con);
-                return false;
-            }
-            if (success && isTerminalStatusCode(statusCode)) {
-                attemptNoForFinalize = getOrCreateCurrentAttemptNo(con, pairId, true);
-            }
-            Common.endTransaction(con);
-            return success;
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
-            Common.doRollback(con);
-        } finally {
-            Common.safeClose(con);
-            if (success && isTerminalStatusCode(statusCode) && attemptNoForFinalize != null) {
+            Integer attemptNoForFinalize = Common.inTransaction(con -> {
+                if (!setPairStatus(pairId, statusCode, con)) {
+                    throw new PairStatusAbortException();
+                }
+                if (isTerminalStatusCode(statusCode)) {
+                    return getOrCreateCurrentAttemptNo(con, pairId, true);
+                }
+                return null;
+            });
+            if (isTerminalStatusCode(statusCode) && attemptNoForFinalize != null) {
                 finalizePairManifest(pairId, attemptNoForFinalize, statusCode);
             }
+            return true;
+        } catch (PairStatusAbortException e) {
+            return false;
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+            return false;
         }
-
-        return false;
     }
 
     /**
