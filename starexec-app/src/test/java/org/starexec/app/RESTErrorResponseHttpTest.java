@@ -6,21 +6,28 @@ import org.jboss.resteasy.mock.MockHttpRequest;
 import org.jboss.resteasy.mock.MockHttpResponse;
 import org.jboss.resteasy.spi.ResteasyProviderFactory;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import org.starexec.constants.R;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.UploadJobQueue;
 import org.starexec.data.security.BenchmarkSecurity;
 import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.Benchmark;
+import org.starexec.exceptions.RESTException;
 import org.starexec.util.SessionUtil;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class RESTErrorResponseHttpTest {
 
@@ -74,6 +81,39 @@ public class RESTErrorResponseHttpTest {
 			assertEquals("not available", response.getContentAsString());
 			queue.verify(() -> UploadJobQueue.getJob(14L));
 		}
+	}
+
+	@Test
+	public void publicUserPastReportReturns404() throws Exception {
+		MockHttpResponse response = request("/services/reports/past/2026-01-01.txt", R.PUBLIC_USER_ID);
+
+		assertEquals(404, response.getStatus());
+		assertEquals("not available", response.getContentAsString());
+	}
+
+	@Test
+	public void pastReportPathTraversalAndSymlinkAreRejected(@TempDir Path tempDir) throws Exception {
+		Path reportsDir = Files.createDirectory(tempDir.resolve("reports"));
+		Path outsideSecret = tempDir.resolve("secret.txt");
+		Files.write(outsideSecret, "confidential".getBytes(StandardCharsets.UTF_8));
+		Files.createSymbolicLink(reportsDir.resolve("escape.txt"), outsideSecret);
+
+		assertThrows(RESTException.class,
+				() -> RESTServices.readPastReport("../secret.txt", 3, reportsDir));
+		assertThrows(RESTException.class,
+				() -> RESTServices.readPastReport("escape.txt", 3, reportsDir));
+		assertThrows(RESTException.class,
+				() -> RESTServices.readPastReport("..", 3, reportsDir));
+		assertThrows(RESTException.class,
+				() -> RESTServices.readPastReport("2026-01-01.txt", R.PUBLIC_USER_ID, reportsDir));
+	}
+
+	@Test
+	public void pastReportReadsRegularFileInsideReportsDir(@TempDir Path tempDir) throws Exception {
+		Path reportsDir = Files.createDirectory(tempDir.resolve("reports"));
+		Files.write(reportsDir.resolve("2026-01-01.txt"), "daily report ok".getBytes(StandardCharsets.UTF_8));
+
+		assertEquals("daily report ok", RESTServices.readPastReport("2026-01-01.txt", 3, reportsDir));
 	}
 
 	private MockHttpResponse request(String path, int userId) throws Exception {

@@ -7542,9 +7542,36 @@ public class RESTServices {
 	@Path("/reports/past/{reportName}")
 	@Produces("text/plain")
 	public String getPastReport(@PathParam("reportName") String reportName, @Context HttpServletRequest request) {
+		int callerId = SessionUtil.getUserId(request);
+		return readPastReport(reportName, callerId, Paths.get(R.STAREXEC_DATA_DIR, "reports"));
+	}
+
+	static String readPastReport(String reportName, int callerId, java.nio.file.Path reportsDir) {
+		if (callerId == R.PUBLIC_USER_ID || callerId <= 0) {
+			throw RESTException.FORBIDDEN;
+		}
+		if (reportName == null || reportName.isEmpty() || ".".equals(reportName) || "..".equals(reportName)
+				|| reportName.indexOf('/') >= 0 || reportName.indexOf('\\') >= 0 || reportName.indexOf('\0') >= 0) {
+			throw RESTException.FORBIDDEN;
+		}
 		try {
-			File pastReport = new File(R.STAREXEC_DATA_DIR, "/reports/" + reportName);
-			return FileUtils.readFileToString(pastReport, "UTF8");
+			java.nio.file.Path normalizedDir = reportsDir.toAbsolutePath().normalize();
+			java.nio.file.Path candidate = normalizedDir.resolve(reportName).normalize();
+			if (!normalizedDir.equals(candidate.getParent()) || Files.isSymbolicLink(candidate)) {
+				throw RESTException.FORBIDDEN;
+			}
+			if (!Files.exists(candidate, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+				throw RESTException.NOT_FOUND;
+			}
+			if (!Files.isRegularFile(candidate, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+				throw RESTException.FORBIDDEN;
+			}
+			java.nio.file.Path realDir = normalizedDir.toRealPath();
+			java.nio.file.Path realCandidate = candidate.toRealPath(java.nio.file.LinkOption.NOFOLLOW_LINKS);
+			if (!realDir.equals(realCandidate.getParent())) {
+				throw RESTException.FORBIDDEN;
+			}
+			return new String(Files.readAllBytes(realCandidate), StandardCharsets.UTF_8);
 		} catch (IOException e) {
 			return "Could not get file.";
 		}
