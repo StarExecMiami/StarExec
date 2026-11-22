@@ -44,13 +44,13 @@ StarExec is a web-based platform for running solver benchmarks and competitions.
 
 | Layer | Technology | Purpose |
 |-------|------------|---------|
-| **Runtime** | Java 17+ | Application runtime |
-| **Web Framework** | Servlets / JSP | HTTP request handling |
-| **Application Server** | Tomcat 9 (WAR deployment) | Web container |
+| **Runtime** | Java 17+ (`eclipse-temurin:17-jre-noble`, `glibc`) | Application runtime with native `SecureDirectoryStream` support |
+| **Web Framework** | Servlets / JSP / RESTEasy | HTTP request handling and REST API |
+| **Application Server** | Tomcat 9.0.124 (WAR deployment) | Web container |
 | **Database** | PostgreSQL 15+ | Persistent storage |
-| **Migrations** | Flyway | Database schema management |
-| **Frontend** | JSP, jQuery, DataTables | User interface |
-| **Styling** | SCSS (Dart Sass) | Stylesheet preprocessing |
+| **Migrations** | Flyway (`V0001`–`V0137` + repeatable `R__*.sql`) | Database schema management |
+| **Frontend** | JSP, jQuery 3.8.0, jQuery UI 1.14.2, DataTables 2.3.8, jsTree 3.3.17 | User interface |
+| **Styling** | SCSS (Dart Sass on Node.js 24 LTS) | Stylesheet preprocessing |
 | **Containerization** | Podman / Docker | Container runtime |
 | **Orchestration** | Kubernetes + Helm | Container orchestration |
 | **Build** | Maven | Java build system |
@@ -73,34 +73,34 @@ StarExec is a web-based platform for running solver benchmarks and competitions.
 
 ```
 starexec-app/src/main/java/org/starexec/
-├── app/                    # Application bootstrap
-│   └── StarExec.java       # Main application class
-├── command/                # CLI (StarExecCommand)
-├── constants/              # Application constants
-│   ├── DB.java             # Database constants
-│   ├── R.java              # Resource paths
-│   └── Web.java            # Web constants
-├── data/                   # Data access layer
-│   ├── Database.java       # Connection management
-│   ├── Benchmarks.java     # Benchmark operations
-│   ├── Jobs.java           # Job operations
-│   ├── Solvers.java        # Solver operations
-│   ├── Spaces.java         # Space operations
-│   └── Users.java          # User operations
+├── app/                    # Application bootstrap, filters, and REST API
+│   ├── Starexec.java       # Main ServletContextListener / lifecycle bootstrap
+│   ├── RESTServices.java   # JAX-RS REST endpoints (/services/*)
+│   ├── RESTHelpers.java    # REST formatting and DataTables helpers
+│   ├── JobSpaceService.java
+│   ├── CsrfFilter.java     # Centralized CSRF protection
+│   └── SessionFilter.java  # Session validation and DB revocation gate
 ├── backend/                # Job execution backends
 │   ├── Backend.java        # Backend interface
 │   ├── LocalBackend.java   # Process-based execution
 │   ├── PodmanBackend.java  # Container-based execution
-│   └── ...                 # Other backends
-├── jobs/                   # Job management
-│   ├── JobManager.java     # Job lifecycle
-│   └── ProcessJob.java     # Job processing
-├── servlets/               # HTTP endpoints
-│   ├── Upload*.java        # Upload handlers
-│   ├── Add*.java           # Creation handlers
-│   └── ...                 # Other servlets
-├── services/               # REST services
-├── util/                   # Utilities
+│   ├── KubernetesBackend.java / KubernetesNativeBackend.java
+│   └── ...                 # Legacy SGE / OAR backends
+├── command/                # CLI (StarExecCommand)
+├── config/                 # Runtime configuration (EnvironmentConfig.java)
+├── constants/              # Application constants
+│   ├── DB.java             # Database constants
+│   ├── R.java              # Resource paths and defaults
+│   └── Web.java            # Web constants
+├── data/                   # Data access, models, and authorization
+│   ├── database/           # JDBC DAOs (Common.java, Jobs.java, Users.java, ...)
+│   ├── security/           # Authorization checks (GeneralSecurity, JobSecurity, ...)
+│   └── to/                 # Transfer objects
+├── jobs/                   # Job management (JobManager.java, ...)
+├── logger/                 # Logging wrappers (StarLogger)
+├── migration/              # Flyway migration runners / helpers
+├── servlets/               # HTTP endpoints (HealthCheck, Upload*, Add*, ...)
+├── util/                   # Utilities (ArchiveUtil, Mail, ...)
 └── exceptions/             # Custom exceptions
 ```
 
@@ -244,10 +244,10 @@ starexec-app/src/main/webapp/
                               ▼
 4. Result Collection
    ┌─────────────────────────────────────────────────────────────┐
-   │ ContainerJobMonitor (polling every 5s):                     │
+   │ ContainerJobMonitor (adaptive polling: 1s base – 10s max):  │
    │   - Check for completed containers                          │
-   │   - Read output files from mounted volume                   │
-   │   - Parse stats.json, status.json, attributes.txt           │
+   │   - Read output files via DescriptorDirectory               │
+   │   - Parse stats.json, status.json (Gson), attributes.txt    │
    │   - Update database via JDBC                                │
    │   - Remove processed container                              │
    └─────────────────────────────────────────────────────────────┘
@@ -256,16 +256,16 @@ starexec-app/src/main/webapp/
 ### File Upload Flow
 
 ```
-┌─────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│  User   │───▶│ Upload      │───▶│ Validation  │───▶│  Storage    │
-│ Browser │    │ Servlet     │    │ Service     │    │  (files)    │
-└─────────┘    └─────────────┘    └─────────────┘    └─────────────┘
-                                         │
-                                         ▼
-                                  ┌─────────────┐
-                                  │  Database   │
-                                  │  (metadata) │
-                                  └─────────────┘
+┌─────────┐    ┌─────────────┐    ┌────────────────────────┐    ┌─────────────┐
+│  User   │───▶│ Upload      │───▶│ PrivateUploadStage     │───▶│  Storage    │
+│ Browser │    │ Servlet     │    │ (STAREXEC_UPLOAD_      │    │  (files)    │
+└─────────┘    └─────────────┘    │  STAGING_DIR)          │    └─────────────┘
+                                  └────────────────────────┘           │
+                                                                       ▼
+                                                                ┌─────────────┐
+                                                                │  Database   │
+                                                                │  (metadata) │
+                                                                └─────────────┘
 ```
 
 ---
@@ -274,25 +274,19 @@ starexec-app/src/main/webapp/
 
 ### Backend Interface
 
-All backends implement a common interface:
+All backends implement `org.starexec.backend.Backend`:
 
 ```java
 public interface Backend {
-    // Submit a job for execution
-    void submitScript(int pairId, String script, ResourceLimits limits);
-    
-    // Cancel a running job
-    void killPair(int pairId);
-    
-    // Get job status
-    JobStatus getStatus(int pairId);
-    
-    // Get backend statistics
-    Map<String, Object> getStats();
-    
-    // Lifecycle methods
-    void initialize();
-    void shutdown();
+    void initialize(String BACKEND_ROOT);
+    void destroyIf();
+    String submitScript(String script, String workingDirectoryPath, String logPath);
+    boolean killPair(int execId);
+    boolean killAll();
+    String getRunningJobsStatus();
+    String getStatus(int execId);
+    Set<Integer> getActiveExecutionIds() throws IOException;
+    void clearPairTracking(int pairId);
 }
 ```
 
@@ -639,5 +633,9 @@ See [API Guide](API_GUIDE.md) for complete API documentation.
 
 - **[Backend Configuration](BACKENDS.md)** - Backend details
 - **[Configuration Reference](CONFIGURATION.md)** - Configuration options
+- **[Execution Storage Isolation](EXECUTION_STORAGE.md)** - Private execution storage and leases
+- **[Solver Build Artifacts](SOLVER_ARTIFACTS.md)** - Build artifact lifecycle and cleanup
+- **[Kubernetes Execution Identity](k8s-execution-identity.md)** - Attempt fencing and naming
+- **[Reproducibility Manifest Contract](REPRO_MANIFEST_CONTRACT.md)** - Per-attempt manifest schema
 - **[Performance Tuning](PERFORMANCE.md)** - Optimization
 - **[Deployment Guide](DEPLOYMENT.md)** - Deployment procedures

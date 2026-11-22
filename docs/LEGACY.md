@@ -111,11 +111,11 @@ mvn clean package
 | Component | Legacy Version | Modern Version | Notes |
 |-----------|---------------|----------------|-------|
 | Java | 7, 8 | 17+ | Upgraded for security/features |
-| Tomcat | 7.0.64 | Tomcat 9.0.120 (WAR) | Deployed as a WAR on Tomcat 9 |
+| Tomcat | 7.0.64 | Tomcat 9.0.124 (WAR) | Deployed as a WAR on Tomcat 9 |
 | MySQL | 5.6, 5.7 | PostgreSQL 15+ | Database engine changed |
 | Sass | Ruby Sass | Dart Sass | Ruby Sass deprecated |
-| jQuery | 1.x, 2.x | 3.x | Upgraded with compatibility shim |
-| DataTables | 1.9.x | 1.13.x | Major upgrade |
+| jQuery | 1.x, 2.x | 3.8.0 | Upgraded (jQuery UI 1.14.2) |
+| DataTables | 1.9.x | 2.3.8 | Major upgrade |
 
 ### Ruby Sass (Deprecated)
 
@@ -459,4 +459,4 @@ If you need specific historical documentation that isn't included here:
 
 ---
 
-**Note:** This document is for historical reference only. For current usage, see the main [README](../README.md) and [docs/](docs/) directory.
+**Note:** This document is for historical reference only. For current usage, see the main [README](../README.md) and the [docs/](./) directory.

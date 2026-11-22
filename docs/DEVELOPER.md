@@ -47,7 +47,7 @@ make start
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Node.js | 20+ | SCSS compilation |
+| Node.js | 24 LTS | SCSS compilation and JS regression tests (`node --test`) |
 | PostgreSQL client | 15+ | Direct database access |
 | IntelliJ IDEA / VS Code | Latest | IDE with Java support |
 
@@ -63,8 +63,8 @@ sudo apt-get install -y openjdk-17-jdk maven
 # Podman
 sudo apt-get install -y podman catatonit passt fuse-overlayfs
 
-# Optional: Node.js
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# Optional: Node.js 24 LTS
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
 # Optional: PostgreSQL client
@@ -81,7 +81,7 @@ brew install openjdk@17 maven podman
 echo 'export PATH="/opt/homebrew/opt/openjdk@17/bin:$PATH"' >> ~/.zshrc
 
 # Optional
-brew install node postgresql@15
+brew install node@24 postgresql@15
 ```
 
 #### Verify Installation
@@ -90,7 +90,7 @@ brew install node postgresql@15
 java --version    # Should show 17+
 mvn --version     # Should show 3.8+
 podman --version  # Should show 4.0+
-node --version    # Should show 20+ (optional)
+node --version    # Should show 24+ (optional)
 ```
 
 ---
@@ -103,29 +103,32 @@ StarExec/
 │   ├── src/
 │   │   ├── main/
 │   │   │   ├── java/org/starexec/  # Java source code
-│   │   │   │   ├── app/            # Application bootstrap
-│   │   │   │   ├── backend/        # Execution backends
+│   │   │   │   ├── app/            # Bootstrap, filters, RESTServices/RESTHelpers
+│   │   │   │   ├── backend/        # Execution backends (Local, Podman, K8s, legacy)
 │   │   │   │   ├── command/        # CLI (StarExecCommand)
-│   │   │   │   ├── constants/      # Constants and configuration
-│   │   │   │   ├── data/           # Data access layer
+│   │   │   │   ├── config/         # EnvironmentConfig
+│   │   │   │   ├── constants/      # Constants (DB, R, Web, PaginationQueries)
+│   │   │   │   ├── data/           # database/ (DAOs), security/, to/ (models)
 │   │   │   │   ├── jobs/           # Job management
-│   │   │   │   ├── servlets/       # HTTP handlers
-│   │   │   │   ├── services/       # REST services
+│   │   │   │   ├── logger/         # StarLogger
+│   │   │   │   ├── migration/      # Migration helpers
+│   │   │   │   ├── servlets/       # HTTP endpoints (HealthCheck, Upload*, ...)
 │   │   │   │   └── util/           # Utilities
-│   │   │   ├── resources/db/migration/  # Flyway migrations
+│   │   │   ├── resources/db/migration/  # Flyway migrations (V0001..V0137, R__*.sql)
 │   │   │   └── webapp/             # Web resources
 │   │   │       ├── css/            # SCSS stylesheets
 │   │   │       ├── js/             # JavaScript
 │   │   │       ├── images/         # Static images
 │   │   │       └── secure/         # JSP pages
-│   │   └── test/java/              # Unit tests
+│   │   └── test/java/              # JUnit 5 unit and integration tests
 │   └── pom.xml                     # Application Maven configuration
+├── tomcat-credential-handler/    # Independent BCrypt CredentialHandler JAR (v2.1.0)
 ├── sql/                            # Audit/repair SQL scripts (not migrations)
 ├── charts/starexec/                # Helm chart
-├── scripts/                        # DevOps scripts
-├── docker/                         # Container files
+├── scripts/                        # DevOps, release, and mysql2pg scripts
+├── docker/                         # Container entrypoints and job scripts
 ├── docs/                           # Documentation
-├── Dockerfile                      # Container build
+├── Dockerfile                      # Container build (noble glibc runtime)
 ├── Makefile                        # DevOps automation
 ├── pom.xml                         # Parent Maven configuration
 └── docker-compose.yml              # Docker Compose config
@@ -151,13 +154,13 @@ make build-fresh
 ### Production Build
 
 ```bash
-# Build production image with registry tag
-make build-prod IMAGE_TAG=v1.2.3
+# Build production image with registry tag (uses IMAGE_VERSION, default 2.6.0)
+make build-prod IMAGE_VERSION=2.6.0
 ```
 
 ### Security Considerations: Cache Freshness
 
-Note: Relying entirely on cached images via `--pull=missing` means your local environment will not receive upstream security patches for base images (Alpine, OpenJDK, Node.js). If a CVE is published for `eclipse-temurin:17-jre-alpine` or `node:24-alpine`, your cached copy remains vulnerable.
+Note: Relying entirely on cached images via `--pull=missing` means your local environment will not receive upstream security patches for base images (Debian/Ubuntu, Alpine, OpenJDK, Node.js). If a CVE is published for `eclipse-temurin:17-jre-noble`, `alpine:3.24`, or `node:24-alpine`, your cached copy remains vulnerable.
 
 **Recommendation:** Run `make build-fresh` periodically (at minimum weekly, ideally before each major feature branch or CI merge) to ensure parity with the CI environment and receive upstream security patches.
 
@@ -170,7 +173,8 @@ make build-fresh
 
 | Artifact | Location | Description |
 |----------|----------|-------------|
-| WAR file | `target/starexec.war` | Deployable web application |
+| WAR file | `starexec-app/target/starexec.war` | Deployable web application |
+| CLI archive | `starexec-app/target/starexeccommand.zip` | StarExecCommand CLI distribution |
 | Container | `starexec:latest` | Container image |
 | Helm chart | `charts/starexec/` | Kubernetes deployment |
 
@@ -186,14 +190,14 @@ mvn clean package
 #### SCSS Compilation Fails
 
 ```bash
-# Ensure Node.js is installed
+# Ensure Node.js 24+ is installed
 node --version
 
-# Install SCSS compiler
-npm install -g sass
+# Install local npm devDependencies (Dart Sass 1.69.5 + stylelint)
+npm ci
 
-# Compile manually
-sass starexec-app/src/main/webapp/css/global.scss:starexec-app/src/main/webapp/css/global.css
+# Compile all SCSS files using package.json (--load-path is required for partials)
+npm run sass-build
 ```
 
 #### Java Version Mismatch
@@ -270,22 +274,33 @@ docker compose up --build  # Docker Compose
 
 ## Running Tests
 
-### All Tests
+StarExec enforces **JUnit 5** (`org.junit.jupiter.api.*`) via the `jupiter-only` Maven Enforcer rule.
+
+### Java Unit Tests
 
 ```bash
-mvn test
+# Main application suite (fast, runs without external DB/containers)
+mvn -q test -f starexec-app/pom.xml
+
+# Credential handler module
+mvn -q test -f tomcat-credential-handler/pom.xml
+
+# Specific test class or method
+mvn -q test -f starexec-app/pom.xml -Dtest=LocalBackendTests
+mvn -q test -f starexec-app/pom.xml -Dtest=LocalBackendExecutionHostTest#someMethod
 ```
 
-### Specific Test Class
+### Frontend & Script Tests
 
 ```bash
-mvn test -Dtest=LocalBackendTests
-```
+# JavaScript UI and security regression suite
+node --test scripts/tests/*.test.cjs
 
-### Specific Test Method
+# Python script and mysql2pg unit suite
+python3 -m pytest -q scripts/
 
-```bash
-mvn test -Dtest=LocalBackendTests#testSubmitJob
+# Shell syntax check
+for s in scripts/*.sh; do bash -n "$s"; done
 ```
 
 ### Skip Tests During Build
@@ -297,15 +312,15 @@ mvn package -DskipTests
 ### Test Coverage
 
 ```bash
-mvn jacoco:report
-# Report at: target/site/jacoco/index.html
+mvn test jacoco:report -pl starexec-app
+# Report at: starexec-app/target/site/jacoco/index.html
 ```
 
 ### Integration Tests
 
 ```bash
-# Requires running database
-mvn verify -Pit
+# Runs *IT.java integration tests (container-backed tests skip automatically if no runtime is available)
+mvn verify -pl starexec-app -Pit
 ```
 
 ---
@@ -328,34 +343,26 @@ mvn verify -Pit
 ```java
 package org.starexec.example;
 
-import org.starexec.data.Database;
-import org.starexec.util.Util;
+import org.starexec.data.database.Common;
 
 public class ExampleClass {
-    
     private static final int MAX_RETRIES = 3;
-    
-    private final Database database;
-    
-    public ExampleClass(Database database) {
-        this.database = database;
-    }
-    
+
     public void processJob(int jobId) {
         if (jobId <= 0) {
             throw new IllegalArgumentException("Invalid job ID: " + jobId);
         }
-        
+
         for (int i = 0; i < MAX_RETRIES; i++) {
             if (tryProcess(jobId)) {
                 return;
             }
         }
     }
-    
+
     private boolean tryProcess(int jobId) {
-        // Implementation
-        return true;
+        // Use Common.query / Common.runInTransaction for JDBC access
+        return Common.update("{CALL SomeProcedure(?)}", stmt -> stmt.setInt(1, jobId));
     }
 }
 ```
@@ -390,16 +397,16 @@ podman exec -it starexec-postgres psql -U starexec
 
 ### Creating Migrations
 
-1. Create a new file in `starexec-app/src/main/resources/db/migration/`:
+1. Create a new file in `starexec-app/src/main/resources/db/migration/` using the next sequential version (v2.6.0 ends at `V0137`):
    ```bash
    touch starexec-app/src/main/resources/db/migration/V{next_version}__Description_of_change.sql
    ```
 
-2. Add SQL statements:
+2. Add SQL statements (always schema-qualify objects under `starexec` and never use `CREATE INDEX CONCURRENTLY`, which deadlocks Flyway's transaction):
    ```sql
-   -- V0118__Add_job_priority.sql
-   ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0;
-   CREATE INDEX idx_jobs_priority ON jobs(priority);
+   -- V0138__Add_job_priority.sql
+   ALTER TABLE starexec.jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+   CREATE INDEX idx_jobs_priority ON starexec.jobs(priority);
    ```
 
 3. Test migration:
@@ -411,8 +418,9 @@ podman exec -it starexec-postgres psql -U starexec
 ### Migration Best Practices
 
 - **One concern per migration**
-- **Never modify existing migrations**
-- **Test backwards compatibility**
+- **Never modify existing applied versioned migrations**
+- **Never use `CREATE INDEX CONCURRENTLY`** (see [Database Standards](DATABASE_STANDARDS.md))
+- **Test backwards compatibility** (both fresh install and populated upgrade)
 - **Include rollback comments** (for manual rollback if needed)
 
 ### Viewing Migration Status
@@ -497,14 +505,14 @@ make start
 
 ### Log-Based Debugging
 
-```bash
-# Enable debug logging
-export LOGGING_LEVEL_ORG_STAREXEC=DEBUG
-make stop && make start
+`org.starexec` is already configured at `DEBUG` level in `starexec-app/src/main/resources/logback.xml` (while `SessionFilter`, `SessionUtil`, and `Permissions` stay at `INFO` to avoid per-request noise). To inspect debug logs from a running Podman deployment:
 
-# Tail logs
+```bash
+# Tail debug logs (already enabled in logback.xml)
 make logs-app | grep DEBUG
 ```
+
+For runtime tuning via environment variables (such as `STAREXEC_BACKEND_TYPE`), set them in the Helm values `env:` map (or `docker-compose.yml`), not by exporting shell variables before `make start`.
 
 ### Database Debugging
 
