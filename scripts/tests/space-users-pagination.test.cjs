@@ -35,11 +35,18 @@ function setup() {
   vm.runInContext(source, context);
   context.addSpacePermissionButtons = space => actions.push(space.spaceId);
   context.initDraggable = table => actions.push(table);
+  const loadUsers = context.explorerTableAjax('users');
+  const loadBenchmarks = context.explorerTableAjax('benchmarks');
+  context.sortOverride = 'name';
+  context.getSelectedSort = () => 'name';
+  context.isASC = () => 'false';
+  const requestPage = (load, draw, order) => load(
+    {draw, start: 10, length: 5, search: {value: 'Ada'}, order},
+    page => pages.push(JSON.parse(JSON.stringify(page))));
   return {
     select: spaceId => { context.EXP_SP.permissionSelection = selection = {spaceId}; },
-    request: (draw, order = [{column: 1, dir: 'desc'}]) => context.loadUsersPage(
-      {draw, start: 10, length: 5, search: {value: 'Ada'}, order},
-      page => pages.push(JSON.parse(JSON.stringify(page)))),
+    request: (draw, order = [{column: 1, dir: 'desc'}]) => requestPage(loadUsers, draw, order),
+    requestBenchmarks: draw => requestPage(loadBenchmarks, draw, [{column: 0, dir: 'asc'}]),
     calls, pages, errors, actions,
   };
 }
@@ -93,4 +100,18 @@ test('clears the failing draw and can recover on retry', () => {
   retry.resolve(response(3));
   assert.deepEqual(pages.map(page => page.data), [[], [], [['Ada']]]);
   assert.equal(errors.length, 2);
+});
+
+test('keeps benchmark sort overrides and independent table draw counters', () => {
+  const {select, request, requestBenchmarks, pages, actions} = setup();
+  select('10');
+  const users = request(9);
+  const benchmarks = requestBenchmarks(2);
+  assert.equal(benchmarks.options.url, '/services/space/10/benchmarks/pagination');
+  assert.equal(benchmarks.options.data.sort_by, 'name');
+  assert.equal(benchmarks.options.data.sort_dir, 'false');
+  benchmarks.resolve(response(2, 'Benchmark'));
+  users.resolve(response(9));
+  assert.deepEqual(pages.map(page => page.draw), [2, 9]);
+  assert.deepEqual(actions, ['#benchmarks', '10', '#users']);
 });

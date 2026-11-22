@@ -2,7 +2,6 @@
 var EXP_SP = {
 	permissionSelection: {},
 	permissionRequest: null,
-	userPageDraw: null,
 	copySpaceDialog: '#dialog-confirm-space-copy',
 	copySpaceDialogText: '#dialog-confirm-space-copy-txt',
 	hierarchyDialogConfig: {
@@ -1057,10 +1056,6 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 	var tree = $('#exploreList').jstree(true);
 	var idOfSelectedSpace = tree && tree.get_selected()[0] || "1";
 
-	if (sortOverride != null && tableName == "benchmarks") {
-		aoData.push({"name": "sort_by", "value": getSelectedSort()});
-		aoData.push({"name": "sort_dir", "value": isASC()});
-	}
 	// Request the next page of primitives from the server via AJAX
 	log('Source: ' + sSource + idOfSelectedSpace + "/" + tableName + "/pagination");
 	$.ajax({
@@ -1100,60 +1095,68 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 
 // DataTables supplies the draw number and paging parameters. The endpoint still
 // speaks the legacy pagination contract shared by the explorer tables.
-function loadUsersPage(request, draw) {
-	var selection = EXP_SP.permissionSelection;
-	var tree = $('#exploreList').jstree(true);
-	var selectedSpace = String(tree && tree.get_selected()[0] || '1');
-	var order = request.order[0] || {column: 0, dir: 'asc'};
-	EXP_SP.userPageDraw = request.draw;
-
-	function isCurrent() {
-		return EXP_SP.userPageDraw === request.draw && EXP_SP.permissionSelection === selection;
-	}
-
-	function showLoadError() {
-		if (isCurrent()) {
-			draw({draw: request.draw, recordsTotal: 0, recordsFiltered: 0, data: []});
-			showMessage('error', 'Could not load users for this space.', 5000);
-		}
-	}
-
-	return $.ajax({
-		type: 'POST',
-		url: starexecRoot + 'services/space/' + selectedSpace + '/users/pagination',
-		dataType: 'json',
-		data: {
+function explorerTableAjax(tableName) {
+	var latestDraw;
+	return function(request, draw) {
+		var selection = EXP_SP.permissionSelection;
+		var tree = $('#exploreList').jstree(true);
+		var selectedSpace = String(tree && tree.get_selected()[0] || '1');
+		var order = request.order[0] || {column: 0, dir: 'asc'};
+		latestDraw = request.draw;
+		var data = {
 			sEcho: request.draw,
 			iDisplayStart: request.start,
 			iDisplayLength: request.length,
 			sSearch: request.search.value,
 			iSortCol_0: order.column,
 			sSortDir_0: order.dir
+		};
+		if (tableName === 'benchmarks' && sortOverride != null) {
+			data.sort_by = getSelectedSort();
+			data.sort_dir = isASC();
 		}
-	}).done(function(page) {
-		if (!isCurrent()) {
-			return;
+
+		function isCurrent() {
+			return latestDraw === request.draw && EXP_SP.permissionSelection === selection;
 		}
-		if (!page || !parseReturnCode(page, false) || page.sEcho !== request.draw
-			|| !Array.isArray(page.aaData)) {
-			showLoadError();
-			return;
+
+		function showLoadError() {
+			if (isCurrent()) {
+				draw({draw: request.draw, recordsTotal: 0, recordsFiltered: 0, data: []});
+				showMessage('error', 'Could not load ' + tableName + ' for this space.', 5000);
+			}
 		}
-		draw({
-			draw: page.sEcho,
-			recordsTotal: page.iTotalRecords,
-			recordsFiltered: page.iTotalDisplayRecords,
-			data: page.aaData
+
+		return $.ajax({
+			type: 'POST',
+			url: starexecRoot + 'services/space/' + selectedSpace + '/' + tableName + '/pagination',
+			dataType: 'json',
+			data: data
+		}).done(function(page) {
+			if (!isCurrent()) {
+				return;
+			}
+			if (!page || !parseReturnCode(page, false) || page.sEcho !== request.draw
+				|| !Array.isArray(page.aaData)) {
+				showLoadError();
+				return;
+			}
+			draw({
+				draw: page.sEcho,
+				recordsTotal: page.iTotalRecords,
+				recordsFiltered: page.iTotalDisplayRecords,
+				data: page.aaData
+			});
+			if (tableName === 'users' && selection.spaceId === selectedSpace) {
+				addSpacePermissionButtons(selection);
+			}
+			initDraggable('#' + tableName);
+		}).fail(function(xhr, status) {
+			if (status !== 'abort') {
+				showLoadError();
+			}
 		});
-		if (selection.spaceId === selectedSpace) {
-			addSpacePermissionButtons(selection);
-		}
-		initDraggable('#users');
-	}).fail(function(xhr, status) {
-		if (status !== 'abort') {
-			showLoadError();
-		}
-	});
+	};
 }
 
 /**
@@ -1211,11 +1214,12 @@ function initDataTables() {
 	// Extend the DataTables api and add our custom features
 	extendDataTableFunctions();
 
-	var dataTableConfig = new window.star.DataTableConfig({
-		"bServerSide": true,
-		"sAjaxSource": starexecRoot + "services/space/",
-		"fnServerData": fnPaginationHandler // included in this file
-	});
+	function initTable(name) {
+		return $('#' + name).dataTable(new star.DataTableConfig({
+			serverSide: true,
+			ajax: explorerTableAjax(name)
+		}));
+	}
 
 	var dataTableConfigNoSort = new window.star.DataTableConfig({
 		"bServerSide": true,
@@ -1225,13 +1229,10 @@ function initDataTables() {
 	});
 
 	// Setup the DataTable objects
-	userTable = $('#users').dataTable(new star.DataTableConfig({
-		serverSide: true,
-		ajax: loadUsersPage
-	}));
-	solverTable = $('#solvers').dataTable(dataTableConfig);
-	benchTable = $('#benchmarks').dataTable(dataTableConfig);
-	spaceTable = $('#spaces').dataTable(dataTableConfig);
+	userTable = initTable('users');
+	solverTable = initTable('solvers');
+	benchTable = initTable('benchmarks');
+	spaceTable = initTable('spaces');
 	jobTable = $('#jobs').dataTable(dataTableConfigNoSort);
 
 	setSortTable(benchTable);
