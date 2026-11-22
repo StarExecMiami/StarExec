@@ -1179,12 +1179,12 @@ function colorizeJobStatistics() {
  */
 function initDataTables() {
 
-	// Extend the DataTables api and add our custom features
-	extendDataTableFunctions();
+	addProcessingIndicator();
 
 	function initTable(name, options) {
 		return $('#' + name).dataTable(new star.DataTableConfig(Object.assign({
 			serverSide: true,
+			searchDelay: 400,
 			ajax: explorerTableAjax(name)
 		}, options)));
 	}
@@ -1239,12 +1239,6 @@ function initDataTables() {
 			{expires: 10000, path: '/'});
 	});
 
-	// Set the DataTable filters to only query the server when the user finishes typing
-	jobTable.fnFilterOnDoneTyping();
-	solverTable.fnFilterOnDoneTyping();
-	benchTable.fnFilterOnDoneTyping();
-	userTable.fnFilterOnDoneTyping();
-	spaceTable.fnFilterOnDoneTyping();
 	log('all datatables initialized');
 }
 
@@ -1297,15 +1291,6 @@ function linkButtons() {
 
 
 }
-/**
- * Adds fnProcessingIndicator and fnFilterOnDoneTyping to dataTables api
- */
-function extendDataTableFunctions() {
-	// Allows manually turning on and off of the processing indicator (used for jobs table)
-	addProcessingIndicator();
-	addFilterOnDoneTyping();
-}
-
 /**
  * Returns the 'processing...' image with the loading gif which is used
  * on the jobs table when deleting/paginating
