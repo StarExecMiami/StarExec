@@ -28,8 +28,9 @@ fieldset table {
 }
 
 fieldset table tr td:first-child {
-    width: 200px;
-    margin: 10px;
+    width: 30%;
+    min-width: 120px;
+    max-width: 200px;
 }
 
 table tr td:first-child.label {
@@ -39,6 +40,7 @@ table tr td:first-child.label {
 
 table tr td {
     padding: 10px;
+    box-sizing: border-box;
 }
 
 /* Button positioning for to_community page table cells */
@@ -49,7 +51,6 @@ td button {
 
 tr .label {
     min-width: 120px;
-    float: top;
 }
 
 .shade {
@@ -68,8 +69,10 @@ table .styled.error {
 }
 
 textarea#reason {
+    box-sizing: border-box;
     height: 80px;
-    width: 460px;
+    width: 100%;
+    max-width: 460px;
     border: 1px solid $accent-blue;
     border-radius: 6px;
     padding: 10px;
@@ -108,6 +111,7 @@ textarea#reason.error:focus {
 @include mobile {
     #wrapper #communityInformation textarea {
         width: 100%;
+        max-width: none;
         height: 100px;
     }
 
