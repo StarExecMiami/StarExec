@@ -14,6 +14,7 @@ source_timezone: "+00:00"
 
 post_load_sql:
   - sql/wrap-legacy-password-hashes.sql
+  - sql/rewrite-legacy-data-paths.sql
 
 tiers:
   0:
