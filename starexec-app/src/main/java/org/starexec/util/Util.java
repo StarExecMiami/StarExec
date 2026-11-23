@@ -2257,18 +2257,23 @@ public class Util {
 
     /**
      * Applies the attributes every cookie this application sets should carry: HttpOnly, the
-     * application's path, and Secure when the deployment is served over HTTPS.
+     * application's path, and Secure when configured for HTTPS deployments.
      *
      * @param cookie The cookie to configure
      * @return The same cookie, configured
      */
     private static Cookie withSecurityAttributes(Cookie cookie) {
+        return withSecurityAttributes(cookie, R.SECURE_COOKIES);
+    }
+
+    /**
+     * Configures cookie security attributes with an explicit {@code secure} flag so unit tests
+     * can exercise both HTTP and HTTPS modes deterministically.
+     */
+    public static Cookie withSecurityAttributes(Cookie cookie, boolean secure) {
         cookie.setHttpOnly(true);
         cookie.setPath("/" + R.STAREXEC_APPNAME);
-        // Enable secure flag when running over HTTPS
-        if ("https".equalsIgnoreCase(R.STAREXEC_URL_PREFIX)) {
-            cookie.setSecure(true);
-        }
+        cookie.setSecure(secure);
         return cookie;
     }
 }

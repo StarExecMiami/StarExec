@@ -3,6 +3,7 @@ package org.starexec.app;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletContextEvent;
 import javax.servlet.ServletContextListener;
+import javax.servlet.SessionCookieConfig;
 
 import org.starexec.backend.Backend;
 import org.starexec.backend.BackendInitializer;
@@ -72,6 +73,7 @@ public class Starexec implements ServletContextListener {
 
             // Set build info as application attributes
             ServletContext context = sce.getServletContext();
+            configureSessionCookieConfig(context, R.SECURE_COOKIES);
             context.setAttribute("buildVersion", R.buildVersion);
             context.setAttribute("buildDate", R.buildDate != null
                     ? R.buildDate : R.buildDateRaw);
@@ -90,6 +92,25 @@ public class Starexec implements ServletContextListener {
             log.fatal("Failed to initialize StarExec application", e);
             throw new RuntimeException("Application startup failed", e);
         }
+    }
+
+    /**
+     * Applies container session cookie security attributes at application startup so {@code JSESSIONID}
+     * carries {@code HttpOnly} and, when enabled for HTTPS deployments, {@code Secure} while
+     * preserving {@code SameSite=Lax} configured in {@code META-INF/context.xml}.
+     */
+    public static void configureSessionCookieConfig(ServletContext context, boolean secureCookies) {
+        if (context == null) {
+            return;
+        }
+        SessionCookieConfig sessionCookieConfig = context.getSessionCookieConfig();
+        if (sessionCookieConfig == null) {
+            log.warn("ServletContext.getSessionCookieConfig() returned null; session cookie attributes unchanged");
+            return;
+        }
+        sessionCookieConfig.setHttpOnly(true);
+        sessionCookieConfig.setSecure(secureCookies);
+        log.info("Configured session cookie policy: httpOnly=true, secure=" + secureCookies);
     }
 
     @Override

@@ -512,6 +512,33 @@ public class EnvironmentConfig {
         return getEnv("STAREXEC_URL_PREFIX", "http");
     }
 
+    /**
+     * Resolves whether session and application cookies should carry the {@code Secure} attribute.
+     * Uses an explicit {@code STAREXEC_SECURE_COOKIES} override when non-blank, and otherwise
+     * enables {@code Secure} whenever {@code STAREXEC_URL_PREFIX} is {@code https}.
+     *
+     * @param secureCookiesRaw raw {@code STAREXEC_SECURE_COOKIES} value (may be null or blank)
+     * @param urlPrefix        resolved {@code STAREXEC_URL_PREFIX} value
+     * @return {@code true} when cookies should be marked {@code Secure}
+     */
+    public static boolean resolveSecureCookies(String secureCookiesRaw, String urlPrefix) {
+        if (secureCookiesRaw != null && !secureCookiesRaw.trim().isEmpty()) {
+            return Boolean.parseBoolean(secureCookiesRaw.trim());
+        }
+        return "https".equalsIgnoreCase(urlPrefix == null ? "" : urlPrefix.trim());
+    }
+
+    /**
+     * Returns whether session and application cookies should be marked {@code Secure}
+     * in the current runtime environment.
+     */
+    public static boolean getSecureCookies() {
+        return resolveSecureCookies(
+            getEnv("STAREXEC_SECURE_COOKIES", ""),
+            getStarexecUrlPrefix()
+        );
+    }
+
     public static String getJobSolverCacheClearLogDirectory() {
         return getEnv(
             "STAREXEC_JOB_SOLVER_CACHE_CLEAR_LOG_DIR",

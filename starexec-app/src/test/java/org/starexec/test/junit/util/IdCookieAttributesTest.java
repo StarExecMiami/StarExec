@@ -52,9 +52,9 @@ public class IdCookieAttributesTest {
 
 	@Test
 	public void anIdCookieIsSecureExactlyWhenTheDeploymentIsHttps() {
-		// Asserted against the deployment's own scheme rather than a fixed expectation, so this
-		// holds however the test environment is configured.
-		assertEquals("https".equalsIgnoreCase(R.STAREXEC_URL_PREFIX),
+		// Asserted against the deployment's resolved secure-cookie policy rather than a fixed
+		// expectation, so this holds however the test environment is configured.
+		assertEquals(R.SECURE_COOKIES,
 				Util.createIdCookie("New_ID", "7").getSecure());
 	}
 
@@ -63,7 +63,7 @@ public class IdCookieAttributesTest {
 		Cookie encoded = Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, "a message");
 		assertTrue(encoded.isHttpOnly());
 		assertEquals("/" + R.STAREXEC_APPNAME, encoded.getPath());
-		assertEquals("https".equalsIgnoreCase(R.STAREXEC_URL_PREFIX), encoded.getSecure());
+		assertEquals(R.SECURE_COOKIES, encoded.getSecure());
 		assertEquals("a+message", encoded.getValue(), "the encoding path is unchanged");
 	}
 }

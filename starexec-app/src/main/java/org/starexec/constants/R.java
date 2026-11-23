@@ -275,6 +275,7 @@ public class R {
     public static final String JOB_XML_SCHEMA_RELATIVE_LOC = EnvironmentConfig.getJobXmlSchemaRelativeLoc();
     public static final String STAREXEC_URL_PREFIX = EnvironmentConfig.getStarexecUrlPrefix(); // either "https" or
                                                                                                // "http"
+    public static final boolean SECURE_COOKIES = EnvironmentConfig.getSecureCookies();
     public static final String SANDBOX_DIRECTORY = EnvironmentConfig.getSandboxDir(); // the sandbox directory for doing
                                                                                       // processing / building on the
                                                                                       // head node
