@@ -20,6 +20,13 @@
       "severity": "warning",
       "message": "Avoid ID selectors - use classes instead"
     }],
+    "selector-id-pattern": [
+      "^([a-z][a-z0-9]*)(-[a-z0-9]+)*$",
+      {
+        "severity": "warning",
+        "message": "Expected id selector to be kebab-case"
+      }
+    ],
     "color-named": ["never", {
       "message": "Use design tokens or hex colors, not named colors"
     }],
@@ -53,7 +60,9 @@
     "node_modules/**",
     "**/vendor/**",
     "**/*.min.css",
-    "**/jquery-ui*.scss"
+    "**/jquery-ui*.scss",
+    "**/prettify/**",
+    "**/_properties.scss"
   ],
   "overrides": [
     {
