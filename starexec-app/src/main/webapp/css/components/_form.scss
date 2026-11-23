@@ -5,6 +5,7 @@
 // Provides consistent form layouts, inputs, labels, and validation styles
 // =============================================================================
 
+@use "sass:color";
 @use "../global/colors" as c;
 @use "../global/typography" as t;
 @use "../global/spacing" as s;
@@ -253,7 +254,7 @@
       text-decoration: underline;
       
       &:hover {
-        color: lighten(c.$accent-orange, 10%);
+        color: color.adjust(c.$accent-orange, $lightness: 10%);
       }
     }
   }

@@ -3,6 +3,8 @@
  * (analytics.scss, jobpairErrors.scss)
  */
 
+@use "sass:color";
+
 @import "../global/colors";
 @import "../global/fonts";
 @import "../global/helper";
@@ -43,7 +45,7 @@
     }
 
     input[type="date"] {
-      background: darken($foreground-color, 5%);
+      background: color.adjust($foreground-color, $lightness: -5%);
       border: 1px solid $background-color;
       color: $text-main-color;
       padding: 0.5em 0.75em;
@@ -102,7 +104,7 @@
   }
 }
 
-@keyframes slideIn {
+@keyframes slide-in {
   from {
     opacity: 0;
     transform: translateY(-10px);
@@ -212,7 +214,7 @@
     gap: 1em;
     padding: 1em;
     margin-bottom: 1em;
-    background-color: darken($accent-blue, 20%);
+    background-color: color.adjust($accent-blue, $lightness: -20%);
     border: 1px solid $accent-blue;
     @extend %rounded-corners;
     color: $text-main-color;
@@ -240,7 +242,7 @@
     font-size: $font-size-sm;
     line-height: 1.5;
     margin-bottom: $spacing-lg;
-    animation: slideIn 0.3s ease-out;
+    animation: slide-in 0.3s ease-out;
 
     .error-message,
     .info-message {
@@ -276,7 +278,7 @@
     background: $foreground-color;
 
     thead {
-      background-color: darken($foreground-color, 10%);
+      background-color: color.adjust($foreground-color, $lightness: -10%);
       border-bottom: 2px solid $background-color;
 
       th {
@@ -333,7 +335,7 @@
       transition: color 0.2s ease;
 
       &:hover {
-        color: darken($accent-orange, 15%);
+        color: color.adjust($accent-orange, $lightness: -15%);
         text-decoration: underline;
       }
 
@@ -343,7 +345,7 @@
       }
 
       &:visited {
-        color: darken($accent-orange, 20%);
+        color: color.adjust($accent-orange, $lightness: -20%);
       }
     }
   }

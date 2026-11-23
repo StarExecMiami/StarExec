@@ -12,23 +12,17 @@
 	#wrapper #usersTable tr > *:first-child {
 		width: 50%;
 	}
+
 	#wrapper #usersTable tr > *:nth-child(2) {
 		display: none;
 	}
+
 	#wrapper #usersTable tr > *:nth-child(3) {
 		width: 50%;
 	}
 
-	#wrapper #usersTable tr > *:first-child {
-		width: 50%
-	}
-	
 	#wrapper #addUsers tr > *:nth-child(2) {
 		display: none;
-	}
-
-	#wrapper #usersTable tr > *:nth-child(3) {
-		width: 50%
 	}
 
 	body table td {

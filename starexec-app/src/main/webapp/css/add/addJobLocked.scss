@@ -1,3 +1,4 @@
+@use "sass:color";
 @use "../global/colors" as c;
 @use "../global/typography" as t;
 @use "../global/spacing" as s;
@@ -91,7 +92,7 @@ $hover-overlay: rgba(c.$text-main-color, 0.1);
         color: c.$accent-orange;
         
         &:hover {
-            background-color: darken(c.$text-main-color, 10%);
+            background-color: color.adjust(c.$text-main-color, $lightness: -10%);
         }
     }
     

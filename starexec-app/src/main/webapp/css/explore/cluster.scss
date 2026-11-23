@@ -1,3 +1,5 @@
+@use "sass:color";
+
 @import "../global/helper";
 @import "../global/colors";
 
@@ -33,7 +35,7 @@
 // =============================================================================
 
 #graphs {
-	border: 1px solid lighten($foreground-color, 10%);
+	border: 1px solid color.adjust($foreground-color, $lightness: 10%);
 	border-radius: 12px;
 	background-color: $foreground-color;
 	padding: 20px;
@@ -45,7 +47,7 @@
 		color: $text-main-color;
 		padding: 4px 12px;
 		background-color: $foreground-color;
-		border: 1px solid lighten($foreground-color, 10%);
+		border: 1px solid color.adjust($foreground-color, $lightness: 10%);
 		border-radius: 6px;
 	}
 }
@@ -55,7 +57,7 @@
 	margin-bottom: 12px;
 	padding: 8px 12px;
 	background-color: $input-background;
-	border: 1px solid lighten($foreground-color, 10%);
+	border: 1px solid color.adjust($foreground-color, $lightness: 10%);
 	border-radius: 8px;
 	color: $text-main-color;
 	font-size: 14px;
@@ -68,7 +70,7 @@
 	transition: border-color 0.2s ease, box-shadow 0.2s ease;
 
 	&:hover {
-		border-color: lighten($foreground-color, 20%);
+		border-color: color.adjust($foreground-color, $lightness: 20%);
 	}
 
 	&:focus {
@@ -84,7 +86,7 @@
 	background-color: $background-color;
 	border-radius: 8px;
 	padding: 10px;
-	border: 1px solid lighten($foreground-color, 5%);
+	border: 1px solid color.adjust($foreground-color, $lightness: 5%);
 }
 
 #queuegraph {

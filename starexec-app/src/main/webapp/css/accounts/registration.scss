@@ -1,8 +1,10 @@
+@use "sass:color";
+
 // =============================================================================
 // REGISTRATION PAGE STYLES
 // =============================================================================
 
-@import "../common/_pass_strength_meter";
+@import "../common/pass_strength_meter";
 @import "../global/colors";
 @import "../global/typography";
 @import "../global/spacing";
@@ -21,7 +23,7 @@
     background: linear-gradient(
         135deg,
         $foreground-color 0%,
-        lighten($foreground-color, 5%) 100%
+        color.adjust($foreground-color, $lightness: 5%) 100%
     );
     padding: $spacing-2xl 0;
     border-bottom: 1px solid $surface-tertiary;

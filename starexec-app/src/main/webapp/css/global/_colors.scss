@@ -2,6 +2,8 @@
 // STAREXEC COLOR PALETTE
 // =============================================================================
 
+@use "sass:color";
+
 // --- Base Colors ---
 $background-color: #0a0a0a;
 $foreground-color: #1f1f1f;
@@ -42,8 +44,8 @@ $input-text: #f8f8f8;
 
 // --- Surface Colors ---
 $surface-primary: $foreground-color;
-$surface-secondary: lighten($foreground-color, 5%);
-$surface-tertiary: lighten($foreground-color, 10%);
+$surface-secondary: color.adjust($foreground-color, $lightness: 5%);
+$surface-tertiary: color.adjust($foreground-color, $lightness: 10%);
 
 // --- Text Semantic Colors ---
 $text-primary: $text-main-color;

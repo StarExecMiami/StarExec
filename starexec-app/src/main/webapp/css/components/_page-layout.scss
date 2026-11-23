@@ -5,6 +5,7 @@
 // Provides consistent page structure, hero sections, and containers
 // =============================================================================
 
+@use "sass:color";
 @use "../global/colors" as c;
 @use "../global/typography" as t;
 @use "../global/spacing" as s;
@@ -251,7 +252,7 @@
     @include m.transition-default;
     
     &:hover {
-      color: lighten(c.$accent-orange, 10%);
+      color: color.adjust(c.$accent-orange, $lightness: 10%);
       text-decoration: underline;
     }
   }

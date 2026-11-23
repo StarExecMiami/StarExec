@@ -144,9 +144,6 @@ $status-wrong-bg: rgb(245 158 11 / 12%);
   mask-repeat: no-repeat;
   mask-position: center;
   mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  -webkit-mask-size: contain;
   opacity: 0.98;
 }
 
@@ -154,21 +151,18 @@ $status-wrong-bg: rgb(245 158 11 / 12%);
 td.jobMatrixCell.solved .statusIcon {
   color: $status-solved-border;
   mask-image: url("../../images/icons/status-solved.svg");
-  -webkit-mask-image: url("../../images/icons/status-solved.svg");
 }
 
 .legendColor.incomplete .statusIcon,
 td.jobMatrixCell.incomplete .statusIcon {
   color: $status-incomplete-border;
   mask-image: url("../../images/icons/status-incomplete.svg");
-  -webkit-mask-image: url("../../images/icons/status-incomplete.svg");
 }
 
 .legendColor.unknown .statusIcon,
 td.jobMatrixCell.unknown .statusIcon {
   color: $status-unknown-border;
   mask-image: url("../../images/icons/status-unknown.svg");
-  -webkit-mask-image: url("../../images/icons/status-unknown.svg");
 }
 
 .legendColor.resource .statusIcon,
@@ -176,21 +170,18 @@ td.jobMatrixCell.resource .statusIcon,
 td.jobMatrixCell.complete .statusIcon {
   color: $status-resource-border;
   mask-image: url("../../images/icons/status-resource.svg");
-  -webkit-mask-image: url("../../images/icons/status-resource.svg");
 }
 
 .legendColor.failed .statusIcon,
 td.jobMatrixCell.failed .statusIcon {
   color: $status-failed-border;
   mask-image: url("../../images/icons/status-failed.svg");
-  -webkit-mask-image: url("../../images/icons/status-failed.svg");
 }
 
 .legendColor.wrong .statusIcon,
 td.jobMatrixCell.wrong .statusIcon {
   color: $status-wrong-border;
   mask-image: url("../../images/icons/status-wrong.svg");
-  -webkit-mask-image: url("../../images/icons/status-wrong.svg");
 }
 
 // =============================================================================
@@ -257,7 +248,7 @@ td.jobMatrixCell.wrong .statusIcon {
   font-size: t.$font-size-sm;
   color: c.$text-accent-color;
   background: c.$foreground-color;
-  border: 1px solid lighten(c.$foreground-color, 10%);
+  border: 1px solid color.adjust(c.$foreground-color, $lightness: 10%);
   border-radius: 4px;
   cursor: pointer;
   user-select: none;
@@ -290,8 +281,8 @@ td.jobMatrixCell.wrong .statusIcon {
   }
 
   &:hover {
-    background: lighten(c.$foreground-color, 5%);
-    border-color: lighten(c.$foreground-color, 15%);
+    background: color.adjust(c.$foreground-color, $lightness: 5%);
+    border-color: color.adjust(c.$foreground-color, $lightness: 15%);
     color: c.$text-main-color;
   }
 
@@ -353,7 +344,7 @@ td.jobMatrixCell.wrong .statusIcon {
     font-size: t.$font-size-sm;
     background: c.$foreground-color;
     color: c.$text-main-color;
-    border: 1px solid lighten(c.$foreground-color, 10%);
+    border: 1px solid color.adjust(c.$foreground-color, $lightness: 10%);
     border-radius: 4px;
     cursor: pointer;
 
@@ -362,7 +353,7 @@ td.jobMatrixCell.wrong .statusIcon {
     min-height: 36px;
 
     &:hover {
-      background: lighten(c.$foreground-color, 8%);
+      background: color.adjust(c.$foreground-color, $lightness: 8%);
     }
 
     &:focus-visible {
@@ -420,7 +411,7 @@ div.dataTables_scrollBody {
   padding: s.$spacing-sm s.$spacing-md;
   vertical-align: middle;
   word-wrap: break-word;
-  border-bottom: 1px solid lighten(c.$foreground-color, 12%);
+  border-bottom: 1px solid color.adjust(c.$foreground-color, $lightness: 12%);
 
   a {
     color: c.$text-main-color;
@@ -441,7 +432,7 @@ div.dataTables_scrollBody {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: c.$text-accent-color;
-  border-right: 1px solid lighten(c.$foreground-color, 8%);
+  border-right: 1px solid color.adjust(c.$foreground-color, $lightness: 8%);
 }
 
 // =============================================================================
@@ -454,16 +445,16 @@ div.dataTables_scrollBody {
   @include m.transition-safe(background-color 0.15s ease);
 
   &:nth-child(even) {
-    background-color: lighten(c.$foreground-color, 3%);
+    background-color: color.adjust(c.$foreground-color, $lightness: 3%);
   }
 
   &:hover {
-    background-color: lighten(c.$foreground-color, 6%) !important;
+    background-color: color.adjust(c.$foreground-color, $lightness: 6%) !important;
   }
 
   td {
-    border-right: 1px solid lighten(c.$foreground-color, 6%);
-    border-bottom: 1px solid lighten(c.$foreground-color, 6%);
+    border-right: 1px solid color.adjust(c.$foreground-color, $lightness: 6%);
+    border-bottom: 1px solid color.adjust(c.$foreground-color, $lightness: 6%);
     border-collapse: collapse;
   }
 }
@@ -551,7 +542,7 @@ td.jobMatrixCell {
 // =============================================================================
 
 .benchmarkHeader {
-  border-right: 1px solid lighten(c.$foreground-color, 8%);
+  border-right: 1px solid color.adjust(c.$foreground-color, $lightness: 8%);
   text-align: left;
   vertical-align: middle;
   padding: s.$spacing-xs s.$spacing-sm;
@@ -564,7 +555,7 @@ td.jobMatrixCell {
 
     &:hover {
       text-decoration: underline;
-      color: lighten(c.$accent-orange, 10%);
+      color: color.adjust(c.$accent-orange, $lightness: 10%);
     }
 
     &:focus-visible {

@@ -25,16 +25,18 @@ HEADER = """\
 /*! Lucide icons (lucide-static), ISC License, Copyright (c) 2026 Lucide Icons
  * and Contributors. Full text: starexec-app/src/main/icons/lucide/LICENSE */
 
+@use "sass:map";
+
 """
 
 FOOTER = """
 // Returns the data URI of a vendored icon; fails the build on an unknown name.
 @function icon($name) {
-	@if not map-has-key($icon-data, $name) {
+	@if not map.has-key($icon-data, $name) {
 		@error "Unknown icon '#{$name}'. Add it to starexec-app/src/main/icons/lucide and rerun scripts/build-icon-data.py.";
 	}
 
-	@return map-get($icon-data, $name);
+	@return map.get($icon-data, $name);
 }
 """
 

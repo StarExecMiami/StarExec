@@ -5,6 +5,7 @@
  */
 
 // Import dependencies
+@use "sass:color";
 @import "../global/colors";
 @import "../global/helper";
 
@@ -34,7 +35,8 @@ $touch-target-min-padding: 12px;
 $touch-target-mobile-min-padding: 14px;
 
 /* ========== Base Button Styles ========== */
-.btn {
+.btn,
+%btn {
 	padding: $btn-padding-y $btn-padding-x;
 	margin: $btn-margin;
 	border: 1px solid transparent;
@@ -133,14 +135,15 @@ $touch-target-mobile-min-padding: 14px;
 }
 
 /* ========== Primary Button (Orange Accent) ========== */
-.btn-primary {
+.btn-primary,
+%btn-primary {
 	background-color: $button-orange;
 	color: $button-text;
 	border-color: $button-orange;
 
 	&:hover:not(:disabled) {
-		background-color: lighten($button-orange, 10%);
-		border-color: lighten($button-orange, 10%);
+		background-color: color.adjust($button-orange, $lightness: 10%);
+		border-color: color.adjust($button-orange, $lightness: 10%);
 	}
 
 	&:focus {
@@ -149,34 +152,35 @@ $touch-target-mobile-min-padding: 14px;
 }
 
 /* ========== Secondary Button (Gray) ========== */
-.btn-secondary {
-	background-color: lighten($foreground-color, 5%);
+.btn-secondary,
+%btn-secondary {
+	background-color: color.adjust($foreground-color, $lightness: 5%);
 	color: $text-main-color;  // White text on dark gray - good contrast
 	border-color: $background-color;
 
 	&:hover:not(:disabled) {
-		background-color: lighten($foreground-color, 12%);
+		background-color: color.adjust($foreground-color, $lightness: 12%);
 		border-color: $accent-orange;
 	}
 
 	&:active:not(:disabled) {
-		background-color: lighten($foreground-color, 2%);
+		background-color: color.adjust($foreground-color, $lightness: 2%);
 	}
 }
 
 /* ========== Preset/Filter Button ========== */
 .btn-preset {
-	background-color: lighten($foreground-color, 5%);
+	background-color: color.adjust($foreground-color, $lightness: 5%);
 	color: $text-main-color;
 	border-color: $background-color;
 
 	&:hover:not(:disabled) {
-		background-color: lighten($foreground-color, 12%);
+		background-color: color.adjust($foreground-color, $lightness: 12%);
 		border-color: $accent-orange;
 	}
 
 	&:active:not(:disabled) {
-		background-color: lighten($foreground-color, 2%);
+		background-color: color.adjust($foreground-color, $lightness: 2%);
 	}
 }
 
@@ -186,6 +190,7 @@ $touch-target-mobile-min-padding: 14px;
 
 // Standardize jQuery UI button padding and margin
 .ui-button {
+	@extend %btn;
 	padding: $btn-padding-y $btn-padding-x !important;
 	margin: $btn-margin !important;
 	box-sizing: border-box !important;
@@ -194,6 +199,22 @@ $touch-target-mobile-min-padding: 14px;
 	min-height: $touch-target-min-size !important;
 	min-width: $touch-target-min-size !important;
 	position: relative !important;
+
+	// Remove jQuery UI's default styling
+	&.ui-corner-all {
+		@extend %rounded-corners;
+	}
+
+	// Hover transform effect
+	&:hover:not(:disabled):not(.ui-state-disabled) {
+		transform: translateY(-1px);
+		box-shadow: 0 2px 8px rgba(255, 255, 255, 0.08);
+	}
+
+	// Active press effect
+	&:active:not(:disabled):not(.ui-state-disabled) {
+		transform: translateY(0);
+	}
 }
 
 /* ========== jQuery UI Icon Button Specific Styles ========== */
@@ -230,7 +251,7 @@ a:visited.ui-button,
 .ui-state-default a:link,
 .ui-state-default a:visited {
 	color: $text-main-color !important;
-	background: lighten($foreground-color, 5%) !important;
+	background: color.adjust($foreground-color, $lightness: 5%) !important;
 	border-color: $background-color !important;
 }
 
@@ -245,7 +266,7 @@ a.ui-button:hover,
 .ui-state-hover a:link,
 .ui-state-hover a:visited {
 	color: $text-main-color !important;
-	background: lighten($foreground-color, 12%) !important;
+	background: color.adjust($foreground-color, $lightness: 12%) !important;
 	border-color: $accent-orange !important;
 }
 
@@ -260,7 +281,7 @@ a.ui-button:focus,
 .ui-state-focus a:link,
 .ui-state-focus a:visited {
 	color: $text-main-color !important;
-	background: lighten($foreground-color, 12%) !important;
+	background: color.adjust($foreground-color, $lightness: 12%) !important;
 	border-color: $accent-orange !important;
 	outline: 2px solid $accent-orange !important;
 	outline-offset: 2px !important;
@@ -277,7 +298,7 @@ a.ui-button:active,
 .ui-state-active a:link,
 .ui-state-active a:visited {
 	color: $text-main-color !important;
-	background: lighten($foreground-color, 2%) !important;
+	background: color.adjust($foreground-color, $lightness: 2%) !important;
 	border-color: $accent-orange !important;
 }
 
@@ -288,7 +309,7 @@ html .ui-button.ui-state-disabled:active,
 .ui-widget-content .ui-state-disabled,
 .ui-widget-header .ui-state-disabled {
 	color: $text-main-color !important;
-	background: lighten($foreground-color, 5%) !important;
+	background: color.adjust($foreground-color, $lightness: 5%) !important;
 	border-color: $background-color !important;
 	opacity: 0.5 !important;
 	cursor: not-allowed !important;
@@ -297,26 +318,6 @@ html .ui-button.ui-state-disabled:active,
 // Visual focus indicator override
 .ui-visual-focus {
 	box-shadow: 0 0 3px 1px $accent-orange !important;
-}
-
-.ui-button {
-	@extend .btn;
-	
-	// Remove jQuery UI's default styling
-	&.ui-corner-all {
-		@extend %rounded-corners;
-	}
-
-	// Hover transform effect
-	&:hover:not(:disabled):not(.ui-state-disabled) {
-		transform: translateY(-1px);
-		box-shadow: 0 2px 8px rgba(255, 255, 255, 0.08);
-	}
-
-	// Active press effect
-	&:active:not(:disabled):not(.ui-state-disabled) {
-		transform: translateY(0);
-	}
 }
 
 /* ========== Legacy jQuery UI Button Classes ========== */
@@ -328,8 +329,8 @@ html .ui-button.ui-state-disabled:active,
 .btnDown,
 .btnAdd,
 .btnRemove {
-	@extend .btn;
-	@extend .btn-secondary;
+	@extend %btn;
+	@extend %btn-secondary;
 }
 
 /* ========== Button Groups ========== */
@@ -362,19 +363,20 @@ html .ui-button.ui-state-disabled:active,
 
 
 /* ========== Danger Button (for destructive actions) ========== */
-.btn-danger {
+.btn-danger,
+%btn-danger {
 	background-color: $button-red;
 	color: $button-text; // #0a0a0a on #ef4444 = 5.26:1 WCAG AA contrast
 	border-color: $button-red;
 
 	&:hover:not(:disabled) {
-		background-color: lighten($button-red, 10%);
-		border-color: lighten($button-red, 10%);
+		background-color: color.adjust($button-red, $lightness: 10%);
+		border-color: color.adjust($button-red, $lightness: 10%);
 	}
 
 	&:active:not(:disabled) {
-		background-color: lighten($button-red, 5%);
-		border-color: lighten($button-red, 5%);
+		background-color: color.adjust($button-red, $lightness: 5%);
+		border-color: color.adjust($button-red, $lightness: 5%);
 	}
 
 	&:focus {
@@ -551,27 +553,27 @@ button:focus-visible {
 .uploadBtn,
 .saveBtn,
 .submitBtn {
-	@extend .btn;
-	@extend .btn-primary;
+	@extend %btn;
+	@extend %btn-primary;
 }
 
 .cancelBtn {
-	@extend .btn;
-	@extend .btn-secondary;
+	@extend %btn;
+	@extend %btn-secondary;
 }
 
 .compareBtn {
-	@extend .btn;
-	@extend .btn-secondary;
+	@extend %btn;
+	@extend %btn-secondary;
 }
 
 .selectPrim {
-	@extend .btn;
-	@extend .btn-secondary;
+	@extend %btn;
+	@extend %btn-secondary;
 }
 
 /* ========== Danger Zone Button (for account deletion etc.) ========== */
 button.danger,
 .btn.danger {
-	@extend .btn-danger;
+	@extend %btn-danger;
 }

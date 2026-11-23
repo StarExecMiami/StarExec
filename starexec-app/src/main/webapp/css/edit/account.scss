@@ -1,5 +1,6 @@
+@use "sass:color";
 @use "../global/mixins" as m;
-@import "../common/_pass_strength_meter";
+@import "../common/pass_strength_meter";
 @import "../global/colors";
 
 // =============================================================================
@@ -86,10 +87,6 @@ fieldset {
 	}
 }
 
-#infoTable {
-	table-layout: auto;
-}
-
 tr .label {
 	width: 25%;
 }
@@ -133,7 +130,7 @@ tr .label {
 		border-color: $accent-red;
 
 		&:hover {
-			background-color: darken($accent-red, 10%);
+			background-color: color.adjust($accent-red, $lightness: -10%);
 		}
 	}
 }
@@ -149,6 +146,7 @@ fieldset ul li {
 
 #new_website {
 	float: right;
+	margin-top: 10px;
 
 	input {
 		width: 30%;
@@ -204,11 +202,6 @@ fieldset ul li {
 	margin-top: 10px;
 }
 
-#new_website {
-	float: right;
-	margin-top: 10px;
-}
-
 // Inputs within the personal info and settings tables use 50% width to align
 // with the two-column label/value layout. Scoped to avoid affecting dialogs and other components.
 #infoTable input[type="text"],
@@ -260,10 +253,6 @@ fieldset ul li {
 	vertical-align: top;
 }
 
-#infoTable tbody tr:hover {
-	background-color: inherit;
-}
-
 #personal {
 	tbody tr:hover {
 		background-color: rgba($accent-orange, 0.15);
@@ -292,6 +281,8 @@ fieldset ul li {
 }
 
 #infoTable {
+	table-layout: auto;
+
 	tbody tr:hover {
 		background-color: $foreground-color !important;
 	}

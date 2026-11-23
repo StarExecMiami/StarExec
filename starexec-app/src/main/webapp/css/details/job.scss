@@ -39,6 +39,33 @@ fieldset {
 	fieldset {
 		width: 100%;
 	}
+
+	#spaceOverviewOptionField {
+		float: left;
+		width: 290px;
+
+		/* text-align:center;*/
+	}
+
+	#solverComparisonOptionField {
+		float: left;
+		width: 290px;
+
+		/* text-align:center;*/
+
+		/*needs to be determined whether we want everything centered*/
+	}
+
+	#spaceOverviewUpdate, #solverComparisonUpdate {
+		margin-top: 10px;
+		margin-right: auto;
+		margin-left: auto;
+	}
+
+	#pairTimeOptionField {
+		float: left;
+		width: 290px;
+	}
 }
 
 tr {
@@ -208,35 +235,6 @@ p.accent {
 	margin-left: auto;
 }
 
-#detailPanel {
-	#spaceOverviewOptionField {
-		float: left;
-		width: 290px;
-
-		/* text-align:center;*/
-	}
-
-	#solverComparisonOptionField {
-		float: left;
-		width: 290px;
-
-		/* text-align:center;*/
-
-		/*needs to be determined whether we want everything centered*/
-	}
-
-	#spaceOverviewUpdate, #solverComparisonUpdate {
-		margin-top: 10px;
-		margin-right: auto;
-		margin-left: auto;
-	}
-
-	#pairTimeOptionField {
-        	float: left;
-        	width: 290px;
-	}
-}
-
 #subspaceSummaryField {
 	.dataTables_wrapper {
 		float: left;
@@ -274,7 +272,7 @@ p.accent {
 
 	#panelActions {
 		width: 97%;
-		border: 0 none black;
+		border: 0 none #000000;
 		border-bottom: 5px solid;
 		margin-top: 0;
 		padding-top: 0;
@@ -283,7 +281,7 @@ p.accent {
 
 #solverSummaryField #statActions, #pairTblField #pairActions, #graphField #graphActions {
 	width: 97%;
-	border: 0 none black;
+	border: 0 none #000000;
 	border-bottom: 5px solid;
 	margin-top: 0;
 	padding-top: 0;
@@ -310,6 +308,10 @@ table.panel {
 }
 
 @include mobile {
+	.jstree-icon {
+		width: 30px;
+	}
+
 	#wrapper {
 		#explorer {
 			width: 100%;
@@ -323,13 +325,7 @@ table.panel {
 				float: none;
 			}
 		}
-	}
 
-	.jstree-icon {
-		width: 30px;
-	}
-
-	#wrapper {
 		#detailPanel {
 			width: 100%;
 			float: none;

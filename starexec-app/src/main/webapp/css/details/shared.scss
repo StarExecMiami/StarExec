@@ -4,6 +4,7 @@
 // Shared styles for detail pages (user, solver, benchmark, etc.)
 // =============================================================================
 
+@use "sass:color";
 @use "../global/mixins" as m;
 @import "../global/colors";
 
@@ -13,10 +14,6 @@
 
 table {
 	width: 100%;
-}
-
-#infoTable {
-	table-layout: auto;
 }
 
 // =============================================================================
@@ -180,7 +177,7 @@ fieldset {
 		border: 1px solid $text-secondary;
 		
 		&:hover {
-			background-color: darken($foreground-color, 5%);
+			background-color: color.adjust($foreground-color, $lightness: -5%);
 		}
 	}
 }
@@ -214,10 +211,6 @@ fieldset {
 // TABLE HOVER STATES - Using design system colors
 // =============================================================================
 
-#infoTable tbody tr:hover {
-	background-color: inherit;
-}
-
 #solverInfo {
 	tbody tr:hover {
 		background-color: rgba($accent-orange, 0.15);
@@ -233,6 +226,8 @@ fieldset {
 }
 
 #infoTable {
+	table-layout: auto;
+
 	tbody tr:hover {
 		background-color: $foreground-color !important;
 	}
@@ -300,5 +295,3 @@ fieldset {
 // =============================================================================
 // RESPONSIVE STYLES
 // =============================================================================
-
-@media only screen and (min-width: 560px) and (max-width: #{m.$breakpoint-tablet - 1px}) {}

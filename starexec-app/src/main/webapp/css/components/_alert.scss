@@ -14,7 +14,8 @@
 // BASE ALERT
 // =============================================================================
 
-.alert {
+.alert,
+%alert {
     box-sizing: border-box;
     display: flex;
     align-items: center;
@@ -48,7 +49,8 @@
 }
 
 // Alert content wrapper - groups icon and message content
-.alert__wrapper {
+.alert__wrapper,
+%alert-wrapper {
     display: flex;
     align-items: center;
     gap: $spacing-sm;
@@ -56,7 +58,8 @@
     min-width: 0; // Prevents flex children from overflowing
 }
 
-.alert__icon {
+.alert__icon,
+%alert-icon {
     flex-shrink: 0;
     width: 20px;
     height: 20px;
@@ -67,7 +70,8 @@
     margin-top: 0;
 }
 
-.alert__content {
+.alert__content,
+%alert-content {
     flex: 1;
     // Ensure proper text wrapping and word breaking
     word-wrap: break-word;
@@ -75,7 +79,8 @@
     min-width: 0; // Prevents text overflow in flex containers
 }
 
-.alert__title {
+.alert__title,
+%alert-title {
     font-weight: $font-weight-semibold;
     // Display inline to flow with message on same line
     display: inline;
@@ -84,7 +89,8 @@
 }
 
 // Message/body text within alert
-.alert__message {
+.alert__message,
+%alert-message {
     margin: 0;
     line-height: 1.5;
     word-break: break-word;
@@ -101,7 +107,8 @@
     }
 }
 
-.alert__dismiss {
+.alert__dismiss,
+%alert-dismiss {
     background: none;
     border: none;
     color: inherit;
@@ -176,42 +183,50 @@
 // ALERT VARIANTS
 // =============================================================================
 
-.alert--success {
+.alert--success,
+%alert-success {
     background: rgba($success, 0.15);
     color: $text-success;
     border: 1px solid rgba($success, 0.3);
 
-    .alert__icon {
+    .alert__icon,
+%alert-icon {
         color: $text-success;
     }
 }
 
-.alert--error {
+.alert--error,
+%alert-error {
     background: rgba($error, 0.15);
     color: $text-error;
     border: 1px solid rgba($error, 0.3);
 
-    .alert__icon {
+    .alert__icon,
+%alert-icon {
         color: $text-error;
     }
 }
 
-.alert--warning {
+.alert--warning,
+%alert-warning {
     background: rgba($warning, 0.15);
     color: $text-warning;
     border: 1px solid rgba($warning, 0.3);
 
-    .alert__icon {
+    .alert__icon,
+%alert-icon {
         color: $text-warning;
     }
 }
 
-.alert--info {
+.alert--info,
+%alert-info {
     background: rgba($info, 0.15);
     color: $text-info;
     border: 1px solid rgba($info, 0.3);
 
-    .alert__icon {
+    .alert__icon,
+%alert-icon {
         color: $text-info;
     }
 }
@@ -226,7 +241,8 @@
     margin-bottom: $spacing-sm;
     gap: $spacing-sm;
 
-    .alert__wrapper {
+    .alert__wrapper,
+%alert-wrapper {
         gap: $spacing-xs;
     }
 
@@ -241,7 +257,8 @@
     margin-bottom: $spacing-xl;
     gap: $spacing-lg;
 
-    .alert__wrapper {
+    .alert__wrapper,
+%alert-wrapper {
         gap: $spacing-md;
     }
 
@@ -259,30 +276,30 @@
 // Maps legacy markup to new alert system
 .error.message,
 .message.error {
-    @extend .alert;
-    @extend .alert--error;
+    @extend %alert;
+    @extend %alert-error;
     display: block;
 }
 
 .success.message,
 .message.success {
-    @extend .alert;
-    @extend .alert--success;
+    @extend %alert;
+    @extend %alert-success;
     display: block;
 }
 
 .warning.message,
 .message.warn,
 .warning-message {
-    @extend .alert;
-    @extend .alert--warning;
+    @extend %alert;
+    @extend %alert-warning;
     display: block;
 }
 
 .info.message,
 .message.info {
-    @extend .alert;
-    @extend .alert--info;
+    @extend %alert;
+    @extend %alert-info;
     display: block;
 }
 
@@ -291,7 +308,7 @@
 // =============================================================================
 
 .toast {
-    @extend .alert;
+    @extend %alert;
     position: fixed;
     top: $spacing-lg;
     right: $spacing-lg;
@@ -301,7 +318,7 @@
 
     // Animations respect user motion preferences
     @media (prefers-reduced-motion: no-preference) {
-        animation: slideIn 0.3s ease-out;
+        animation: slide-in 0.3s ease-out;
     }
 
     // Ensure toast is not constrained by parent
@@ -321,7 +338,7 @@
 // Animation keyframes
 // Only applied when motion is not reduced
 @media (prefers-reduced-motion: no-preference) {
-    @keyframes slideIn {
+    @keyframes slide-in {
         from {
             opacity: 0;
             transform: translateX(100%);
@@ -343,19 +360,19 @@
 }
 
 .toast--success {
-    @extend .alert--success;
+    @extend %alert-success;
 }
 
 .toast--error {
-    @extend .alert--error;
+    @extend %alert-error;
 }
 
 .toast--warning {
-    @extend .alert--warning;
+    @extend %alert-warning;
 }
 
 .toast--info {
-    @extend .alert--info;
+    @extend %alert-info;
 }
 
 // =============================================================================
@@ -368,7 +385,8 @@
     gap: $spacing-md;
 }
 
-.alerts-container > .alert {
+.alerts-container > .alert,
+%alert {
     margin-bottom: 0;
     margin-top: 0;
 
@@ -385,25 +403,25 @@
 
 // Legacy element names - map to new BEM structure
 .alert-icon {
-    @extend .alert__icon;
+    @extend %alert-icon;
 }
 
 .alert-content {
-    @extend .alert__content;
+    @extend %alert-content;
 }
 
 .alert-title {
-    @extend .alert__title;
+    @extend %alert-title;
 }
 
 .alert-dismiss {
-    @extend .alert__dismiss;
+    @extend %alert-dismiss;
 }
 
 .alert-wrapper {
-    @extend .alert__wrapper;
+    @extend %alert-wrapper;
 }
 
 .alert-message {
-    @extend .alert__message;
+    @extend %alert-message;
 }

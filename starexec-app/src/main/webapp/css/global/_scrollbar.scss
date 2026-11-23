@@ -4,6 +4,8 @@
 // Applies consistent scrollbar styling across all scrollable elements
 // using WebKit (Chrome/Safari/Edge) and Firefox custom scrollbar APIs
 
+@use "sass:color";
+
 // WebKit Browsers (Chrome, Safari, Edge)
 // ============================================================================
 
@@ -34,7 +36,7 @@
 
 // Thumb active state
 *::-webkit-scrollbar-thumb:active {
-  background: darken($accent-orange, 10%);
+  background: color.adjust($accent-orange, $lightness: -10%);
 }
 
 // Firefox
@@ -60,12 +62,12 @@ code,
   }
   
   &::-webkit-scrollbar-track {
-    background: darken($surface-tertiary, 3%);
+    background: color.adjust($surface-tertiary, $lightness: -3%);
   }
   
   &::-webkit-scrollbar-thumb {
-    background: lighten($text-secondary, 5%);
-    border: 2px solid darken($surface-tertiary, 3%);
+    background: color.adjust($text-secondary, $lightness: 5%);
+    border: 2px solid color.adjust($surface-tertiary, $lightness: -3%);
   }
   
   &::-webkit-scrollbar-thumb:hover {

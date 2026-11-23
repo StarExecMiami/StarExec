@@ -1,3 +1,4 @@
+@use "sass:color";
 @use "../global/breakpoints";
 @use "../global/colors";
 
@@ -85,7 +86,7 @@ a:visited.ui-button,
 .ui-button:hover,
 .ui-button:focus {
   border: 1px solid colors.$accent-orange !important;
-  background: darken(colors.$foreground-color, 5%) !important;
+  background: color.adjust(colors.$foreground-color, $lightness: -5%) !important;
   font-weight: normal;
   color: colors.$text-main-color !important;
 }

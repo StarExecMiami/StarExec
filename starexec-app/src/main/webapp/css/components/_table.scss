@@ -5,6 +5,8 @@
 // All table-related styles should use these variables and mixins.
 // =============================================================================
 
+@use "sass:color";
+
 @import "../global/colors";
 @import "../global/helper";
 
@@ -32,7 +34,7 @@ $table-cell-padding-spacious: $table-cell-padding-spacious-y $table-cell-padding
 $table-bg: transparent !default;
 $table-bg-alt: $foreground-color !default;
 $table-bg-header: $background-color !default;                 // #111111
-$table-bg-hover: lighten($foreground-color, 3%) !default;     // subtle highlight instead of red
+$table-bg-hover: color.adjust($foreground-color, $lightness: 3%) !default;     // subtle highlight instead of red
 $table-bg-selected: rgba($accent-orange, 0.15) !default;      // subtle orange selection
 $table-bg-odd: $foreground-color !default;                    // solid bg (no heavy zebra)
 $table-bg-even: $foreground-color !default;                   // solid bg (no heavy zebra)
@@ -45,14 +47,14 @@ $table-text-selected: $text-main-color !default;
 $table-text-muted: $text-accent-color !default;               // #999999
 
 // Borders
-$table-border-color: lighten($foreground-color, 5%) !default; // delicate line separators
+$table-border-color: color.adjust($foreground-color, $lightness: 5%) !default; // delicate line separators
 $table-border-width: 1px !default;
 $table-border: $table-border-width solid $table-border-color !default;
-$table-border-header: 1px solid lighten($foreground-color, 12%) !default;
+$table-border-header: 1px solid color.adjust($foreground-color, $lightness: 12%) !default;
 
 // Links in tables
 $table-link-color: $accent-orange !default;
-$table-link-hover-color: lighten($accent-orange, 10%) !default;
+$table-link-hover-color: color.adjust($accent-orange, $lightness: 10%) !default;
 
 // Focus state
 $table-focus-outline: 2px solid rgba($accent-orange, 0.5) !default;
@@ -133,7 +135,7 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
 @mixin table-striped {
   tbody tr {
     &:nth-child(odd) {
-      background-color: lighten($table-bg-odd, 2%);
+      background-color: color.adjust($table-bg-odd, $lightness: 2%);
     }
     
     &:nth-child(even) {
@@ -150,12 +152,12 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
     transition: all 0.2s ease;
     
     &:hover {
-      color: lighten($table-link-color, 15%);
+      color: color.adjust($table-link-color, $lightness: 15%);
       text-decoration: underline;
     }
     
     &:focus {
-      outline: 2px solid white;
+      outline: 2px solid #ffffff;
       outline-offset: 2px;
     }
   }
@@ -168,7 +170,7 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
     color: $text-main-color;
     
     &:hover {
-      color: white;
+      color: #ffffff;
     }
   }
 }
@@ -342,6 +344,8 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
 
 table.dataTable {
   background: transparent;
+  width: 100% !important;
+  min-width: 100% !important;
   
   // Header
   thead {
@@ -389,7 +393,7 @@ table.dataTable {
       &:hover.selected,
       &.odd:hover.selected,
       &.even:hover.selected {
-        background-color: darken($table-bg-selected, 10%) !important;
+        background-color: color.adjust($table-bg-selected, $lightness: -10%) !important;
       }
     }
     
@@ -413,7 +417,7 @@ table.dataTable {
     background-color: $table-bg-odd;
     
     &.selected {
-      background-color: darken($table-bg-selected, 5%);
+      background-color: color.adjust($table-bg-selected, $lightness: -5%);
     }
   }
   
@@ -518,7 +522,7 @@ tbody tr.row_selected {
     &:hover,
     &:active {
       color: $table-text-color !important;
-      background-color: lighten($foreground-color, 8%) !important;
+      background-color: color.adjust($foreground-color, $lightness: 8%) !important;
       border-color: transparent !important;
       box-shadow: none !important;
     }
@@ -696,12 +700,6 @@ td .stat {
 // (display: none). This happens with expandable sections (.expdContainer).
 // We must override inline styles with !important to fix this issue.
 
-// Force tables to always have proper width even when DataTables sets inline 0px
-table.dataTable {
-  width: 100% !important;
-  min-width: 100% !important;
-}
-
 // Fix for tables inside expandable containers
 .expdContainer {
   table.dataTable {
@@ -754,14 +752,14 @@ fieldset {
 
 td {
   &.group {
-    background-color: lighten($foreground-color, 4%);
+    background-color: color.adjust($foreground-color, $lightness: 4%);
     border-bottom: 1px solid $accent-orange;
     border-top: 1px solid $accent-orange;
     color: $text-main-color;
   }
 
   &.details {
-    background-color: lighten($foreground-color, 4%);
+    background-color: color.adjust($foreground-color, $lightness: 4%);
     border: 1px solid $accent-orange;
     color: $text-main-color;
   }

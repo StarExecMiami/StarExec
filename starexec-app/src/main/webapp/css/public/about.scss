@@ -5,6 +5,7 @@
 // Uses shared components from the design system
 // =============================================================================
 
+@use "sass:color";
 @use "../global/colors" as c;
 @use "../global/typography" as t;
 @use "../global/spacing" as s;
@@ -140,7 +141,7 @@ $spacing-2xs: s.$spacing-2xs;
     @include m.transition-default;
     
     &:hover {
-      color: lighten($accent-orange, 10%);
+      color: color.adjust($accent-orange, $lightness: 10%);
       text-decoration: underline;
     }
   }
@@ -183,7 +184,7 @@ $spacing-2xs: s.$spacing-2xs;
   justify-content: center;
   border-radius: 8px;
   margin-bottom: $spacing-md;
-  color: white;
+  color: #ffffff;
   
   &--benchmarks {
     background: $accent-blue;

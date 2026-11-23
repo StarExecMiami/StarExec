@@ -5,6 +5,7 @@
 // Uses shared components from the design system
 // =============================================================================
 
+@use "sass:color";
 @use "../global/colors" as c;
 @use "../global/typography" as t;
 @use "../global/spacing" as s;
@@ -128,7 +129,7 @@ $container-max-width: s.$container-max-width;
   box-shadow: 0 2px 8px rgba($accent-blue, 0.2);
 
   &:hover {
-    background-color: lighten($accent-blue, 8%);
+    background-color: color.adjust($accent-blue, $lightness: 8%);
     color: $text-main-color;
     text-decoration: none;
     box-shadow: 0 4px 12px rgba($accent-blue, 0.3);
@@ -230,7 +231,7 @@ $container-max-width: s.$container-max-width;
   background: $foreground-color;
   padding: $spacing-lg;
   border-radius: 4px;
-  border: 1px solid lighten($foreground-color, 10%);
+  border: 1px solid color.adjust($foreground-color, $lightness: 10%);
   z-index: 100;
 
   @include m.mobile {
@@ -273,7 +274,7 @@ $container-max-width: s.$container-max-width;
 
   &:hover {
     color: $text-main-color;
-    background-color: lighten($foreground-color, 5%);
+    background-color: color.adjust($foreground-color, $lightness: 5%);
   }
 
   &:focus {
@@ -284,14 +285,14 @@ $container-max-width: s.$container-max-width;
   &.active {
     color: $accent-blue;
     font-weight: $font-weight-semibold;
-    background-color: lighten($foreground-color, 5%);
+    background-color: color.adjust($foreground-color, $lightness: 5%);
   }
 }
 
 .nav-footer {
   margin-top: $spacing-lg;
   padding-top: $spacing-lg;
-  border-top: 1px solid lighten($foreground-color, 10%);
+  border-top: 1px solid color.adjust($foreground-color, $lightness: 10%);
 }
 
 .scroll-to-top {
@@ -370,7 +371,7 @@ $container-max-width: s.$container-max-width;
     border-radius: 3px;
     color: $accent-orange;
     font-size: $font-size-sm;
-    border: 1px solid lighten($foreground-color, 5%);
+    border: 1px solid color.adjust($foreground-color, $lightness: 5%);
   }
 }
 
@@ -380,7 +381,7 @@ $container-max-width: s.$container-max-width;
 
 pre {
   background: $foreground-color;
-  border: 1px solid lighten($foreground-color, 10%);
+  border: 1px solid color.adjust($foreground-color, $lightness: 10%);
   border-radius: 4px;
   padding: $spacing-md;
   overflow-x: auto;
@@ -422,7 +423,7 @@ pre {
 
   th,
   td {
-    border: 1px solid lighten($foreground-color, 10%);
+    border: 1px solid color.adjust($foreground-color, $lightness: 10%);
     padding: $spacing-sm;
     text-align: left;
   }
@@ -439,11 +440,11 @@ pre {
   }
 
   tbody tr:nth-child(even) {
-    background-color: lighten($foreground-color, 3%);
+    background-color: color.adjust($foreground-color, $lightness: 3%);
   }
 
   tbody tr:hover {
-    background-color: lighten($foreground-color, 5%);
+    background-color: color.adjust($foreground-color, $lightness: 5%);
   }
 
   code {
@@ -458,7 +459,7 @@ pre {
 
 .command {
   background: $foreground-color;
-  border: 1px solid lighten($foreground-color, 10%);
+  border: 1px solid color.adjust($foreground-color, $lightness: 10%);
   border-radius: 4px;
   padding: $spacing-lg;
   margin-bottom: $spacing-lg;
@@ -576,7 +577,7 @@ pre {
 
 .feature-card {
   background: $foreground-color;
-  border: 1px solid lighten($foreground-color, 10%);
+  border: 1px solid color.adjust($foreground-color, $lightness: 10%);
   border-radius: 12px;
   padding: $spacing-lg;
   @include m.transition-default;
@@ -608,14 +609,14 @@ pre {
   justify-content: center;
   border-radius: 10px;
   flex-shrink: 0;
-  color: white;
+  color: #ffffff;
 
   &--shell {
-    background: linear-gradient(135deg, $info, darken($info, 8%));
+    background: linear-gradient(135deg, $info, color.adjust($info, $lightness: -8%));
   }
 
   &--batch {
-    background: linear-gradient(135deg, $success, darken($success, 8%));
+    background: linear-gradient(135deg, $success, color.adjust($success, $lightness: -8%));
   }
 }
 
@@ -665,8 +666,8 @@ pre {
 // ============================================================================
 
 .example-box {
-  background: lighten($foreground-color, 2%);
-  border: 1px solid lighten($foreground-color, 8%);
+  background: color.adjust($foreground-color, $lightness: 2%);
+  border: 1px solid color.adjust($foreground-color, $lightness: 8%);
   border-radius: 12px;
   overflow: hidden;
   margin: $spacing-lg 0;
@@ -677,8 +678,8 @@ pre {
   align-items: center;
   gap: $spacing-sm;
   padding: $spacing-md;
-  background: lighten($foreground-color, 4%);
-  border-bottom: 1px solid lighten($foreground-color, 8%);
+  background: color.adjust($foreground-color, $lightness: 4%);
+  border-bottom: 1px solid color.adjust($foreground-color, $lightness: 8%);
   color: $text-main-color;
   font-size: $font-size-sm;
   font-weight: $font-weight-medium;
@@ -751,7 +752,7 @@ pre {
 
 .mode-card {
   background: $foreground-color;
-  border: 1px solid lighten($foreground-color, 10%);
+  border: 1px solid color.adjust($foreground-color, $lightness: 10%);
   border-radius: 12px;
   padding: $spacing-lg;
   @include m.transition-default;
@@ -781,12 +782,12 @@ pre {
 .feature-tag {
   display: inline-block;
   padding: $spacing-2xs $spacing-sm;
-  background: lighten($foreground-color, 8%);
+  background: color.adjust($foreground-color, $lightness: 8%);
   color: $text-main-color;
   font-size: $font-size-xs;
   font-weight: $font-weight-medium;
   border-radius: 6px;
-  border: 1px solid lighten($foreground-color, 12%);
+  border: 1px solid color.adjust($foreground-color, $lightness: 12%);
 }
 
 // ============================================================================

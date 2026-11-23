@@ -5,6 +5,7 @@
 // Uses shared components from the design system
 // =============================================================================
 
+@use "sass:color";
 @use "../global/colors" as c;
 @use "../global/typography" as t;
 @use "../global/spacing" as s;
@@ -664,8 +665,8 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, $accent-blue, darken($accent-blue, 10%));
-  color: white;
+  background: linear-gradient(135deg, $accent-blue, color.adjust($accent-blue, $lightness: -10%));
+  color: #ffffff;
   font-size: $font-size-lg;
   font-weight: $font-weight-bold;
   border-radius: 10px;
@@ -745,7 +746,7 @@ kbd {
   align-items: center;
   justify-content: center;
   background: $accent-blue;
-  color: white;
+  color: #ffffff;
   font-weight: $font-weight-bold;
   border-radius: 8px;
   flex-shrink: 0;
