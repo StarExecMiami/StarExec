@@ -20,7 +20,7 @@
 	}
 
 	.ui-dialog-content {
-		border: 1px solid #333;
+		border: 1px solid #333333;
 
 		&::after {
 			@include loading-spinner(25px);

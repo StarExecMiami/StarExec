@@ -10,6 +10,7 @@ fieldset table,
 fieldset ul {
 	width: 100%;
 }
+
 tr .label {
 	width: 20%;
 }
@@ -19,10 +20,12 @@ tr th {
 	padding: 10px;		
 	vertical-align: middle;
 }
+
 #process{
 	margin-top:5px;
 	margin-right:20px;
 }
+
 #detailsTbl tr td:first-child {
 	width: 20%;
 }
@@ -32,6 +35,7 @@ tr th {
 }
 
 /* Button positioning for process benchmarks action field */
+
 /* Base button styles come from global components/_button.scss */
 #actionField button {
 	float:right;

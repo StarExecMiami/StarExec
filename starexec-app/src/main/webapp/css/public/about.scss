@@ -22,7 +22,6 @@ $accent-orange: c.$accent-orange;
 $accent-green: c.$accent-green;
 $surface-secondary: c.$surface-secondary;
 $surface-tertiary: c.$surface-tertiary;
-
 $font-size-4xl: t.$font-size-4xl;
 $font-size-3xl: t.$font-size-3xl;
 $font-size-2xl: t.$font-size-2xl;
@@ -33,7 +32,6 @@ $font-size-xs: t.$font-size-xs;
 $font-weight-bold: t.$font-weight-bold;
 $font-weight-semibold: t.$font-weight-semibold;
 $font-weight-medium: t.$font-weight-medium;
-
 $spacing-3xl: s.$spacing-3xl;
 $spacing-2xl: s.$spacing-2xl;
 $spacing-xl: s.$spacing-xl;
@@ -138,6 +136,7 @@ $spacing-2xs: s.$spacing-2xs;
   a {
     color: $accent-orange;
     text-decoration: none;
+
     @include m.transition-default;
     
     &:hover {
@@ -166,12 +165,15 @@ $spacing-2xs: s.$spacing-2xs;
   border: 1px solid $surface-tertiary;
   border-radius: 12px;
   padding: $spacing-lg;
+
   @include m.transition-default;
+
   display: flex;
   flex-direction: column;
 
   &:hover {
     border-color: $accent-blue;
+
     @include m.card-shadow;
   }
 }
@@ -235,6 +237,7 @@ $spacing-2xs: s.$spacing-2xs;
   padding: $spacing-md;
   color: $text-main-color;
   text-decoration: none;
+
   @include m.transition-default;
   
   &:hover {
@@ -261,7 +264,9 @@ $spacing-2xs: s.$spacing-2xs;
 
 .external-icon {
   color: $accent-orange;
+
   @include m.transition-default;
+
   flex-shrink: 0;
 }
 
@@ -323,11 +328,14 @@ $spacing-2xs: s.$spacing-2xs;
   border-radius: 8px;
   padding: $spacing-lg;
   text-decoration: none;
+
   @include m.transition-default;
   
   &:hover {
     border-color: $accent-blue;
+
     @include m.card-shadow;
+
     transform: translateY(-2px);
   }
   

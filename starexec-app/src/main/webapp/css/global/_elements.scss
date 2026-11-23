@@ -34,7 +34,6 @@ a:link, a:visited {
 
 input, textarea, select {
 	@extend %heading;
-
 	@extend %rounded-corners;
 
 	background-color: $input-background;
@@ -60,7 +59,7 @@ input[type="search"]:not(.form-input, .form-control),
 input[type="password"]:not(.form-input, .form-control) {
 	-webkit-appearance: none;
 	height: 26px;
-	padding: 0 5px 0 5px;
+	padding: 0 5px;
 }
 
 textarea {
@@ -94,7 +93,7 @@ legend {
 	border: 2px solid $background-color;
 	border-radius: 3px;
 	background-color: $background-color;
-	padding: 5px 8px 5px 8px;
+	padding: 5px 8px;
 	margin-left: 25px;
 }
 

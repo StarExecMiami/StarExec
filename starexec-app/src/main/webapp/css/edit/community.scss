@@ -31,6 +31,7 @@ tr th {
 }
 
 /* Button positioning for community edit page forms */
+
 /* Base button styles come from global components/_button.scss */
 .newForm button {
   width: 90px;
@@ -167,7 +168,7 @@ tr th {
 #editCpuTimeout:hover,
 #editClockTimeout:hover,
 #editMaxMem:hover {
-  background-color: rgba(220, 111, 4, 0.1);
+  background-color: rgb(220 111 4 / 10%);
 }
 
 /* Empty description placeholder styling */
@@ -191,6 +192,7 @@ tr th {
 #newTypeForm input {
   width: 90%;
 }
+
 #addPreProcessorForm textarea,
 #addPostProcessorForm textarea,
 #addUpdateProcessorForm textarea,
@@ -223,6 +225,7 @@ tr th {
   #wrapper #leaders tr > *:nth-child(2) {
     display: none;
   }
+
   #wrapper #leaders tr > *:nth-child(3) {
     display: none;
   }
@@ -230,6 +233,7 @@ tr th {
   #wrapper #Members tr > *:nth-child(2) {
     display: none;
   }
+
   #wrapper #Members tr > *:nth-child(3) {
     display: none;
   }

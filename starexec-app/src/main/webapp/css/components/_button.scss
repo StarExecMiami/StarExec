@@ -40,7 +40,9 @@ $touch-target-mobile-min-padding: 14px;
 	padding: $btn-padding-y $btn-padding-x;
 	margin: $btn-margin;
 	border: 1px solid transparent;
+
 	@extend %rounded-corners;
+
 	font-size: 1em;
 	font-weight: 500;
 	cursor: pointer;
@@ -74,7 +76,7 @@ $touch-target-mobile-min-padding: 14px;
 
 	&:hover:not(:disabled) {
 		transform: translateY(-1px);
-		box-shadow: 0 2px 8px rgba(255, 255, 255, 0.08);
+		box-shadow: 0 2px 8px rgb(255 255 255 / 8%);
 	}
 
 	&:active:not(:disabled) {
@@ -86,6 +88,7 @@ $touch-target-mobile-min-padding: 14px;
 .btn-sm {
 	padding: $btn-sm-padding-y $btn-sm-padding-x;
 	font-size: 0.875em;
+
 	// Small buttons still need touch targets
 	min-height: $touch-target-min-size;
 	min-width: $touch-target-min-size;
@@ -191,6 +194,7 @@ $touch-target-mobile-min-padding: 14px;
 // Standardize jQuery UI button padding and margin
 .ui-button {
 	@extend %btn;
+
 	padding: $btn-padding-y $btn-padding-x !important;
 	margin: $btn-margin !important;
 	box-sizing: border-box !important;
@@ -206,13 +210,13 @@ $touch-target-mobile-min-padding: 14px;
 	}
 
 	// Hover transform effect
-	&:hover:not(:disabled):not(.ui-state-disabled) {
+	&:hover:not(:disabled, .ui-state-disabled) {
 		transform: translateY(-1px);
-		box-shadow: 0 2px 8px rgba(255, 255, 255, 0.08);
+		box-shadow: 0 2px 8px rgb(255 255 255 / 8%);
 	}
 
 	// Active press effect
-	&:active:not(:disabled):not(.ui-state-disabled) {
+	&:active:not(:disabled, .ui-state-disabled) {
 		transform: translateY(0);
 	}
 }
@@ -468,7 +472,7 @@ html .ui-button.ui-state-disabled:active,
 @media (prefers-contrast: high) {
 	.btn,
 	.ui-button {
-		border: 2px solid currentColor;
+		border: 2px solid currentcolor;
 	}
 	
 	.btn-icon .ui-icon,

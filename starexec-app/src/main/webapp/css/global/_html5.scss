@@ -25,14 +25,14 @@ blockquote, q {
 }
 
 blockquote {
-	&:before, &:after {
+	&::before, &::after {
 		content: '';
 		content: none;
 	}
 }
 
 q {
-	&:before, &:after {
+	&::before, &::after {
 		content: '';
 		content: none;
 	}
@@ -48,15 +48,15 @@ a {
 
 ins {
 	// change colours to suit your needs
-	background-color: #ff9;
-	color: #000;
+	background-color: #ffff99;
+	color: #000000;
 	text-decoration: none;
 }
 
 mark {
 	// change colours to suit your needs
-	background-color: #ff9;
-	color: #000;
+	background-color: #ffff99;
+	color: #000000;
 	font-style: italic;
 	font-weight: bold;
 }

@@ -21,17 +21,16 @@
     align-items: center;
     justify-content: space-between;
     gap: $spacing-md;
+
     // Enhanced vertical padding for better breathing room (20px vertical)
     // Maintain strong horizontal padding for content containment (24px horizontal)
     padding: calc(#{$spacing-md} + 4px) $spacing-lg;
     border-radius: 8px;
     font-size: $font-size-sm;
     line-height: 1.5;
+
     // Generous bottom margin for spacing between consecutive alerts
-    margin-bottom: $spacing-lg;
-    margin-top: 0;
-    margin-left: 0;
-    margin-right: 0;
+    margin: 0 0 $spacing-lg;
 
     &:first-child {
         margin-top: 0;
@@ -63,6 +62,7 @@
     flex-shrink: 0;
     width: 20px;
     height: 20px;
+
     // Center icon vertically with text baseline
     display: flex;
     align-items: center;
@@ -73,6 +73,7 @@
 .alert__content,
 %alert-content {
     flex: 1;
+
     // Ensure proper text wrapping and word breaking
     word-wrap: break-word;
     overflow-wrap: break-word;
@@ -82,6 +83,7 @@
 .alert__title,
 %alert-title {
     font-weight: $font-weight-semibold;
+
     // Display inline to flow with message on same line
     display: inline;
     margin: 0;
@@ -114,6 +116,7 @@
     color: inherit;
     opacity: 0.7;
     cursor: pointer;
+
     // Proper sizing for touch target (minimum 44x44px per WCAG)
     padding: $spacing-xs;
     display: flex;
@@ -124,15 +127,16 @@
     border-radius: 4px;
     flex-shrink: 0;
     margin: 0;
+
     @include transition-default;
 
     &:hover {
         opacity: 1;
-        background: rgba(255, 255, 255, 0.1);
+        background: rgb(255 255 255 / 10%);
     }
 
     &:focus {
-        outline: 2px solid currentColor;
+        outline: 2px solid currentcolor;
         outline-offset: 2px;
     }
 
@@ -150,6 +154,7 @@
     color: inherit;
     opacity: 0.7;
     cursor: pointer;
+
     // Explicit sizing for proper hit target (44px x 44px)
     width: 44px;
     height: 44px;
@@ -161,16 +166,17 @@
     line-height: 1;
     border-radius: 4px;
     margin: 0;
+
     @include transition-default;
 
     &:hover,
     &:focus {
         opacity: 1;
-        background: rgba(255, 255, 255, 0.15);
+        background: rgb(255 255 255 / 15%);
     }
 
     &:focus {
-        outline: 2px solid currentColor;
+        outline: 2px solid currentcolor;
         outline-offset: 2px;
     }
 
@@ -278,6 +284,7 @@
 .message.error {
     @extend %alert;
     @extend %alert-error;
+
     display: block;
 }
 
@@ -285,6 +292,7 @@
 .message.success {
     @extend %alert;
     @extend %alert-success;
+
     display: block;
 }
 
@@ -293,6 +301,7 @@
 .warning-message {
     @extend %alert;
     @extend %alert-warning;
+
     display: block;
 }
 
@@ -300,6 +309,7 @@
 .message.info {
     @extend %alert;
     @extend %alert-info;
+
     display: block;
 }
 
@@ -309,12 +319,13 @@
 
 .toast {
     @extend %alert;
+
     position: fixed;
     top: $spacing-lg;
     right: $spacing-lg;
     max-width: 400px;
     z-index: var(--z-index-tooltip, 700);
-    box-shadow: var(--shadow-lg, 0 10px 15px -3px rgba(0, 0, 0, 0.3));
+    box-shadow: var(--shadow-lg, 0 10px 15px -3px rgb(0 0 0 / 30%));
 
     // Animations respect user motion preferences
     @media (prefers-reduced-motion: no-preference) {
@@ -325,11 +336,9 @@
     margin: 0;
 
     @include mobile {
-        left: $spacing-md;
-        right: $spacing-md;
+        inset: auto $spacing-md $spacing-md;
         max-width: none;
-        top: auto;
-        bottom: $spacing-md;
+
         // Reduce padding on mobile for space efficiency
         padding: $spacing-md $spacing-md;
     }
@@ -343,6 +352,7 @@
             opacity: 0;
             transform: translateX(100%);
         }
+
         to {
             opacity: 1;
             transform: translateX(0);

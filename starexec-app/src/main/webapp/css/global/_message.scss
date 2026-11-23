@@ -1,48 +1,48 @@
-// =============================================================================
-// LEGACY MESSAGE STYLES - DEPRECATED
-// =============================================================================
-// These styles are DEPRECATED and maintained for backwards compatibility only.
-//
-// MIGRATION REQUIRED: Please migrate to the new centralized alert system:
-//   - CSS: Use .alert and .alert--{type} classes from _alert.scss
-//   - JS: Use window.Alerts utility from alerts.js
-//   - Banners: Use window.Banners utility from banners.js
-//
-// Timeline for removal:
-//   - Current: Maintained for backwards compatibility
-//   - Q1 2026: Issue deprecation warnings in console
-//   - Q2 2026: Remove from codebase
-//
-// New Alert System Benefits:
-//   ✓ Unified DOM structure across all notifications
-//   ✓ Consistent styling and behavior
-//   ✓ Better accessibility (ARIA roles, live regions)
-//   ✓ Session dismissal persistence
-//   ✓ Responsive mobile-friendly design
-//   ✓ Animation support
-//
-// MIGRATION EXAMPLES:
-//
-//   Old (DEPRECATED):
-//   <div class="message error">
-//     <span class="message__icon" aria-hidden="true"></span>
-//     Error message text
-//     <span class="exit">×</span>
-//   </div>
-//
-//   New (RECOMMENDED):
-//   Use window.Alerts.create() in JavaScript:
-//   var alert = Alerts.create({
-//     id: 'my-alert',
-//     type: 'error',
-//     title: 'Error',
-//     message: 'Error message text',
-//     icon: '<svg>...</svg>',
-//     dismissible: true
-//   });
-//   document.body.insertBefore(alert, document.body.firstChild);
-//
-// =============================================================================
+/* =============================================================================
+ * LEGACY MESSAGE STYLES - DEPRECATED
+ * =============================================================================
+ * These styles are DEPRECATED and maintained for backwards compatibility only.
+ *
+ * MIGRATION REQUIRED: Please migrate to the new centralized alert system:
+ *   - CSS: Use .alert and .alert--{type} classes from _alert.scss
+ *   - JS: Use window.Alerts utility from alerts.js
+ *   - Banners: Use window.Banners utility from banners.js
+ *
+ * Timeline for removal:
+ *   - Current: Maintained for backwards compatibility
+ *   - Q1 2026: Issue deprecation warnings in console
+ *   - Q2 2026: Remove from codebase
+ *
+ * New Alert System Benefits:
+ *   ✓ Unified DOM structure across all notifications
+ *   ✓ Consistent styling and behavior
+ *   ✓ Better accessibility (ARIA roles, live regions)
+ *   ✓ Session dismissal persistence
+ *   ✓ Responsive mobile-friendly design
+ *   ✓ Animation support
+ *
+ * MIGRATION EXAMPLES:
+ *
+ *   Old (DEPRECATED):
+ *   <div class="message error">
+ *     <span class="message__icon" aria-hidden="true"></span>
+ *     Error message text
+ *     <span class="exit">×</span>
+ *   </div>
+ *
+ *   New (RECOMMENDED):
+ *   Use window.Alerts.create() in JavaScript:
+ *   var alert = Alerts.create({
+ *     id: 'my-alert',
+ *     type: 'error',
+ *     title: 'Error',
+ *     message: 'Error message text',
+ *     icon: '<svg>...</svg>',
+ *     dismissible: true
+ *   });
+ *   document.body.insertBefore(alert, document.body.firstChild);
+ *
+ * ============================================================================= */
 
 @import "colors";
 

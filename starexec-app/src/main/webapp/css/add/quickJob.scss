@@ -24,12 +24,13 @@
 .contentTbl input[type="text"] {
   width: 200px;
 }
+
 #content fieldset {
   width: 700px;
   margin: s.$spacing-2xl auto s.$spacing-2xl auto;
 }
 
-@media only screen and (max-width: 1023px) {
+@media only screen and (width <= 1023px) {
   #content fieldset {
     width: 90%;
   }
@@ -44,6 +45,7 @@
   #wrapper .contentTbl input[type="text"] {
     width: 95%;
   }
+
   #wrapper .contentTbl textarea {
     width: 95%;
   }

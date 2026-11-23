@@ -1,15 +1,15 @@
-// =============================================================================
-// DEPRECATED - DO NOT USE
-// =============================================================================
-// This legacy stylesheet has been unified with the modern design system.
-// All table styles now live in:
-// -> css/components/_table.scss (Table styles & DataTables dark mode)
-// -> css/components/_form.scss (Form elements within tables)
-// -> css/global/_helper.scss (Utility classes like .clear)
-// 
-// This file is kept intentionally blank to prevent 404 errors on the 45+
-// JSP pages that still use <star:template css="common/table">.
-// 
-// Future refactoring can safely remove this file once all JSPs are updated to
-// stop requesting it.
-// =============================================================================
+/* =============================================================================
+ * DEPRECATED - DO NOT USE
+ * =============================================================================
+ * This legacy stylesheet has been unified with the modern design system.
+ * All table styles now live in:
+ * -> css/components/_table.scss (Table styles & DataTables dark mode)
+ * -> css/components/_form.scss (Form elements within tables)
+ * -> css/global/_helper.scss (Utility classes like .clear)
+ *
+ * This file is kept intentionally blank to prevent 404 errors on the 45+
+ * JSP pages that still use <star:template css="common/table">.
+ *
+ * Future refactoring can safely remove this file once all JSPs are updated to
+ * stop requesting it.
+ * ============================================================================= */

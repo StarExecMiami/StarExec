@@ -23,19 +23,20 @@
     }
 }
 
-// ============================================================================
-// Alert Messages - Warnings & Errors
-// ============================================================================
-// Alert message styles are now centralized in components/_alert.scss
-// Legacy .warning-message and .error.message classes are automatically
-// handled by _alert.scss backwards compatibility rules (@extend .alert)
-//
-// For new markup, use:
-//   <div class="alert alert--warning">...</div>
-//   <div class="alert alert--error">...</div>
-//
-// Existing .warning-message and .error.message markup continues to work
-// through the centralized alert component system
+/* ============================================================================
+ * Alert Messages - Warnings & Errors
+ * ============================================================================
+ * Alert message styles are now centralized in components/_alert.scss
+ * Legacy .warning-message and .error.message classes are automatically
+ * handled by _alert.scss backwards compatibility rules (@extend %alert)
+ *
+ * For new markup, use:
+ *   <div class="alert alert--warning">...</div>
+ *   <div class="alert alert--error">...</div>
+ *
+ * Existing .warning-message and .error.message markup continues to work
+ * through the centralized alert component system
+ */
 
 // ============================================================================
 // Login Form - Main Container
@@ -50,6 +51,7 @@
         padding: 30px;
         background-color: $foreground-color;
         border: 1px solid color.adjust($background-color, $lightness: -5%);
+
         @extend %rounded-corners;
     }
 
@@ -92,7 +94,9 @@
     color: $input-text;
     font-size: 14px;
     box-sizing: border-box;
+
     @extend %rounded-corners;
+
     transition: all 0.2s ease-in-out;
 
     &::placeholder {
@@ -158,7 +162,7 @@
     text-align: center;
 
     p {
-        margin: 0 0 10px 0;
+        margin: 0 0 10px;
 
         &:last-child {
             margin-bottom: 0;
@@ -216,7 +220,7 @@
 
     .login-form {
         width: 100%;
-        margin: 20px auto 0 auto;
+        margin: 20px auto 0;
 
         #loginFieldset {
             width: 100%;
@@ -246,7 +250,7 @@
 // Responsive Design - Mobile (max 480px)
 // ============================================================================
 
-@media only screen and (max-width: 480px) {
+@media only screen and (width <= 480px) {
     .login-container {
         padding: 5px;
 
@@ -258,7 +262,7 @@
 
     .login-form {
         width: 100%;
-        margin: 10px 0 0 0;
+        margin: 10px 0 0;
 
         #loginFieldset {
             width: 100%;
@@ -293,7 +297,7 @@
         padding-top: 10px;
 
         p {
-            margin: 0 0 8px 0;
+            margin: 0 0 8px;
             font-size: 12px;
         }
     }

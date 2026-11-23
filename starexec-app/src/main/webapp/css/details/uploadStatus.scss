@@ -1,5 +1,4 @@
 @use "sass:color";
-
 @import "../global/helper";
 @import "../global/colors";
 
@@ -10,15 +9,37 @@
 // --- Animations ---
 
 @keyframes pulse-red {
-	0% { opacity: 1; transform: scale(1); }
-	50% { opacity: 0.5; transform: scale(1.2); }
-	100% { opacity: 1; transform: scale(1); }
+	0% {
+		opacity: 1;
+		transform: scale(1);
+	}
+
+	50% {
+		opacity: 0.5;
+		transform: scale(1.2);
+	}
+
+	100% {
+		opacity: 1;
+		transform: scale(1);
+	}
 }
 
 @keyframes pulse-green {
-	0% { opacity: 1; transform: scale(1); }
-	50% { opacity: 0.8; transform: scale(1.2); }
-	100% { opacity: 1; transform: scale(1); }
+	0% {
+		opacity: 1;
+		transform: scale(1);
+	}
+
+	50% {
+		opacity: 0.8;
+		transform: scale(1.2);
+	}
+
+	100% {
+		opacity: 1;
+		transform: scale(1);
+	}
 }
 
 .pulse-stuck {
@@ -124,7 +145,7 @@
 	font-weight: 600;
 	font-size: 12px;
 	color: $text-main-color;
-	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+	text-shadow: 0 1px 2px rgb(0 0 0 / 50%);
 }
 
 // --- Phase Text ---

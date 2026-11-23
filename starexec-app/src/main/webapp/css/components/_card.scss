@@ -12,7 +12,7 @@
   &:hover {
     border-color: c.$accent-orange;
     transform: translateY(-2px);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 20%);
   }
   
   &__header {

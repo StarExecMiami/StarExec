@@ -2,10 +2,10 @@
 
 #content fieldset {
 	width: 600px;
-	margin: 50px auto 50px auto;	
+	margin: 50px auto;	
 }
 
-@media only screen and (max-width: 1023px) {
+@media only screen and (width <= 1023px) {
 	#content fieldset {
 		width: 90%;
 	}

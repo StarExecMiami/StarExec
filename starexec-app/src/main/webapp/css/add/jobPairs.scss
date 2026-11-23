@@ -2,10 +2,10 @@
 
 #content fieldset {
 	width: 600px;
-	margin: 50px auto 50px auto;	
+	margin: 50px auto;	
 }
 
-@media only screen and (max-width: 1023px) {
+@media only screen and (width <= 1023px) {
 	#content fieldset {
 		width: 90%;
 	}
@@ -164,7 +164,7 @@ td.details {
 	}
 }
 
-@media only screen and (min-width: 560px) and (max-width: #{m.$breakpoint-tablet - 1px})  {
+@media only screen and (width >= 560px) and (max-width: #{m.$breakpoint-tablet - 1px})  {
 	#wrapper #tblSolverConfig td, #wrapper #tblSolverConfig th {
 		font-size: 100%;
 	}

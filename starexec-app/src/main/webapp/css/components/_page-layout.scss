@@ -156,6 +156,7 @@
 .breadcrumb-link {
   color: c.$text-secondary;
   text-decoration: none;
+
   @include m.transition-default;
 
   &:hover {
@@ -249,6 +250,7 @@
   a {
     color: c.$accent-orange;
     text-decoration: none;
+
     @include m.transition-default;
     
     &:hover {
@@ -348,6 +350,7 @@
   text-decoration: none;
   border-radius: 8px;
   font-size: t.$font-size-sm;
+
   @include m.transition-default;
 
   &:hover {
@@ -390,6 +393,7 @@
   color: c.$text-secondary;
   font-size: t.$font-size-sm;
   text-decoration: none;
+
   @include m.transition-default;
 
   &:hover {

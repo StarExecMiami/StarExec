@@ -78,7 +78,7 @@ table.dataTable {
 
 	tfoot {
 		th, td {
-			padding: 10px 18px 6px 18px;
+			padding: 10px 18px 6px;
 			border-top: 1px solid #111111;
 		}
 	}
@@ -327,7 +327,7 @@ table.dataTable {
 			}
 
 			tfoot {
-				padding: 5px 9px 3px 9px;
+				padding: 5px 9px 3px;
 			}
 
 			tbody {
@@ -446,25 +446,25 @@ table.dataTable {
 
 			text-decoration: none !important;
 			cursor: pointer;
-			color: #fff !important;
+			color: #ffffff !important;
 			border: 1px solid transparent;
 
 			&.current, &.current:hover {
-				color: #000 !important;
+				color: #000000 !important;
 				border-color: #cacaca;
 				background-color: #ffffff;
 			}
 
 			&.disabled, &.disabled:hover {
 				cursor: default;
-				color: #333 !important;
+				color: #333333 !important;
 				border-color: transparent;
 				background: transparent;
 				box-shadow: none;
 			}
 
 			&:hover, &:active {
-				color: #fff !important;
+				color: #ffffff !important;
 				border-color: #d8f0fa;
 				background-color: $accent-orange;
 			}
@@ -485,7 +485,7 @@ table.dataTable {
 
 		font-size: 1.2em;
 		background-color: #ffffff;
-		background-image: linear-gradient(to right, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.9) 25%, rgba(255, 255, 255, 0.9) 75%, rgba(255, 255, 255, 0) 100%);
+		background-image: linear-gradient(to right, rgb(255 255 255 / 0%) 0%, rgb(255 255 255 / 90%) 25%, rgb(255 255 255 / 90%) 75%, rgb(255 255 255 / 0%) 100%);
 	}
 
 	:is(.dataTables_length, .dt-length), :is(.dataTables_filter, .dt-search), :is(.dataTables_info, .dt-info), .dataTables_processing, :is(.dataTables_paginate, .dt-paging) {
@@ -519,7 +519,7 @@ table.dataTable {
 		}
 	}
 
-	&:after {
+	&::after {
 		visibility: hidden;
 		display: block;
 		content: "";
@@ -543,7 +543,7 @@ table.dataTable {
 	}
 }
 
-@media screen and (max-width: 640px) {
+@media screen and (width <= 640px) {
 	:is(.dataTables_wrapper, .dt-container) {
 		:is(.dataTables_length, .dt-length) {
 			float: none;

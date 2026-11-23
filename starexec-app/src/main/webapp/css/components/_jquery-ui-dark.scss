@@ -132,7 +132,7 @@ a.ui-button:active,
 .ui-dialog {
   background: colors.$foreground-color !important;
   border: 2px solid colors.$background-color !important;
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 10px rgb(0 0 0 / 50%);
   max-width: calc(100vw - 16px) !important;
 }
 

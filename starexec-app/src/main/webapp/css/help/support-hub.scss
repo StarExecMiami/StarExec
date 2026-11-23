@@ -20,7 +20,6 @@ $accent-orange: c.$accent-orange;
 $surface-secondary: c.$surface-secondary;
 $surface-tertiary: c.$surface-tertiary;
 $success: c.$success;
-
 $font-size-4xl: t.$font-size-4xl;
 $font-size-3xl: t.$font-size-3xl;
 $font-size-2xl: t.$font-size-2xl;
@@ -33,7 +32,6 @@ $font-weight-bold: t.$font-weight-bold;
 $font-weight-semibold: t.$font-weight-semibold;
 $font-weight-medium: t.$font-weight-medium;
 $font-family-mono: t.$font-family-mono;
-
 $spacing-3xl: s.$spacing-3xl;
 $spacing-2xl: s.$spacing-2xl;
 $spacing-xl: s.$spacing-xl;
@@ -114,6 +112,7 @@ $container-max-width: s.$container-max-width;
   border: 2px solid $surface-tertiary;
   border-radius: 12px;
   padding: $spacing-sm $spacing-md;
+
   @include m.transition-default;
 
   &:focus-within {
@@ -185,7 +184,9 @@ $container-max-width: s.$container-max-width;
   border-radius: 12px;
   padding: $spacing-lg;
   text-decoration: none;
+
   @include m.transition-default;
+
   overflow: hidden;
 
   &::before {
@@ -197,12 +198,14 @@ $container-max-width: s.$container-max-width;
     height: 4px;
     background: linear-gradient(90deg, $accent-blue, $accent-orange);
     opacity: 0;
+
     @include m.transition-default;
   }
 
   &:hover {
     border-color: $accent-blue;
     transform: translateY(-4px);
+
     @include m.card-shadow;
 
     &::before {
@@ -277,10 +280,12 @@ $container-max-width: s.$container-max-width;
   border: 1px solid $surface-tertiary;
   border-radius: 12px;
   padding: $spacing-lg;
+
   @include m.transition-default;
 
   &:hover {
     border-color: $accent-blue;
+
     @include m.card-shadow;
   }
 }
@@ -368,11 +373,13 @@ $container-max-width: s.$container-max-width;
   border-radius: 12px;
   padding: $spacing-md;
   text-decoration: none;
+
   @include m.transition-default;
 
   &:hover {
     border-color: $accent-blue;
     transform: translateY(-2px);
+
     @include m.card-shadow;
 
     .external-link-icon {
@@ -478,6 +485,7 @@ $container-max-width: s.$container-max-width;
   100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.6;
   }
@@ -550,13 +558,14 @@ $container-max-width: s.$container-max-width;
     font-size: $font-size-sm;
     display: block;
     padding: 0.375rem 0;
+
     @include m.transition-default;
 
     &:hover {
       color: $accent-blue;
     }
 
-    &:before {
+    &::before {
       content: "→ ";
       margin-right: $spacing-xs;
       opacity: 0.5;

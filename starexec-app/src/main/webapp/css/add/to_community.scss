@@ -3,11 +3,12 @@
 
 fieldset {
     width: 75%;
-    margin: 50px auto 0 auto;
+    margin: 50px auto 0;
     padding: 30px;
     background-color: $surface-primary;
     border: 1px solid $input-background-selected;
     border-radius: 12px;
+
     @include card-shadow;
 }
 
@@ -17,6 +18,7 @@ fieldset {
         background-color: $surface-primary;
         border: 1px solid $input-background-selected;
         border-radius: 8px;
+
         @include card-shadow;
     }
 }
@@ -44,6 +46,7 @@ table tr td {
 }
 
 /* Button positioning for to_community page table cells */
+
 /* Base button styles come from global components/_button.scss */
 td button {
     float: right;
@@ -81,6 +84,7 @@ textarea#reason {
     resize: vertical;
     background-color: $input-background;
     color: $text-main-color;
+
     @include transition-safe(border-color 0.3s ease);
 }
 
@@ -88,6 +92,7 @@ textarea#reason:focus {
     border-color: $accent-blue;
     outline: none;
     box-shadow: 0 0 0 2px rgba($accent-blue, 0.2);
+
     @include focus-visible {
         box-shadow: 0 0 0 2px rgba($accent-blue, 0.2);
     }
@@ -103,6 +108,7 @@ textarea#reason.error {
 textarea#reason.error:focus {
     border-color: $soft-red;
     box-shadow: 0 0 0 2px rgba($soft-red, 0.2);
+
     @include focus-visible {
         box-shadow: 0 0 0 2px rgba($soft-red, 0.2);
     }
@@ -135,7 +141,9 @@ textarea#reason.error:focus {
     background-color: rgba($accent-blue, 0.1);
     border: 1px solid $accent-blue;
     border-radius: 8px;
+
     @include card-shadow;
+
     color: $text-main-color;
 
     h2 {
@@ -161,7 +169,9 @@ textarea#reason.error:focus {
     background-color: rgba($success, 0.1);
     border: 1px solid $success;
     border-radius: 8px;
+
     @include card-shadow;
+
     color: $text-main-color;
 
     p {

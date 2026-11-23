@@ -132,6 +132,7 @@ $footer-line-height: 1.5 !default;
   
   .footer-link-button {
     @include footer-link;
+
     background: none;
     border: none;
     padding: 0;

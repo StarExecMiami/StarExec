@@ -23,7 +23,6 @@ $surface-secondary: c.$surface-secondary;
 $surface-tertiary: c.$surface-tertiary;
 $success: c.$success;
 $info: c.$info;
-
 $font-size-4xl: t.$font-size-4xl;
 $font-size-3xl: t.$font-size-3xl;
 $font-size-2xl: t.$font-size-2xl;
@@ -36,7 +35,6 @@ $font-weight-bold: t.$font-weight-bold;
 $font-weight-semibold: t.$font-weight-semibold;
 $font-weight-medium: t.$font-weight-medium;
 $font-family-mono: t.$font-family-mono;
-
 $spacing-3xl: s.$spacing-3xl;
 $spacing-2xl: s.$spacing-2xl;
 $spacing-xl: s.$spacing-xl;
@@ -124,7 +122,9 @@ $container-max-width: s.$container-max-width;
   border-radius: 8px;
   text-decoration: none;
   font-weight: $font-weight-semibold;
+
   @include m.transition-default;
+
   border: 1px solid transparent;
   box-shadow: 0 2px 8px rgba($accent-blue, 0.2);
 
@@ -166,6 +166,7 @@ $container-max-width: s.$container-max-width;
 .breadcrumb-link {
   color: $text-secondary;
   text-decoration: none;
+
   @include m.transition-default;
 
   &:hover {
@@ -270,6 +271,7 @@ $container-max-width: s.$container-max-width;
   display: block;
   padding: $spacing-2xs $spacing-sm;
   border-radius: 4px;
+
   @include m.transition-default;
 
   &:hover {
@@ -299,6 +301,7 @@ $container-max-width: s.$container-max-width;
   color: $text-secondary;
   text-decoration: none;
   font-size: $font-size-sm;
+
   @include m.transition-default;
 
   &:hover {
@@ -463,6 +466,7 @@ pre {
   border-radius: 4px;
   padding: $spacing-lg;
   margin-bottom: $spacing-lg;
+
   @include m.transition-default;
 
   &:hover {
@@ -580,7 +584,9 @@ pre {
   border: 1px solid color.adjust($foreground-color, $lightness: 10%);
   border-radius: 12px;
   padding: $spacing-lg;
+
   @include m.transition-default;
+
   display: flex;
   flex-direction: column;
   height: auto;
@@ -755,6 +761,7 @@ pre {
   border: 1px solid color.adjust($foreground-color, $lightness: 10%);
   border-radius: 12px;
   padding: $spacing-lg;
+
   @include m.transition-default;
 
   &:hover {

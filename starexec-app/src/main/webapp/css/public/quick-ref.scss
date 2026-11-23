@@ -28,7 +28,6 @@ $error: c.$error;
 $text-tertiary: c.$text-tertiary;
 $accent-purple: c.$accent-purple;
 $accent-red: c.$accent-red;
-
 $font-size-4xl: t.$font-size-4xl;
 $font-size-3xl: t.$font-size-3xl;
 $font-size-2xl: t.$font-size-2xl;
@@ -41,7 +40,6 @@ $font-weight-bold: t.$font-weight-bold;
 $font-weight-semibold: t.$font-weight-semibold;
 $font-weight-medium: t.$font-weight-medium;
 $font-family-mono: t.$font-family-mono;
-
 $spacing-3xl: s.$spacing-3xl;
 $spacing-2xl: s.$spacing-2xl;
 $spacing-xl: s.$spacing-xl;
@@ -101,6 +99,7 @@ $container-max-width: s.$container-max-width;
 .breadcrumb-link {
   color: $text-secondary;
   text-decoration: none;
+
   @include m.transition-default;
 
   &:hover {
@@ -204,6 +203,7 @@ $container-max-width: s.$container-max-width;
   text-decoration: none;
   border-radius: 8px;
   font-size: $font-size-sm;
+
   @include m.transition-default;
 
   &:hover {
@@ -245,6 +245,7 @@ $container-max-width: s.$container-max-width;
   color: $text-secondary;
   font-size: $font-size-sm;
   text-decoration: none;
+
   @include m.transition-default;
 
   &:hover {
@@ -354,11 +355,13 @@ $container-max-width: s.$container-max-width;
   border: 1px solid $surface-tertiary;
   border-radius: 12px;
   padding: $spacing-md;
+
   @include m.transition-default;
 
   &:hover {
     border-color: $accent-blue;
     transform: translateY(-2px);
+
     @include m.card-shadow;
   }
 }
@@ -456,7 +459,7 @@ kbd {
   font-family: $font-family-mono;
   font-size: $font-size-xs;
   color: $text-main-color;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 20%);
 }
 
 // ============================================================================
@@ -475,12 +478,13 @@ kbd {
   border-radius: 12px;
   padding: $spacing-md;
   text-align: center;
+
   @include m.transition-default;
 
   &:hover {
     border-color: $accent-blue;
     transform: translateY(-4px);
-    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 12px 24px rgb(0 0 0 / 15%);
 
     .resource-icon {
       transform: scale(1.1);
@@ -528,6 +532,7 @@ kbd {
   border: 2px solid $surface-tertiary;
   border-radius: 12px;
   padding: $spacing-lg;
+
   @include m.transition-default;
 
   &--add {
@@ -651,11 +656,12 @@ kbd {
   border: 1px solid $surface-tertiary;
   border-radius: 12px;
   padding: $spacing-lg;
+
   @include m.transition-default;
 
   &:hover {
     border-color: $accent-blue;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 12px rgb(0 0 0 / 8%);
   }
 }
 

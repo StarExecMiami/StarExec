@@ -87,8 +87,7 @@ $detail-panel-padding-mobile: $space-sm !default;
   width: $explorer-width;
   min-height: $explorer-min-height;
   height: auto;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: auto hidden;
   position: relative;
   background: $explorer-bg;
   box-sizing: border-box;
@@ -98,7 +97,7 @@ $detail-panel-padding-mobile: $space-sm !default;
   color: $explorer-heading-color;
   font-size: $explorer-heading-font-size;
   line-height: $explorer-heading-line-height;
-  margin: 0 0 $explorer-heading-margin-bottom 0;
+  margin: 0 0 $explorer-heading-margin-bottom;
   padding: 0;
   display: inline-block;
   font-weight: normal;
@@ -235,7 +234,7 @@ $tree-node-icons: (
   text-align: center;
   padding: $space-sm;
   border-radius: $tree-node-border-radius;
-  box-shadow: 4px 4px 5px rgba(0, 0, 0, 0.3);
+  box-shadow: 4px 4px 5px rgb(0 0 0 / 30%);
   opacity: 0.9;
   
   span {

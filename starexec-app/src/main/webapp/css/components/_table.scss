@@ -6,7 +6,6 @@
 // =============================================================================
 
 @use "sass:color";
-
 @import "../global/colors";
 @import "../global/helper";
 
@@ -118,7 +117,7 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
 
 // Row hover state
 @mixin table-hover {
-  tbody tr:not(.row_selected):not(.noHover):hover {
+  tbody tr:not(.row_selected, .noHover):hover {
     background-color: $table-bg-hover;
   }
 }
@@ -226,6 +225,7 @@ $table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-colo
 
 .table-wrapper {
   @include table-responsive;
+
   margin-top: 1em;
   margin-bottom: 1em;
 }
@@ -533,7 +533,7 @@ tbody tr.row_selected {
       background-color: $accent-orange !important;
       border-color: transparent !important;
       font-weight: 600;
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important;
+      box-shadow: 0 2px 4px rgb(0 0 0 / 20%) !important;
     }
     
     &.disabled,
