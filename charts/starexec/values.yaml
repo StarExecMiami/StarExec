@@ -256,6 +256,7 @@ web:
   urlPrefix: "http"
   address: "localhost"
   proxyPort: 80
+  secureCookies: false
 
 # ============================================================================
 # SCALABILITY TUNING

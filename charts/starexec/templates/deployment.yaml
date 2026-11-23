@@ -318,6 +318,8 @@ spec:
               value: {{ .Values.web.address | quote }}
             - name: STAREXEC_PROXY_PORT
               value: {{ .Values.web.proxyPort | quote }}
+            - name: STAREXEC_SECURE_COOKIES
+              value: {{ default false .Values.web.secureCookies | quote }}
             - name: SKIP_MIGRATIONS
 {{- if $embeddedPostgres }}
               value: "false"

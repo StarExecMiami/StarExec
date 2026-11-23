@@ -152,6 +152,7 @@ web:
   address: "quokka.acorn.miami.edu"
   urlPrefix: "https"
   proxyPort: 443
+  secureCookies: true
 
 env:
   STAREXEC_EMAIL_SMTP: "mailgw.as.acorn.miami.edu"
