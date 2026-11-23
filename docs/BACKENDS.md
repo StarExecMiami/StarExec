@@ -169,6 +169,7 @@ export STAREXEC_LOCAL_CORE_LIST=2,4,6,8      # Example only; use IDs measured on
 # export STAREXEC_LOCAL_CONCURRENCY=4        # Used only when the core list is unset
 
 # Optional (with defaults)
+export STAREXEC_LOCAL_ISOLATION_MODE=permissive  # 'permissive' (local dev) or 'strict' (scientific cgroup v2 cpuset)
 export STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS=3600   # 1 hour timeout
 export STAREXEC_LOCAL_USE_RUNSOLVER=false    # Use runsolver wrapper
 export STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS=30
@@ -185,10 +186,32 @@ the intersection of `Cpus_allowed_list` and the online mask in affinity order,
 then leases the first logical CPU from each distinct sysfs sibling group.
 Multiple leases fail startup when `thread_siblings_list` is unavailable,
 inconsistent, or describes fewer physical cores than
-`STAREXEC_LOCAL_CONCURRENCY`. This prevents two LocalBackend jobs from sharing
-a physical core. It does not reserve the unused sibling against unrelated host
-workloads; full-core exclusivity still requires host CPU isolation or an
-equivalent cgroup/cpuset policy.
+`STAREXEC_LOCAL_CONCURRENCY`.
+
+#### Isolation Modes (`STAREXEC_LOCAL_ISOLATION_MODE`)
+
+- **`permissive` (default — local dev / throughput):** Launches each job under
+  `taskset -c <leasedCpu>`. It prevents two LocalBackend jobs from sharing a
+  physical core, but does **not** reserve unused SMT siblings against unrelated
+  host workloads. Attempts are recorded in `attempt_cpu_attestation` with
+  `isolation_mode='permissive'`, `isolation_mechanism='taskset'`,
+  `physical_exclusivity_attested=false`, and `attestation_status='UNQUALIFIED'`
+  (or `'VIOLATED'` + `INGESTION_BLOCKED` if CPU invariants break).
+- **`strict` (scientific profile — fail-closed cgroups v2 exclusivity):** Requires
+  a unified cgroups v2 hierarchy with delegated `cpuset` controller, complete
+  sysfs topology (`core_id`, `physical_package_id`, `thread_siblings_list`),
+  all SMT siblings of every configured lease present in both `online` and the
+  process's effective affinity, and kernel support for
+  `cpuset.cpus.partition=isolated`. Startup fails closed if any prerequisite or
+  startup partition probe fails (verify hosts beforehand with
+  `./scripts/check-local-cpu-isolation.sh`). Before launching each solver,
+  `LocalBackend` creates an isolated child cgroup reserving the full SMT sibling
+  group (`cpuset.cpus`), verifies `cpuset.cpus.partition=isolated`, enters the
+  slot before `exec taskset -c <leasedCpu>`, and continuously attests both the
+  isolated partition and process affinity until ingestion (`ATTESTED`,
+  `isolation_mechanism='cpuset-v2'`, `physical_exclusivity_attested=true`). Any
+  partition downgrade or CPU removal aborts execution and blocks scientific
+  ingestion (`VIOLATED` + `INGESTION_BLOCKED`).
 
 Each LocalBackend job starts under `taskset -c` with its validated one-CPU lease.
 In container mode, `functions.bash` passes that inherited `Cpus_allowed_list` to
