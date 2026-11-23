@@ -43,6 +43,10 @@ import org.starexec.logger.StarLogger;
  * <li>{@code STAREXEC_LOCAL_CORE_LIST} - Ordered comma-separated logical CPU
  * leases. Every lease must be allowed and online; the validated length determines
  * concurrency.</li>
+ * <li>{@code STAREXEC_LOCAL_ISOLATION_MODE} - CPU isolation profile: {@code permissive}
+ * (default local dev/throughput via {@code taskset}, recorded as {@code UNQUALIFIED}) or
+ * {@code strict} (fail-closed cgroups v2 {@code cpuset} {@code isolated} partition reserving
+ * all SMT siblings)</li>
  * <li>{@code STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS} - Per-job timeout in seconds
  * (default: 3600)</li>
  * <li>{@code STAREXEC_LOCAL_USE_RUNSOLVER} - Whether to wrap jobs with
@@ -163,10 +167,18 @@ public class LocalBackend implements Backend {
     private static final class QuarantinedCore {
         final int core;
         final List<ProcessHandle> survivors;
+        final LocalCpuExclusivity.SlotReservation slotReservation;
+        final List<Integer> reservedSiblings;
 
-        QuarantinedCore(int core, List<ProcessHandle> survivors) {
+        QuarantinedCore(
+                int core,
+                List<ProcessHandle> survivors,
+                LocalCpuExclusivity.SlotReservation slotReservation,
+                List<Integer> reservedSiblings) {
             this.core = core;
             this.survivors = survivors;
+            this.slotReservation = slotReservation;
+            this.reservedSiblings = reservedSiblings;
         }
 
         boolean anyAlive() {
@@ -195,6 +207,9 @@ public class LocalBackend implements Backend {
 
     private final LocalCpuAttestation.CpuEnvironmentReader cpuEnvironmentReader;
     private final Supplier<Map<Integer, List<Integer>>> siblingTopologySupplier;
+    private final LocalCpuExclusivity.IsolationMode configuredIsolationModeOverride;
+    private final LocalCpuExclusivity.TopologyReader topologyReader;
+    private final LocalCpuExclusivity.CgroupCpusetController cgroupController;
     private final LongSupplier nanoTime;
     private final long runtimePollMillis;
     private final long transientRetryDelayMillis;
@@ -207,7 +222,10 @@ public class LocalBackend implements Backend {
     // threads that look it up again while it is unknown (recordExecutionHost).
     private volatile int cachedNodeId = -1;
 
-    // Core leasing for physical isolation
+    // Core leasing and isolation mode for physical exclusivity
+    private LocalCpuExclusivity.IsolationMode isolationMode =
+            LocalCpuExclusivity.IsolationMode.PERMISSIVE;
+    private Map<Integer, LocalCpuExclusivity.CoreTopology> coreTopologies = Collections.emptyMap();
     private LinkedBlockingQueue<Integer> availableCores;
     private final Set<Integer> invalidatedCores = ConcurrentHashMap.newKeySet();
 
@@ -215,6 +233,9 @@ public class LocalBackend implements Backend {
         this(
                 LocalCpuAttestation.LinuxCpuEnvironmentReader.DEFAULT,
                 () -> CpuPartitionManager.readThreadSiblings(SYSFS_CPU_PATH),
+                null,
+                LocalCpuExclusivity.LinuxTopologyReader.DEFAULT,
+                LocalCpuExclusivity.LinuxCgroupCpusetController.DEFAULT,
                 System::nanoTime,
                 DEFAULT_RUNTIME_POLL_MILLIS,
                 DEFAULT_TRANSIENT_RETRY_DELAY_MILLIS,
@@ -230,10 +251,37 @@ public class LocalBackend implements Backend {
             long transientRetryDelayMillis,
             long processStartupGraceNanos,
             LocalJobMonitor jobMonitor) {
+        this(
+                cpuEnvironmentReader,
+                siblingTopologySupplier,
+                null,
+                LocalCpuExclusivity.LinuxTopologyReader.DEFAULT,
+                LocalCpuExclusivity.LinuxCgroupCpusetController.DEFAULT,
+                nanoTime,
+                runtimePollMillis,
+                transientRetryDelayMillis,
+                processStartupGraceNanos,
+                jobMonitor);
+    }
+
+    LocalBackend(
+            LocalCpuAttestation.CpuEnvironmentReader cpuEnvironmentReader,
+            Supplier<Map<Integer, List<Integer>>> siblingTopologySupplier,
+            LocalCpuExclusivity.IsolationMode isolationModeOverride,
+            LocalCpuExclusivity.TopologyReader topologyReader,
+            LocalCpuExclusivity.CgroupCpusetController cgroupController,
+            LongSupplier nanoTime,
+            long runtimePollMillis,
+            long transientRetryDelayMillis,
+            long processStartupGraceNanos,
+            LocalJobMonitor jobMonitor) {
         this.cpuEnvironmentReader = Objects.requireNonNull(
                 cpuEnvironmentReader, "cpuEnvironmentReader");
         this.siblingTopologySupplier = Objects.requireNonNull(
                 siblingTopologySupplier, "siblingTopologySupplier");
+        this.configuredIsolationModeOverride = isolationModeOverride;
+        this.topologyReader = Objects.requireNonNull(topologyReader, "topologyReader");
+        this.cgroupController = Objects.requireNonNull(cgroupController, "cgroupController");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
         this.runtimePollMillis = Math.max(10L, runtimePollMillis);
         this.transientRetryDelayMillis = Math.max(0L, transientRetryDelayMillis);
@@ -263,6 +311,7 @@ public class LocalBackend implements Backend {
         volatile long startedAt;
         volatile long completedAt;
         volatile Integer coreId; // The leased CPU core ID
+        volatile LocalCpuExclusivity.SlotReservation cpuSlotReservation;
         volatile LocalCpuAttestation.AttemptTracker cpuAttestation;
         /** The pair's attempt at submit (#185); null for maintenance jobs. */
         volatile Integer attemptNo;
@@ -643,18 +692,40 @@ public class LocalBackend implements Backend {
 
         long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(jobTimeoutSeconds);
 
+        LocalCpuAttestation.AttemptTracker tracker = null;
         try {
             // Lease a validated core for physical isolation and bind runtime/ingestion
-            // CPU attestation before starting the solver process (#295).
+            // CPU attestation before starting the solver process (#295, #291).
             LeasedCpuSlot leasedSlot = acquireValidLease(job, deadlineNanos);
             job.coreId = leasedSlot.core;
-            LocalCpuAttestation.AttemptTracker tracker = new LocalCpuAttestation.AttemptTracker(
+            LocalCpuExclusivity.CoreTopology topology = coreTopologies.get(leasedSlot.core);
+            LocalCpuExclusivity.SlotReservation slotReservation = null;
+            LocalCpuExclusivity.SlotCgroupState initialSlotState = null;
+            if (isolationMode == LocalCpuExclusivity.IsolationMode.STRICT) {
+                slotReservation = cgroupController.acquireSlot(job.execId, pairId, topology);
+                job.cpuSlotReservation = slotReservation;
+                try {
+                    initialSlotState = cgroupController.readSlotState(slotReservation);
+                } catch (LocalCpuAttestation.CpuStateReadException e) {
+                    throw new IOException(
+                            "Failed to verify initial strict cgroup slot state for CPU "
+                                    + leasedSlot.core
+                                    + ": "
+                                    + e.getMessage(),
+                            e);
+                }
+            }
+            tracker = new LocalCpuAttestation.AttemptTracker(
                     pairId,
                     job.attemptNo,
                     nodeName,
-                    "taskset",
+                    isolationMode,
                     leasedSlot.core,
                     leasedSlot.snapshot,
+                    topology,
+                    slotReservation,
+                    initialSlotState,
+                    cgroupController,
                     cpuEnvironmentReader,
                     nanoTime,
                     processStartupGraceNanos);
@@ -669,12 +740,17 @@ public class LocalBackend implements Backend {
                             job.execId +
                             ", pairId=" +
                             pairId +
+                            ", mode=" +
+                            isolationMode.getValue() +
                             ", script=" +
                             job.scriptPath +
                             ", workingDir=" +
                             job.workingDirectoryPath +
                             ", core=" +
                             job.coreId +
+                            (slotReservation != null
+                                    ? ", reservedSiblings=" + slotReservation.getReservedSiblingCpus()
+                                    : "") +
                             ", timeout=" +
                             jobTimeoutSeconds +
                             "s");
@@ -682,6 +758,19 @@ public class LocalBackend implements Backend {
             // Start the job process
             job.process = startJobProcess(job);
             long childPid = job.process != null ? job.process.pid() : -1L;
+            if (slotReservation != null && childPid > 0) {
+                try {
+                    cgroupController.assignPid(slotReservation, childPid);
+                } catch (IOException e) {
+                    tracker.latchFailure(
+                            "Failed to place child PID "
+                                    + childPid
+                                    + " into isolated slot cgroup: "
+                                    + e.getMessage());
+                    killTree(job);
+                    throw e;
+                }
+            }
             tracker.verifyRuntime(childPid);
 
             // Record when the pair started. Outside container mode the job script does it
@@ -859,6 +948,9 @@ public class LocalBackend implements Backend {
                         " backend failure is not terminal solver evidence.");
             }
         } finally {
+            if (tracker != null) {
+                tracker.verifyBeforeSlotRelease();
+            }
             releaseCore(job);
             job.completedAt = System.currentTimeMillis();
             // Remove from active jobs immediately, after recording that the monitor may
@@ -939,6 +1031,17 @@ public class LocalBackend implements Backend {
         ProcessBuilder builder = new ProcessBuilder();
 
         List<String> command = new ArrayList<>();
+        Path cgroupProcs =
+                job.cpuSlotReservation != null ? job.cpuSlotReservation.getCgroupProcsPath() : null;
+        if (cgroupProcs != null && Files.isWritable(cgroupProcs)) {
+            // Enter the isolated cgroup before exec'ing taskset/solver so short-lived
+            // attempts never execute outside their reserved sibling partition.
+            command.add("/bin/sh");
+            command.add("-c");
+            command.add("printf '%s\\n' \"$$\" > \"$1\" && shift && exec \"$@\"");
+            command.add("starexec-cgroup-enter");
+            command.add(cgroupProcs.toString());
+        }
         command.add("taskset");
         command.add("-c");
         command.add(String.valueOf(job.coreId));
@@ -1247,7 +1350,21 @@ public class LocalBackend implements Backend {
                         e);
             }
 
-            if (snapshot.isCpuValid(leasedCore)) {
+            boolean validForMode = snapshot.isCpuValid(leasedCore);
+            if (validForMode && isolationMode == LocalCpuExclusivity.IsolationMode.STRICT) {
+                LocalCpuExclusivity.CoreTopology topology = coreTopologies.get(leasedCore);
+                if (topology == null || !topology.isCompleteStrictTopology()) {
+                    validForMode = false;
+                } else {
+                    for (int sibling : topology.getSiblingCpus()) {
+                        if (!snapshot.getOnlineCpus().contains(sibling)) {
+                            validForMode = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (validForMode) {
                 return new LeasedCpuSlot(leasedCore, snapshot);
             }
 
@@ -1298,17 +1415,16 @@ public class LocalBackend implements Backend {
      */
     private void releaseCore(LocalJob job) {
         Integer core = job.coreId;
+        LocalCpuExclusivity.SlotReservation slotReservation = job.cpuSlotReservation;
+        job.cpuSlotReservation = null;
         if (core == null) {
+            if (slotReservation != null) {
+                cgroupController.releaseSlot(slotReservation);
+            }
             return;
         }
         job.coreId = null;
         LocalCpuAttestation.AttemptTracker tracker = job.cpuAttestation;
-        if (tracker != null && !tracker.isLeasedCoreGloballyValidOnRelease()) {
-            invalidatedCores.add(core);
-            log.warn("Withholding invalidated CPU lease " + core + " after job " + job.execId
-                    + " (pairId=" + job.pairId + ")");
-            return;
-        }
         if (isTreeAlive(job) && !killTree(job)) {
             List<ProcessHandle> survivors = new ArrayList<>();
             for (ProcessHandle handle : treeOf(job)) {
@@ -1316,13 +1432,28 @@ public class LocalBackend implements Backend {
                     survivors.add(handle);
                 }
             }
-            quarantinedCores.put(job.execId, new QuarantinedCore(core, survivors));
+            List<Integer> reservedSiblings =
+                    slotReservation != null
+                            ? slotReservation.getReservedCpuList()
+                            : Collections.emptyList();
+            quarantinedCores.put(
+                    job.execId,
+                    new QuarantinedCore(core, survivors, slotReservation, reservedSiblings));
             log.error("Core " + core + " of job " + job.execId + " is quarantined: "
                     + survivors.size() + " process(es) of its tree are still alive");
             for (ProcessHandle handle : survivors) {
                 handle.onExit().thenRun(this::reclaimQuarantinedCores);
             }
             reclaimQuarantinedCores();
+            return;
+        }
+        if (slotReservation != null) {
+            cgroupController.releaseSlot(slotReservation);
+        }
+        if (tracker != null && !tracker.isLeasedCoreGloballyValidOnRelease()) {
+            invalidatedCores.add(core);
+            log.warn("Withholding invalidated CPU lease " + core + " after job " + job.execId
+                    + " (pairId=" + job.pairId + ")");
             return;
         }
         availableCores.offer(core);
@@ -1333,9 +1464,22 @@ public class LocalBackend implements Backend {
         for (Map.Entry<Integer, QuarantinedCore> entry : quarantinedCores.entrySet()) {
             QuarantinedCore quarantined = entry.getValue();
             if (!quarantined.anyAlive() && quarantinedCores.remove(entry.getKey(), quarantined)) {
+                if (quarantined.slotReservation != null) {
+                    cgroupController.releaseSlot(quarantined.slotReservation);
+                }
                 boolean valid = true;
                 try {
-                    valid = cpuEnvironmentReader.readSystemSnapshot().isCpuValid(quarantined.core);
+                    LocalCpuAttestation.SystemSnapshot snapshot =
+                            cpuEnvironmentReader.readSystemSnapshot();
+                    valid = snapshot.isCpuValid(quarantined.core);
+                    if (valid && isolationMode == LocalCpuExclusivity.IsolationMode.STRICT) {
+                        for (int sibling : quarantined.reservedSiblings) {
+                            if (!snapshot.getOnlineCpus().contains(sibling)) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                    }
                 } catch (LocalCpuAttestation.CpuStateReadException e) {
                     log.warn("Transient error reading CPU state reclaiming quarantined core "
                             + quarantined.core + "; retaining capacity: " + e.getMessage());
@@ -1892,7 +2036,13 @@ public class LocalBackend implements Backend {
      * Loads configuration from environment variables.
      */
     private void loadConfiguration() {
-        // Concurrency level and Core Pinning
+        // Isolation mode and core pinning configuration
+        isolationMode =
+                configuredIsolationModeOverride != null
+                        ? configuredIsolationModeOverride
+                        : LocalCpuExclusivity.IsolationMode.parse(
+                                EnvironmentConfig.getLocalIsolationMode());
+
         String coreList = EnvironmentConfig.getLocalCoreList();
         List<Integer> effectiveAffinity;
         List<Integer> onlineCpus;
@@ -1945,6 +2095,23 @@ public class LocalBackend implements Backend {
                     "STAREXEC_LOCAL_CORE_LIST not set. Using one allowed logical CPU " +
                             "from each of " + maxConcurrency + " physical cores: " +
                             configuredCores);
+        }
+
+        coreTopologies =
+                LocalCpuExclusivity.readTopologies(
+                        configuredCores, topologyReader, isolationMode);
+        if (isolationMode == LocalCpuExclusivity.IsolationMode.STRICT) {
+            LocalCpuExclusivity.validateAndPrepareStrictMode(
+                    configuredCores,
+                    coreTopologies,
+                    effectiveAffinity,
+                    onlineCpus,
+                    cgroupController);
+        } else {
+            log.info(
+                    "LocalBackend isolation mode is 'permissive' (taskset pinning without "
+                            + "cpuset isolated partitions; scientific physical exclusivity will "
+                            + "be marked UNQUALIFIED)");
         }
 
         // Job timeout
@@ -2429,6 +2596,7 @@ public class LocalBackend implements Backend {
 
         log.info("LocalBackend initialized successfully");
         log.info("  Node name: " + nodeName);
+        log.info("  Isolation mode: " + isolationMode.getValue());
         log.info("  Max concurrency: " + maxConcurrency);
         log.info("  Job timeout: " + jobTimeoutSeconds + " seconds");
         log.info("  Use runsolver: " + useRunsolver);

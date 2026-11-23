@@ -195,6 +195,10 @@ public class EnvironmentConfig {
     public static String getLocalCoreList() {
         return getEnv("STAREXEC_LOCAL_CORE_LIST", "");
     }
+
+    public static String getLocalIsolationMode() {
+        return getEnv("STAREXEC_LOCAL_ISOLATION_MODE", "permissive");
+    }
     
     // Backend Configuration
     public static String getBackendType() {

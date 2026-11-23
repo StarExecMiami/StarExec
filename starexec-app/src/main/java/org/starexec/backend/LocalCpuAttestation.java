@@ -138,6 +138,10 @@ public final class LocalCpuAttestation {
             return cgroupEffectiveCpus != null;
         }
 
+        public Set<Integer> getOnlineCpus() {
+            return onlineCpus;
+        }
+
         public String getEffectiveAffinityStr() {
             return effectiveAffinityStr;
         }
@@ -286,16 +290,25 @@ public final class LocalCpuAttestation {
         private final int pairId;
         private final Integer attemptNo;
         private final String nodeName;
+        private final LocalCpuExclusivity.IsolationMode mode;
         private final String isolationMode;
+        private final String isolationMechanism;
         private final int leasedCore;
         private final SystemSnapshot initialSnapshot;
         private final CpuEnvironmentReader reader;
         private final LongSupplier nanoTime;
         private final long launchNanos;
         private final long processStartupGraceNanos;
+        private final LocalCpuExclusivity.CoreTopology topology;
+        private final LocalCpuExclusivity.SlotReservation slotReservation;
+        private final LocalCpuExclusivity.CgroupCpusetController cgroupController;
+        private final String initialEffectiveCpuset;
         private final String topologySummary;
 
         private SystemSnapshot lastSnapshot;
+        private LocalCpuExclusivity.SlotCgroupState lastSlotState;
+        private boolean slotReleased;
+        private boolean slotMembershipConfirmed;
         private String observedProcessCpuset;
         private boolean processAffinityConfirmed;
         private String latchedViolationReason;
@@ -312,9 +325,18 @@ public final class LocalCpuAttestation {
                 pairId,
                 attemptNo,
                 nodeName,
-                isolationMode,
+                LocalCpuExclusivity.IsolationMode.parse(
+                    "cpuset-v2".equalsIgnoreCase(isolationMode)
+                        || "strict".equalsIgnoreCase(isolationMode)
+                        ? "strict"
+                        : "permissive"
+                ),
                 leasedCore,
                 initialSnapshot,
+                null,
+                null,
+                null,
+                null,
                 reader,
                 System::nanoTime,
                 DEFAULT_PROCESS_STARTUP_GRACE_NANOS
@@ -331,22 +353,74 @@ public final class LocalCpuAttestation {
                 CpuEnvironmentReader reader,
                 LongSupplier nanoTime,
                 long processStartupGraceNanos) {
+            this(
+                pairId,
+                attemptNo,
+                nodeName,
+                LocalCpuExclusivity.IsolationMode.parse(
+                    "cpuset-v2".equalsIgnoreCase(isolationMode)
+                        || "strict".equalsIgnoreCase(isolationMode)
+                        ? "strict"
+                        : "permissive"
+                ),
+                leasedCore,
+                initialSnapshot,
+                null,
+                null,
+                null,
+                null,
+                reader,
+                nanoTime,
+                processStartupGraceNanos
+            );
+        }
+
+        public AttemptTracker(
+                int pairId,
+                Integer attemptNo,
+                String nodeName,
+                LocalCpuExclusivity.IsolationMode mode,
+                int leasedCore,
+                SystemSnapshot initialSnapshot,
+                LocalCpuExclusivity.CoreTopology topology,
+                LocalCpuExclusivity.SlotReservation slotReservation,
+                LocalCpuExclusivity.SlotCgroupState initialSlotState,
+                LocalCpuExclusivity.CgroupCpusetController cgroupController,
+                CpuEnvironmentReader reader,
+                LongSupplier nanoTime,
+                long processStartupGraceNanos) {
             this.pairId = pairId;
             this.attemptNo = attemptNo;
             this.nodeName = nodeName;
-            this.isolationMode = isolationMode;
+            this.mode = Objects.requireNonNull(mode, "mode");
+            this.isolationMode = mode.getValue();
+            this.isolationMechanism =
+                mode == LocalCpuExclusivity.IsolationMode.STRICT ? "cpuset-v2" : "taskset";
             this.leasedCore = leasedCore;
             this.initialSnapshot = Objects.requireNonNull(initialSnapshot, "initialSnapshot");
             this.lastSnapshot = initialSnapshot;
+            this.topology = topology;
+            this.slotReservation = slotReservation;
+            this.lastSlotState = initialSlotState;
+            this.cgroupController = cgroupController;
             this.reader = Objects.requireNonNull(reader, "reader");
             this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
             this.launchNanos = this.nanoTime.getAsLong();
             this.processStartupGraceNanos = Math.max(0L, processStartupGraceNanos);
+            if (mode == LocalCpuExclusivity.IsolationMode.STRICT && initialSlotState != null) {
+                this.initialEffectiveCpuset = initialSlotState.getEffectiveCpus();
+            } else {
+                this.initialEffectiveCpuset = initialSnapshot.getCombinedEffectiveStr();
+            }
             this.topologySummary =
-                "online=" + initialSnapshot.getOnlineStr()
+                "mode=" + this.isolationMode
+                    + ";online=" + initialSnapshot.getOnlineStr()
                     + ";affinity=" + initialSnapshot.getEffectiveAffinityStr()
                     + (initialSnapshot.getCgroupEffectiveStr() != null
                         ? ";cgroup_cpuset=" + initialSnapshot.getCgroupEffectiveStr()
+                        : "")
+                    + (slotReservation != null
+                        ? ";reserved_siblings=" + slotReservation.getReservedSiblingCpus()
                         : "");
         }
 
@@ -358,9 +432,13 @@ public final class LocalCpuAttestation {
             return latchedViolationReason != null;
         }
 
+        public synchronized void latchFailure(String reason) {
+            latchViolation(reason);
+        }
+
         /**
-         * Observes the global CPU state and child process affinity during execution.
-         * Transient read errors do not trigger false violations or evict the lease.
+         * Observes the global CPU state, slot cgroup state (strict mode), and child process
+         * affinity during execution. Transient read errors do not trigger false violations.
          */
         public synchronized void verifyRuntime(long pid) {
             try {
@@ -375,6 +453,49 @@ public final class LocalCpuAttestation {
                     "Transient CPU state read error during runtime attestation for pair "
                         + pairId + " on CPU " + leasedCore + ": " + e.getMessage()
                 );
+            }
+
+            if (mode == LocalCpuExclusivity.IsolationMode.STRICT
+                    && slotReservation != null
+                    && cgroupController != null
+                    && !slotReleased) {
+                try {
+                    LocalCpuExclusivity.SlotCgroupState slotState =
+                        cgroupController.readSlotState(slotReservation);
+                    lastSlotState = slotState;
+                    String slotViolation = checkSlotInvariant(slotState);
+                    if (slotViolation != null) {
+                        latchViolation(slotViolation);
+                    }
+                } catch (CpuStateReadException e) {
+                    log.debug(
+                        "Transient cgroup slot state read error during runtime attestation for pair "
+                            + pairId + " on CPU " + leasedCore + ": " + e.getMessage()
+                    );
+                }
+
+                if (pid > 0) {
+                    try {
+                        Optional<Boolean> inSlot = cgroupController.isPidInSlot(slotReservation, pid);
+                        if (inSlot.isPresent()) {
+                            if (Boolean.TRUE.equals(inSlot.get())) {
+                                slotMembershipConfirmed = true;
+                            } else if (slotMembershipConfirmed
+                                    || (nanoTime.getAsLong() - launchNanos)
+                                        >= processStartupGraceNanos) {
+                                latchViolation(
+                                    "Process PID " + pid + " is outside isolated slot cgroup "
+                                        + slotReservation.getCgroupRelativePath()
+                                );
+                            }
+                        }
+                    } catch (CpuStateReadException e) {
+                        log.debug(
+                            "Transient cgroup membership check error for PID " + pid + " (pair "
+                                + pairId + "): " + e.getMessage()
+                        );
+                    }
+                }
             }
 
             if (pid > 0) {
@@ -406,9 +527,38 @@ public final class LocalCpuAttestation {
         }
 
         /**
-         * Checks whether the leased CPU is specifically invalidated in the global environment.
-         * Returns {@code true} when valid OR when reading state failed transiently so capacity
-         * is never discarded on transient read errors.
+         * Captures terminal isolated slot state right before {@link LocalBackend} deletes the
+         * per-attempt cgroup slot upon job completion.
+         */
+        public synchronized void verifyBeforeSlotRelease() {
+            if (mode != LocalCpuExclusivity.IsolationMode.STRICT
+                    || slotReservation == null
+                    || slotReleased) {
+                return;
+            }
+            if (cgroupController != null) {
+                try {
+                    LocalCpuExclusivity.SlotCgroupState slotState =
+                        cgroupController.readSlotState(slotReservation);
+                    lastSlotState = slotState;
+                    String slotViolation = checkSlotInvariant(slotState);
+                    if (slotViolation != null) {
+                        latchViolation(slotViolation);
+                    }
+                } catch (CpuStateReadException e) {
+                    latchViolation(
+                        "Unable to verify strict slot cgroup state before release: "
+                            + e.getMessage()
+                    );
+                }
+            }
+            slotReleased = true;
+        }
+
+        /**
+         * Checks whether the leased CPU (and in strict mode all reserved SMT siblings) remain
+         * globally valid in the host environment when releasing capacity. Returns {@code true}
+         * when valid OR when reading state failed transiently.
          */
         public boolean isLeasedCoreGloballyValidOnRelease() {
             try {
@@ -416,7 +566,17 @@ public final class LocalCpuAttestation {
                 synchronized (this) {
                     lastSnapshot = current;
                 }
-                return current.isCpuValid(leasedCore);
+                if (!current.isCpuValid(leasedCore)) {
+                    return false;
+                }
+                if (mode == LocalCpuExclusivity.IsolationMode.STRICT && slotReservation != null) {
+                    for (int sibling : slotReservation.getReservedCpuList()) {
+                        if (!current.isCpuValid(sibling)) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
             } catch (CpuStateReadException e) {
                 log.warn(
                     "Transient error reading CPU state when releasing lease " + leasedCore
@@ -429,10 +589,9 @@ public final class LocalCpuAttestation {
         /**
          * Verifies the CPU invariant at the {@link LocalJobMonitor} ingestion boundary.
          *
-         * @return an {@code ATTESTED} record (or {@code null} when {@code pairId <= 0} or
-         *     {@code attemptNo == null})
-         * @throws CpuAllocationViolationException if an allocation change occurred at any point
-         *     from launch through ingestion
+         * @return an {@code ATTESTED} (strict) or {@code UNQUALIFIED} (permissive) record (or
+         *     {@code null} when {@code pairId <= 0} or {@code attemptNo == null})
+         * @throws CpuAllocationViolationException if an allocation or isolation violation occurred
          * @throws CpuStateReadException if global CPU state cannot be read transiently at the
          *     ingestion boundary (caller retries with backoff)
          */
@@ -449,6 +608,20 @@ public final class LocalCpuAttestation {
             lastSnapshot = terminal;
 
             String violation = checkGlobalInvariant(terminal);
+            if (violation == null && mode == LocalCpuExclusivity.IsolationMode.STRICT) {
+                if (slotReservation == null) {
+                    violation = "Strict mode requires an active cgroup v2 slot reservation";
+                } else if (!slotReleased && cgroupController != null) {
+                    LocalCpuExclusivity.SlotCgroupState slotState =
+                        cgroupController.readSlotState(slotReservation);
+                    lastSlotState = slotState;
+                    violation = checkSlotInvariant(slotState);
+                } else if (lastSlotState != null) {
+                    violation = checkSlotInvariant(lastSlotState);
+                } else {
+                    violation = "Missing terminal strict cgroup slot state";
+                }
+            }
             if (violation == null && observedProcessCpuset != null) {
                 List<Integer> parsed = CpuPartitionManager.expandCpuset(observedProcessCpuset);
                 if (parsed.size() != 1 || !parsed.contains(leasedCore)) {
@@ -465,10 +638,27 @@ public final class LocalCpuAttestation {
                 );
             }
 
-            return buildRecord(CpuAttestationRecord.Status.ATTESTED, null);
+            CpuAttestationRecord.Status terminalStatus =
+                mode == LocalCpuExclusivity.IsolationMode.STRICT
+                    ? CpuAttestationRecord.Status.ATTESTED
+                    : CpuAttestationRecord.Status.UNQUALIFIED;
+            return buildRecord(terminalStatus, null);
         }
 
         private String checkGlobalInvariant(SystemSnapshot snapshot) {
+            if (mode == LocalCpuExclusivity.IsolationMode.STRICT) {
+                if (slotReservation == null) {
+                    return "Strict mode missing cgroup slot reservation for CPU " + leasedCore;
+                }
+                for (int sibling : slotReservation.getReservedCpuList()) {
+                    if (!snapshot.getOnlineCpus().contains(sibling)) {
+                        return "Reserved SMT sibling CPU " + sibling
+                            + " went offline during strict execution (online="
+                            + snapshot.getOnlineStr() + ")";
+                    }
+                }
+                return null;
+            }
             if (!initialSnapshot.isCpuValid(leasedCore)) {
                 return "Initial snapshot did not permit leased CPU " + leasedCore;
             }
@@ -484,6 +674,25 @@ public final class LocalCpuAttestation {
                         ? ", cpuset=" + snapshot.getCgroupEffectiveStr()
                         : "")
                     + ")";
+            }
+            return null;
+        }
+
+        private String checkSlotInvariant(LocalCpuExclusivity.SlotCgroupState slotState) {
+            if (slotState == null) {
+                return "Missing cgroup v2 slot state";
+            }
+            if (!"isolated".equals(slotState.getPartitionMode())) {
+                return "Isolated slot partition degraded from 'isolated' to '"
+                    + slotState.getPartitionMode() + "' for CPUs "
+                    + slotReservation.getReservedSiblingCpus();
+            }
+            List<Integer> expected = slotReservation.getReservedCpuList();
+            List<Integer> actual = slotState.getEffectiveCpuList();
+            if (!actual.containsAll(expected) || !expected.containsAll(actual)) {
+                return "Slot cpuset.cpus.effective='" + slotState.getEffectiveCpus()
+                    + "' does not match reserved SMT sibling group '"
+                    + slotReservation.getReservedSiblingCpus() + "'";
             }
             return null;
         }
@@ -504,16 +713,39 @@ public final class LocalCpuAttestation {
             if (pairId <= 0 || attemptNo == null || attemptNo < 1) {
                 return null;
             }
+            String terminalEffective;
+            if (mode == LocalCpuExclusivity.IsolationMode.STRICT && lastSlotState != null) {
+                terminalEffective = lastSlotState.getEffectiveCpus();
+            } else {
+                terminalEffective =
+                    lastSnapshot != null ? lastSnapshot.getCombinedEffectiveStr() : null;
+            }
+            boolean physicallyAttested =
+                mode == LocalCpuExclusivity.IsolationMode.STRICT
+                    && status == CpuAttestationRecord.Status.ATTESTED;
+            String reservedSiblings =
+                slotReservation != null
+                    ? slotReservation.getReservedSiblingCpus()
+                    : (topology != null ? topology.getSiblingCpuset() : null);
+            Integer coreId = topology != null ? topology.getCoreId() : null;
+            Integer packageId = topology != null ? topology.getPackageId() : null;
+            String threadSiblings = topology != null ? topology.getSiblingCpuset() : null;
             return new CpuAttestationRecord(
                 pairId,
                 attemptNo,
                 "local",
                 nodeName,
                 isolationMode,
+                isolationMechanism,
+                physicallyAttested,
                 Integer.toString(leasedCore),
-                initialSnapshot.getCombinedEffectiveStr(),
-                lastSnapshot != null ? lastSnapshot.getCombinedEffectiveStr() : null,
+                reservedSiblings,
+                initialEffectiveCpuset,
+                terminalEffective,
                 observedProcessCpuset,
+                coreId,
+                packageId,
+                threadSiblings,
                 topologySummary,
                 status,
                 violationReason

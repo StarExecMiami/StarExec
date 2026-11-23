@@ -253,11 +253,13 @@ public class LocalCpuAttestationTest {
                 ArgumentCaptor.forClass(CpuAttestationRecord.class);
             db.verify(() -> JobPairs.recordAttemptCpuAttestation(captor.capture()));
             CpuAttestationRecord recorded = captor.getValue();
-            assertEquals(CpuAttestationRecord.Status.ATTESTED, recorded.getAttestationStatus());
+            assertEquals(CpuAttestationRecord.Status.UNQUALIFIED, recorded.getAttestationStatus());
             assertEquals(Integer.toString(realCpu), recorded.getLeasedCpus());
             assertEquals(Integer.toString(realCpu), recorded.getInitialEffectiveCpuset());
             assertEquals(Integer.toString(realCpu), recorded.getTerminalEffectiveCpuset());
-            assertEquals("taskset", recorded.getIsolationMode());
+            assertEquals("permissive", recorded.getIsolationMode());
+            assertEquals("taskset", recorded.getIsolationMechanism());
+            assertFalse(recorded.isPhysicalExclusivityAttested());
         }
     }
 
@@ -561,7 +563,10 @@ public class LocalCpuAttestationTest {
             ArgumentCaptor<CpuAttestationRecord> captor =
                 ArgumentCaptor.forClass(CpuAttestationRecord.class);
             db.verify(() -> JobPairs.recordAttemptCpuAttestation(captor.capture()));
-            assertEquals(CpuAttestationRecord.Status.ATTESTED, captor.getValue().getAttestationStatus());
+            assertEquals(CpuAttestationRecord.Status.UNQUALIFIED, captor.getValue().getAttestationStatus());
+            assertEquals("permissive", captor.getValue().getIsolationMode());
+            assertEquals("taskset", captor.getValue().getIsolationMechanism());
+            assertFalse(captor.getValue().isPhysicalExclusivityAttested());
             assertEquals(Integer.toString(realCpu), captor.getValue().getLeasedCpus());
         }
     }
