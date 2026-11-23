@@ -5073,11 +5073,13 @@ public class JobPairs {
         final String sql =
             "INSERT INTO starexec.attempt_cpu_attestation ("
                 + "pair_id, attempt_no, backend_type, node_name, isolation_mode, "
-                + "leased_cpus, initial_effective_cpuset, terminal_effective_cpuset, "
-                + "observed_process_cpuset, topology_summary, attestation_status, "
+                + "isolation_mechanism, physical_exclusivity_attested, leased_cpus, "
+                + "reserved_sibling_cpus, initial_effective_cpuset, terminal_effective_cpuset, "
+                + "observed_process_cpuset, topology_core_id, topology_package_id, "
+                + "topology_thread_siblings, topology_summary, attestation_status, "
                 + "violation_reason, attested_at, updated_at"
                 + ") "
-                + "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW() "
+                + "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW() "
                 + "WHERE EXISTS (SELECT 1 FROM starexec.job_pairs WHERE id = ?) "
                 + "AND COALESCE((SELECT current_attempt_no FROM starexec.job_pair_attempts "
                 + "WHERE pair_id = ?), 1) = ? "
@@ -5085,10 +5087,16 @@ public class JobPairs {
                 + "backend_type = EXCLUDED.backend_type, "
                 + "node_name = EXCLUDED.node_name, "
                 + "isolation_mode = EXCLUDED.isolation_mode, "
+                + "isolation_mechanism = EXCLUDED.isolation_mechanism, "
+                + "physical_exclusivity_attested = EXCLUDED.physical_exclusivity_attested, "
                 + "leased_cpus = EXCLUDED.leased_cpus, "
+                + "reserved_sibling_cpus = EXCLUDED.reserved_sibling_cpus, "
                 + "initial_effective_cpuset = EXCLUDED.initial_effective_cpuset, "
                 + "terminal_effective_cpuset = EXCLUDED.terminal_effective_cpuset, "
                 + "observed_process_cpuset = EXCLUDED.observed_process_cpuset, "
+                + "topology_core_id = EXCLUDED.topology_core_id, "
+                + "topology_package_id = EXCLUDED.topology_package_id, "
+                + "topology_thread_siblings = EXCLUDED.topology_thread_siblings, "
                 + "topology_summary = EXCLUDED.topology_summary, "
                 + "attestation_status = EXCLUDED.attestation_status, "
                 + "violation_reason = EXCLUDED.violation_reason, "
@@ -5102,16 +5110,22 @@ public class JobPairs {
                 stmt.setString(3, record.getBackendType());
                 setNullableString(stmt, 4, record.getNodeName());
                 stmt.setString(5, record.getIsolationMode());
-                setNullableString(stmt, 6, record.getLeasedCpus());
-                setNullableString(stmt, 7, record.getInitialEffectiveCpuset());
-                setNullableString(stmt, 8, record.getTerminalEffectiveCpuset());
-                setNullableString(stmt, 9, record.getObservedProcessCpuset());
-                setNullableString(stmt, 10, record.getTopologySummary());
-                stmt.setString(11, record.getAttestationStatus().name());
-                setNullableString(stmt, 12, record.getViolationReason());
-                stmt.setInt(13, record.getPairId());
-                stmt.setInt(14, record.getPairId());
-                stmt.setInt(15, record.getAttemptNo());
+                stmt.setString(6, record.getIsolationMechanism());
+                stmt.setBoolean(7, record.isPhysicalExclusivityAttested());
+                setNullableString(stmt, 8, record.getLeasedCpus());
+                setNullableString(stmt, 9, record.getReservedSiblingCpus());
+                setNullableString(stmt, 10, record.getInitialEffectiveCpuset());
+                setNullableString(stmt, 11, record.getTerminalEffectiveCpuset());
+                setNullableString(stmt, 12, record.getObservedProcessCpuset());
+                setNullableInt(stmt, 13, record.getTopologyCoreId());
+                setNullableInt(stmt, 14, record.getTopologyPackageId());
+                setNullableString(stmt, 15, record.getTopologyThreadSiblings());
+                setNullableString(stmt, 16, record.getTopologySummary());
+                stmt.setString(17, record.getAttestationStatus().name());
+                setNullableString(stmt, 18, record.getViolationReason());
+                stmt.setInt(19, record.getPairId());
+                stmt.setInt(20, record.getPairId());
+                stmt.setInt(21, record.getAttemptNo());
                 int affected = stmt.executeUpdate();
                 if (affected == 0) {
                     log.info(
@@ -5144,8 +5158,10 @@ public class JobPairs {
         }
         final String sql =
             "SELECT pair_id, attempt_no, backend_type, node_name, isolation_mode, "
-                + "leased_cpus, initial_effective_cpuset, terminal_effective_cpuset, "
-                + "observed_process_cpuset, topology_summary, attestation_status, violation_reason "
+                + "isolation_mechanism, physical_exclusivity_attested, leased_cpus, "
+                + "reserved_sibling_cpus, initial_effective_cpuset, terminal_effective_cpuset, "
+                + "observed_process_cpuset, topology_core_id, topology_package_id, "
+                + "topology_thread_siblings, topology_summary, attestation_status, violation_reason "
                 + "FROM starexec.attempt_cpu_attestation "
                 + "WHERE pair_id = ? AND attempt_no = ?";
         Connection con = null;
@@ -5164,10 +5180,16 @@ public class JobPairs {
                         rs.getString("backend_type"),
                         rs.getString("node_name"),
                         rs.getString("isolation_mode"),
+                        rs.getString("isolation_mechanism"),
+                        rs.getBoolean("physical_exclusivity_attested"),
                         rs.getString("leased_cpus"),
+                        rs.getString("reserved_sibling_cpus"),
                         rs.getString("initial_effective_cpuset"),
                         rs.getString("terminal_effective_cpuset"),
                         rs.getString("observed_process_cpuset"),
+                        getNullableInt(rs, "topology_core_id"),
+                        getNullableInt(rs, "topology_package_id"),
+                        rs.getString("topology_thread_siblings"),
                         rs.getString("topology_summary"),
                         CpuAttestationRecord.Status.valueOf(rs.getString("attestation_status")),
                         rs.getString("violation_reason")
@@ -5193,5 +5215,10 @@ public class JobPairs {
         } else {
             stmt.setString(index, value);
         }
+    }
+
+    private static Integer getNullableInt(ResultSet rs, String column) throws SQLException {
+        int val = rs.getInt(column);
+        return rs.wasNull() ? null : val;
     }
 }
