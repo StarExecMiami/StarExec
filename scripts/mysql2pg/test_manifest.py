@@ -115,7 +115,13 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertTrue(tier0["system_flags"]["overrides"]["paused"])
 
     def test_post_load_sql_files_exist(self):
-        self.assertTrue(self.manifest["post_load_sql"])
+        self.assertEqual(
+            self.manifest["post_load_sql"],
+            [
+                "sql/wrap-legacy-password-hashes.sql",
+                "sql/rewrite-legacy-data-paths.sql",
+            ],
+        )
         for rel_path in self.manifest["post_load_sql"]:
             self.assertTrue(
                 (REPO_ROOT / rel_path).is_file(),

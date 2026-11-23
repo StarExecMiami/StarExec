@@ -84,6 +84,7 @@ class MigrateUnitTest(unittest.TestCase):
         self.assertIn("[DRY-RUN] Target schema: starexec", output)
         self.assertIn("[tier 0] system_flags", output)
         self.assertIn("sql/wrap-legacy-password-hashes.sql", output)
+        self.assertIn("sql/rewrite-legacy-data-paths.sql", output)
 
     def test_split_resume_tables_and_dry_run_resume_from(self):
         planned = migrate.plan_tables(self.manifest)
