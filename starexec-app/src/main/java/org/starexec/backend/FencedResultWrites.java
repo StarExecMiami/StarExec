@@ -64,4 +64,12 @@ final class FencedResultWrites {
                 ? JobPairs.addJobPairAttributes(pairId, stageId, attributes)
                 : JobPairs.addJobPairAttributes(pairId, stageId, attributes, attemptNo);
     }
+
+    /** Records CPU allocation/topology attestation fenced on the attempt number. */
+    static boolean recordAttemptCpuAttestation(CpuAttestationRecord record) {
+        if (record == null) {
+            return false;
+        }
+        return JobPairs.recordAttemptCpuAttestation(record);
+    }
 }

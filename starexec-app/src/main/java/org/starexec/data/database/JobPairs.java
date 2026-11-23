@@ -18,6 +18,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.Map.Entry;
 import org.apache.commons.io.FileUtils;
+import org.starexec.backend.CpuAttestationRecord;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
 import org.starexec.data.to.*;
@@ -5056,5 +5057,141 @@ public class JobPairs {
 
     private static boolean isTerminalStatusCode(int statusCode) {
         return !StatusCode.toStatusCode(statusCode).incomplete();
+    }
+
+    /**
+     * Records CPU allocation and topology attestation for a job-pair attempt, fenced on
+     * {@code current_attempt_no} so a superseded execution cannot overwrite a rerun.
+     *
+     * @param record attestation evidence to persist
+     * @return true if the row was written for the current attempt, false otherwise
+     */
+    public static boolean recordAttemptCpuAttestation(CpuAttestationRecord record) {
+        if (record == null) {
+            return false;
+        }
+        final String sql =
+            "INSERT INTO starexec.attempt_cpu_attestation ("
+                + "pair_id, attempt_no, backend_type, node_name, isolation_mode, "
+                + "leased_cpus, initial_effective_cpuset, terminal_effective_cpuset, "
+                + "observed_process_cpuset, topology_summary, attestation_status, "
+                + "violation_reason, attested_at, updated_at"
+                + ") "
+                + "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW() "
+                + "WHERE EXISTS (SELECT 1 FROM starexec.job_pairs WHERE id = ?) "
+                + "AND COALESCE((SELECT current_attempt_no FROM starexec.job_pair_attempts "
+                + "WHERE pair_id = ?), 1) = ? "
+                + "ON CONFLICT (pair_id, attempt_no) DO UPDATE SET "
+                + "backend_type = EXCLUDED.backend_type, "
+                + "node_name = EXCLUDED.node_name, "
+                + "isolation_mode = EXCLUDED.isolation_mode, "
+                + "leased_cpus = EXCLUDED.leased_cpus, "
+                + "initial_effective_cpuset = EXCLUDED.initial_effective_cpuset, "
+                + "terminal_effective_cpuset = EXCLUDED.terminal_effective_cpuset, "
+                + "observed_process_cpuset = EXCLUDED.observed_process_cpuset, "
+                + "topology_summary = EXCLUDED.topology_summary, "
+                + "attestation_status = EXCLUDED.attestation_status, "
+                + "violation_reason = EXCLUDED.violation_reason, "
+                + "updated_at = NOW()";
+        Connection con = null;
+        try {
+            con = Common.getConnection();
+            try (PreparedStatement stmt = con.prepareStatement(sql)) {
+                stmt.setInt(1, record.getPairId());
+                stmt.setInt(2, record.getAttemptNo());
+                stmt.setString(3, record.getBackendType());
+                setNullableString(stmt, 4, record.getNodeName());
+                stmt.setString(5, record.getIsolationMode());
+                setNullableString(stmt, 6, record.getLeasedCpus());
+                setNullableString(stmt, 7, record.getInitialEffectiveCpuset());
+                setNullableString(stmt, 8, record.getTerminalEffectiveCpuset());
+                setNullableString(stmt, 9, record.getObservedProcessCpuset());
+                setNullableString(stmt, 10, record.getTopologySummary());
+                stmt.setString(11, record.getAttestationStatus().name());
+                setNullableString(stmt, 12, record.getViolationReason());
+                stmt.setInt(13, record.getPairId());
+                stmt.setInt(14, record.getPairId());
+                stmt.setInt(15, record.getAttemptNo());
+                int affected = stmt.executeUpdate();
+                if (affected == 0) {
+                    log.info(
+                        "Refused CPU attestation write for pair " + record.getPairId()
+                            + " attempt " + record.getAttemptNo()
+                            + " (missing pair or superseded attempt)"
+                    );
+                    return false;
+                }
+                return true;
+            }
+        } catch (Exception e) {
+            log.error(
+                "Error recording CPU attestation for pair " + record.getPairId()
+                    + " attempt " + record.getAttemptNo() + ": " + e.getMessage(),
+                e
+            );
+            return false;
+        } finally {
+            Common.safeClose(con);
+        }
+    }
+
+    /**
+     * Reads a persisted CPU attestation record for {@code (pairId, attemptNo)}, or null when absent.
+     */
+    public static CpuAttestationRecord getAttemptCpuAttestation(int pairId, int attemptNo) {
+        if (pairId <= 0 || attemptNo < 1) {
+            return null;
+        }
+        final String sql =
+            "SELECT pair_id, attempt_no, backend_type, node_name, isolation_mode, "
+                + "leased_cpus, initial_effective_cpuset, terminal_effective_cpuset, "
+                + "observed_process_cpuset, topology_summary, attestation_status, violation_reason "
+                + "FROM starexec.attempt_cpu_attestation "
+                + "WHERE pair_id = ? AND attempt_no = ?";
+        Connection con = null;
+        try {
+            con = Common.getConnection();
+            try (PreparedStatement stmt = con.prepareStatement(sql)) {
+                stmt.setInt(1, pairId);
+                stmt.setInt(2, attemptNo);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    if (!rs.next()) {
+                        return null;
+                    }
+                    return new CpuAttestationRecord(
+                        rs.getInt("pair_id"),
+                        rs.getInt("attempt_no"),
+                        rs.getString("backend_type"),
+                        rs.getString("node_name"),
+                        rs.getString("isolation_mode"),
+                        rs.getString("leased_cpus"),
+                        rs.getString("initial_effective_cpuset"),
+                        rs.getString("terminal_effective_cpuset"),
+                        rs.getString("observed_process_cpuset"),
+                        rs.getString("topology_summary"),
+                        CpuAttestationRecord.Status.valueOf(rs.getString("attestation_status")),
+                        rs.getString("violation_reason")
+                    );
+                }
+            }
+        } catch (Exception e) {
+            log.error(
+                "Error reading CPU attestation for pair " + pairId
+                    + " attempt " + attemptNo + ": " + e.getMessage(),
+                e
+            );
+            return null;
+        } finally {
+            Common.safeClose(con);
+        }
+    }
+
+    private static void setNullableString(PreparedStatement stmt, int index, String value)
+        throws SQLException {
+        if (value == null) {
+            stmt.setNull(index, Types.VARCHAR);
+        } else {
+            stmt.setString(index, value);
+        }
     }
 }
