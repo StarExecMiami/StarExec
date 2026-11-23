@@ -79,6 +79,9 @@ jobs:
       - name: Run frontend regression tests
         run: ./node/node --test scripts/tests/*.test.cjs
 
+      - name: Lint SCSS assets
+        run: PATH="$PWD/node:$PATH" ./node/npm run lint:css
+
       # Surefire matches **/*Test.java and **/*Tests.java, which do not match *IT.java,
       # so the step above runs none of the stored routines. Scope Failsafe explicitly to
       # StoredRoutineSmokeIT here; PopulatedSchemaUpgradeIT runs in its own PostgreSQL job.
