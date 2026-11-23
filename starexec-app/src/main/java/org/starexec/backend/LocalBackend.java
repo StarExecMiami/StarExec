@@ -12,6 +12,8 @@ import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
@@ -187,6 +189,17 @@ public class LocalBackend implements Backend {
     private final AtomicInteger completedJobCount = new AtomicInteger(0);
     private final AtomicInteger failedJobCount = new AtomicInteger(0);
 
+    private static final int MAX_TRANSIENT_CPU_READ_RETRIES = 3;
+    private static final long DEFAULT_RUNTIME_POLL_MILLIS = 2000L;
+    private static final long DEFAULT_TRANSIENT_RETRY_DELAY_MILLIS = 50L;
+
+    private final LocalCpuAttestation.CpuEnvironmentReader cpuEnvironmentReader;
+    private final Supplier<Map<Integer, List<Integer>>> siblingTopologySupplier;
+    private final LongSupplier nanoTime;
+    private final long runtimePollMillis;
+    private final long transientRetryDelayMillis;
+    private final long processStartupGraceNanos;
+
     // Job completion monitor (reads status files and updates database)
     private LocalJobMonitor jobMonitor;
 
@@ -196,6 +209,37 @@ public class LocalBackend implements Backend {
 
     // Core leasing for physical isolation
     private LinkedBlockingQueue<Integer> availableCores;
+    private final Set<Integer> invalidatedCores = ConcurrentHashMap.newKeySet();
+
+    public LocalBackend() {
+        this(
+                LocalCpuAttestation.LinuxCpuEnvironmentReader.DEFAULT,
+                () -> CpuPartitionManager.readThreadSiblings(SYSFS_CPU_PATH),
+                System::nanoTime,
+                DEFAULT_RUNTIME_POLL_MILLIS,
+                DEFAULT_TRANSIENT_RETRY_DELAY_MILLIS,
+                LocalCpuAttestation.AttemptTracker.DEFAULT_PROCESS_STARTUP_GRACE_NANOS,
+                null);
+    }
+
+    LocalBackend(
+            LocalCpuAttestation.CpuEnvironmentReader cpuEnvironmentReader,
+            Supplier<Map<Integer, List<Integer>>> siblingTopologySupplier,
+            LongSupplier nanoTime,
+            long runtimePollMillis,
+            long transientRetryDelayMillis,
+            long processStartupGraceNanos,
+            LocalJobMonitor jobMonitor) {
+        this.cpuEnvironmentReader = Objects.requireNonNull(
+                cpuEnvironmentReader, "cpuEnvironmentReader");
+        this.siblingTopologySupplier = Objects.requireNonNull(
+                siblingTopologySupplier, "siblingTopologySupplier");
+        this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+        this.runtimePollMillis = Math.max(10L, runtimePollMillis);
+        this.transientRetryDelayMillis = Math.max(0L, transientRetryDelayMillis);
+        this.processStartupGraceNanos = Math.max(0L, processStartupGraceNanos);
+        this.jobMonitor = jobMonitor;
+    }
 
     // Cached container detection result (null = not yet checked)
     private static volatile Boolean isRunningInContainer = null;
@@ -219,6 +263,7 @@ public class LocalBackend implements Backend {
         volatile long startedAt;
         volatile long completedAt;
         volatile Integer coreId; // The leased CPU core ID
+        volatile LocalCpuAttestation.AttemptTracker cpuAttestation;
         /** The pair's attempt at submit (#185); null for maintenance jobs. */
         volatile Integer attemptNo;
         BuildExecutionContext buildContext;
@@ -573,8 +618,18 @@ public class LocalBackend implements Backend {
             return;
         }
 
+        // NOTE: This thread will block for the entire duration of job execution.
+        // For very long-running jobs (hours), this ties up a worker thread.
+        // Monitor thread pool exhaustion via getStats() if experiencing throughput
+        // issues.
+        // Future optimization: Use ProcessHandle.onExit() for async job completion.
+
+        // Register with monitor immediately after cleanup so any pre-launch backend failure
+        // leaves the pair tracked/unresolved, then bind the validated CPU tracker before start.
+        long monitorGeneration = -1L;
         if (pairId > 0 && jobMonitor != null) {
-            jobMonitor.registerJob(outputDir.getAbsolutePath(), pairId, job.attemptNo);
+            monitorGeneration = jobMonitor.registerJob(
+                    outputDir.getAbsolutePath(), pairId, job.attemptNo, null);
             log.info(
                     "Registered job with monitor: execId=" +
                             job.execId +
@@ -586,35 +641,48 @@ public class LocalBackend implements Backend {
             log.warn("Could not extract pairId from logPath: " + job.logPath);
         }
 
-        log.info(
-                "DEBUG_TRACE: Starting job execution: execId=" +
-                        job.execId +
-                        ", pairId=" +
-                        pairId +
-                        ", script=" +
-                        job.scriptPath +
-                        ", workingDir=" +
-                        job.workingDirectoryPath +
-                        ", timeout=" +
-                        jobTimeoutSeconds +
-                        "s");
-
-        // NOTE: This thread will block for the entire duration of job execution.
-        // For very long-running jobs (hours), this ties up a worker thread.
-        // Monitor thread pool exhaustion via getStats() if experiencing throughput
-        // issues.
-        // Future optimization: Use ProcessHandle.onExit() for async job completion.
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(jobTimeoutSeconds);
 
         try {
-            // Lease a core for physical isolation
-            Integer leasedCore = availableCores.poll(jobTimeoutSeconds, TimeUnit.SECONDS);
-            if (leasedCore == null) {
-                throw new IOException("Timeout waiting for an available CPU core");
+            // Lease a validated core for physical isolation and bind runtime/ingestion
+            // CPU attestation before starting the solver process (#295).
+            LeasedCpuSlot leasedSlot = acquireValidLease(job, deadlineNanos);
+            job.coreId = leasedSlot.core;
+            LocalCpuAttestation.AttemptTracker tracker = new LocalCpuAttestation.AttemptTracker(
+                    pairId,
+                    job.attemptNo,
+                    nodeName,
+                    "taskset",
+                    leasedSlot.core,
+                    leasedSlot.snapshot,
+                    cpuEnvironmentReader,
+                    nanoTime,
+                    processStartupGraceNanos);
+            job.cpuAttestation = tracker;
+
+            if (pairId > 0 && jobMonitor != null && monitorGeneration > 0) {
+                jobMonitor.bindCpuAttestation(pairId, monitorGeneration, tracker);
             }
-            job.coreId = leasedCore;
+
+            log.info(
+                    "DEBUG_TRACE: Starting job execution: execId=" +
+                            job.execId +
+                            ", pairId=" +
+                            pairId +
+                            ", script=" +
+                            job.scriptPath +
+                            ", workingDir=" +
+                            job.workingDirectoryPath +
+                            ", core=" +
+                            job.coreId +
+                            ", timeout=" +
+                            jobTimeoutSeconds +
+                            "s");
 
             // Start the job process
             job.process = startJobProcess(job);
+            long childPid = job.process != null ? job.process.pid() : -1L;
+            tracker.verifyRuntime(childPid);
 
             // Record when the pair started. Outside container mode the job script does it
             // through SetPairStartTime; in container mode it cannot reach the database and
@@ -629,20 +697,34 @@ public class LocalBackend implements Backend {
                 recordExecutionHost(pairId);
             }
 
-            // Wait for completion with timeout and zombie detection
-            long startTime = System.currentTimeMillis();
-            long maxDuration = TimeUnit.SECONDS.toMillis(jobTimeoutSeconds);
+            // Wait for completion with timeout, runtime CPU attestation, and zombie detection
             boolean finished = false;
+            boolean abortedForCpuViolation = false;
 
-            while (System.currentTimeMillis() - startTime < maxDuration) {
-                // Check if process exited naturally (poll every 2 seconds)
-                if (job.process.waitFor(2, TimeUnit.SECONDS)) {
+            while (!tracker.isViolated()) {
+                long remainingMillis = TimeUnit.NANOSECONDS.toMillis(
+                        deadlineNanos - System.nanoTime());
+                if (remainingMillis <= 0) {
+                    break;
+                }
+                long waitMillis = Math.min(runtimePollMillis, remainingMillis);
+                if (job.process.waitFor(waitMillis, TimeUnit.MILLISECONDS)) {
                     finished = true;
                     break;
                 }
                 // Keep a record of the tree while the wrapper is alive: once it exits its
                 // children are re-parented and can no longer be found from it.
                 recordDescendants(job);
+                tracker.verifyRuntime(childPid);
+                if (tracker.isViolated()) {
+                    abortedForCpuViolation = true;
+                    log.error("Job " + job.execId + " (pairId=" + pairId
+                            + ") violated its CPU allocation invariant during execution; "
+                            + "killing process tree and blocking result ingestion.");
+                    killTree(job);
+                    finished = !job.process.isAlive();
+                    break;
+                }
 
                 // Check if the job reported completion status >= 7 (Complete/Error) via file
                 // This handles "zombie" processes that write status but don't exit
@@ -655,7 +737,17 @@ public class LocalBackend implements Backend {
                 }
             }
 
-            if (!finished) {
+            tracker.verifyRuntime(childPid);
+            if (!abortedForCpuViolation && tracker.isViolated()) {
+                abortedForCpuViolation = true;
+                log.error("Job " + job.execId + " (pairId=" + pairId
+                        + ") violated its CPU allocation invariant; result ingestion will be blocked.");
+            }
+
+            if (abortedForCpuViolation) {
+                job.state = LocalJob.JobState.FAILED;
+                failedJobCount.incrementAndGet();
+            } else if (!finished) {
                 // Timeout - kill the process
                 log.error(
                         "Job " +
@@ -1110,10 +1202,99 @@ public class LocalBackend implements Backend {
         return true;
     }
 
+    /** Returns the validated lease and baseline global snapshot captured at launch (#295). */
+    private static final class LeasedCpuSlot {
+        final int core;
+        final LocalCpuAttestation.SystemSnapshot snapshot;
+
+        LeasedCpuSlot(int core, LocalCpuAttestation.SystemSnapshot snapshot) {
+            this.core = core;
+            this.snapshot = snapshot;
+        }
+    }
+
     /**
-     * Returns the job's core to the pool only once its whole tree has exited. A tree that
-     * outlives the kill keeps its core out of service: leasing it to the next pair would
-     * put two solvers on one core, which the benchmark isolation policy forbids.
+     * Acquires a valid CPU lease within {@code deadlineNanos}, failing over if a specific
+     * lease became invalid while leaving capacity untouched on transient read failures (#295).
+     */
+    private LeasedCpuSlot acquireValidLease(LocalJob job, long deadlineNanos)
+            throws IOException, InterruptedException {
+        while (true) {
+            long remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime());
+            if (remainingMillis <= 0) {
+                throw new IOException("Timeout waiting for an available valid CPU core");
+            }
+            long waitSlice = Math.min(runtimePollMillis, remainingMillis);
+            Integer leasedCore = availableCores.poll(waitSlice, TimeUnit.MILLISECONDS);
+            if (leasedCore == null) {
+                if (invalidatedCores.size() >= configuredCores.size()
+                        && quarantinedCores.isEmpty()) {
+                    throw new IOException(
+                            "No valid CPU leases remain; invalidated cores=" + invalidatedCores);
+                }
+                continue;
+            }
+
+            LocalCpuAttestation.SystemSnapshot snapshot;
+            try {
+                snapshot = readSystemSnapshotWithBoundedRetry(deadlineNanos);
+            } catch (LocalCpuAttestation.CpuStateReadException e) {
+                // Transient read error: return the core untouched so capacity is never lost.
+                availableCores.offer(leasedCore);
+                throw new IOException(
+                        "Transient failure verifying CPU state before launching job "
+                                + job.execId + " (pairId=" + job.pairId + "): " + e.getMessage(),
+                        e);
+            }
+
+            if (snapshot.isCpuValid(leasedCore)) {
+                return new LeasedCpuSlot(leasedCore, snapshot);
+            }
+
+            invalidatedCores.add(leasedCore);
+            log.warn("Retiring invalidated CPU lease " + leasedCore
+                    + " before launching pairId=" + job.pairId
+                    + " (online=" + snapshot.getOnlineStr()
+                    + ", affinity=" + snapshot.getEffectiveAffinityStr() + "); "
+                    + "checking remaining valid leases.");
+            if (availableCores.isEmpty()
+                    && invalidatedCores.size() >= configuredCores.size()
+                    && quarantinedCores.isEmpty()) {
+                throw new IOException(
+                        "No valid CPU leases remain after retiring CPU " + leasedCore
+                                + "; invalidated cores=" + invalidatedCores);
+            }
+        }
+    }
+
+    private LocalCpuAttestation.SystemSnapshot readSystemSnapshotWithBoundedRetry(long deadlineNanos)
+            throws LocalCpuAttestation.CpuStateReadException, InterruptedException {
+        LocalCpuAttestation.CpuStateReadException lastError = null;
+        for (int attempt = 1; attempt <= MAX_TRANSIENT_CPU_READ_RETRIES; attempt++) {
+            try {
+                return cpuEnvironmentReader.readSystemSnapshot();
+            } catch (LocalCpuAttestation.CpuStateReadException e) {
+                lastError = e;
+                log.warn("Transient CPU state read failure (attempt " + attempt + "/"
+                        + MAX_TRANSIENT_CPU_READ_RETRIES + "): " + e.getMessage());
+                if (attempt < MAX_TRANSIENT_CPU_READ_RETRIES && transientRetryDelayMillis > 0) {
+                    long remainingMillis = TimeUnit.NANOSECONDS.toMillis(
+                            deadlineNanos - System.nanoTime());
+                    if (remainingMillis <= 0) {
+                        break;
+                    }
+                    Thread.sleep(Math.min(transientRetryDelayMillis, remainingMillis));
+                }
+            }
+        }
+        throw lastError;
+    }
+
+    /**
+     * Returns the job's core to the pool only once its whole tree has exited and the core is
+     * not specifically invalidated in the host environment. A tree that outlives the kill keeps
+     * its core out of service: leasing it to the next pair would put two solvers on one core,
+     * which the benchmark isolation policy forbids.
      */
     private void releaseCore(LocalJob job) {
         Integer core = job.coreId;
@@ -1121,6 +1302,13 @@ public class LocalBackend implements Backend {
             return;
         }
         job.coreId = null;
+        LocalCpuAttestation.AttemptTracker tracker = job.cpuAttestation;
+        if (tracker != null && !tracker.isLeasedCoreGloballyValidOnRelease()) {
+            invalidatedCores.add(core);
+            log.warn("Withholding invalidated CPU lease " + core + " after job " + job.execId
+                    + " (pairId=" + job.pairId + ")");
+            return;
+        }
         if (isTreeAlive(job) && !killTree(job)) {
             List<ProcessHandle> survivors = new ArrayList<>();
             for (ProcessHandle handle : treeOf(job)) {
@@ -1145,9 +1333,22 @@ public class LocalBackend implements Backend {
         for (Map.Entry<Integer, QuarantinedCore> entry : quarantinedCores.entrySet()) {
             QuarantinedCore quarantined = entry.getValue();
             if (!quarantined.anyAlive() && quarantinedCores.remove(entry.getKey(), quarantined)) {
-                availableCores.offer(quarantined.core);
-                log.info("Core " + quarantined.core + " reclaimed after job " + entry.getKey()
-                        + " tree exited");
+                boolean valid = true;
+                try {
+                    valid = cpuEnvironmentReader.readSystemSnapshot().isCpuValid(quarantined.core);
+                } catch (LocalCpuAttestation.CpuStateReadException e) {
+                    log.warn("Transient error reading CPU state reclaiming quarantined core "
+                            + quarantined.core + "; retaining capacity: " + e.getMessage());
+                }
+                if (valid) {
+                    availableCores.offer(quarantined.core);
+                    log.info("Core " + quarantined.core + " reclaimed after job " + entry.getKey()
+                            + " tree exited");
+                } else {
+                    invalidatedCores.add(quarantined.core);
+                    log.warn("Withholding invalidated quarantined CPU " + quarantined.core
+                            + " after job " + entry.getKey() + " tree exited");
+                }
             }
         }
     }
@@ -1693,23 +1894,28 @@ public class LocalBackend implements Backend {
     private void loadConfiguration() {
         // Concurrency level and Core Pinning
         String coreList = EnvironmentConfig.getLocalCoreList();
-        List<Integer> effectiveAffinity = readEffectiveCpuAffinity(PROC_SELF_STATUS_PATH);
-        List<Integer> onlineCpus = readOnlineCpuList(CPU_ONLINE_PATH);
+        List<Integer> effectiveAffinity;
+        List<Integer> onlineCpus;
+        try {
+            effectiveAffinity = cpuEnvironmentReader.readEffectiveAffinity();
+            onlineCpus = cpuEnvironmentReader.readOnlineCpus();
+        } catch (LocalCpuAttestation.CpuStateReadException e) {
+            throw new IllegalStateException(e.getMessage(), e);
+        }
         if (coreList != null && !coreList.trim().isEmpty()) {
             List<Integer> parsedCores = parseConfiguredCoreList(coreList);
             configuredCores = validateConfiguredCoreList(
                     parsedCores,
                     effectiveAffinity,
                     onlineCpus,
-                    CpuPartitionManager.readThreadSiblings(SYSFS_CPU_PATH));
+                    siblingTopologySupplier.get());
             // Concurrency is derived only after the complete lease list is valid.
             maxConcurrency = configuredCores.size();
             log.info(
                     "Using validated core list for CPU pinning: " + configuredCores +
                             " (Concurrency: " + maxConcurrency + ")");
         } else {
-            Map<Integer, List<Integer>> siblingTopology =
-                    CpuPartitionManager.readThreadSiblings(SYSFS_CPU_PATH);
+            Map<Integer, List<Integer>> siblingTopology = siblingTopologySupplier.get();
             OptionalInt configuredConcurrency = getEnvOptionalInt(
                     "STAREXEC_LOCAL_CONCURRENCY");
             if (configuredConcurrency.isPresent() && configuredConcurrency.getAsInt() >= 1) {
@@ -2174,6 +2380,7 @@ public class LocalBackend implements Backend {
         }
 
         // Initialize available cores for CPU pinning
+        invalidatedCores.clear();
         availableCores = new LinkedBlockingQueue<>();
         availableCores.addAll(configuredCores);
 
@@ -2209,7 +2416,9 @@ public class LocalBackend implements Backend {
         );
 
         // Create and start job completion monitor
-        jobMonitor = new LocalJobMonitor();
+        if (jobMonitor == null) {
+            jobMonitor = new LocalJobMonitor();
+        }
         jobMonitor.start();
 
         // Cache the node ID to avoid database queries during job submission

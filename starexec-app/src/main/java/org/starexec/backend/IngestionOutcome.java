@@ -61,6 +61,10 @@ enum IngestionOutcome {
                 // Deterministic: the same bytes will fail the same checks forever.
                 return BLOCKED;
             }
+            if (t instanceof LocalCpuAttestation.CpuAllocationViolationException) {
+                // Deterministic: CPU allocation invariant violated during execution or ingestion.
+                return BLOCKED;
+            }
         }
         return BLOCKED;
     }

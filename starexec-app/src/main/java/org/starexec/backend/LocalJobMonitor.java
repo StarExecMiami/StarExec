@@ -136,13 +136,25 @@ public class LocalJobMonitor {
          */
         final Integer attemptNo;
 
+        /**
+         * CPU allocation invariant tracker bound to this execution attempt (#295), or null
+         * for legacy registrations that do not carry a lease tracker.
+         */
+        final LocalCpuAttestation.AttemptTracker cpuAttestation;
+
         PairExecutionState(String logDir, long generation, int parseFailures) {
-            this(logDir, generation, parseFailures, 0, 0L, false, null, null);
+            this(logDir, generation, parseFailures, 0, 0L, false, null, null, null);
         }
 
         PairExecutionState(String logDir, long generation, int parseFailures,
                 Integer attemptNo) {
-            this(logDir, generation, parseFailures, 0, 0L, false, null, attemptNo);
+            this(logDir, generation, parseFailures, 0, 0L, false, null, attemptNo, null);
+        }
+
+        PairExecutionState(String logDir, long generation, int parseFailures,
+                Integer attemptNo, LocalCpuAttestation.AttemptTracker cpuAttestation) {
+            this(logDir, generation, parseFailures, 0, 0L, false, null, attemptNo,
+                    cpuAttestation);
         }
 
         PairExecutionState(
@@ -154,7 +166,7 @@ public class LocalJobMonitor {
                 boolean ingestionBlocked,
                 String lastIngestionFailure) {
             this(logDir, generation, parseFailures, ingestionFailures, nextRetryAtNanos,
-                    ingestionBlocked, lastIngestionFailure, null);
+                    ingestionBlocked, lastIngestionFailure, null, null);
         }
 
         PairExecutionState(
@@ -166,6 +178,20 @@ public class LocalJobMonitor {
                 boolean ingestionBlocked,
                 String lastIngestionFailure,
                 Integer attemptNo) {
+            this(logDir, generation, parseFailures, ingestionFailures, nextRetryAtNanos,
+                    ingestionBlocked, lastIngestionFailure, attemptNo, null);
+        }
+
+        PairExecutionState(
+                String logDir,
+                long generation,
+                int parseFailures,
+                int ingestionFailures,
+                long nextRetryAtNanos,
+                boolean ingestionBlocked,
+                String lastIngestionFailure,
+                Integer attemptNo,
+                LocalCpuAttestation.AttemptTracker cpuAttestation) {
             this.logDir = logDir;
             this.generation = generation;
             this.parseFailures = parseFailures;
@@ -174,22 +200,24 @@ public class LocalJobMonitor {
             this.ingestionBlocked = ingestionBlocked;
             this.lastIngestionFailure = lastIngestionFailure;
             this.attemptNo = attemptNo;
+            this.cpuAttestation = cpuAttestation;
         }
 
         PairExecutionState withParseFailures(int failures) {
             return new PairExecutionState(logDir, generation, failures,
                     ingestionFailures, nextRetryAtNanos, ingestionBlocked, lastIngestionFailure,
-                    attemptNo);
+                    attemptNo, cpuAttestation);
         }
 
         PairExecutionState withIngestionRetry(long dueAtNanos, String cause) {
             return new PairExecutionState(logDir, generation, parseFailures,
-                    ingestionFailures + 1, dueAtNanos, false, cause, attemptNo);
+                    ingestionFailures + 1, dueAtNanos, false, cause, attemptNo, cpuAttestation);
         }
 
         PairExecutionState blockedForIngestion(String cause) {
             return new PairExecutionState(logDir, generation, parseFailures,
-                    ingestionFailures + 1, nextRetryAtNanos, true, cause, attemptNo);
+                    ingestionFailures + 1, nextRetryAtNanos, true, cause, attemptNo,
+                    cpuAttestation);
         }
     }
 
@@ -403,7 +431,7 @@ public class LocalJobMonitor {
         pairs.computeIfPresent(pairId, (key, current) ->
                 current.generation == state.generation && current.ingestionFailures != 0
                         ? new PairExecutionState(current.logDir, current.generation,
-                                current.parseFailures, current.attemptNo)
+                                current.parseFailures, current.attemptNo, current.cpuAttestation)
                         : current);
     }
 
@@ -441,6 +469,18 @@ public class LocalJobMonitor {
      * and writes are unfenced.
      */
     public synchronized void registerJob(String logDir, int pairId, Integer attemptNo) {
+        registerJob(logDir, pairId, attemptNo, null);
+    }
+
+    /**
+     * As {@link #registerJob(String, int, Integer)}, additionally binding a CPU allocation
+     * attestation tracker verified before any result writes are permitted (#295).
+     */
+    public synchronized long registerJob(
+            String logDir,
+            int pairId,
+            Integer attemptNo,
+            LocalCpuAttestation.AttemptTracker cpuAttestation) {
         // A fresh generation supersedes whatever was in flight: a poll that started
         // before this point finds its generation stale and declines to record its
         // result. This single put replaces what used to be three separate mutations
@@ -452,7 +492,7 @@ public class LocalJobMonitor {
         // otherwise store the lower generation last and leave the map describing an
         // older run than the one actually starting.
         long generation = generationSequence.incrementAndGet();
-        pairs.put(pairId, new PairExecutionState(logDir, generation, 0, attemptNo));
+        pairs.put(pairId, new PairExecutionState(logDir, generation, 0, attemptNo, cpuAttestation));
 
         // Reset poll interval to base for responsive detection of new job completion
         pollInterval.resetToBase();
@@ -468,6 +508,36 @@ public class LocalJobMonitor {
                         logDir +
                         ", generation=" +
                         generation);
+        return generation;
+    }
+
+    /**
+     * Binds a CPU allocation tracker onto an already-registered execution generation so an
+     * unexpected failure before launch still leaves the pair tracked while any running attempt
+     * carries its tracker before process launch (#295).
+     */
+    public synchronized boolean bindCpuAttestation(
+            int pairId,
+            long expectedGeneration,
+            LocalCpuAttestation.AttemptTracker cpuAttestation) {
+        final boolean[] bound = { false };
+        pairs.computeIfPresent(pairId, (key, current) -> {
+            if (current.generation != expectedGeneration) {
+                return current;
+            }
+            bound[0] = true;
+            return new PairExecutionState(
+                    current.logDir,
+                    current.generation,
+                    current.parseFailures,
+                    current.ingestionFailures,
+                    current.nextRetryAtNanos,
+                    current.ingestionBlocked,
+                    current.lastIngestionFailure,
+                    current.attemptNo,
+                    cpuAttestation);
+        });
+        return bound[0];
     }
 
     /**
@@ -813,6 +883,33 @@ public class LocalJobMonitor {
             return false;
         }
 
+        // 4.5 Verify CPU allocation attestation before writing any scientific state or
+        //     measurements (#295). Transient failures reading /proc or sysfs raise
+        //     RetryableIngestionException so the poll backs off cleanly; proven CPU
+        //     allocation violations persist a VIOLATED attestation record (best-effort)
+        //     and throw CpuAllocationViolationException to block ingestion.
+        CpuAttestationRecord cpuRecord = null;
+        if (state.cpuAttestation != null) {
+            try {
+                cpuRecord = state.cpuAttestation.verifyForIngestion();
+            } catch (LocalCpuAttestation.CpuStateReadException e) {
+                throw new org.starexec.backend.exception.RetryableIngestionException(
+                        "Transient failure verifying CPU attestation for pairId=" + pairId
+                                + ": " + e.getMessage(),
+                        e);
+            } catch (LocalCpuAttestation.CpuAllocationViolationException e) {
+                if (e.getRecord() != null && isCurrent(pairId, state)) {
+                    try {
+                        FencedResultWrites.recordAttemptCpuAttestation(e.getRecord());
+                    } catch (Exception recordError) {
+                        log.warn("Could not persist VIOLATED CPU attestation for pairId=" + pairId
+                                + ": " + recordError.getMessage());
+                    }
+                }
+                throw e;
+            }
+        }
+
         // 5. Earlier stages, from the per-stage snapshots the job script writes beside
         //    status.json. That file is one slot the stages take turns truncating, so
         //    without this the pair keeps only its last stage and every earlier one stays
@@ -870,6 +967,14 @@ public class LocalJobMonitor {
         // tracking a pair that has not finished, and it is the same predicate whose divergence
         // from the database contract allowed status laundering elsewhere.
         if (ss.status.isTerminalExecutionResult()) {
+            if (cpuRecord != null && isCurrent(pairId, state)) {
+                try {
+                    FencedResultWrites.recordAttemptCpuAttestation(cpuRecord);
+                } catch (Exception e) {
+                    log.warn("Could not persist ATTESTED CPU record for pairId=" + pairId
+                            + ": " + e.getMessage(), e);
+                }
+            }
             log.info("Job execution finished for pairId=" + pairId + " with status=" + ss.status);
             return true;
         } else {
@@ -1499,6 +1604,22 @@ public class LocalJobMonitor {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /** Whether {@code pairId} is currently tracked by this monitor. */
+    public boolean isTracking(int pairId) {
+        return pairs.containsKey(pairId);
+    }
+
+    /** Whether {@code pairId} is held in {@code INGESTION_BLOCKED} state (#295). */
+    public boolean isIngestionBlocked(int pairId) {
+        PairExecutionState state = pairs.get(pairId);
+        return state != null && state.ingestionBlocked;
+    }
+
+    /** Runs one poll cycle synchronously for deterministic unit testing. */
+    public void pollOnceForTesting() {
+        checkCompletedJobs();
     }
 
     /**
