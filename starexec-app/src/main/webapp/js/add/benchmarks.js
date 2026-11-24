@@ -16,6 +16,8 @@ $(document).ready(function() {
 
 var resumableUploadState = null;
 var MAX_CHUNK_RETRIES = 3;
+var FINALIZE_POLL_INTERVAL_MS = 2000;
+var MAX_FINALIZE_POLL_RETRIES = 10;
 var RESUMABLE_UPLOAD_STORAGE_PREFIX = 'starexec-benchmark-upload:';
 
 // Helper function to properly join URL paths (avoids double slashes)
@@ -139,7 +141,7 @@ function clearStoredSession(state) {
 function getErrorMessage(xhr, fallback) {
 	try {
 		var response = JSON.parse(xhr.responseText);
-		return response.message || fallback;
+		return response.message || response.errorMessage || fallback;
 	} catch (e) {
 		return fallback;
 	}
@@ -262,34 +264,114 @@ function resumeOrCreateUploadSession() {
 	});
 }
 
-function finalizeResumableUpload() {
-	if (!resumableUploadState || resumableUploadState.isFinalizing) {
+function isTransientUploadError(xhr, status) {
+	return status === 'timeout' || status === 'parsererror' ||
+		[0, 408, 429, 500, 502, 503, 504].includes(xhr && xhr.status);
+}
+
+function handleFinalizedSessionStatus(state, response) {
+	if (resumableUploadState !== state || state.isStopped) {
 		return;
 	}
-	resumableUploadState.isFinalizing = true;
+	if ((response.status === 'COMPLETE' || (response.success && response.status !== 'FINALIZING')) && response.jobId) {
+		clearStoredSession(state);
+		updateUploadProgressUi('Upload transferred. Redirecting...', 'Opening processing status page', 100);
+		window.location.href = joinPath(starexecRoot, '/secure/details/uploadStatus.jsp?id=' + response.jobId);
+		return;
+	}
+	if (response.status === 'FINALIZING') {
+		state.isFinalizing = true;
+		state.finalizeRetryCount = 0;
+		updateUploadControlState();
+		updateUploadProgressUi(
+			'Finalizing archive on server...',
+			'Assembling uploaded chunks for ' + state.file.name,
+			100
+		);
+		state.finalizeTimer = window.setTimeout(function() {
+			state.finalizeTimer = null;
+			pollFinalizeUploadSession(state);
+		}, FINALIZE_POLL_INTERVAL_MS);
+		return;
+	}
+
+	state.isFinalizing = false;
+	updateUploadControlState();
+	if (response.status === 'FAILED' || response.status === 'ABORTED' || response.status === 'EXPIRED') {
+		clearStoredSession(state);
+	}
+	showResumableUploadError(response.errorMessage || response.message || 'Failed to finalize upload session');
+}
+
+function recoverFinalizingSession(state, xhr, status) {
+	if (resumableUploadState !== state || state.isStopped) {
+		return;
+	}
+	var retries = state.finalizeRetryCount || 0;
+	if (isTransientUploadError(xhr, status) && retries < MAX_FINALIZE_POLL_RETRIES) {
+		var delay = 1000 * Math.pow(2, Math.min(4, retries));
+		state.finalizeRetryCount = retries + 1;
+		updateUploadProgressUi(
+			'Finalizing archive on server...',
+			'Checking server status (attempt ' + state.finalizeRetryCount + ')...',
+			100
+		);
+		state.finalizeTimer = window.setTimeout(function() {
+			state.finalizeTimer = null;
+			pollFinalizeUploadSession(state);
+		}, delay);
+		return;
+	}
+	state.isFinalizing = false;
+	updateUploadControlState();
+	showResumableUploadError(getErrorMessage(xhr, 'Failed to finalize upload session'));
+}
+
+function pollFinalizeUploadSession(state) {
+	if (resumableUploadState !== state || state.isStopped || state.xhr || state.finalizeTimer !== null) {
+		return;
+	}
+	var request = fetchUploadSession(state.sessionId);
+	state.xhr = request;
+	request.done(function(session) {
+		if (!finishUploadRequest(state, request) || state.isStopped) {
+			return;
+		}
+		handleFinalizedSessionStatus(state, session);
+	}).fail(function(xhr, status) {
+		if (!finishUploadRequest(state, request) || status === 'abort' || state.isStopped) {
+			return;
+		}
+		recoverFinalizingSession(state, xhr, status);
+	});
+}
+
+function finalizeResumableUpload() {
+	var state = resumableUploadState;
+	if (!state || state.isFinalizing) {
+		return;
+	}
+	state.isFinalizing = true;
+	state.finalizeRetryCount = 0;
 	updateUploadControlState();
 	updateUploadProgressUi(
 		'Upload finished. Finalizing on server...',
-		'Preparing async processing job for ' + resumableUploadState.file.name,
+		'Preparing async processing job for ' + state.file.name,
 		100
 	);
-	finalizeUploadSessionRequest(resumableUploadState.sessionId)
-		.done(function(response) {
-			if (!response.success || !response.jobId) {
-				resumableUploadState.isFinalizing = false;
-				updateUploadControlState();
-				showResumableUploadError(response.message || 'Failed to finalize upload session');
-				return;
-			}
-			clearStoredSession(resumableUploadState);
-			updateUploadProgressUi('Upload transferred. Redirecting...', 'Opening processing status page', 100);
-			window.location.href = joinPath(starexecRoot, '/secure/details/uploadStatus.jsp?id=' + response.jobId);
-		})
-		.fail(function(xhr) {
-			resumableUploadState.isFinalizing = false;
-			updateUploadControlState();
-			showResumableUploadError(getErrorMessage(xhr, 'Failed to finalize upload session'));
-		});
+	var request = finalizeUploadSessionRequest(state.sessionId);
+	state.xhr = request;
+	request.done(function(response) {
+		if (!finishUploadRequest(state, request) || state.isStopped) {
+			return;
+		}
+		handleFinalizedSessionStatus(state, response);
+	}).fail(function(xhr, status) {
+		if (!finishUploadRequest(state, request) || status === 'abort' || state.isStopped) {
+			return;
+		}
+		recoverFinalizingSession(state, xhr, status);
+	});
 }
 
 function finishUploadRequest(state, request) {
@@ -303,6 +385,8 @@ function finishUploadRequest(state, request) {
 function cancelUploadWork(state) {
 	window.clearTimeout(state.retryTimer);
 	state.retryTimer = null;
+	window.clearTimeout(state.finalizeTimer);
+	state.finalizeTimer = null;
 	var request = state.xhr;
 	state.xhr = null;
 	if (request) {
@@ -324,12 +408,17 @@ function recoverUploadChunk(state, chunkIndex, message) {
 		if (!finishUploadRequest(state, request) || state.isPaused || state.isStopped) {
 			return;
 		}
-		if (!session.success || (session.status !== 'UPLOADING' && session.status !== 'READY')) {
-			pauseUploadWithError(state, session.message || 'Could not recover the upload session.');
+		if (!session.success || (session.status !== 'UPLOADING' && session.status !== 'READY' && session.status !== 'FINALIZING')) {
+			pauseUploadWithError(state, session.errorMessage || session.message || 'Could not recover the upload session.');
 			return;
 		}
 		syncStateFromSession(session);
-		if (session.status === 'READY') {
+		if (session.status === 'FINALIZING') {
+			state.isFinalizing = true;
+			state.finalizeRetryCount = 0;
+			updateUploadControlState();
+			pollFinalizeUploadSession(state);
+		} else if (session.status === 'READY') {
 			finalizeResumableUpload();
 		} else if (state.nextChunkIndex > chunkIndex) {
 			// A transport error does not mean that the server rejected the chunk.
@@ -455,8 +544,8 @@ function resumeResumableUpload() {
 		if (!finishUploadRequest(state, request)) {
 			return;
 		}
-		if (!session.success || (session.status !== 'UPLOADING' && session.status !== 'READY')) {
-			pauseUploadWithError(state, session.message || 'Could not resume upload session');
+		if (!session.success || (session.status !== 'UPLOADING' && session.status !== 'READY' && session.status !== 'FINALIZING')) {
+			pauseUploadWithError(state, session.errorMessage || session.message || 'Could not resume upload session');
 			return;
 		}
 		state.isPaused = false;
@@ -464,7 +553,12 @@ function resumeResumableUpload() {
 		syncStateFromSession(session);
 		updateUiFromSession(session, 'Resuming upload...');
 		updateUploadControlState();
-		if (session.status === 'READY') {
+		if (session.status === 'FINALIZING') {
+			state.isFinalizing = true;
+			state.finalizeRetryCount = 0;
+			updateUploadControlState();
+			pollFinalizeUploadSession(state);
+		} else if (session.status === 'READY') {
 			finalizeResumableUpload();
 		} else {
 			uploadNextChunk();
@@ -643,6 +737,8 @@ function handleUploadClick(event) {
 		xhr: null,
 		retryCount: 0,
 		retryTimer: null,
+		finalizeRetryCount: 0,
+		finalizeTimer: null,
 		isPaused: false,
 		isStopped: false,
 		isFinalizing: false
@@ -662,6 +758,12 @@ function handleUploadClick(event) {
 			if (session.status === 'COMPLETE' && session.jobId) {
 				clearStoredSession(resumableUploadState);
 				window.location.href = joinPath(starexecRoot, '/secure/details/uploadStatus.jsp?id=' + session.jobId);
+				return;
+			}
+			if (session.status === 'FINALIZING') {
+				resumableUploadState.isFinalizing = true;
+				updateUploadControlState();
+				pollFinalizeUploadSession(resumableUploadState);
 				return;
 			}
 			if (session.status === 'READY') {

@@ -89,6 +89,10 @@ public class UploadSessions {
         "UPDATE upload_sessions SET status = 'FINALIZING', updated_at = CURRENT_TIMESTAMP " +
         "WHERE id = ? AND status IN ('UPLOADING', 'READY')";
 
+    private static final String TOUCH_FINALIZING_SESSION_SQL =
+        "UPDATE upload_sessions SET updated_at = CURRENT_TIMESTAMP " +
+        "WHERE id = ? AND status = 'FINALIZING' AND job_id IS NULL";
+
     private static final String COMPLETE_SESSION_SQL =
         "UPDATE upload_sessions " +
         "SET status = 'COMPLETE', job_id = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP, error_message = NULL " +
@@ -364,6 +368,27 @@ public class UploadSessions {
             return ps.executeUpdate() > 0;
         } catch (SQLException e) {
             log.error("markFinalizing", "Failed to mark session " + sessionId + " as finalizing", e);
+            return false;
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+    }
+
+    /**
+     * Refreshes {@code updated_at} while a background finalization worker assembles chunks.
+     */
+    public static boolean touchSession(long sessionId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(TOUCH_FINALIZING_SESSION_SQL);
+            ps.setLong(1, sessionId);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            log.debug("touchSession", "Failed to update heartbeat for upload session " + sessionId, e);
             return false;
         } finally {
             Common.safeClose(ps);

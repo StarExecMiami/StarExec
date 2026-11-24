@@ -59,6 +59,7 @@ import java.util.*;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -120,6 +121,46 @@ public class RESTServices {
 
 	/** Dedicated executor for live log stream polling and SSE writes. */
 	private static volatile ScheduledExecutorService pairLogStreamExecutor = createPairLogStreamExecutor();
+
+	private static final long FINALIZE_HEARTBEAT_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(2);
+
+	/** Dedicated bounded executor for assembling resumable upload chunks asynchronously (#98). */
+	private static final ExecutorService defaultUploadFinalizeExecutor = Executors.newFixedThreadPool(2,
+			new ThreadFactory() {
+				private final java.util.concurrent.atomic.AtomicInteger count = new java.util.concurrent.atomic.AtomicInteger();
+				@Override
+				public Thread newThread(Runnable r) {
+					Thread t = new Thread(r);
+					t.setName("upload-session-finalize-" + count.incrementAndGet());
+					t.setDaemon(true);
+					return t;
+				}
+			});
+
+	private final Executor uploadFinalizeExecutor;
+
+	public RESTServices() {
+		this(defaultUploadFinalizeExecutor);
+	}
+
+	public RESTServices(Executor uploadFinalizeExecutor) {
+		this.uploadFinalizeExecutor = Objects.requireNonNull(uploadFinalizeExecutor, "uploadFinalizeExecutor");
+	}
+
+	public static void shutdownUploadFinalizeExecutor() {
+		if (defaultUploadFinalizeExecutor.isShutdown()) {
+			return;
+		}
+		defaultUploadFinalizeExecutor.shutdown();
+		try {
+			if (!defaultUploadFinalizeExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+				defaultUploadFinalizeExecutor.shutdownNow();
+			}
+		} catch (InterruptedException e) {
+			defaultUploadFinalizeExecutor.shutdownNow();
+			Thread.currentThread().interrupt();
+		}
+	}
 
 	/** Active log-stream sessions — drained at shutdown so no stream slot is leaked. */
 	private static final Set<PairLogStreamSession> activePairLogSessions =
@@ -745,44 +786,40 @@ public class RESTServices {
 	@POST
 	@Path("/uploads/sessions/{sessionId}/finalize")
 	@Produces(MediaType.APPLICATION_JSON)
-	public String finalizeUploadSession(@PathParam("sessionId") long sessionId, @Context HttpServletRequest request) {
+	public Response finalizeUploadSession(@PathParam("sessionId") long sessionId, @Context HttpServletRequest request) {
 		int userId = SessionUtil.getUserId(request);
 		if (!UploadSessionSecurity.canUserManageUploadSession(sessionId, userId)) {
-			return gson.toJson(new ValidatorStatusCode(false, "You do not have permission to finalize this upload session"));
+			return jsonOk(new ValidatorStatusCode(false, "You do not have permission to finalize this upload session"));
 		}
 
 		UploadSession session = UploadSessions.getSession(sessionId).orElse(null);
 		if (session == null) {
-			return gson.toJson(new ValidatorStatusCode(false, "Upload session not found"));
+			return jsonOk(new ValidatorStatusCode(false, "Upload session not found"));
 		}
 		if ("COMPLETE".equals(session.getStatus()) && session.getJobId() != null) {
-			Map<String, Object> response = new HashMap<>();
-			response.put("success", true);
-			response.put("jobId", session.getJobId());
-			response.put("sessionId", session.getId());
-			return gson.toJson(response);
+			return jsonOk(buildFinalizeSessionPayload(session));
+		}
+		if ("FINALIZING".equals(session.getStatus())) {
+			return jsonAccepted(buildFinalizeSessionPayload(session));
 		}
 		if (session.getBytesReceived() != session.getTotalBytes() || session.getNextChunkIndex() != session.getTotalChunks()) {
-			return gson.toJson(new ValidatorStatusCode(false, "Upload is incomplete and cannot be finalized"));
+			return jsonOk(new ValidatorStatusCode(false, "Upload is incomplete and cannot be finalized"));
 		}
 		if (!UploadSessions.markFinalizing(sessionId)) {
 			UploadSession refreshed = UploadSessions.getSession(sessionId).orElse(null);
 			if (refreshed == null) {
-				return gson.toJson(new ValidatorStatusCode(false, "Upload session not found"));
+				return jsonOk(new ValidatorStatusCode(false, "Upload session not found"));
 			}
 			if ("COMPLETE".equals(refreshed.getStatus()) && refreshed.getJobId() != null) {
-				Map<String, Object> response = new HashMap<>();
-				response.put("success", true);
-				response.put("jobId", refreshed.getJobId());
-				response.put("sessionId", refreshed.getId());
-				return gson.toJson(response);
+				return jsonOk(buildFinalizeSessionPayload(refreshed));
 			}
 			if ("FINALIZING".equals(refreshed.getStatus())) {
-				return gson.toJson(new ValidatorStatusCode(false, "Upload finalization already in progress"));
+				return jsonAccepted(buildFinalizeSessionPayload(refreshed));
 			}
-			return gson.toJson(new ValidatorStatusCode(false, "Upload session is not ready to finalize"));
+			return jsonOk(new ValidatorStatusCode(false, "Upload session is not ready to finalize"));
 		}
 
+		session.setStatus("FINALIZING");
 		java.nio.file.Path chunksDir;
 		java.nio.file.Path finalArchivePath;
 		try {
@@ -796,49 +833,90 @@ public class RESTServices {
 		} catch (IOException e) {
 			log.error("finalizeUploadSession", "Unsafe upload session path for session " + sessionId, e);
 			UploadSessions.failSession(sessionId, "Upload session path is invalid");
-			return gson.toJson(new ValidatorStatusCode(false, "Upload session path is invalid"));
+			return jsonOk(new ValidatorStatusCode(false, "Upload session path is invalid"));
 		}
 
-		ValidatorStatusCode assembleStatus = assembleUploadSessionChunks(session, chunksDir, finalArchivePath);
-		if (!assembleStatus.isSuccess()) {
-			UploadSessions.failSession(sessionId, assembleStatus.getMessage());
-			return gson.toJson(new ValidatorStatusCode(false, assembleStatus.getMessage()));
+		try {
+			uploadFinalizeExecutor.execute(() -> runAsyncFinalizeUploadSession(session, chunksDir, finalArchivePath));
+		} catch (RejectedExecutionException e) {
+			log.error("finalizeUploadSession", "Failed to schedule async finalization for session " + sessionId, e);
+			UploadSessions.failSession(sessionId, "Failed to schedule upload finalization");
+			return jsonOk(new ValidatorStatusCode(false, "Failed to schedule upload finalization"));
 		}
 
-		File finalArchive = finalArchivePath.toFile();
+		return jsonAccepted(buildFinalizeSessionPayload(session));
+	}
 
-		UploadJob.UploadJobRequest uploadJobRequest = new UploadJob.UploadJobRequest.Builder()
-			.archivePath(finalArchive.getAbsolutePath())
-			.userId(session.getUserId())
-			.spaceId(session.getSpaceId())
-			.uploadMethod(session.getUploadMethod())
-			.benchmarkTypeId(session.getBenchmarkTypeId())
-			.downloadable(session.isDownloadable())
-			.archiveSize(session.getTotalBytes())
-			.hasDependencies(session.isHasDependencies())
-			.depRootSpaceId(session.getDepRootSpaceId())
-			.linked(session.isLinked())
-			.uploadSessionId(session.getId())
-			.spacePermissions(UploadJob.decodeSpacePermissions(session.getSpacePermissions()))
+	private void runAsyncFinalizeUploadSession(
+		UploadSession session,
+		java.nio.file.Path chunksDir,
+		java.nio.file.Path finalArchivePath
+	) {
+		long sessionId = session.getId();
+		try {
+			ValidatorStatusCode assembleStatus = assembleUploadSessionChunks(session, chunksDir, finalArchivePath);
+			if (!assembleStatus.isSuccess()) {
+				String message = assembleStatus.getMessage();
+				if (message == null || message.isEmpty()) {
+					message = "Failed to finalize upload assembly";
+				}
+				UploadSessions.failSession(sessionId, message);
+				return;
+			}
+
+			File finalArchive = finalArchivePath.toFile();
+			UploadJob.UploadJobRequest uploadJobRequest = new UploadJob.UploadJobRequest.Builder()
+				.archivePath(finalArchive.getAbsolutePath())
+				.userId(session.getUserId())
+				.spaceId(session.getSpaceId())
+				.uploadMethod(session.getUploadMethod())
+				.benchmarkTypeId(session.getBenchmarkTypeId())
+				.downloadable(session.isDownloadable())
+				.archiveSize(session.getTotalBytes())
+				.hasDependencies(session.isHasDependencies())
+				.depRootSpaceId(session.getDepRootSpaceId())
+				.linked(session.isLinked())
+				.uploadSessionId(session.getId())
+				.spacePermissions(UploadJob.decodeSpacePermissions(session.getSpacePermissions()))
+				.build();
+
+			Optional<Long> jobId = UploadSessions.finalizeSessionWithUploadJob(
+				sessionId,
+				finalArchivePath.toAbsolutePath().toString(),
+				uploadJobRequest
+			);
+			if (jobId.isEmpty()) {
+				UploadSessions.failSession(sessionId, "Failed to schedule upload processing");
+				cleanupFinalizedUploadArtifacts(session, chunksDir, finalArchivePath);
+				return;
+			}
+
+			cleanupUploadSessionChunks(session, chunksDir);
+		} catch (Exception e) {
+			log.error("runAsyncFinalizeUploadSession", "Unexpected failure finalizing upload session " + sessionId, e);
+			String message = e.getMessage();
+			if (message == null || message.isEmpty()) {
+				message = "Failed to finalize upload session";
+			}
+			UploadSessions.failSession(sessionId, message);
+		}
+	}
+
+	private Map<String, Object> buildFinalizeSessionPayload(UploadSession session) {
+		Map<String, Object> response = buildUploadSessionPayload(session);
+		response.put("sessionId", session.getId());
+		return response;
+	}
+
+	private Response jsonOk(Object payload) {
+		return Response.ok(gson.toJson(payload), MediaType.APPLICATION_JSON).build();
+	}
+
+	private Response jsonAccepted(Object payload) {
+		return Response.status(Response.Status.ACCEPTED)
+			.entity(gson.toJson(payload))
+			.type(MediaType.APPLICATION_JSON)
 			.build();
-
-		Optional<Long> jobId = UploadSessions.finalizeSessionWithUploadJob(
-			sessionId,
-			finalArchivePath.toAbsolutePath().toString(),
-			uploadJobRequest
-		);
-		if (jobId.isEmpty()) {
-			UploadSessions.failSession(sessionId, "Failed to schedule upload processing");
-			cleanupFinalizedUploadArtifacts(session, chunksDir, finalArchivePath);
-			return gson.toJson(new ValidatorStatusCode(false, "Failed to schedule upload processing"));
-		}
-
-		cleanupUploadSessionChunks(session, chunksDir);
-		Map<String, Object> response = new HashMap<>();
-		response.put("success", true);
-		response.put("sessionId", sessionId);
-		response.put("jobId", jobId.get());
-		return gson.toJson(response);
 	}
 
 	private static void moveWithAtomicFallback(java.nio.file.Path source, java.nio.file.Path target) throws IOException {
@@ -896,6 +974,7 @@ public class RESTServices {
 			StandardOpenOption.WRITE
 		)) {
 			long targetOffset = 0L;
+			long lastTouchNanos = System.nanoTime();
 			for (int i = 0; i < session.getTotalChunks(); i++) {
 				java.nio.file.Path chunkPath = chunksDir.resolve("chunk_" + i + ".bin");
 				if (!Files.exists(chunkPath, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
@@ -915,6 +994,11 @@ public class RESTServices {
 						pos += transferred;
 						targetOffset += transferred;
 					}
+				}
+				long nowNanos = System.nanoTime();
+				if (i > 0 && nowNanos - lastTouchNanos >= FINALIZE_HEARTBEAT_INTERVAL_NANOS) {
+					UploadSessions.touchSession(session.getId());
+					lastTouchNanos = nowNanos;
 				}
 			}
 			out.force(true);

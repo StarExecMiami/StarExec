@@ -1,5 +1,6 @@
 package org.starexec.servlets;
 
+import org.starexec.app.RESTServices;
 import org.starexec.constants.R;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.data.database.Spaces;
@@ -287,6 +288,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
     @Override
     public void contextDestroyed(ServletContextEvent sce) {
         log.info("contextDestroyed", "Shutting down upload job worker");
+        RESTServices.shutdownUploadFinalizeExecutor();
         
         // Signal worker to stop
         running.set(false);

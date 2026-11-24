@@ -126,3 +126,101 @@ test('pause cancels a pending retry, and duplicate Resume clicks share one state
   h.reads[1].resolve(h.session(1));
   assert.deepEqual(h.puts.map(request => request.url.split('/').at(-1)), ['0', '1']);
 });
+
+function setupFinalize() {
+  const posts = [];
+  const reads = [];
+  const timers = new Map();
+  const messages = [];
+  const errors = [];
+  let cleared = 0;
+  const $ = () => ({ ready() {} });
+  const request = (requests, url) => {
+    const pending = {
+      url,
+      done(callback) { this.resolve = callback; return this; },
+      fail(callback) { this.reject = callback; return this; },
+      abort() { this.reject({ status: 0 }, 'abort'); },
+    };
+    requests.push(pending);
+    return pending;
+  };
+  $.ajax = options => request(posts, options.url);
+  $.getJSON = url => request(reads, url);
+  let timerId = 0;
+  const context = vm.createContext({ document: {}, $, starexecRoot: '/', log() {},
+    setTimeout(callback, delay) {
+      const id = ++timerId;
+      timers.set(id, { callback, delay });
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
+  });
+  context.window = context;
+  context.location = { href: '' };
+  vm.runInContext(source, context);
+  context.updateUploadControlState = () => {};
+  context.updateUploadProgressUi = (...args) => messages.push(args);
+  context.persistStoredSession = () => {};
+  context.clearStoredSession = () => { cleared++; };
+  context.showResumableUploadError = message => errors.push(message);
+  context.resumableUploadState = {
+    sessionId: 9, file: { name: 'large.tgz', size: 1024 }, chunkSize: 512, totalChunks: 2,
+    nextChunkIndex: 2, bytesReceived: 1024, retryCount: 0, retryTimer: null,
+    finalizeRetryCount: 0, finalizeTimer: null, isFinalizing: false, isStopped: false,
+  };
+  function fireTimer() {
+    assert.equal(timers.size, 1);
+    const [[id, timer]] = timers;
+    timers.delete(id);
+    timer.callback();
+    return timer.delay;
+  }
+  return { context, posts, reads, timers, messages, errors, fireTimer, cleared: () => cleared };
+}
+
+test('async FINALIZING response polls session until COMPLETE and redirects', () => {
+  const h = setupFinalize();
+  h.context.finalizeResumableUpload();
+  assert.equal(h.posts.length, 1);
+
+  h.posts[0].resolve({ success: true, id: 9, sessionId: 9, status: 'FINALIZING' });
+  assert.equal(h.timers.size, 1);
+  assert.equal(h.fireTimer(), 2000);
+  assert.equal(h.reads.length, 1);
+
+  h.reads[0].resolve({ success: true, id: 9, status: 'FINALIZING' });
+  assert.equal(h.fireTimer(), 2000);
+  assert.equal(h.reads.length, 2);
+
+  h.reads[1].resolve({ success: true, id: 9, status: 'COMPLETE', jobId: 88 });
+  assert.equal(h.cleared(), 1);
+  assert.equal(h.context.window.location.href, '/secure/details/uploadStatus.jsp?id=88');
+  assert.equal(h.errors.length, 0);
+});
+
+test('transient 504 on finalize recovers via session polling without aborting finalization', () => {
+  const h = setupFinalize();
+  h.context.finalizeResumableUpload();
+  h.posts[0].reject({ status: 504 }, 'error');
+
+  assert.equal(h.errors.length, 0);
+  assert.equal(h.fireTimer(), 1000);
+  assert.equal(h.reads.length, 1);
+
+  h.reads[0].resolve({ success: true, id: 9, status: 'COMPLETE', jobId: 99 });
+  assert.equal(h.cleared(), 1);
+  assert.equal(h.context.window.location.href, '/secure/details/uploadStatus.jsp?id=99');
+});
+
+test('terminal FAILED state during finalization polling surfaces server errorMessage', () => {
+  const h = setupFinalize();
+  h.context.finalizeResumableUpload();
+  h.posts[0].resolve({ success: true, id: 9, sessionId: 9, status: 'FINALIZING' });
+  h.fireTimer();
+  h.reads[0].resolve({ success: true, id: 9, status: 'FAILED', errorMessage: 'Missing chunk 1' });
+
+  assert.equal(h.cleared(), 1);
+  assert.deepEqual(h.errors, ['Missing chunk 1']);
+  assert.equal(h.context.resumableUploadState.isFinalizing, false);
+});
