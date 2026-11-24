@@ -1,10 +1,14 @@
 package org.starexec.test.integration;
 
+import java.io.IOException;
 import java.lang.reflect.Method;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 
 import org.junit.platform.engine.EngineDiscoveryRequest;
@@ -23,34 +27,55 @@ import org.opentest4j.MultipleFailuresError;
 
 /**
  * Runs the legacy {@link TestSequence} classes on the JUnit Platform. It contributes tests only
- * when a request selects {@link LegacyTestSequenceSuite}: the opt-in
- * {@code legacy-test-sequences} Maven profile does, Surefire's default includes do not.
+ * when a request selects {@link LegacyTestSequenceSuite}: the {@code legacy-test-sequences}
+ * Maven profile does, while Surefire's default includes do not.
  *
- * <p>Each sequence runs as one unit (setup, every method, teardown) through
- * {@link TestSequence#execute(TestSequence.ExecutionListener)}, and each method is reported as a
- * test. A failed construction, setup or teardown fails the sequence. Methods that never started
- * because setup failed are not reported, as with a failed {@code @BeforeAll} in Jupiter. The
- * inventory preflight runs during discovery, before any sequence is instantiated, and a refusal
- * fails the suite.
+ * <p>Supports layer selection via {@code -Dstarexec.legacy.layers=COMPONENT_DAO,...}, enforces
+ * the layer inventory before instantiation, initializes PostgreSQL/fixtures once when running the
+ * live suite, and emits SHA-bound JSON and CSV reports.
  */
 public final class LegacyTestSequenceEngine implements TestEngine {
 	static final String ENGINE_ID = "starexec-legacy-sequences";
+	static final String LAYERS_PROPERTY = "starexec.legacy.layers";
+	static final String REPORT_DIR_PROPERTY = "starexec.legacy.reportDir";
+	static final String DEFAULT_REPORT_DIR = "target/legacy-sequence-reports";
 
 	private final Supplier<List<TestSequenceDiscovery.DiscoveredSequence>> sequences;
+	private final Supplier<LegacyTestLayerInventory> inventorySupplier;
+	private final Supplier<Set<LegacyTestLayerInventory.Layer>> layersSupplier;
+	private final Runnable bootstrap;
+	private final Path reportDir;
 
 	/** Used by the JUnit Platform, which finds the engine through {@code META-INF/services}. */
 	public LegacyTestSequenceEngine() {
-		this(LegacyTestSequenceEngine::discoverReadySequences);
+		this(
+				() -> {
+					LegacyTestLayerInventory inventory = LegacyTestLayerInventory.load();
+					Set<LegacyTestLayerInventory.Layer> selectedLayers =
+							LegacyTestLayerInventory.parseLayerFilter(System.getProperty(LAYERS_PROPERTY));
+					return inventory.filter(TestSequenceDiscovery.discover(), selectedLayers);
+				},
+				LegacyTestLayerInventory::load,
+				() -> LegacyTestLayerInventory.parseLayerFilter(System.getProperty(LAYERS_PROPERTY)),
+				LegacySequenceBootstrap::initializeForLiveSuite,
+				Path.of(System.getProperty(REPORT_DIR_PROPERTY, DEFAULT_REPORT_DIR)));
 	}
 
 	LegacyTestSequenceEngine(Supplier<List<TestSequenceDiscovery.DiscoveredSequence>> sequences) {
-		this.sequences = sequences;
+		this(sequences, null, null, () -> {}, null);
 	}
 
-	private static List<TestSequenceDiscovery.DiscoveredSequence> discoverReadySequences() {
-		List<TestSequenceDiscovery.DiscoveredSequence> discovered = TestSequenceDiscovery.discover();
-		LegacyTestLayerInventory.load().validateReady(discovered);
-		return discovered;
+	LegacyTestSequenceEngine(
+			Supplier<List<TestSequenceDiscovery.DiscoveredSequence>> sequences,
+			Supplier<LegacyTestLayerInventory> inventorySupplier,
+			Supplier<Set<LegacyTestLayerInventory.Layer>> layersSupplier,
+			Runnable bootstrap,
+			Path reportDir) {
+		this.sequences = sequences;
+		this.inventorySupplier = inventorySupplier;
+		this.layersSupplier = layersSupplier;
+		this.bootstrap = bootstrap != null ? bootstrap : () -> {};
+		this.reportDir = reportDir;
 	}
 
 	@Override
@@ -64,7 +89,8 @@ public final class LegacyTestSequenceEngine implements TestEngine {
 		boolean suiteSelected = request.getSelectorsByType(ClassSelector.class).stream()
 				.anyMatch(selector -> selector.getClassName().equals(LegacyTestSequenceSuite.class.getName()));
 		if (suiteSelected) {
-			engine.addChild(SuiteDescriptor.discover(uniqueId, sequences));
+			engine.addChild(SuiteDescriptor.discover(
+					uniqueId, sequences, inventorySupplier, layersSupplier, bootstrap, reportDir));
 		}
 		return engine;
 	}
@@ -83,27 +109,51 @@ public final class LegacyTestSequenceEngine implements TestEngine {
 	private static final class SuiteDescriptor extends AbstractTestDescriptor {
 		/** Why the suite cannot run, or null when it can. */
 		private final RuntimeException refusal;
+		private final Supplier<LegacyTestLayerInventory> inventorySupplier;
+		private final Supplier<Set<LegacyTestLayerInventory.Layer>> layersSupplier;
+		private final Runnable bootstrap;
+		private final Path reportDir;
 
-		private SuiteDescriptor(UniqueId uniqueId, RuntimeException refusal) {
+		private SuiteDescriptor(
+				UniqueId uniqueId,
+				RuntimeException refusal,
+				Supplier<LegacyTestLayerInventory> inventorySupplier,
+				Supplier<Set<LegacyTestLayerInventory.Layer>> layersSupplier,
+				Runnable bootstrap,
+				Path reportDir) {
 			super(uniqueId, LegacyTestSequenceSuite.class.getName(), ClassSource.from(LegacyTestSequenceSuite.class));
 			this.refusal = refusal;
+			this.inventorySupplier = inventorySupplier;
+			this.layersSupplier = layersSupplier;
+			this.bootstrap = bootstrap;
+			this.reportDir = reportDir;
 		}
 
 		static SuiteDescriptor discover(
 				UniqueId engineId,
-				Supplier<List<TestSequenceDiscovery.DiscoveredSequence>> sequences) {
+				Supplier<List<TestSequenceDiscovery.DiscoveredSequence>> sequences,
+				Supplier<LegacyTestLayerInventory> inventorySupplier,
+				Supplier<Set<LegacyTestLayerInventory.Layer>> layersSupplier,
+				Runnable bootstrap,
+				Path reportDir) {
 			UniqueId suiteId = engineId.append("suite", LegacyTestSequenceSuite.class.getName());
 			List<TestSequenceDiscovery.DiscoveredSequence> discovered;
 			try {
 				discovered = sequences.get();
 			} catch (RuntimeException refusal) {
-				return new SuiteDescriptor(suiteId, refusal);
+				return new SuiteDescriptor(suiteId, refusal, inventorySupplier, layersSupplier, bootstrap, reportDir);
 			}
 			if (TestSequenceDiscovery.countMethods(discovered) == 0) {
-				return new SuiteDescriptor(suiteId,
-						new IllegalStateException("Legacy TestSequence engine received zero methods"));
+				return new SuiteDescriptor(
+						suiteId,
+						new IllegalStateException("Legacy TestSequence engine received zero methods"),
+						inventorySupplier,
+						layersSupplier,
+						bootstrap,
+						reportDir);
 			}
-			SuiteDescriptor suite = new SuiteDescriptor(suiteId, null);
+			SuiteDescriptor suite = new SuiteDescriptor(
+					suiteId, null, inventorySupplier, layersSupplier, bootstrap, reportDir);
 			for (TestSequenceDiscovery.DiscoveredSequence sequence : discovered) {
 				suite.addChild(new SequenceDescriptor(suiteId, sequence));
 			}
@@ -112,9 +162,6 @@ public final class LegacyTestSequenceEngine implements TestEngine {
 
 		@Override
 		public Type getType() {
-			// A suite that cannot run has no children. As a plain container the launcher would
-			// prune it and Surefire would skip its class, hiding the refusal; as a test it is
-			// kept and fails.
 			return refusal == null ? Type.CONTAINER : Type.CONTAINER_AND_TEST;
 		}
 
@@ -124,10 +171,55 @@ public final class LegacyTestSequenceEngine implements TestEngine {
 				listener.executionFinished(this, TestExecutionResult.failed(refusal));
 				return;
 			}
-			for (TestDescriptor sequence : getChildren()) {
-				((SequenceDescriptor) sequence).execute(listener);
+			try {
+				bootstrap.run();
+			} catch (Throwable failure) {
+				listener.executionFinished(this, TestExecutionResult.failed(failure));
+				return;
 			}
-			listener.executionFinished(this, TestExecutionResult.successful());
+
+			LegacyTestLayerInventory inventory = inventorySupplier != null ? inventorySupplier.get() : null;
+			Set<LegacyTestLayerInventory.Layer> selectedLayers = layersSupplier != null
+					? layersSupplier.get()
+					: Set.of(LegacyTestLayerInventory.Layer.COMPONENT_DAO);
+
+			List<LegacySequenceReport.SequenceRecord> records = new ArrayList<>();
+			int executedMethods = 0;
+			for (TestDescriptor child : getChildren()) {
+				SequenceDescriptor seq = (SequenceDescriptor) child;
+				LegacySequenceReport.SequenceRecord rec = seq.execute(listener, inventory);
+				records.add(rec);
+				executedMethods += rec.methods.size();
+			}
+
+			Throwable suiteFailure = null;
+			boolean anySequenceFailed = records.stream().anyMatch(r -> !"PASSED".equals(r.status));
+			if (executedMethods == 0 && !anySequenceFailed) {
+				suiteFailure = new IllegalStateException("Legacy TestSequence suite executed zero methods");
+			}
+			if (reportDir != null) {
+				try {
+					Map<LegacyTestLayerInventory.Layer, Integer> counts = inventory != null
+							? inventory.countByLayer()
+							: Map.of();
+					LegacySequenceReport.writeReports(
+							reportDir,
+							LegacySequenceReport.resolveCommitSha(),
+							selectedLayers,
+							counts,
+							records);
+				} catch (IOException e) {
+					if (suiteFailure == null) {
+						suiteFailure = new IllegalStateException("Failed to write legacy sequence report", e);
+					} else {
+						suiteFailure.addSuppressed(e);
+					}
+				}
+			}
+
+			listener.executionFinished(
+					this,
+					suiteFailure == null ? TestExecutionResult.successful() : TestExecutionResult.failed(suiteFailure));
 		}
 	}
 
@@ -151,22 +243,35 @@ public final class LegacyTestSequenceEngine implements TestEngine {
 			return Type.CONTAINER;
 		}
 
-		void execute(EngineExecutionListener listener) {
+		LegacySequenceReport.SequenceRecord execute(
+				EngineExecutionListener listener, LegacyTestLayerInventory inventory) {
+			long seqStarted = System.currentTimeMillis();
 			listener.executionStarted(this);
 			TestSequence instance;
 			try {
 				instance = TestSequenceDiscovery.instantiate(sequence);
 			} catch (Throwable failure) {
-				listener.executionFinished(this, TestExecutionResult.failed(
-						new LegacyLifecycleException(sequence.sequenceClass(), "construction", failure)));
-				return;
+				Throwable wrapped = new LegacyLifecycleException(sequence.sequenceClass(), "construction", failure);
+				listener.executionFinished(this, TestExecutionResult.failed(wrapped));
+				LegacySequenceReport.SequenceRecord failedRec = new LegacySequenceReport.SequenceRecord(
+						sequence.sequenceClass().getName(),
+						"FAILED",
+						System.currentTimeMillis() - seqStarted);
+				failedRec.lifecycleFailures.add("construction: " + failure.getMessage());
+				return failedRec;
 			}
 			List<Throwable> failures = new ArrayList<>();
 			Map<Method, Throwable> methodFailures = new HashMap<>();
+			Map<Method, Long> methodStarts = new HashMap<>();
+			List<LegacySequenceReport.MethodRecord> methodRecords = new ArrayList<>();
+			List<String> lifecycleErrors = new ArrayList<>();
+			Set<Method> selectedMethods = new LinkedHashSet<>(sequence.testMethods());
+
 			try {
 				instance.execute(new TestSequence.ExecutionListener() {
 					@Override
 					public void testStarted(Method method) {
+						methodStarts.put(method, System.currentTimeMillis());
 						listener.executionStarted(descriptorFor(method));
 					}
 
@@ -177,7 +282,20 @@ public final class LegacyTestSequenceEngine implements TestEngine {
 
 					@Override
 					public void testFinished(Method method) {
+						long started = methodStarts.getOrDefault(method, System.currentTimeMillis());
+						long duration = System.currentTimeMillis() - started;
 						Throwable failure = methodFailures.remove(method);
+						String identity = TestSequenceDiscovery.identity(sequence.sequenceClass(), method);
+						String layerName = inventory != null
+								? safeLayer(inventory, identity)
+								: "UNCLASSIFIED";
+						methodRecords.add(new LegacySequenceReport.MethodRecord(
+								identity,
+								method.getName(),
+								layerName,
+								failure == null ? "PASSED" : "FAILED",
+								duration,
+								failure == null ? null : failureMessage(failure)));
 						listener.executionFinished(descriptorFor(method), failure == null
 								? TestExecutionResult.successful()
 								: TestExecutionResult.failed(failure));
@@ -185,14 +303,45 @@ public final class LegacyTestSequenceEngine implements TestEngine {
 
 					@Override
 					public void lifecycleFailure(String phase, Throwable failure) {
+						lifecycleErrors.add(phase + ": " + failureMessage(failure));
 						failures.add(new LegacyLifecycleException(sequence.sequenceClass(), phase, failure));
 					}
-				});
+				}, selectedMethods);
 			} catch (RuntimeException failure) {
-				// Setup, methods and teardown report their own failures; this is a fault of the engine.
+				lifecycleErrors.add("execution: " + failureMessage(failure));
 				failures.add(new LegacyLifecycleException(sequence.sequenceClass(), "execution", failure));
 			}
+
+			boolean sequencePassed = failures.isEmpty()
+					&& methodRecords.stream().allMatch(rec -> "PASSED".equals(rec.status))
+					&& methodRecords.size() == selectedMethods.size();
+			if (failures.isEmpty() && methodRecords.size() != selectedMethods.size()) {
+				failures.add(new IllegalStateException(
+						"Method execution count mismatch in " + sequence.sequenceClass().getName()
+								+ ": expected " + selectedMethods.size()
+								+ ", executed " + methodRecords.size()));
+			}
 			listener.executionFinished(this, resultOf(failures));
+
+			LegacySequenceReport.SequenceRecord rec = new LegacySequenceReport.SequenceRecord(
+					sequence.sequenceClass().getName(),
+					sequencePassed ? "PASSED" : "FAILED",
+					System.currentTimeMillis() - seqStarted);
+			rec.lifecycleFailures.addAll(lifecycleErrors);
+			rec.methods.addAll(methodRecords);
+			return rec;
+		}
+
+		private static String safeLayer(LegacyTestLayerInventory inventory, String identity) {
+			try {
+				return inventory.layerOf(identity).name();
+			} catch (RuntimeException ignored) {
+				return "UNCLASSIFIED";
+			}
+		}
+
+		private static String failureMessage(Throwable failure) {
+			return failure.getMessage() == null ? failure.getClass().getName() : failure.getMessage();
 		}
 
 		private MethodDescriptor descriptorFor(Method method) {

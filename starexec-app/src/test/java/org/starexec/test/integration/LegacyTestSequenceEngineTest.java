@@ -11,6 +11,8 @@ import static org.junit.platform.engine.TestExecutionResult.Status.FAILED;
 import static org.junit.platform.engine.TestExecutionResult.Status.SUCCESSFUL;
 import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -24,6 +26,7 @@ import java.util.stream.Stream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.platform.engine.TestDescriptor;
 import org.junit.platform.engine.TestExecutionResult;
 import org.junit.platform.engine.UniqueId;
@@ -196,20 +199,93 @@ public class LegacyTestSequenceEngineTest {
 		assertEquals(0, discoveries.get());
 	}
 
-	/**
-	 * Discovery only. Executing the live suite would run every sequence as soon as the inventory
-	 * accepts it; once it does, this test fails instead.
-	 */
 	@Test
-	public void theLiveSuiteStopsAtTheInventoryPreflight() {
-		IllegalStateException refusal = assertThrows(IllegalStateException.class,
-				() -> LegacyTestLayerInventory.load().validateReady(TestSequenceDiscovery.discover()));
-		assertTrue(refusal.getMessage().contains("725 UNVERIFIED"), refusal.getMessage());
+	public void unverifiedInventoryStillBlocksExecutionBeforeInstantiation() {
+		List<TestSequenceDiscovery.DiscoveredSequence> seqs =
+				TestSequenceDiscovery.inspectClasses(List.of(RecordingSequence.class));
+		String id0 = TestSequenceDiscovery.identity(
+				RecordingSequence.class, seqs.get(0).testMethods().get(0));
+		LegacyTestLayerInventory blockedInventory = LegacyTestLayerInventory.of(Map.of(
+				id0, LegacyTestLayerInventory.Layer.UNVERIFIED));
+		LegacyTestSequenceEngine engine = new LegacyTestSequenceEngine(() -> {
+			blockedInventory.validateReady(seqs);
+			return seqs;
+		});
 
-		// The default engine applies the same preflight: the suite stays one test, with no sequence below it.
-		TestPlan plan = launcher(new LegacyTestSequenceEngine()).discover(suiteRequest());
+		TestPlan plan = launcher(engine).discover(suiteRequest());
 		assertEquals(Set.of(ENGINE_NAME, SUITE), displayNames(plan));
 		assertEquals(1, plan.countTestIdentifiers(TestIdentifier::isTest));
+		Run run = new Run();
+		launcher(engine).execute(suiteRequest(), run);
+		assertEquals(List.of(SUITE), run.failed());
+		assertTrue(RecordingSequence.calls.isEmpty());
+	}
+
+	@Test
+	public void liveEngineDiscoversAllLayersAndFiltersBySystemProperty() {
+		String prev = System.getProperty(LegacyTestSequenceEngine.LAYERS_PROPERTY);
+		try {
+			System.clearProperty(LegacyTestSequenceEngine.LAYERS_PROPERTY);
+			TestPlan allPlan = launcher(new LegacyTestSequenceEngine()).discover(suiteRequest());
+			assertEquals(725, allPlan.countTestIdentifiers(TestIdentifier::isTest));
+
+			System.setProperty(LegacyTestSequenceEngine.LAYERS_PROPERTY, "COMPONENT_DAO");
+			TestPlan daoPlan = launcher(new LegacyTestSequenceEngine()).discover(suiteRequest());
+			assertEquals(530, daoPlan.countTestIdentifiers(TestIdentifier::isTest));
+
+			System.setProperty(LegacyTestSequenceEngine.LAYERS_PROPERTY, "BACKEND_INTEGRATION");
+			TestPlan backendPlan = launcher(new LegacyTestSequenceEngine()).discover(suiteRequest());
+			assertEquals(81, backendPlan.countTestIdentifiers(TestIdentifier::isTest));
+		} finally {
+			if (prev == null) {
+				System.clearProperty(LegacyTestSequenceEngine.LAYERS_PROPERTY);
+			} else {
+				System.setProperty(LegacyTestSequenceEngine.LAYERS_PROPERTY, prev);
+			}
+		}
+	}
+
+	@Test
+	public void emitsShaBoundJsonAndCsvReportAndSupportsMethodSubset(@TempDir Path reportDir) throws Exception {
+		List<TestSequenceDiscovery.DiscoveredSequence> all =
+				TestSequenceDiscovery.inspectClasses(List.of(RecordingSequence.class));
+		Method alpha = RecordingSequence.class.getDeclaredMethod("alphaPasses");
+		Method beta = RecordingSequence.class.getDeclaredMethod("betaFails");
+		Method gamma = RecordingSequence.class.getDeclaredMethod("gammaPasses");
+		LegacyTestLayerInventory inv = LegacyTestLayerInventory.of(Map.of(
+				TestSequenceDiscovery.identity(RecordingSequence.class, alpha), LegacyTestLayerInventory.Layer.COMPONENT_DAO,
+				TestSequenceDiscovery.identity(RecordingSequence.class, beta), LegacyTestLayerInventory.Layer.BACKEND_INTEGRATION,
+				TestSequenceDiscovery.identity(RecordingSequence.class, gamma), LegacyTestLayerInventory.Layer.COMPONENT_DAO));
+		Set<LegacyTestLayerInventory.Layer> selected = Set.of(LegacyTestLayerInventory.Layer.COMPONENT_DAO);
+		LegacyTestSequenceEngine engine = new LegacyTestSequenceEngine(
+				() -> inv.filter(all, selected),
+				() -> inv,
+				() -> selected,
+				() -> {},
+				reportDir);
+
+		String prevSha = System.getProperty("starexec.legacy.gitSha");
+		System.setProperty("starexec.legacy.gitSha", "deadbeefcafebabe");
+		try {
+			Run run = new Run();
+			launcher(engine).execute(suiteRequest(), run);
+			assertTrue(run.failed().isEmpty(), () -> "unexpected failures: " + run.failed());
+			assertEquals(List.of("alphaPasses", "gammaPasses"), run.startedTests);
+		} finally {
+			if (prevSha == null) {
+				System.clearProperty("starexec.legacy.gitSha");
+			} else {
+				System.setProperty("starexec.legacy.gitSha", prevSha);
+			}
+		}
+
+		String json = Files.readString(reportDir.resolve("legacy-sequence-report.json"));
+		String csv = Files.readString(reportDir.resolve("legacy-sequence-report.csv"));
+		assertTrue(json.contains("\"commitSha\": \"deadbeefcafebabe\""));
+		assertTrue(json.contains("\"passedMethods\": 2"));
+		assertTrue(json.contains("\"failedMethods\": 0"));
+		assertTrue(csv.contains("deadbeefcafebabe," + RecordingSequence.class.getName() + ",alphaPasses,COMPONENT_DAO,PASSED"));
+		assertTrue(csv.contains("deadbeefcafebabe," + RecordingSequence.class.getName() + ",gammaPasses,COMPONENT_DAO,PASSED"));
 	}
 
 	private static Supplier<List<TestSequenceDiscovery.DiscoveredSequence>> sequenceOf(Class<? extends TestSequence> sequenceClass) {

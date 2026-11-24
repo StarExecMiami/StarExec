@@ -1,6 +1,7 @@
 package org.starexec.test.integration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -56,17 +57,21 @@ public class LegacyTestSequenceDiscoveryTest {
 	}
 
 	@Test
-	public void testManagerStopsAtInventoryPreflightWithoutRegisteringSequences() {
-		assertTrue(TestManager.getAllTestSequences().isEmpty());
+	public void testManagerInitializesAllVerifiedSequencesOnceIdempotently() {
+		TestManager.initializeTests();
+		List<TestSequence> first = TestManager.getAllTestSequences();
+		TestManager.initializeTests();
+		List<TestSequence> second = TestManager.getAllTestSequences();
 
-		IllegalStateException first = assertThrows(IllegalStateException.class,
-				TestManager::initializeTests);
-		IllegalStateException second = assertThrows(IllegalStateException.class,
-				TestManager::initializeTests);
-
-		assertTrue(first.getMessage().contains("725 UNVERIFIED"));
-		assertEquals(first.getMessage(), second.getMessage());
-		assertTrue(TestManager.getAllTestSequences().isEmpty());
+		assertEquals(44, first.size());
+		assertSame(first, second);
+		Set<String> classNames = first.stream()
+				.map(seq -> seq.getClass().getName())
+				.collect(Collectors.toSet());
+		assertTrue(classNames.containsAll(Set.of(
+				MATRIX_TESTS,
+				PAIRS_RERUN_TESTS,
+				SETTING_SECURITY_TESTS)));
 	}
 
 	@Test
@@ -88,16 +93,10 @@ public class LegacyTestSequenceDiscoveryTest {
 	}
 
 	@Test
-	public void testManagerExecuteTestRechecksPreflightBeforeExecution() {
-		BlockedManagerSequence.reset();
-		BlockedManagerSequence sequence = new BlockedManagerSequence();
-
-		IllegalStateException error = assertThrows(IllegalStateException.class,
-				() -> TestManager.executeTest(sequence));
-
-		assertTrue(error.getMessage().contains("725 UNVERIFIED"));
-		assertEquals(1, BlockedManagerSequence.constructions);
-		assertEquals(0, BlockedManagerSequence.executions);
+	public void rejectsEmptyOrUnknownLayerSelectionsAndUnverifiedFilter() {
+		assertThrows(IllegalStateException.class, () -> LegacyTestLayerInventory.parseLayerFilter(","));
+		assertThrows(IllegalStateException.class, () -> LegacyTestLayerInventory.parseLayerFilter("NO_SUCH_LAYER"));
+		assertThrows(IllegalStateException.class, () -> LegacyTestLayerInventory.parseLayerFilter("UNVERIFIED"));
 	}
 
 	@Test
@@ -128,18 +127,37 @@ public class LegacyTestSequenceDiscoveryTest {
 	}
 
 	@Test
-	public void inventoryCoversEveryMethodButBlocksExecutionUntilLayersAreVerified() {
+	public void inventoryClassifiesAllMethodsWithZeroUnverifiedAndFiltersByLayer() {
 		List<TestSequenceDiscovery.DiscoveredSequence> sequences = TestSequenceDiscovery.discover();
 		LegacyTestLayerInventory inventory = LegacyTestLayerInventory.load();
 
-		inventory.validateCoverage(sequences);
+		inventory.validateReady(sequences);
 		assertEquals(725, inventory.size());
-		IllegalStateException error = assertThrows(IllegalStateException.class,
-				() -> inventory.validateReady(sequences));
-		assertTrue(error.getMessage().contains("725 UNVERIFIED"));
-		assertTrue(error.getMessage().contains("COMPONENT_DAO"));
-		assertTrue(error.getMessage().contains("BACKEND_INTEGRATION"));
-		assertTrue(error.getMessage().contains("DEPLOYED_E2E"));
+
+		Map<LegacyTestLayerInventory.Layer, Integer> counts = inventory.countByLayer();
+		assertEquals(0, counts.get(LegacyTestLayerInventory.Layer.UNVERIFIED));
+		assertEquals(530, counts.get(LegacyTestLayerInventory.Layer.COMPONENT_DAO));
+		assertEquals(81, counts.get(LegacyTestLayerInventory.Layer.BACKEND_INTEGRATION));
+		assertEquals(114, counts.get(LegacyTestLayerInventory.Layer.DEPLOYED_E2E));
+
+		List<TestSequenceDiscovery.DiscoveredSequence> daoOnly = inventory.filter(
+				sequences, Set.of(LegacyTestLayerInventory.Layer.COMPONENT_DAO));
+		assertEquals(530, TestSequenceDiscovery.countMethods(daoOnly));
+		assertTrue(daoOnly.stream().anyMatch(s -> s.sequenceClass().getName().equals(MATRIX_TESTS)));
+		assertTrue(daoOnly.stream().anyMatch(s -> s.sequenceClass().getName().equals(PAIRS_RERUN_TESTS)));
+		assertTrue(daoOnly.stream().anyMatch(s -> s.sequenceClass().getName().equals(SETTING_SECURITY_TESTS)));
+
+		List<TestSequenceDiscovery.DiscoveredSequence> backendOnly = inventory.filter(
+				sequences, Set.of(LegacyTestLayerInventory.Layer.BACKEND_INTEGRATION));
+		assertEquals(81, TestSequenceDiscovery.countMethods(backendOnly));
+		assertEquals(4, backendOnly.stream()
+				.filter(s -> s.sequenceClass().getName().equals("org.starexec.test.integration.database.JobTests"))
+				.mapToInt(s -> s.testMethods().size())
+				.sum());
+
+		List<TestSequenceDiscovery.DiscoveredSequence> deployedOnly = inventory.filter(
+				sequences, Set.of(LegacyTestLayerInventory.Layer.DEPLOYED_E2E));
+		assertEquals(114, TestSequenceDiscovery.countMethods(deployedOnly));
 	}
 
 	private abstract static class InMemorySequence extends TestSequence {

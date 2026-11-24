@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
 
 public abstract class TestSequence {
 	interface ExecutionListener {
@@ -88,6 +89,10 @@ public abstract class TestSequence {
 	}
 
 	final boolean execute(ExecutionListener listener) {
+		return execute(listener, null);
+	}
+
+	final boolean execute(ExecutionListener listener, Set<Method> selectedMethods) {
 		clearResults();
 		status.setCode(TestStatus.TestStatusCode.STATUS_RUNNING.getVal());
 		Throwable setupFailure = null;
@@ -104,7 +109,7 @@ public abstract class TestSequence {
 				listener.lifecycleFailure("setup", setupFailure);
 			}
 			if (setupFailure == null) {
-				runTests(listener);
+				runTests(listener, selectedMethods);
 			}
 		} finally {
 			try {
@@ -191,12 +196,15 @@ public abstract class TestSequence {
 	abstract protected void setup() throws Exception;
 
 	protected final void runTests() {
-		runTests(ExecutionListener.NONE);
+		runTests(ExecutionListener.NONE, null);
 	}
 
-	private void runTests(ExecutionListener listener) {
+	private void runTests(ExecutionListener listener, Set<Method> selectedMethods) {
 		List<Method> afters = getAfters();
 		for (Method method : getTests()) {
+			if (selectedMethods != null && !selectedMethods.contains(method)) {
+				continue;
+			}
 			TestResult result = testResults.get(method.getName());
 			result.clearMessages();
 			result.addMessage("test running");

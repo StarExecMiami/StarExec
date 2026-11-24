@@ -24,6 +24,9 @@
         <!-- Image builds provide precompiled CSS from their assets stage. -->
         <skip.sass>false</skip.sass>
         <war.assembly.directory>${project.build.directory}/${project.build.finalName}</war.assembly.directory>
+        <starexec.legacy.layers></starexec.legacy.layers>
+        <starexec.legacy.gitSha></starexec.legacy.gitSha>
+        <starexec.legacy.reportDir>${project.build.directory}/legacy-sequence-reports</starexec.legacy.reportDir>
     </properties>
 
     <dependencies>
@@ -713,6 +716,11 @@
                                 <include>**/LegacyTestSequenceSuite.java</include>
                             </includes>
                             <failIfNoTests>true</failIfNoTests>
+                            <systemPropertyVariables>
+                                <starexec.legacy.layers>${starexec.legacy.layers}</starexec.legacy.layers>
+                                <starexec.legacy.gitSha>${starexec.legacy.gitSha}</starexec.legacy.gitSha>
+                                <starexec.legacy.reportDir>${starexec.legacy.reportDir}</starexec.legacy.reportDir>
+                            </systemPropertyVariables>
                         </configuration>
                         <executions>
                             <execution>

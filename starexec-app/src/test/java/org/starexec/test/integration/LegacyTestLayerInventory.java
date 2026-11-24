@@ -7,6 +7,8 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -94,6 +96,73 @@ final class LegacyTestLayerInventory {
 							+ " UNVERIFIED methods must each be classified as COMPONENT_DAO, "
 							+ "BACKEND_INTEGRATION, or DEPLOYED_E2E");
 		}
+	}
+
+	Layer layerOf(String identity) {
+		Layer layer = layersByIdentity.get(identity);
+		if (layer == null) {
+			throw new IllegalStateException("Missing inventory entry for legacy test: " + identity);
+		}
+		return layer;
+	}
+
+	Map<Layer, Integer> countByLayer() {
+		EnumMap<Layer, Integer> counts = new EnumMap<>(Layer.class);
+		for (Layer layer : Layer.values()) {
+			counts.put(layer, 0);
+		}
+		for (Layer layer : layersByIdentity.values()) {
+			counts.put(layer, counts.get(layer) + 1);
+		}
+		return Map.copyOf(counts);
+	}
+
+	static Set<Layer> parseLayerFilter(String raw) {
+		if (raw == null || raw.isBlank()) {
+			return EnumSet.of(Layer.COMPONENT_DAO, Layer.BACKEND_INTEGRATION, Layer.DEPLOYED_E2E);
+		}
+		EnumSet<Layer> selected = EnumSet.noneOf(Layer.class);
+		for (String part : raw.split(",", -1)) {
+			String trimmed = part.trim();
+			if (trimmed.isEmpty()) {
+				throw new IllegalStateException("Empty layer name in starexec.legacy.layers: " + raw);
+			}
+			Layer layer;
+			try {
+				layer = Layer.valueOf(trimmed);
+			} catch (IllegalArgumentException e) {
+				throw new IllegalStateException("Unknown legacy test layer: " + trimmed, e);
+			}
+			if (layer == Layer.UNVERIFIED) {
+				throw new IllegalStateException("UNVERIFIED layer cannot be selected for execution");
+			}
+			selected.add(layer);
+		}
+		return Set.copyOf(selected);
+	}
+
+	List<TestSequenceDiscovery.DiscoveredSequence> filter(
+			List<TestSequenceDiscovery.DiscoveredSequence> sequences,
+			Set<Layer> selectedLayers) {
+		validateReady(sequences);
+		List<TestSequenceDiscovery.DiscoveredSequence> filtered = new ArrayList<>();
+		for (TestSequenceDiscovery.DiscoveredSequence sequence : sequences) {
+			List<java.lang.reflect.Method> matching = new ArrayList<>();
+			for (java.lang.reflect.Method method : sequence.testMethods()) {
+				String identity = TestSequenceDiscovery.identity(sequence.sequenceClass(), method);
+				if (selectedLayers.contains(layerOf(identity))) {
+					matching.add(method);
+				}
+			}
+			if (!matching.isEmpty()) {
+				filtered.add(new TestSequenceDiscovery.DiscoveredSequence(sequence.sequenceClass(), matching));
+			}
+		}
+		if (TestSequenceDiscovery.countMethods(filtered) == 0) {
+			throw new IllegalStateException(
+					"Legacy sequence layer filter matched zero methods for layers " + selectedLayers);
+		}
+		return List.copyOf(filtered);
 	}
 
 	private static Set<String> discoveredIdentities(
