@@ -317,6 +317,67 @@ jobs:
           echo ""
           echo "✓ All integration tests completed successfully"
 
+      - name: Set up Java for legacy TestSequence suite
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Cache Maven repository (legacy-test-sequences)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-legacy-seq-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-verify-migrations-
+            ${{ runner.os }}-m2-
+
+      - name: Run mandatory legacy TestSequence layer (COMPONENT_DAO)
+        env:
+          STAREXEC_DB_HOST: 127.0.0.1
+          STAREXEC_DB_PORT: 5432
+          STAREXEC_DB_NAME: starexec
+          STAREXEC_DB_USER: starexec
+          STAREXEC_DB_PASS: ci_test_password_secure_12345
+          STAREXEC_DB_PASSWORD: ci_test_password_secure_12345
+          STAREXEC_DB_SCHEMA: starexec
+          STAREXEC_TEST_COMMUNITY_ID: "2"
+          STAREXEC_ALLOW_TESTING: "true"
+        run: |
+          set -euo pipefail
+          # Stop app poller so background schedulers do not mutate fixture jobs mid-test
+          docker compose stop starexec
+          TMP_ROOT=$(mktemp -d /tmp/starexec-legacy-XXXXXX)
+          trap 'rm -rf "$TMP_ROOT"' EXIT
+          mkdir -p "$TMP_ROOT/data" "$TMP_ROOT/web"
+          export STAREXEC_DATA_DIR="$TMP_ROOT/data"
+          export STAREXEC_WEB_BASE_DIR="$TMP_ROOT/web"
+          mvn -B -ntp verify -Plegacy-test-sequences -pl starexec-app \
+            -Dtest="LegacyTestSequenceDiscoveryTest,LegacyTestSequenceEngineTest,LegacyFixtureClasspathTest" \
+            -Dstarexec.legacy.layers=COMPONENT_DAO \
+            -Dstarexec.legacy.gitSha="${{ github.sha }}"
+          python3 - <<'PY' "${{ github.sha }}"
+          import json, sys
+          expected_sha = sys.argv[1]
+          with open("starexec-app/target/legacy-sequence-reports/legacy-sequence-report.json", encoding="utf-8") as fh:
+              report = json.load(fh)
+          assert report.get("commitSha") == expected_sha, report
+          assert report.get("totalMethods", 0) > 0, report
+          assert report.get("failedSequences", -1) == 0, report
+          assert report.get("failedMethods", -1) == 0, report
+          print(f"Verified legacy-sequence-report.json: total={report['totalMethods']}, passed={report['passedMethods']}, failed={report['failedMethods']}, sha={report['commitSha']}")
+          PY
+
+      - name: Upload legacy TestSequence reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: legacy-test-sequence-reports
+          if-no-files-found: ignore
+          path: |
+            starexec-app/target/legacy-sequence-reports/
+            starexec-app/target/failsafe-reports/
+
       - name: Collect logs on failure
         if: failure()
         run: |
