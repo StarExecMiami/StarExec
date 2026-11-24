@@ -1,0 +1,26 @@
+{
+  "backend": "podman",
+  "mode": "fresh",
+  "fixture_mode": "reproducible-offline",
+  "base_url": "http://127.0.0.1:17900/starexec",
+  "deployment_name": "sq-example-pdm",
+  "db_exec": ["podman", "exec", "-i", "sq-example-pdm-db", "psql", "-U", "starexec", "-d", "starexec", "-X", "-qAt", "-v", "ON_ERROR_STOP=1"],
+  "app_exec": ["podman", "exec", "-i", "sq-example-pdm-app"],
+  "app_data_root": "/app/data",
+  "queue_id": "auto",
+  "commit": "0000000000000000000000000000000000000000",
+  "image": "ghcr.io/starexecmiami/starexec:sha-0000000000000000000000000000000000000000",
+  "image_digest": null,
+  "report_dir": "../../target/e2e-reports/podman",
+  "allowed_hosts": [],
+  "smtp_capture": null,
+  "community_id": null,
+  "admin_user_id": 1,
+  "enable_browser": false,
+  "timeouts": {"upload": 300, "job": 1200, "pause": 120, "kill": 120, "dispatch": 180, "smtp": 60},
+  "_notes": [
+    "Container names above are placeholders: set them to the actual disposable sq-* deployment.",
+    "Kubernetes: db_exec/app_exec use kubectl with an explicit allowed namespace (e.g. starexec-dev or sq-<sha8>-k8s).",
+    "smtp_capture example: {\"kind\": \"maildev\", \"url\": \"http://127.0.0.1:1080\"} (or kind mailpit)."
+  ]
+}

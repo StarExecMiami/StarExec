@@ -1,0 +1,5 @@
+<!-- Capability 41 runs StarexecCommand from the server's compiled classes, whose logback.xml writes
+     to /var/log/starexec. This replaces it, so the shell's stdout holds only what the client prints. -->
+<configuration>
+  <root level="OFF"/>
+</configuration>
