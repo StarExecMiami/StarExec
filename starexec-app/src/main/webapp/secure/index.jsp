@@ -76,7 +76,7 @@
 					<ul class="resource-links">
 						<li><a href="${starexecRoot}/public/quickReference.jsp" rel="external">Quick Reference</a></li>
 						<li><a href="${starexecRoot}/public/StarExecUserGuide.pdf" target="_blank" rel="noopener noreferrer">User Guide</a></li>
-						<li><a href="http://wiki.uiowa.edu/display/stardev/Home" target="_blank" rel="noopener noreferrer">Public Dev Wiki</a></li>
+						<li><a href="https://github.com/StarExecMiami/StarExec/tree/containerised/docs" target="_blank" rel="noopener noreferrer">Documentation</a></li>
 						<li><a href="mailto:${contactEmail}?subject=[Starexec ${buildVersion}] Feedback">Give Feedback</a></li>
 						<li><a href="mailto:${contactEmail}?subject=[Starexec ${buildVersion}] Bug Report">Report Bug</a></li>
 					</ul>

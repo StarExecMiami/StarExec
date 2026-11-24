@@ -20,12 +20,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
  * Documentation links in the web pages and help files point at targets that still exist (#103).
  *
  * <p>The User Guide lived on the University of Iowa wiki, which has been retired; the same guide
- * ships with the application as {@code public/StarExecUserGuide.pdf}. NSF award pages moved from
- * FastLane to nsf.gov.
+ * ships with the application as {@code public/StarExecUserGuide.pdf}, and development docs live on
+ * GitHub ({@code StarExecMiami/StarExec}). The retired virtual machine image link
+ * ({@code www.starexec.org/vmimage/}) was removed, and NSF award pages moved from FastLane to nsf.gov.
  *
- * <p>Known exceptions, not asserted here until a replacement is chosen: the development wiki home
- * page ({@code wiki.uiowa.edu/display/stardev/Home}), the virtual machine image
- * ({@code www.starexec.org/vmimage/}) and the video on the job details help page.
+ * <p>Remaining legacy reference not enforced here: the historical video tag on {@code secure/details/job.help}.
  */
 public class DocumentationLinksTest {
 
@@ -33,7 +32,7 @@ public class DocumentationLinksTest {
 	private static final Path JAVA = Path.of("src/main/java");
 
 	private static final List<String> RETIRED_HOSTS =
-			List.of("wiki.uiowa.edu/display/stardev/User", "fastlane.nsf.gov");
+			List.of("wiki.uiowa.edu", "www.starexec.org/vmimage", "fastlane.nsf.gov");
 
 	private static final Set<String> TEXT_EXTENSIONS =
 			Set.of(".jsp", ".jspf", ".tag", ".help", ".html", ".js", ".txt", ".xml", ".java");

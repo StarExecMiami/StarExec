@@ -158,29 +158,6 @@ tagdir="/WEB-INF/tags" %>
           </a>
 
           <a
-            href="https://www.starexec.org/vmimage/"
-            class="resource-link"
-            target="_blank"
-            rel="noopener noreferrer external"
-          >
-            <svg
-              class="resource-icon"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-            >
-              <circle cx="12" cy="12" r="10"></circle>
-              <circle cx="12" cy="12" r="3"></circle>
-              <line x1="12" y1="2" x2="12" y2="9"></line>
-              <line x1="12" y1="15" x2="12" y2="22"></line>
-            </svg>
-            <span class="resource-text">Virtual Machine Image</span>
-            <span class="external-icon">↗</span>
-          </a>
-
-          <a
             href="STAREXEC TERMS OF SERVICE.doc"
             class="resource-link"
             rel="help"
@@ -206,7 +183,7 @@ tagdir="/WEB-INF/tags" %>
           </a>
 
           <a
-            href="http://wiki.uiowa.edu/display/stardev/Home"
+            href="https://github.com/StarExecMiami/StarExec/tree/containerised/docs"
             class="resource-link"
             target="_blank"
             rel="noopener noreferrer external"
@@ -223,7 +200,7 @@ tagdir="/WEB-INF/tags" %>
                 d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
               ></path>
             </svg>
-            <span class="resource-text">Development Wiki</span>
+            <span class="resource-text">Documentation</span>
             <span class="external-icon">↗</span>
           </a>
         </div>
