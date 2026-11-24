@@ -272,15 +272,32 @@ public class EnvironmentConfig {
         return getEnvInt("STAREXEC_JOB_PAIR_MAX_FILE_WRITE", 600);
     }
 
+    /** Default chunk size (8 MiB) for browser resumable uploads; balances HTTP overhead against NFS IOPS. */
+    public static final int DEFAULT_UPLOAD_SESSION_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
+    /** Upper safety bound (64 MiB) for a single resumable upload chunk request. */
+    public static final int MAX_UPLOAD_SESSION_CHUNK_SIZE_BYTES = 64 * 1024 * 1024;
+
     /**
      * Maximum size of a resumable upload chunk in bytes.
+     * Defaults to 8 MiB and clamps custom values to [1, 64 MiB] so oversized chunks cannot
+     * exhaust proxy swallow limits or server request buffers.
      */
     public static int getUploadSessionChunkSizeBytes() {
-        return getEnvInt("STAREXEC_UPLOAD_SESSION_CHUNK_SIZE_BYTES", 2 * 1024 * 1024);
+        int configured = getEnvInt(
+            "STAREXEC_UPLOAD_SESSION_CHUNK_SIZE_BYTES",
+            DEFAULT_UPLOAD_SESSION_CHUNK_SIZE_BYTES
+        );
+        if (configured <= 0) {
+            return DEFAULT_UPLOAD_SESSION_CHUNK_SIZE_BYTES;
+        }
+        return Math.min(configured, MAX_UPLOAD_SESSION_CHUNK_SIZE_BYTES);
     }
 
     /**
-     * Maximum number of seconds an async benchmark archive extraction may run.
+     * Maximum number of seconds an async benchmark archive extraction may run without
+     * recording forward progress (bytes written or entries extracted). Paired with a
+     * bounded total-duration ceiling in {@code ArchiveExtractor} so stalled extractions fail
+     * promptly while large NFS trees that keep advancing are not cut off mid-stream.
      */
     public static int getUploadExtractionTimeoutSeconds() {
         return getEnvInt("STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS", 1800);

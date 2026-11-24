@@ -31,6 +31,12 @@ class DockerfileRuntimeTests(unittest.TestCase):
         self.assertIsNotNone(runner_match)
         self.assertEqual(app_match.group(1), runner_match.group(1))
 
+    def test_tomcat_connector_hardens_large_upload_timeouts_and_swallow_size(self):
+        content = DOCKERFILE.read_text(encoding="utf-8")
+        self.assertIn('disableUploadTimeout="false"', content)
+        self.assertIn('connectionUploadTimeout="600000"', content)
+        self.assertIn('maxSwallowSize="52428800"', content)
+
 
 if __name__ == "__main__":
     unittest.main()

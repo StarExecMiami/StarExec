@@ -21,7 +21,9 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Enumeration;
+import java.util.Objects;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongSupplier;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.nio.file.FileVisitResult.CONTINUE;
@@ -36,8 +38,9 @@ public class ArchiveExtractor {
     private static final long MAX_UNCOMPRESSED_SIZE_BYTES = 100L * 1024 * 1024 * 1024; // 100GB max
     // Keep this as a long expression. An int expression overflows and makes tiny entries look "too large".
     private static final long MAX_ENTRY_SIZE_BYTES = 10L * 1024 * 1024 * 1024; // 10GB per file
-    private static final int BUFFER_SIZE = 8192;
+    private static final int BUFFER_SIZE = 65536;
     private static final int MAX_ENTRY_NAME_LENGTH = 255;
+    private static final long MAX_TOTAL_TIMEOUT_MULTIPLIER = 4L;
 
     /** Sentinel for {@link ExtractionSettings#withRemainingQuotaBytes(long)}: no quota cap. */
     public static final long NO_QUOTA_LIMIT = 0L;
@@ -62,34 +65,60 @@ public class ArchiveExtractor {
         private final long maxUncompressedSizeBytes;
         private final long remainingQuotaBytes;
         private final int timeoutSeconds;
-        private final long deadlineEpochMillis;
+        private final long maxTotalTimeoutSeconds;
+        private final LongSupplier clockMillis;
         private final Runnable progressCallback;
         private final BooleanSupplier cancellationRequested;
 
         private ExtractionSettings(long maxUncompressedSizeBytes, long remainingQuotaBytes, int timeoutSeconds,
+                                   long maxTotalTimeoutSeconds, LongSupplier clockMillis,
                                    Runnable progressCallback, BooleanSupplier cancellationRequested) {
             this.maxUncompressedSizeBytes = maxUncompressedSizeBytes;
             this.remainingQuotaBytes = remainingQuotaBytes;
             this.timeoutSeconds = timeoutSeconds;
-            this.deadlineEpochMillis = timeoutSeconds > 0
-                ? System.currentTimeMillis() + (timeoutSeconds * 1000L)
-                : Long.MAX_VALUE;
+            this.maxTotalTimeoutSeconds = maxTotalTimeoutSeconds;
+            this.clockMillis = Objects.requireNonNull(clockMillis, "clockMillis");
             this.progressCallback = progressCallback;
             this.cancellationRequested = cancellationRequested;
         }
 
         public static ExtractionSettings defaults() {
-            return new ExtractionSettings(MAX_UNCOMPRESSED_SIZE_BYTES, NO_QUOTA_LIMIT, 0, null, null);
-        }
-
-        public static ExtractionSettings fromEnvironment() {
             return new ExtractionSettings(
-                EnvironmentConfig.getUploadExtractionMaxUncompressedBytes(),
+                MAX_UNCOMPRESSED_SIZE_BYTES,
                 NO_QUOTA_LIMIT,
-                EnvironmentConfig.getUploadExtractionTimeoutSeconds(),
+                0,
+                0L,
+                System::currentTimeMillis,
                 null,
                 null
             );
+        }
+
+        public static ExtractionSettings fromEnvironment() {
+            int timeout = EnvironmentConfig.getUploadExtractionTimeoutSeconds();
+            return new ExtractionSettings(
+                EnvironmentConfig.getUploadExtractionMaxUncompressedBytes(),
+                NO_QUOTA_LIMIT,
+                timeout,
+                defaultMaxTotalTimeoutSeconds(timeout),
+                System::currentTimeMillis,
+                null,
+                null
+            );
+        }
+
+        private static long defaultMaxTotalTimeoutSeconds(int inactivityTimeoutSeconds) {
+            if (inactivityTimeoutSeconds <= 0) {
+                return 0L;
+            }
+            return (long) inactivityTimeoutSeconds * MAX_TOTAL_TIMEOUT_MULTIPLIER;
+        }
+
+        private long effectiveMaxTotalTimeoutSeconds() {
+            if (maxTotalTimeoutSeconds > 0L) {
+                return maxTotalTimeoutSeconds;
+            }
+            return defaultMaxTotalTimeoutSeconds(timeoutSeconds);
         }
 
         /**
@@ -97,8 +126,8 @@ public class ArchiveExtractor {
          * is not the uploading user's quota -- see {@link #withRemainingQuotaBytes(long)}.
          */
         public ExtractionSettings withMaxUncompressedSizeBytes(long maxBytes) {
-            return new ExtractionSettings(maxBytes, remainingQuotaBytes, timeoutSeconds, progressCallback,
-                cancellationRequested);
+            return new ExtractionSettings(maxBytes, remainingQuotaBytes, timeoutSeconds, maxTotalTimeoutSeconds,
+                clockMillis, progressCallback, cancellationRequested);
         }
 
         /**
@@ -107,23 +136,73 @@ public class ArchiveExtractor {
          * quota cap.
          */
         public ExtractionSettings withRemainingQuotaBytes(long quotaBytes) {
-            return new ExtractionSettings(maxUncompressedSizeBytes, quotaBytes, timeoutSeconds, progressCallback,
-                cancellationRequested);
+            return new ExtractionSettings(maxUncompressedSizeBytes, quotaBytes, timeoutSeconds, maxTotalTimeoutSeconds,
+                clockMillis, progressCallback, cancellationRequested);
         }
 
         public ExtractionSettings withTimeoutSeconds(int newTimeoutSeconds) {
             return new ExtractionSettings(maxUncompressedSizeBytes, remainingQuotaBytes, newTimeoutSeconds,
-                progressCallback, cancellationRequested);
+                defaultMaxTotalTimeoutSeconds(newTimeoutSeconds), clockMillis, progressCallback, cancellationRequested);
+        }
+
+        public ExtractionSettings withMaxTotalTimeoutSeconds(long newMaxTotalTimeoutSeconds) {
+            return new ExtractionSettings(maxUncompressedSizeBytes, remainingQuotaBytes, timeoutSeconds,
+                newMaxTotalTimeoutSeconds, clockMillis, progressCallback, cancellationRequested);
+        }
+
+        public ExtractionSettings withClock(LongSupplier newClockMillis) {
+            return new ExtractionSettings(maxUncompressedSizeBytes, remainingQuotaBytes, timeoutSeconds,
+                maxTotalTimeoutSeconds, newClockMillis, progressCallback, cancellationRequested);
         }
 
         public ExtractionSettings withProgressCallback(Runnable newProgressCallback) {
             return new ExtractionSettings(maxUncompressedSizeBytes, remainingQuotaBytes, timeoutSeconds,
-                newProgressCallback, cancellationRequested);
+                maxTotalTimeoutSeconds, clockMillis, newProgressCallback, cancellationRequested);
         }
 
         public ExtractionSettings withCancellationRequested(BooleanSupplier newCancellationRequested) {
             return new ExtractionSettings(maxUncompressedSizeBytes, remainingQuotaBytes, timeoutSeconds,
-                progressCallback, newCancellationRequested);
+                maxTotalTimeoutSeconds, clockMillis, progressCallback, newCancellationRequested);
+        }
+    }
+
+    private static final class ExtractionMonitor {
+        private final ExtractionSettings settings;
+        private final long startMillis;
+        private long lastProgressMillis;
+
+        private ExtractionMonitor(ExtractionSettings settings) {
+            this.settings = settings;
+            this.startMillis = settings.clockMillis.getAsLong();
+            this.lastProgressMillis = this.startMillis;
+        }
+
+        private void recordProgress() {
+            this.lastProgressMillis = settings.clockMillis.getAsLong();
+        }
+
+        private void check(Path archivePath, long bytesExtracted) throws IOException {
+            validateTotalSize(bytesExtracted, settings);
+            if (settings.timeoutSeconds > 0) {
+                long now = settings.clockMillis.getAsLong();
+                long idleLimitMillis = settings.timeoutSeconds * 1000L;
+                if ((now - lastProgressMillis) > idleLimitMillis) {
+                    throw new IOException(
+                        "Archive extraction timed out after " + settings.timeoutSeconds +
+                            " seconds without progress for " + archivePath.getFileName()
+                    );
+                }
+                long maxTotalSeconds = settings.effectiveMaxTotalTimeoutSeconds();
+                if (maxTotalSeconds > 0L && (now - startMillis) > (maxTotalSeconds * 1000L)) {
+                    throw new IOException(
+                        "Archive extraction timed out after exceeding maximum duration of " +
+                            maxTotalSeconds + " seconds for " + archivePath.getFileName()
+                    );
+                }
+            }
+            if (settings.cancellationRequested != null && settings.cancellationRequested.getAsBoolean()) {
+                throw new IOException("Archive extraction cancelled for " + archivePath.getFileName());
+            }
         }
     }
 
@@ -217,11 +296,12 @@ public class ArchiveExtractor {
 
         long totalUncompressedSize = 0;
         int entryCount = 0;
+        ExtractionMonitor monitor = new ExtractionMonitor(settings);
 
         try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
             Enumeration<ZipArchiveEntry> entries = zipFile.getEntries();
             while (entries.hasMoreElements()) {
-                checkExtractionState(settings, archivePath, totalUncompressedSize);
+                monitor.check(archivePath, totalUncompressedSize);
                 ZipArchiveEntry entry = entries.nextElement();
                 String entryName = entry.getName();
                 if (entryName.length() > MAX_ENTRY_NAME_LENGTH) {
@@ -236,6 +316,7 @@ public class ArchiveExtractor {
                 if (entry.isDirectory()) {
                     Files.createDirectories(targetPath);
                     ArchiveUtil.applyPosixPermissions(targetPath, entry.getUnixMode());
+                    monitor.recordProgress();
                     continue;
                 }
 
@@ -246,8 +327,8 @@ public class ArchiveExtractor {
 
                 try (InputStream is = zipFile.getInputStream(entry);
                      OutputStream os = Files.newOutputStream(targetPath);
-                     BufferedOutputStream bos = new BufferedOutputStream(os)) {
-                    long entryBytes = copyEntryData(is, bos, entryName, archivePath, settings, totalUncompressedSize);
+                     BufferedOutputStream bos = new BufferedOutputStream(os, BUFFER_SIZE)) {
+                    long entryBytes = copyEntryData(is, bos, entryName, archivePath, settings, monitor, totalUncompressedSize);
                     if (entryBytes > MAX_ENTRY_SIZE_BYTES) {
                         throw new SecurityException("Entry too large: " + entryName + " (" + entryBytes + " bytes)");
                     }
@@ -255,6 +336,7 @@ public class ArchiveExtractor {
                     validateTotalSize(totalUncompressedSize, settings);
                 }
                 ArchiveUtil.applyPosixPermissions(targetPath, entry.getUnixMode());
+                monitor.recordProgress();
 
                 entryCount++;
                 if (extractedCount != null) {
@@ -286,9 +368,10 @@ public class ArchiveExtractor {
 
         long totalUncompressedSize = 0L;
         int count = 0;
+        ExtractionMonitor monitor = new ExtractionMonitor(settings);
 
         try (InputStream fileInput = Files.newInputStream(archivePath);
-             BufferedInputStream bufferedInput = new BufferedInputStream(fileInput);
+             BufferedInputStream bufferedInput = new BufferedInputStream(fileInput, BUFFER_SIZE);
              InputStream archiveInput = archivePath.getFileName().toString().toLowerCase().endsWith(".tar")
                  ? bufferedInput
                  : new GzipCompressorInputStream(bufferedInput);
@@ -296,7 +379,7 @@ public class ArchiveExtractor {
 
             TarArchiveEntry entry;
             while ((entry = tarInput.getNextTarEntry()) != null) {
-                checkExtractionState(settings, archivePath, totalUncompressedSize);
+                monitor.check(archivePath, totalUncompressedSize);
                 String entryName = entry.getName();
                 if (entryName == null || entryName.isEmpty()) {
                     continue;
@@ -312,13 +395,14 @@ public class ArchiveExtractor {
                 if (entry.isDirectory()) {
                     Files.createDirectories(targetPath);
                     ArchiveUtil.applyPosixPermissions(targetPath, entry.getMode());
+                    monitor.recordProgress();
                     continue;
                 }
 
                 Files.createDirectories(targetPath.getParent());
                 try (OutputStream outputStream = Files.newOutputStream(targetPath);
-                     BufferedOutputStream bufferedOutput = new BufferedOutputStream(outputStream)) {
-                    long entryBytes = copyEntryData(tarInput, bufferedOutput, entryName, archivePath, settings, totalUncompressedSize);
+                     BufferedOutputStream bufferedOutput = new BufferedOutputStream(outputStream, BUFFER_SIZE)) {
+                    long entryBytes = copyEntryData(tarInput, bufferedOutput, entryName, archivePath, settings, monitor, totalUncompressedSize);
                     if (entryBytes > MAX_ENTRY_SIZE_BYTES) {
                         throw new SecurityException("Entry too large: " + entryName + " (" + entryBytes + " bytes)");
                     }
@@ -326,6 +410,7 @@ public class ArchiveExtractor {
                     validateTotalSize(totalUncompressedSize, settings);
                 }
                 ArchiveUtil.applyPosixPermissions(targetPath, entry.getMode());
+                monitor.recordProgress();
 
                 count++;
                 if (extractedCount != null) {
@@ -478,15 +563,20 @@ public class ArchiveExtractor {
     }
 
     private static long copyEntryData(InputStream inputStream, OutputStream outputStream, String entryName,
-                                      Path archivePath, ExtractionSettings settings, long bytesExtractedSoFar)
+                                      Path archivePath, ExtractionSettings settings, ExtractionMonitor monitor,
+                                      long bytesExtractedSoFar)
         throws IOException {
         byte[] buffer = new byte[BUFFER_SIZE];
         long entryBytes = 0L;
         int read;
+        monitor.check(archivePath, bytesExtractedSoFar);
         while ((read = inputStream.read(buffer)) != -1) {
+            if (read > 0) {
+                monitor.recordProgress();
+            }
             long projectedEntryBytes = entryBytes + read;
             long projectedTotalBytes = bytesExtractedSoFar + projectedEntryBytes;
-            checkExtractionState(settings, archivePath, projectedTotalBytes);
+            monitor.check(archivePath, projectedTotalBytes);
             if (projectedEntryBytes > MAX_ENTRY_SIZE_BYTES) {
                 throw new SecurityException("Entry too large: " + entryName + " (" + projectedEntryBytes + " bytes)");
             }
@@ -509,22 +599,6 @@ public class ArchiveExtractor {
             throw new QuotaExceededException(
                 formatQuotaExceededMessage(totalUncompressedSize, settings.remainingQuotaBytes)
             );
-        }
-    }
-
-    private static void checkExtractionState(ExtractionSettings settings, Path archivePath, long bytesExtracted)
-        throws IOException {
-        validateTotalSize(bytesExtracted, settings);
-        if (settings.timeoutSeconds > 0 && System.currentTimeMillis() > settings.deadlineEpochMillis) {
-            // File name only: this message is surfaced to the uploader. The full path is
-            // logged separately by the callers that have it.
-            throw new IOException(
-                "Archive extraction timed out after " + settings.timeoutSeconds +
-                    " seconds for " + archivePath.getFileName()
-            );
-        }
-        if (settings.cancellationRequested != null && settings.cancellationRequested.getAsBoolean()) {
-            throw new IOException("Archive extraction cancelled for " + archivePath.getFileName());
         }
     }
 

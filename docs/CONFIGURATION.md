@@ -86,8 +86,9 @@ export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
 | `STAREXEC_DATA_DIR` | `/tmp/starexec/data` | No | `/var/lib/starexec/data` | Data directory path |
 | `STAREXEC_BUILD_ARTIFACT_DIR` | *(empty)* | For managed build publication | `/var/lib/starexec/build-artifacts` | Existing application-owned directory with mode `0700`, separate from all runner-writable roots. No shared-data fallback. See [execution storage](EXECUTION_STORAGE.md). |
 | `STAREXEC_UPLOAD_STAGING_DIR` | *(empty)* | For private upload staging | `/var/lib/starexec/uploads-private` | Existing application-owned directory with mode `0700`, outside runner-writable roots and their mount aliases. The application never provisions the root or falls back to shared data. |
-| `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` | `1800` | No | `3600` | Timeout for async benchmark archive extraction only. Applies to resumable upload job extraction, not all shell commands globally. |
+| `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` | `1800` | No | `3600` | Inactivity timeout (seconds without progress) for async benchmark archive extraction, paired with a bounded `4x` total duration ceiling. |
 | `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` | `107374182400` | No | `214748364800` | Hard cap for total extracted bytes during async benchmark archive extraction. Effective limit is the smaller of this value and the uploader's remaining disk quota. |
+| `STAREXEC_UPLOAD_SESSION_CHUNK_SIZE_BYTES` | `8388608` | No | `8388608` | Chunk size in bytes (`8 MiB` default, clamped to `64 MiB`) for resumable browser benchmark uploads. |
 | `STAREXEC_UPLOAD_CLEANUP_ENABLED` | `true` | No | `true` | Enables DB-driven cleanup of expired upload-owned artifacts. |
 | `STAREXEC_UPLOAD_CLEANUP_INTERVAL_SECONDS` | `900` | No | `300` | Interval between upload artifact cleanup sweeps. |
 | `STAREXEC_UPLOAD_CLEANUP_BATCH_SIZE` | `100` | No | `50` | Maximum upload artifacts claimed per cleanup sweep. |

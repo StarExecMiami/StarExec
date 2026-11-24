@@ -344,8 +344,8 @@ RUN usermod -a -G starexec starexec1 && \
     chmod 0700 /var/lib/starexec/uploads-private
 
 # Security hardening - Update Tomcat server.xml
-# Sets connection limits to prevent resource exhaustion
-RUN sed -i 's/port="8080"/port="8080" maxThreads="200" minSpareThreads="10"/' ${CATALINA_HOME}/conf/server.xml
+# Sets connection limits to prevent resource exhaustion while allowing slow large uploads and clean error responses
+RUN sed -i 's/port="8080"/port="8080" maxThreads="200" minSpareThreads="10" disableUploadTimeout="false" connectionUploadTimeout="600000" maxSwallowSize="52428800"/' ${CATALINA_HOME}/conf/server.xml
 
 # Health check.
 # Uses the readiness endpoint rather than liveness: nothing here restarts on

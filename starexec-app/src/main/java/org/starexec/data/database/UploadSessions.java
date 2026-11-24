@@ -23,7 +23,7 @@ import java.util.UUID;
  */
 public class UploadSessions {
     private static final StarLogger log = StarLogger.getLogger(UploadSessions.class);
-    public static final int DEFAULT_CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
+    public static final int DEFAULT_CHUNK_SIZE_BYTES = EnvironmentConfig.DEFAULT_UPLOAD_SESSION_CHUNK_SIZE_BYTES;
 
     private static final String INSERT_SESSION_SQL =
         "INSERT INTO upload_sessions (" +

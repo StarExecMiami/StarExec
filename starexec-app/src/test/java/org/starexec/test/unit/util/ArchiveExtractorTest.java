@@ -14,7 +14,9 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -323,6 +325,104 @@ public class ArchiveExtractorTest {
         Path zipOut = tempDir.resolve("zip-exec-out");
         ArchiveExtractor.extractSafely(zip.toString(), zipOut);
         assertTrue(Files.isExecutable(zipOut.resolve("bin/run.sh")));
+    }
+
+    @Test
+    public void extractTarGzCopiesMultiBufferEntryIntact() throws Exception {
+        byte[] payload = new byte[256 * 1024 + 137];
+        for (int i = 0; i < payload.length; i++) {
+            payload[i] = (byte) ((i * 31) & 0xFF);
+        }
+        Path archive = tempDir.resolve("multi-buffer.tgz");
+        try (OutputStream fileOutput = Files.newOutputStream(archive);
+             GzipCompressorOutputStream gzipOutput = new GzipCompressorOutputStream(fileOutput);
+             TarArchiveOutputStream tarOutput = new TarArchiveOutputStream(gzipOutput)) {
+            TarArchiveEntry entry = new TarArchiveEntry("large/bench.smt2");
+            entry.setSize(payload.length);
+            tarOutput.putArchiveEntry(entry);
+            tarOutput.write(payload);
+            tarOutput.closeArchiveEntry();
+            tarOutput.finish();
+        }
+
+        Path extractDir = tempDir.resolve("multi-buffer-out");
+        AtomicInteger count = new AtomicInteger();
+        ArchiveExtractor.extractWithCleanup(archive.toString(), extractDir, count);
+
+        assertEquals(1, count.get());
+        assertTrue(Arrays.equals(payload, Files.readAllBytes(extractDir.resolve("large/bench.smt2"))));
+    }
+
+    @Test
+    public void extractTarGzExtendsInactivityTimeoutWhileEntriesMakeProgress() throws Exception {
+        Path archive = createTarGzArchive("bench/file1.p", "content-1", "bench/file2.p", "content-2");
+        Path extractDir = tempDir.resolve("progress-timeout-out");
+        AtomicLong fakeNow = new AtomicLong(1_000_000L);
+        AtomicInteger extractedCount = new AtomicInteger();
+
+        ArchiveExtractor.ExtractionSettings settings = ArchiveExtractor.ExtractionSettings.defaults()
+            .withTimeoutSeconds(10)
+            .withMaxTotalTimeoutSeconds(60)
+            .withClock(fakeNow::get)
+            .withProgressCallback(() -> fakeNow.addAndGet(7_000L));
+
+        ArchiveExtractor.extractWithCleanup(archive.toString(), extractDir, extractedCount, settings);
+
+        assertEquals(2, extractedCount.get());
+        assertTrue(Files.exists(extractDir.resolve("bench/file2.p")));
+    }
+
+    @Test
+    public void extractTarGzFailsWhenIdleBeyondInactivityTimeout() throws Exception {
+        Path archive = createTarGzArchive("bench/file1.p", "content-1", "bench/file2.p", "content-2");
+        Path extractDir = tempDir.resolve("idle-timeout-out");
+        AtomicLong fakeNow = new AtomicLong(1_000_000L);
+
+        ArchiveExtractor.ExtractionSettings settings = ArchiveExtractor.ExtractionSettings.defaults()
+            .withTimeoutSeconds(5)
+            .withClock(() -> fakeNow.getAndAdd(6_000L));
+
+        try {
+            ArchiveExtractor.extractWithCleanup(archive.toString(), extractDir, null, settings);
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("without progress"));
+            assertFalse(e.getMessage().contains(tempDir.toAbsolutePath().toString()));
+            assertFalse(Files.exists(extractDir));
+            return;
+        }
+
+        throw new AssertionError("Expected idle extraction timeout");
+    }
+
+    @Test
+    public void extractTarGzStopsAtMaximumDurationCeilingDespiteProgress() throws Exception {
+        Path archive = tempDir.resolve("three-entries.tgz");
+        try (OutputStream fileOutput = Files.newOutputStream(archive);
+             GzipCompressorOutputStream gzipOutput = new GzipCompressorOutputStream(fileOutput);
+             TarArchiveOutputStream tarOutput = new TarArchiveOutputStream(gzipOutput)) {
+            writeTarEntry(tarOutput, "bench/file1.p", "content-1");
+            writeTarEntry(tarOutput, "bench/file2.p", "content-2");
+            writeTarEntry(tarOutput, "bench/file3.p", "content-3");
+            tarOutput.finish();
+        }
+        Path extractDir = tempDir.resolve("max-duration-out");
+        AtomicLong fakeNow = new AtomicLong(1_000_000L);
+
+        ArchiveExtractor.ExtractionSettings settings = ArchiveExtractor.ExtractionSettings.defaults()
+            .withTimeoutSeconds(10)
+            .withMaxTotalTimeoutSeconds(12)
+            .withClock(fakeNow::get)
+            .withProgressCallback(() -> fakeNow.addAndGet(7_000L));
+
+        try {
+            ArchiveExtractor.extractWithCleanup(archive.toString(), extractDir, null, settings);
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("maximum duration"));
+            assertFalse(Files.exists(extractDir));
+            return;
+        }
+
+        throw new AssertionError("Expected max duration timeout");
     }
 
     private Path createTarGzArchive(String firstEntryName, String firstContent, String secondEntryName, String secondContent)
