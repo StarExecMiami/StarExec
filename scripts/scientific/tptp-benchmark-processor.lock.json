@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "assetId": "tptp-benchmark-processor",
+  "version": "8.1.0.1",
+  "expectedVersionOutput": "TPTP4X v8.1.0.1",
+  "sourceCommit": "79a72402caf33b31b85ba043a42c47ecc2a15cb5",
+  "sourceDateEpoch": 1794220932,
+  "sourceUrl": "https://github.com/TPTPWorld/TPTP4X/archive/79a72402caf33b31b85ba043a42c47ecc2a15cb5.tar.gz",
+  "sourceSha256": "f12df911e457a1ac49069156591167901e6c938ab488d2a89171cc8315d9259c",
+  "sourceRoot": "TPTP4X-79a72402caf33b31b85ba043a42c47ecc2a15cb5",
+  "jjparserCommit": "b68947d144008b1dfcc4a28a7782b4aa358b58f2",
+  "jjparserUrl": "https://github.com/TPTPWorld/JJParser/archive/b68947d144008b1dfcc4a28a7782b4aa358b58f2.tar.gz",
+  "jjparserSha256": "dae534b44f0a7435fd95c86a0c4cdd1f55ebd53016723f5648a388667fe6487d",
+  "jjparserRoot": "JJParser-b68947d144008b1dfcc4a28a7782b4aa358b58f2",
+  "copyingSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+  "license": "GPL-3.0-only (upstream TPTPWorld/TPTP4X and JJParser); wrapper scripts MIT",
+  "processorScript": "scripts/scientific/tptp_benchmark_processor.sh"
+}

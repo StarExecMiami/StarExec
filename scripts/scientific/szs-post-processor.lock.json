@@ -1,0 +1,37 @@
+{
+  "assetId": "szs-post-processor",
+  "copyingSha256": "de3871860fd66e558d23f1cabce8935cbd0abe26a0fa856c671170c0d3fea7c3",
+  "expectedVersionOutput": "SZSPostProcessor 1.0.0",
+  "license": "MIT (project-authored repository processor)",
+  "multiStatusPolicy": {
+    "conflictingMultipleStatuses": "Error",
+    "identicalMultipleStatuses": "preserve-status",
+    "invalidStatusToken": "Error",
+    "missingStatus": "starexec-unknown"
+  },
+  "processorScript": "scripts/scientific/szs_post_processor.sh",
+  "schemaVersion": 1,
+  "sourceSha256": "e91c6e2b967974edc07f3de1ab0590183c47c4396ecc90ba363e162f8e77c827",
+  "sourceType": "repo-generated",
+  "sources": {
+    "LICENSE": {
+      "executable": false,
+      "sha256": "de3871860fd66e558d23f1cabce8935cbd0abe26a0fa856c671170c0d3fea7c3",
+      "size": 1092,
+      "source": "LICENSE"
+    },
+    "process": {
+      "executable": true,
+      "sha256": "179b2d1b851c4b0397028759b082d89dbcf60c51e832e496ebe48962d889c0a4",
+      "size": 5932,
+      "source": "scripts/scientific/szs_post_processor.sh"
+    },
+    "recipe/build_szs_processor.py": {
+      "executable": false,
+      "sha256": "410aa008e497b8a7c2a9daba8fecbc66b3edd25ddb7e58fb937494091d7f91fa",
+      "size": 4363,
+      "source": "scripts/scientific/build_szs_processor.py"
+    }
+  },
+  "version": "1.0.0"
+}
