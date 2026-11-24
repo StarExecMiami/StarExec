@@ -1,0 +1,6 @@
+(set-logic QF_UF)
+(set-info :status sat)
+(declare-fun p () Bool)
+(assert p)
+(check-sat)
+(exit)

@@ -1,0 +1,5 @@
+(set-logic QF_UF)
+(set-info :status unknown)
+(declare-fun p () Bool)
+(check-sat)
+(exit)

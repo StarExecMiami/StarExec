@@ -1,0 +1,4 @@
+#!/bin/bash
+# Synthetic benchmark processor fixture for TestSequence harness (#141).
+echo "starexec-valid=true"
+echo "test-attribute=test"
