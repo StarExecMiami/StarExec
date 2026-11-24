@@ -6003,6 +6003,137 @@ public class RESTServices {
 	}
 
 	/**
+	 * Deletes selected upload history entries identified as {@code async:<id>} or {@code legacy:<id>}.
+	 * Active async uploads and recent (< 1h) incomplete legacy uploads are refused.
+	 */
+	@POST
+	@Path("/delete/upload")
+	@Produces("application/json")
+	public String deleteUploads(@Context HttpServletRequest request) {
+		String[] rawTokens = request.getParameterValues("selectedIds[]");
+		if (rawTokens == null || rawTokens.length == 0) {
+			rawTokens = request.getParameterValues("selectedIds");
+		}
+		if (rawTokens == null || rawTokens.length == 0) {
+			return gson.toJson(ERROR_IDS_NOT_GIVEN);
+		}
+
+		int callerId = SessionUtil.getUserId(request);
+		LinkedHashSet<String> deduplicatedTokens = new LinkedHashSet<>();
+		List<Long> asyncJobIds = new ArrayList<>();
+		List<Integer> legacyStatusIds = new ArrayList<>();
+
+		// Phase 1: parse, authorize, and verify lifecycle eligibility across all entries before deleting any.
+		for (String rawToken : rawTokens) {
+			if (rawToken == null) {
+				return gson.toJson(ERROR_INVALID_PARAMS);
+			}
+			String token = rawToken.trim();
+			int sep = token.indexOf(':');
+			if (sep <= 0 || sep == token.length() - 1) {
+				return gson.toJson(ERROR_INVALID_PARAMS);
+			}
+			String kind = token.substring(0, sep);
+			String idPart = token.substring(sep + 1);
+			if (!deduplicatedTokens.add(token)) {
+				continue;
+			}
+			if ("async".equals(kind)) {
+				long jobId;
+				try {
+					jobId = Long.parseLong(idPart);
+				} catch (NumberFormatException e) {
+					return gson.toJson(ERROR_INVALID_PARAMS);
+				}
+				if (jobId <= 0) {
+					return gson.toJson(ERROR_INVALID_PARAMS);
+				}
+				ValidatorStatusCode status = UploadSecurity.canUserDeleteAsyncUploadJob(jobId, callerId);
+				if (!status.isSuccess()) {
+					return gson.toJson(status);
+				}
+				asyncJobIds.add(jobId);
+			} else if ("legacy".equals(kind)) {
+				int statusId;
+				try {
+					statusId = Integer.parseInt(idPart);
+				} catch (NumberFormatException e) {
+					return gson.toJson(ERROR_INVALID_PARAMS);
+				}
+				if (statusId <= 0) {
+					return gson.toJson(ERROR_INVALID_PARAMS);
+				}
+				ValidatorStatusCode status = UploadSecurity.canUserDeleteLegacyUpload(statusId, callerId);
+				if (!status.isSuccess()) {
+					return gson.toJson(status);
+				}
+				legacyStatusIds.add(statusId);
+			} else {
+				return gson.toJson(ERROR_INVALID_PARAMS);
+			}
+		}
+
+		int deletedCount = 0;
+		for (long jobId : asyncJobIds) {
+			UploadJobQueue.DeleteOutcome outcome = UploadJobQueue.deleteTerminalJob(jobId);
+			switch (outcome) {
+				case DELETED:
+					deletedCount++;
+					break;
+				case ACTIVE_UPLOAD:
+					return gson.toJson(new ValidatorStatusCode(false, "Cannot delete an active upload job"));
+				case PVC_CLEANUP_FAILED:
+					return gson.toJson(new ValidatorStatusCode(false,
+							"Failed to safely clean staged upload artifacts on disk; upload history entry was preserved"));
+				case NOT_FOUND:
+					return gson.toJson(new ValidatorStatusCode(false, "Upload history entry could not be found"));
+				case DB_ERROR:
+				default:
+					return gson.toJson(ERROR_DATABASE);
+			}
+		}
+
+		for (int statusId : legacyStatusIds) {
+			if (!Uploads.deleteLegacyUpload(statusId)) {
+				return gson.toJson(new ValidatorStatusCode(false,
+						"Unable to delete legacy upload history entry (incomplete uploads must be older than 1 hour)"));
+			}
+			deletedCount++;
+		}
+
+		return gson.toJson(new ValidatorStatusCode(true, "Deleted " + deletedCount + " upload history entry(s)"));
+	}
+
+	/**
+	 * Clears all eligible terminal upload history entries (async + legacy) for {@code userId}.
+	 */
+	@POST
+	@Path("/clear/uploads/{userId}")
+	@Produces("application/json")
+	public String clearUploadHistory(@PathParam("userId") int userId, @Context HttpServletRequest request) {
+		int callerId = SessionUtil.getUserId(request);
+		ValidatorStatusCode status = UploadSecurity.canUserClearUploadHistory(userId, callerId);
+		if (!status.isSuccess()) {
+			return gson.toJson(status);
+		}
+
+		UploadJobQueue.ClearUserJobsResult asyncResult = UploadJobQueue.clearTerminalJobsForUser(userId);
+		int legacyDeleted = Uploads.clearEligibleLegacyUploadsForUser(userId);
+		if (legacyDeleted < 0) {
+			return gson.toJson(ERROR_DATABASE);
+		}
+
+		int totalDeleted = asyncResult.getDeletedCount() + legacyDeleted;
+		if (asyncResult.getFailedPvcCount() > 0) {
+			return gson.toJson(new ValidatorStatusCode(false,
+					"Cleared " + totalDeleted + " upload history entry(s), but " + asyncResult.getFailedPvcCount()
+							+ " entry(s) could not be deleted because disk artifact cleanup failed"));
+		}
+
+		return gson.toJson(new ValidatorStatusCode(true, "Cleared " + totalDeleted + " upload history entry(s)"));
+	}
+
+	/**
 	 * Removes a subspace's association with a space, thereby removing the subspace
 	 * from the space
 	 * 

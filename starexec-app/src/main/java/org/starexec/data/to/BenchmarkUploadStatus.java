@@ -15,6 +15,7 @@ public class BenchmarkUploadStatus extends Identifiable {
 	private boolean fileExtractionComplete;
 	private boolean processingBegun;
 	private boolean everythingComplete;
+	private boolean asyncUpload;
 	private int totalSpaces;
 	private int completedSpaces;
 	private int totalBenchmarks;
@@ -221,6 +222,20 @@ public class BenchmarkUploadStatus extends Identifiable {
 	 */
 	public void setErrorMessage(String errorMessage) {
 		this.errorMessage = errorMessage;
+	}
+
+	/**
+	 * @return true when this row originates from {@code upload_jobs} rather than legacy {@code benchmark_uploads}
+	 */
+	public boolean isAsyncUpload() {
+		return asyncUpload;
+	}
+
+	/**
+	 * @param asyncUpload whether this row originates from {@code upload_jobs}
+	 */
+	public void setAsyncUpload(boolean asyncUpload) {
+		this.asyncUpload = asyncUpload;
 	}
 }
 

@@ -1250,6 +1250,7 @@ public class RESTHelpers {
 		String jobStatus = job.getStatus();
 		boolean isComplete = "COMPLETED".equals(jobStatus) || "COMPLETED_WITH_ERRORS".equals(jobStatus);
 		status.setEverythingComplete(isComplete);
+		status.setAsyncUpload(true);
 		status.setFileUploadComplete(true);
 		status.setFileExtractionComplete(true);
 		status.setProcessingBegun(!"PENDING".equals(jobStatus));
@@ -2134,10 +2135,14 @@ public class RESTHelpers {
 	public static JsonObject convertUploadsToJsonObject(List<BenchmarkUploadStatus> uploads, DataTablesQuery query) {
 		JsonArray dataTablePageEntries = new JsonArray();
 		for (BenchmarkUploadStatus upload : uploads) {
+			String kind = upload.isAsyncUpload() ? "async" : "legacy";
+			String uploadToken = kind + ":" + upload.getId();
 			StringBuilder sb = new StringBuilder();
 			sb.append("<input type=\"hidden\" value =\"");
-			sb.append(upload.getId());
-			sb.append("\" prim=\"upload\" userId=\"").append(upload.getUserId()).append("\"/>");
+			sb.append(uploadToken);
+			sb.append("\" prim=\"upload\" data-upload-kind=\"");
+			sb.append(kind);
+			sb.append("\" userId=\"").append(upload.getUserId()).append("\"/>");
 			String hiddenUploadId = sb.toString();
 			sb = new StringBuilder();
 			sb.append("<a href =\"").append(Util.docRoot("secure/details/uploadStatus.jsp?id="));
