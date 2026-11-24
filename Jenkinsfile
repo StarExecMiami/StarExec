@@ -332,14 +332,32 @@ pipeline {
                         if [ "${DEPLOY_ENV}" = "prod" ]; then
                             BACKUP_DIR="${env.JENKINS_HOME ?: env.WORKSPACE}/backups/starexec"
                             if mkdir -p "\${BACKUP_DIR}"; then
-                                BACKUP_FILE="\${BACKUP_DIR}/pre-deploy-\$(date +%Y%m%d-%H%M%S).sql"
+                                BACKUP_FILE="\${BACKUP_DIR}/pre-deploy-\$(date +%Y%m%d-%H%M%S).sql.gz"
+                                TMP_BACKUP_FILE="\${BACKUP_FILE}.tmp"
+                                DUMP_STATUS_FILE="\${TMP_BACKUP_FILE}.status"
                                 if microk8s kubectl get deploy/${HELM_RELEASE} -n ${K8S_NAMESPACE} >/dev/null 2>&1; then
-                                    if timeout 300 microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} -c postgres \\
-                                        -- pg_dump -U starexec starexec > "\${BACKUP_FILE}" 2>&1; then
+                                    COMPRESS_CMD="gzip -1"
+                                    if command -v ionice >/dev/null 2>&1; then
+                                        COMPRESS_CMD="ionice -c 3 gzip -1"
+                                    fi
+                                    rm -f "\${TMP_BACKUP_FILE}" "\${DUMP_STATUS_FILE}"
+                                    (
+                                        if timeout 300 microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} -c postgres \\
+                                            -- pg_dump -U starexec starexec; then
+                                            echo "0" > "\${DUMP_STATUS_FILE}"
+                                        else
+                                            echo "\$?" > "\${DUMP_STATUS_FILE}"
+                                        fi
+                                    ) | \${COMPRESS_CMD} > "\${TMP_BACKUP_FILE}" || true
+                                    DUMP_RC=\$(cat "\${DUMP_STATUS_FILE}" 2>/dev/null || echo "1")
+                                    rm -f "\${DUMP_STATUS_FILE}"
+                                    if [ "\${DUMP_RC}" -eq 0 ] && [ -s "\${TMP_BACKUP_FILE}" ] && gzip -t "\${TMP_BACKUP_FILE}"; then
+                                        mv -f "\${TMP_BACKUP_FILE}" "\${BACKUP_FILE}"
                                         echo "✓ Backup: \${BACKUP_FILE} (\$(wc -c < "\${BACKUP_FILE}") bytes)"
+                                        ls -1t "\${BACKUP_DIR}"/pre-deploy-*.sql* 2>/dev/null | sed -n '6,\$p' | xargs -r rm -f || true
                                     else
-                                        rm -f "\${BACKUP_FILE}"
-                                        echo "ERROR: pre-deploy backup failed (postgres not reachable)."
+                                        rm -f "\${TMP_BACKUP_FILE}"
+                                        echo "ERROR: pre-deploy backup failed (postgres not reachable or archive corrupt)."
                                         echo "Refusing to deploy a schema-affecting revision without a backup."
                                         exit 1
                                     fi
