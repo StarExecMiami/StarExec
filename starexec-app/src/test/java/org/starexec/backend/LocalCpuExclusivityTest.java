@@ -379,8 +379,14 @@ public class LocalCpuExclusivityTest {
         int realCpu = detectRealAllowedOnlineCpu();
         int smtSibling = realCpu + 100;
 
+        int pairId = 602;
+        Path outDir = Files.createDirectory(tempDir.resolve("downgrade-out"));
+        Path workDir = Files.createDirectory(tempDir.resolve("downgrade-work"));
+        Path statusFile = outDir.resolve("status.json");
+        Path statusTmp = outDir.resolve("status.json.tmp");
+
         SimulatedCgroupController simController = new SimulatedCgroupController(tempDir);
-        simController.downgradeOnRead("member");
+        simController.downgradeOnceFileExists("member", statusFile);
         LocalJobMonitor monitor = new LocalJobMonitor();
         LocalCpuExclusivity.CoreTopology topology =
                 new LocalCpuExclusivity.CoreTopology(
@@ -395,15 +401,12 @@ public class LocalCpuExclusivityTest {
                         simController,
                         monitor);
 
-        int pairId = 602;
-        Path outDir = Files.createDirectory(tempDir.resolve("downgrade-out"));
-        Path workDir = Files.createDirectory(tempDir.resolve("downgrade-work"));
         Path script =
                 writeCompleteSolverScript(
                         outDir,
                         pairId,
                         "cat > '"
-                                + outDir.resolve("status.json")
+                                + statusTmp
                                 + "' <<'EOF'\n"
                                 + "{\"pairId\":"
                                 + pairId
@@ -411,7 +414,12 @@ public class LocalCpuExclusivityTest {
                                 + StatusCode.STATUS_COMPLETE.getVal()
                                 + ",\"stageNumber\":1,\"timestamp\":1}\n"
                                 + "EOF\n"
-                                + "sleep 0.2");
+                                + "mv '"
+                                + statusTmp
+                                + "' '"
+                                + statusFile
+                                + "'\n"
+                                + "sleep 5");
         Object job = newLocalJob(2, pairId, 1, script, workDir, outDir.resolve("job.log"));
 
         try (MockedStatic<EnvironmentConfig> env = mockStatic(EnvironmentConfig.class);
@@ -798,6 +806,7 @@ public class LocalCpuExclusivityTest {
                 new ConcurrentHashMap<>();
         private String forcedProbePartition = "isolated";
         private String downgradePartitionOnRead;
+        private Path downgradeTriggerFile;
         private int readCallsAfterAcquire;
 
         SimulatedCgroupController(Path baseDir) throws IOException {
@@ -811,6 +820,12 @@ public class LocalCpuExclusivityTest {
 
         void downgradeOnRead(String partition) {
             this.downgradePartitionOnRead = partition;
+            this.downgradeTriggerFile = null;
+        }
+
+        void downgradeOnceFileExists(String partition, Path triggerFile) {
+            this.downgradePartitionOnRead = partition;
+            this.downgradeTriggerFile = triggerFile;
         }
 
         Path getSlotsRoot() {
@@ -872,8 +887,13 @@ public class LocalCpuExclusivityTest {
                 LocalCpuExclusivity.SlotReservation reservation) {
             readCallsAfterAcquire++;
             String partition = "isolated";
-            if (downgradePartitionOnRead != null && readCallsAfterAcquire > 1) {
-                partition = downgradePartitionOnRead;
+            if (downgradePartitionOnRead != null) {
+                boolean triggered = downgradeTriggerFile != null
+                        ? Files.exists(downgradeTriggerFile)
+                        : readCallsAfterAcquire > 1;
+                if (triggered) {
+                    partition = downgradePartitionOnRead;
+                }
             }
             return new LocalCpuExclusivity.SlotCgroupState(
                     reservation.getReservedSiblingCpus(), partition, "0");

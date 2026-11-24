@@ -834,6 +834,9 @@ public class LocalBackend implements Backend {
             }
 
             if (abortedForCpuViolation) {
+                if (job.process != null && job.process.isAlive()) {
+                    killTree(job);
+                }
                 job.state = LocalJob.JobState.FAILED;
                 failedJobCount.incrementAndGet();
             } else if (!finished) {
