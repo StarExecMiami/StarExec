@@ -128,7 +128,13 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 	 * @return The absolute file path
 	 */
 	public String getResourcePath() {
-		return ResourceLoader.class.getResource("/org/starexec/test/resources").getFile();
+		final String classpathLocation = "/org/starexec/test/resources";
+		java.net.URL resource = ResourceLoader.class.getResource(classpathLocation);
+		if (resource == null) {
+			throw new IllegalStateException(
+					"Missing test resources directory on classpath: " + classpathLocation);
+		}
+		return resource.getFile();
 	}
 
 	/**
@@ -137,11 +143,19 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 	 * 
 	 * @param name The name of the file, which must be present in the resource
 	 *             directory
-	 * @return
+	 * @return File pointing to the classpath resource
 	 */
 	public File getResource(String name) {
-
-		return new File(ResourceLoader.class.getResource("/org/starexec/test/resources/" + name).getFile());
+		if (name == null || name.trim().isEmpty()) {
+			throw new IllegalArgumentException("Test resource name must not be empty");
+		}
+		final String classpathLocation = "/org/starexec/test/resources/" + name;
+		java.net.URL resource = ResourceLoader.class.getResource(classpathLocation);
+		if (resource == null) {
+			throw new IllegalStateException(
+					"Missing required test fixture '" + name + "' on classpath at " + classpathLocation);
+		}
+		return new File(resource.getFile());
 	}
 
 	/**
@@ -176,6 +190,7 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 	 * @return The Processor object, with all of its attributes set (name, ID, etc.)
 	 */
 	public Processor loadProcessorIntoDatabase(String fileName, ProcessorType type, int communityId) {
+		File processorFile = getResource(fileName);
 		try {
 			Processor p = new Processor();
 			p.setName(TestUtil.getRandomSolverName());
@@ -183,7 +198,6 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 			p.setType(type);
 
 			File processorDir = ProcessorManager.getProcessorDirectory(communityId, p.getName());
-			File processorFile = getResource(fileName);
 			FileUtils.copyFileToDirectory(processorFile, processorDir);
 			ArchiveUtil.extractArchive(new File(processorDir, processorFile.getName()).getAbsolutePath());
 			File processorScript = new File(processorDir, R.PROCESSOR_RUN_SCRIPT);
@@ -371,8 +385,8 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 	 * @return The Configuration object with all of its fields set (name, ID, etc.)
 	 */
 	public Configuration loadConfigurationFileIntoDatabase(String fileName, int solverId) {
+		File file = getResource(fileName);
 		try {
-			File file = getResource(fileName);
 			return loadConfigurationIntoDatabase(FileUtils.readFileToString(file, StandardCharsets.UTF_8), solverId);
 
 		} catch (Exception e) {
@@ -453,8 +467,8 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 	 * @return A list of benchmark Ids for the newly created benchmarks
 	 */
 	public List<Integer> loadBenchmarksIntoDatabase(String archiveName, int parentSpaceId, int userId) {
+		File archive = getResource(archiveName);
 		try {
-			File archive = getResource(archiveName);
 
 			// make a copy of the archive, because the benchmark extraction function will
 			// delete the archive
@@ -493,6 +507,7 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 	 * @return The Solver object will all of its fields set.
 	 */
 	public Solver loadSolverIntoDatabase(String archiveName, int parentSpaceId, int userId) {
+		File archive = getResource(archiveName);
 		try {
 			Solver s = new Solver();
 			s.setName(TestUtil.getRandomSolverName());
@@ -501,7 +516,6 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 			SolverBuildStatus status = new SolverBuildStatus();
 			status.setCode(SolverBuildStatus.SolverBuildStatusCode.BUILT.getVal());
 			s.setBuildStatus(status);
-			File archive = getResource(archiveName);
 			File archiveCopy = new File(archive.getParent(), TestUtil.getRandomAlphaString(20) + ".zip");
 			FileUtils.copyFile(archive, archiveCopy);
 			String filePath = Solvers.getDefaultSolverPath(userId, s.getName());
