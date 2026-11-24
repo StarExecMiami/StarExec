@@ -365,7 +365,7 @@ jobs:
           "$TMP_E2E/venv/bin/python" scripts/e2e/run.py \
             --config "$TMP_E2E/local-e2e-config.json" \
             --mode fresh \
-            --only 0,1,3,4,5,6,7,8,10,11 \
+            --only 0,1,3,4,5,6,7,8,10,11,15,31,34 \
             --matrix-out starexec-app/target/e2e-reports/local
 
           python3 - <<'PY' "${{ github.sha }}"
@@ -505,17 +505,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check Podman rootless prerequisites and execute or record BLOCKED matrix
+      - name: Check Podman rootless prerequisites and build job-runner
+        id: podman-prereq
         run: |
           set -euo pipefail
           TMP_E2E=$(mktemp -d /tmp/starexec-e2e-podman-XXXXXX)
-          cleanup() {
-            docker compose -f docker-compose.yml -f docker-compose.podman.yml down -v --remove-orphans 2>/dev/null || true
-            rm -rf "$TMP_E2E"
-          }
-          trap cleanup EXIT
+          HOST_WORK="/tmp/starexec-podman-e2e"
+          rm -rf "$HOST_WORK"
+          mkdir -p "$HOST_WORK" starexec-app/target/e2e-reports/podman
 
-          mkdir -p starexec-app/target/e2e-reports/podman
+          echo "TMP_E2E=$TMP_E2E" >> "$GITHUB_ENV"
+          echo "HOST_WORK=$HOST_WORK" >> "$GITHUB_ENV"
+
           python3 -m venv "$TMP_E2E/venv"
           "$TMP_E2E/venv/bin/pip" install --quiet requests bcrypt
 
@@ -529,24 +530,8 @@ jobs:
             PODMAN_REASON="rootless subuid range unavailable for runner user"
           elif ! podman info >/dev/null 2>&1; then
             PODMAN_REASON="podman info failed on runner"
-          fi
-
-          if [ -z "$PODMAN_REASON" ]; then
-            SOCK_DIR="${XDG_RUNTIME_DIR:-/tmp/podman-run-$(id -u)}"
-            mkdir -p "$SOCK_DIR/podman"
-            PODMAN_SOCK="$SOCK_DIR/podman/podman.sock"
-            if [ ! -S "$PODMAN_SOCK" ]; then
-              podman system service --time=0 "unix://$PODMAN_SOCK" > "$TMP_E2E/podman-svc.log" 2>&1 &
-              for _ in $(seq 1 15); do
-                if [ -S "$PODMAN_SOCK" ]; then break; fi
-                sleep 1
-              done
-            fi
-            if [ ! -S "$PODMAN_SOCK" ]; then
-              PODMAN_REASON="rootless podman socket could not be started on runner"
-            elif ! podman build -t starexec/job-runner:latest -f docker/job-runner.Dockerfile . >/dev/null 2>&1; then
-              PODMAN_REASON="failed to build starexec/job-runner:latest under rootless podman"
-            fi
+          elif ! podman build -t localhost/starexec/job-runner:latest -f docker/job-runner.Dockerfile . >/dev/null 2>&1; then
+            PODMAN_REASON="failed to build localhost/starexec/job-runner:latest under rootless podman"
           fi
 
           if [ -n "$PODMAN_REASON" ]; then
@@ -562,18 +547,145 @@ jobs:
             RC=$?
             set -e
             test "$RC" -eq 2
+            echo "ready=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          docker build -t "ghcr.io/starexecmiami/starexec:ci-test-latest" -t "ghcr.io/starexecmiami/starexec:${{ github.sha }}" .
-          APP_IMAGE_DIGEST=$(docker image inspect --format='{{.Id}}' "ghcr.io/starexecmiami/starexec:${{ github.sha }}")
-          STAREXEC_DB_PASSWORD=ci_test_password_secure_12345 \
-          STAREXEC_VERSION=ci-test-latest \
-          VOLUME_PREFIX=starexec-podman-ci \
-          CONTAINER_SOCKET="$PODMAN_SOCK" \
-            docker compose -f docker-compose.yml -f docker-compose.podman.yml up -d
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
-          timeout 240 bash -c 'until [ "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/starexec/public/health/readiness)" = "200" ]; do sleep 3; done'
+      - name: Set up Docker Buildx for Podman image transfer
+        if: steps.podman-prereq.outputs.ready == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build StarExec app image using GHA cache
+        if: steps.podman-prereq.outputs.ready == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: |
+            ghcr.io/starexecmiami/starexec:ci-podman-${{ github.sha }}
+          cache-from: type=gha
+          build-args: |
+            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ github.sha }}
+
+      - name: Start rootless Podman stack and run PodmanBackend E2E matrix
+        if: steps.podman-prereq.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          PODMAN_APP_IMAGE="docker.io/starexec/app:ci-podman-${{ github.sha }}"
+          DOCKER_APP_IMAGE="ghcr.io/starexecmiami/starexec:ci-podman-${{ github.sha }}"
+          APP_IMAGE_DIGEST=$(docker image inspect --format='{{.Id}}' "$DOCKER_APP_IMAGE")
+
+          docker save "$DOCKER_APP_IMAGE" | podman load >/dev/null
+          podman tag "$DOCKER_APP_IMAGE" "$PODMAN_APP_IMAGE"
+          docker rmi "$DOCKER_APP_IMAGE" >/dev/null 2>&1 || true
+
+          SOCK_DIR="${XDG_RUNTIME_DIR:-/tmp/podman-run-$(id -u)}"
+          mkdir -p "$SOCK_DIR/podman"
+          PODMAN_SOCK="$SOCK_DIR/podman/podman.sock"
+          rm -f "$PODMAN_SOCK"
+          RUNNER_TRACKING_ID="" podman system service --time=0 "unix://$PODMAN_SOCK" > "$TMP_E2E/podman-svc.log" 2>&1 &
+          echo "$!" > "$TMP_E2E/podman-svc.pid"
+          for _ in $(seq 1 20); do
+            if [ -S "$PODMAN_SOCK" ]; then break; fi
+            sleep 1
+          done
+          test -S "$PODMAN_SOCK"
+
+          HOST_DATA_DIR="$HOST_WORK/data"
+          HOST_SANDBOX_DIR="$HOST_WORK/sandbox"
+          HOST_BACKEND_DIR="$HOST_WORK/backend"
+          HOST_WORK_DIR="$HOST_WORK/work"
+          mkdir -p "$HOST_DATA_DIR"/{pictures,jobin,jobout} "$HOST_SANDBOX_DIR" "$HOST_BACKEND_DIR" "$HOST_WORK_DIR"
+          chmod -R 0777 "$HOST_DATA_DIR" "$HOST_SANDBOX_DIR" "$HOST_BACKEND_DIR" "$HOST_WORK_DIR"
+
+          # Seed default pictures from the image so bind-mounted /app/data matches image defaults
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 \
+            -v "$HOST_DATA_DIR:/mnt/data" \
+            --entrypoint sh "$PODMAN_APP_IMAGE" \
+            -c 'cp -r /app/data/pictures/. /mnt/data/pictures/'
+          chmod -R a+rwX "$HOST_DATA_DIR"
+
+          podman network rm -f starexec-net >/dev/null 2>&1 || true
+          podman network create starexec-net >/dev/null
+          podman volume rm -f starexec-podman-ci-pg >/dev/null 2>&1 || true
+          podman volume create starexec-podman-ci-pg >/dev/null
+
+          podman run -d --name starexec-postgres --network starexec-net \
+            -e POSTGRES_USER=starexec \
+            -e POSTGRES_PASSWORD=ci_test_password_secure_12345 \
+            -e POSTGRES_DB=starexec \
+            -e LC_COLLATE=en_US.UTF-8 \
+            -e LC_CTYPE=en_US.UTF-8 \
+            -v starexec-podman-ci-pg:/var/lib/postgresql/data \
+            docker.io/library/postgres:15 >/dev/null
+
+          for _ in $(seq 1 60); do
+            if podman exec starexec-postgres pg_isready -h localhost -p 5432 -U starexec -d starexec >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          podman exec starexec-postgres pg_isready -h localhost -p 5432 -U starexec -d starexec
+
+          podman run --rm --name starexec-migrations --network starexec-net \
+            --userns=keep-id:uid=1000,gid=1000 \
+            --entrypoint /usr/local/bin/migrations.sh \
+            -e STAREXEC_DB_HOST=starexec-postgres \
+            -e STAREXEC_DB_PORT=5432 \
+            -e STAREXEC_DB_NAME=starexec \
+            -e STAREXEC_DB_USER=starexec \
+            -e STAREXEC_DB_PASSWORD=ci_test_password_secure_12345 \
+            -e STAREXEC_DB_SCHEMA=starexec \
+            "$PODMAN_APP_IMAGE"
+
+          podman run -d --name starexec-app --network starexec-net \
+            --userns=keep-id:uid=1000,gid=1000 \
+            -p 127.0.0.1:8080:8080 \
+            -v "$HOST_DATA_DIR:/app/data" \
+            -v "$HOST_SANDBOX_DIR:/app/sandbox" \
+            -v "$HOST_BACKEND_DIR:/app/backend" \
+            -v "$HOST_WORK_DIR:/app/work" \
+            -v "$PODMAN_SOCK:/run/podman/podman.sock" \
+            -e STAREXEC_DB_HOST=starexec-postgres \
+            -e STAREXEC_DB_PORT=5432 \
+            -e STAREXEC_DB_USER=starexec \
+            -e STAREXEC_DB_PASSWORD=ci_test_password_secure_12345 \
+            -e STAREXEC_DB_NAME=starexec \
+            -e STAREXEC_REPORT_HOST=starexec-postgres \
+            -e SKIP_MIGRATIONS=true \
+            -e STAREXEC_WEB_ADDRESS=localhost \
+            -e STAREXEC_APP_NAME= \
+            -e STAREXEC_PROXY_SCHEME=http:// \
+            -e STAREXEC_PROXY_PORT=8080 \
+            -e STAREXEC_DATA_DIR=/app/data \
+            -e STAREXEC_UPLOAD_STAGING_DIR=/var/lib/starexec/uploads-private \
+            -e STAREXEC_SANDBOX_DIR=/app/sandbox \
+            -e STAREXEC_BACKEND_ROOT=/app/backend \
+            -e STAREXEC_BACKEND_WORKING_DIR=/app/work \
+            -e STAREXEC_BACKEND_TYPE=podman \
+            -e STAREXEC_CONTAINER_SOCKET=unix:///run/podman/podman.sock \
+            -e STAREXEC_CONTAINER_JOB_IMAGE=localhost/starexec/job-runner:latest \
+            -e STAREXEC_CONTAINER_NETWORK_MODE=starexec-net \
+            -e STAREXEC_CONTAINER_DB_HOST=starexec-postgres \
+            -e STAREXEC_CONTAINER_HOST_DATA_PATH="$HOST_DATA_DIR" \
+            -e STAREXEC_ALLOW_TESTING=True \
+            -e STAREXEC_TEST_COMMUNITY_ID=1 \
+            "$PODMAN_APP_IMAGE" >/dev/null
+
+          timeout 240 bash -c 'until [ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/starexec/public/health/readiness)" = "200" ]; do sleep 3; done'
+
+          echo "=== PodmanBackend in-container preflight ==="
+          podman exec starexec-app curl --fail --silent --show-error \
+            --unix-socket /run/podman/podman.sock http://d/v1.41/version
+          echo ""
+          podman exec starexec-app curl --fail --silent --show-error \
+            --unix-socket /run/podman/podman.sock http://d/v1.41/images/json | grep -q "job-runner"
+          podman exec starexec-app test -d /app/data/pictures
 
           SHORT_SHA=$(printf '%s' "${{ github.sha }}" | cut -c1-8)
           cat > "$TMP_E2E/podman-e2e-config.json" <<EOF
@@ -583,12 +695,12 @@ jobs:
             "fixture_mode": "reproducible-offline",
             "base_url": "http://127.0.0.1:8080/starexec",
             "deployment_name": "sq-${SHORT_SHA}-pdm",
-            "db_exec": ["docker", "exec", "-i", "starexec-postgres", "psql", "-U", "starexec", "-d", "starexec", "-X", "-qAt", "-v", "ON_ERROR_STOP=1"],
-            "app_exec": ["docker", "exec", "-i", "starexec-app"],
+            "db_exec": ["podman", "exec", "-i", "starexec-postgres", "psql", "-U", "starexec", "-d", "starexec", "-X", "-qAt", "-v", "ON_ERROR_STOP=1"],
+            "app_exec": ["podman", "exec", "-i", "starexec-app"],
             "app_data_root": "/app/data",
             "queue_id": "auto",
             "commit": "${{ github.sha }}",
-            "image": "ghcr.io/starexecmiami/starexec:${{ github.sha }}",
+            "image": "$DOCKER_APP_IMAGE",
             "image_digest": "${APP_IMAGE_DIGEST}",
             "report_dir": "$PWD/starexec-app/target/e2e-reports/podman",
             "allowed_hosts": [],
@@ -602,8 +714,58 @@ jobs:
             --config "$TMP_E2E/podman-e2e-config.json" \
             --backend podman \
             --mode fresh \
-            --only 0,1,3,4,5,6,7,8,10,11 \
+            --only 0,1,3,4,5,6,7,8,10,11,15,31,34 \
             --matrix-out starexec-app/target/e2e-reports/podman
+
+          python3 - <<'PY' "${{ github.sha }}"
+          import json, sys
+          sha = sys.argv[1]
+          with open("starexec-app/target/e2e-reports/podman/matrix-report.json", encoding="utf-8") as fh:
+              report = json.load(fh)
+          assert report["commitSha"] == sha, report
+          assert report["mode"] == "fresh", report
+          assert report["matrixDenominator"] == 63, report
+          counts = report["countsByStatus"]
+          assert counts["FAIL"] == 0, report
+          assert counts["PASS"] > 0, report
+          print(f"Verified PodmanBackend E2E matrix: PASS={counts['PASS']}, BLOCKED={counts['BLOCKED']}, SKIPPED={counts['SKIPPED']}, FAIL={counts['FAIL']}")
+          PY
+
+      - name: Collect PodmanBackend diagnostics on failure
+        if: failure() && steps.podman-prereq.outputs.ready == 'true'
+        run: |
+          echo "=== Podman Containers ==="
+          podman ps -a || true
+          echo "=== Podman Networks & Images ==="
+          podman network ls || true
+          podman images || true
+          echo "=== starexec-app Logs (Last 200 lines) ==="
+          podman logs --tail=200 starexec-app || true
+          echo "=== starexec-postgres Logs (Last 60 lines) ==="
+          podman logs --tail=60 starexec-postgres || true
+          echo "=== Recent Job Containers ==="
+          for c in $(podman ps -a --format '{{.Names}}' 2>/dev/null | grep -Ev '^(starexec-app|starexec-postgres|starexec-migrations)$' | tail -n 10); do
+            echo "--- job container: $c ---"
+            podman inspect --format 'Status={{.State.Status}} ExitCode={{.State.ExitCode}} Error={{.State.Error}}' "$c" || true
+            podman logs --tail=60 "$c" || true
+          done
+          echo "=== Podman Service Log ==="
+          cat "$TMP_E2E/podman-svc.log" 2>/dev/null | tail -n 80 || true
+          echo "=== Host Data Dir ==="
+          ls -la "$HOST_WORK/data" 2>/dev/null || true
+
+      - name: Cleanup Podman E2E stack
+        if: always()
+        run: |
+          for c in $(podman ps -aq 2>/dev/null); do
+            podman rm -f "$c" >/dev/null 2>&1 || true
+          done
+          podman network rm -f starexec-net >/dev/null 2>&1 || true
+          podman volume rm -f starexec-podman-ci-pg >/dev/null 2>&1 || true
+          if [ -n "${TMP_E2E:-}" ] && [ -f "$TMP_E2E/podman-svc.pid" ]; then
+            kill "$(cat "$TMP_E2E/podman-svc.pid")" >/dev/null 2>&1 || true
+          fi
+          rm -rf "${TMP_E2E:-}" "${HOST_WORK:-}"
 
       - name: Upload PodmanBackend E2E matrix artifacts
         if: always()

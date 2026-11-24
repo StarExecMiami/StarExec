@@ -321,6 +321,55 @@ class E2EHarnessTest(unittest.TestCase):
         self.assertIn("Deployed E2E Matrix (Kubernetes)", jenkins)
         self.assertIn("--backend kubernetes", jenkins)
 
+    def test_ci_only_selections_close_complete_matrix_rows(self):
+        import re
+        from capabilities import BY_NUMBER
+
+        workflow_text = (
+            REPO_ROOT / ".github" / "workflows" / "integration-test.yml"
+        ).read_text(encoding="utf-8")
+        selections = re.findall(r"--only\s+([0-9,]+)", workflow_text)
+        self.assertGreaterEqual(len(selections), 2, selections)
+
+        for sel in selections:
+            caps = [int(x) for x in sel.split(",")]
+            available_state = set()
+            for num in caps:
+                self.assertIn(num, BY_NUMBER)
+                _, _, _, needs, creates = BY_NUMBER[num]
+                missing_needs = [k for k in needs if k not in available_state]
+                self.assertEqual(
+                    missing_needs,
+                    [],
+                    f"--only {sel} runs cap {num} before prerequisites {missing_needs}",
+                )
+                available_state.update(creates)
+
+            fake_run = {
+                "runid": "ci-only-check",
+                "deployment": {
+                    "backend": "local",
+                    "mode": "fresh",
+                    "commit": "0" * 40,
+                    "image_digest": "sha256:0000",
+                },
+                "capabilities": [{"number": n, "status": "PASS"} for n in caps],
+            }
+            report = e2e_matrix.build_matrix_report(
+                [fake_run], commit_sha="0" * 40, active_mode="fresh"
+            )
+            passed = [
+                c["capabilityId"]
+                for c in report["modes"]["fresh"]["cells"]
+                if c["backend"] == "local" and c["status"] == "PASS"
+            ]
+            self.assertGreater(
+                len(passed),
+                0,
+                f"--only {sel} failed to close any complete CAPABILITY_ROWS row",
+            )
+            self.assertEqual(passed, ["C11", "C17", "C18", "C20"])
+
 
 if __name__ == "__main__":
     unittest.main()
