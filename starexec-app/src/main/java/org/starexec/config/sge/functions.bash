@@ -49,6 +49,7 @@ CONTAINER_STAGE_STATUS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-statu
 CONTAINER_STATS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stats.json"
 CONTAINER_STAGE_ATTRS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-attributes"
 CONTAINER_STAGE_STATS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-stats"
+CONTAINER_CPU_TOPOLOGY_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/cpu-topology.json"
 CONTAINER_LOG_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/${PAIR_ID}.txt"
 # Whether the job script's stdout already is that file. On the local backend it is: LocalBackend
 # redirects the script's output to the pair log, and STAREXEC_OUTPUT_DIR is the log's directory.
@@ -154,6 +155,181 @@ EOF
 	mv -f "$CONTAINER_STATS_FILE.tmp" "$CONTAINER_STATS_FILE"
 	containerWriteStageStats "$STAGE" "$CONTAINER_STATS_FILE"
 	log "Container mode: wrote stats for stage $STAGE"
+}
+
+function _containerJsonEscape {
+	local val="$1"
+	val="${val//\\/\\\\}"
+	val="${val//\"/\\\"}"
+	val="${val//$'\n'/}"
+	val="${val//$'\r'/}"
+	printf '%s' "$val"
+}
+
+function _containerExpandCpuset {
+	local spec="${1//[[:space:]]/}"
+	local -a result=()
+	local part start end cur
+	if [ -z "$spec" ]; then
+		return 0
+	fi
+	IFS=',' read -r -a _parts <<< "$spec"
+	for part in "${_parts[@]}"; do
+		if [[ "$part" == *-* ]]; then
+			start="${part%%-*}"
+			end="${part#*-}"
+			if [[ "$start" =~ ^[0-9]+$ && "$end" =~ ^[0-9]+$ && "$start" -le "$end" ]]; then
+				cur="$start"
+				while [ "$cur" -le "$end" ]; do
+					result+=("$cur")
+					cur=$(( cur + 1 ))
+				done
+			fi
+		elif [[ "$part" =~ ^[0-9]+$ ]]; then
+			result+=("$part")
+		fi
+	done
+	if [ "${#result[@]}" -gt 0 ]; then
+		printf '%s\n' "${result[@]}" | sort -n -u
+	fi
+}
+
+# Writes effective container CPU affinity, cgroup cpuset, and sysfs CPU/SMT/NUMA
+# topology to $CONTAINER_CPU_TOPOLOGY_FILE for Kubernetes/container attestation (#286).
+function containerWriteCpuTopology {
+	local target_file="${1:-$CONTAINER_CPU_TOPOLOGY_FILE}"
+	local proc_status="${STAREXEC_TOPOLOGY_PROC_STATUS:-/proc/self/status}"
+	local proc_cgroup="${STAREXEC_TOPOLOGY_PROC_CGROUP:-/proc/self/cgroup}"
+	local cgroup_root="${STAREXEC_TOPOLOGY_CGROUP_ROOT:-/sys/fs/cgroup}"
+	local sysfs_cpu_root="${STAREXEC_TOPOLOGY_SYSFS_CPU_ROOT:-/sys/devices/system/cpu}"
+	local node_name="${STAREXEC_NODE_NAME:-$(hostname)}"
+
+	local cpus_allowed=""
+	if [ -r "$proc_status" ]; then
+		cpus_allowed="$(awk '/^Cpus_allowed_list:/ { print $2; exit }' "$proc_status" 2>/dev/null || true)"
+	fi
+
+	local online_cpus=""
+	if [ -r "$sysfs_cpu_root/online" ]; then
+		online_cpus="$(tr -d '[:space:]' < "$sysfs_cpu_root/online" 2>/dev/null || true)"
+	fi
+
+	local cgroup_hierarchy="unknown"
+	local cgroup_effective=""
+	if [ -f "$cgroup_root/cgroup.controllers" ]; then
+		cgroup_hierarchy="v2"
+		local rel_v2=""
+		if [ -r "$proc_cgroup" ]; then
+			rel_v2="$(awk -F: '$1 == "0" && $2 == "" { print $3; exit }' "$proc_cgroup" 2>/dev/null || true)"
+		fi
+		if [ -n "$rel_v2" ] && [ "$rel_v2" != "/" ] && [ -r "$cgroup_root${rel_v2}/cpuset.cpus.effective" ]; then
+			cgroup_effective="$(tr -d '[:space:]' < "$cgroup_root${rel_v2}/cpuset.cpus.effective" 2>/dev/null || true)"
+		elif [ -r "$cgroup_root/cpuset.cpus.effective" ]; then
+			cgroup_effective="$(tr -d '[:space:]' < "$cgroup_root/cpuset.cpus.effective" 2>/dev/null || true)"
+		fi
+	elif [ -d "$cgroup_root/cpuset" ]; then
+		cgroup_hierarchy="v1"
+		local rel_v1=""
+		if [ -r "$proc_cgroup" ]; then
+			rel_v1="$(awk -F: '$2 ~ /(^|,)cpuset(,|$)/ { print $3; exit }' "$proc_cgroup" 2>/dev/null || true)"
+		fi
+		local v1_dir="$cgroup_root/cpuset"
+		if [ -n "$rel_v1" ] && [ "$rel_v1" != "/" ] && [ -d "$cgroup_root/cpuset${rel_v1}" ]; then
+			v1_dir="$cgroup_root/cpuset${rel_v1}"
+		fi
+		if [ -r "$v1_dir/cpuset.effective_cpus" ]; then
+			cgroup_effective="$(tr -d '[:space:]' < "$v1_dir/cpuset.effective_cpus" 2>/dev/null || true)"
+		elif [ -r "$v1_dir/cpuset.cpus" ]; then
+			cgroup_effective="$(tr -d '[:space:]' < "$v1_dir/cpuset.cpus" 2>/dev/null || true)"
+		fi
+	fi
+
+	local inspect_spec="$cpus_allowed"
+	if [ -z "$inspect_spec" ]; then
+		inspect_spec="$cgroup_effective"
+	elif [ -n "$cgroup_effective" ] && [ "$cgroup_effective" != "$cpus_allowed" ]; then
+		inspect_spec="${cpus_allowed},${cgroup_effective}"
+	fi
+
+	local -a expanded_cpus=()
+	while IFS= read -r _cpu; do
+		if [ -n "$_cpu" ]; then
+			expanded_cpus+=("$_cpu")
+		fi
+	done < <(_containerExpandCpuset "$inspect_spec")
+
+	local -a numa_seen=()
+	local cpu_entries=""
+	local first_entry=true
+	local cpu topo_dir core_id pkg_id sib_list numa_id numa_dir numa_json core_json pkg_json sib_json
+	for cpu in "${expanded_cpus[@]}"; do
+		topo_dir="$sysfs_cpu_root/cpu${cpu}/topology"
+		core_id=""
+		pkg_id=""
+		sib_list=""
+		numa_id=""
+		if [ -r "$topo_dir/core_id" ]; then
+			core_id="$(tr -d '[:space:]' < "$topo_dir/core_id" 2>/dev/null || true)"
+		fi
+		if [ -r "$topo_dir/physical_package_id" ]; then
+			pkg_id="$(tr -d '[:space:]' < "$topo_dir/physical_package_id" 2>/dev/null || true)"
+		fi
+		if [ -r "$topo_dir/thread_siblings_list" ]; then
+			sib_list="$(tr -d '[:space:]' < "$topo_dir/thread_siblings_list" 2>/dev/null || true)"
+		fi
+		for numa_dir in "$sysfs_cpu_root/cpu${cpu}/node"[0-9]*; do
+			if [ -d "$numa_dir" ]; then
+				numa_id="${numa_dir##*/node}"
+				if [[ "$numa_id" =~ ^[0-9]+$ ]]; then
+					numa_seen+=("$numa_id")
+					break
+				else
+					numa_id=""
+				fi
+			fi
+		done
+
+		[[ "$core_id" =~ ^[0-9]+$ ]] && core_json="$core_id" || core_json="null"
+		[[ "$pkg_id" =~ ^[0-9]+$ ]] && pkg_json="$pkg_id" || pkg_json="null"
+		[[ "$numa_id" =~ ^[0-9]+$ ]] && numa_json="$numa_id" || numa_json="null"
+		if [ -n "$sib_list" ]; then
+			sib_json="\"$(_containerJsonEscape "$sib_list")\""
+		else
+			sib_json="null"
+		fi
+
+		if [ "$first_entry" = true ]; then
+			first_entry=false
+		else
+			cpu_entries="${cpu_entries},"
+		fi
+		cpu_entries="${cpu_entries}{\"cpu\":${cpu},\"coreId\":${core_json},\"packageId\":${pkg_json},\"numaNode\":${numa_json},\"threadSiblings\":${sib_json}}"
+	done
+
+	local numa_nodes=""
+	if [ "${#numa_seen[@]}" -gt 0 ]; then
+		numa_nodes="$(printf '%s\n' "${numa_seen[@]}" | sort -n -u | paste -sd ',' -)"
+	fi
+
+	mkdir -p "$(dirname "$target_file")" 2>/dev/null || return 0
+	local cgroup_eff_json="null"
+	[ -n "$cgroup_effective" ] && cgroup_eff_json="\"$(_containerJsonEscape "$cgroup_effective")\""
+	local online_json="null"
+	[ -n "$online_cpus" ] && online_json="\"$(_containerJsonEscape "$online_cpus")\""
+	local numa_nodes_json="null"
+	[ -n "$numa_nodes" ] && numa_nodes_json="\"$(_containerJsonEscape "$numa_nodes")\""
+
+	if printf '{"pairId":%s,"nodeName":"%s","cpusAllowedList":"%s","cgroupEffectiveCpuset":%s,"cgroupHierarchy":"%s","onlineCpus":%s,"numaNodes":%s,"cpus":[%s]}\n' \
+		"${PAIR_ID:-0}" \
+		"$(_containerJsonEscape "$node_name")" \
+		"$(_containerJsonEscape "$cpus_allowed")" \
+		"$cgroup_eff_json" \
+		"$(_containerJsonEscape "$cgroup_hierarchy")" \
+		"$online_json" \
+		"$numa_nodes_json" \
+		"$cpu_entries" > "${target_file}.tmp" 2>/dev/null; then
+		mv -f "${target_file}.tmp" "$target_file" 2>/dev/null || rm -f "${target_file}.tmp" 2>/dev/null || true
+	fi
 }
 
 # Declares that this pair publishes its attributes per stage (see containerWriteStageAttributes).
@@ -695,6 +871,7 @@ function initSandbox {
 			sendStatusToLaterStages "$ERROR_RUNSCRIPT" 0
 			exit 0
 		fi
+		containerWriteCpuTopology || true
 	fi
 	if [ "$CONTAINER_MODE" = "true" ] && [ "${STAREXEC_FORCE_SANDBOX:-false}" != "true" ]; then
 		log "Container mode detected - using container as sandbox (no locking needed)"
