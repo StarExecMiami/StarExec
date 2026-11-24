@@ -3717,6 +3717,8 @@ public class KubernetesNativeBackend implements Backend {
         "watcher.out",
         "status.json",
         "stats.json",
+        "cpu-topology.json",
+        "cpu-topology.json.tmp",
     };
 
     private Path resolveOutputDirectory(Job job, int pairId) {
@@ -5542,6 +5544,9 @@ public class KubernetesNativeBackend implements Backend {
                 if (!persistAttributes(execution, pairId, stageNumber, attemptNo)) {
                     return releaseStaleExecution(execution, pairId, "attributes");
                 }
+
+                // Persist CPU topology and physical-core exclusivity attestation (#286)
+                persistCpuAttestation(execution, pairId, attemptNo);
             } catch (StageStatusSnapshots.InvalidSnapshotException e) {
                 // No usable stage identity, so nothing was written and nothing will be. The
                 // pair keeps its non-terminal status and its output stays on the PVC.
@@ -6575,6 +6580,23 @@ public class KubernetesNativeBackend implements Backend {
                 }
             }
             return true;
+        }
+
+        private void persistCpuAttestation(
+            ExecutionRef execution,
+            int pairId,
+            Integer attemptNo
+        ) {
+            Path outputDir = ownedOutputDir(execution);
+            String fallbackNode =
+                jobMonitor != null ? jobMonitor.getRecordedNodeName(execution) : null;
+            if (jobMonitor != null) {
+                jobMonitor.ingestCpuAttestation(
+                    outputDir, pairId, attemptNo, fallbackNode, strictOnePairPerCpu, cpuLimit);
+            } else {
+                KubernetesCpuAttestation.recordAttemptCpuAttestation(
+                    outputDir, pairId, attemptNo, fallbackNode, strictOnePairPerCpu, cpuLimit);
+            }
         }
 
         /** The legacy attributes.txt, parsed; empty when absent or unreadable. */

@@ -80,6 +80,7 @@ import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
 import io.fabric8.kubernetes.api.model.batch.v1.JobStatus;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -535,6 +536,26 @@ public class KubernetesJobMonitor {
         if (callback.onJobPlaced(execution, nodeName)) {
             recordedNodes.put(execution, nodeName);
         }
+    }
+
+    /** Returns the worker node name observed for {@code execution} while tracked, or {@code null}. */
+    public String getRecordedNodeName(ExecutionRef execution) {
+        return execution != null ? recordedNodes.get(execution) : null;
+    }
+
+    /**
+     * Evaluates {@code cpu-topology.json} in {@code outputDir} against the configured Kubernetes
+     * strict CPU contract and records the resulting attestation row fenced by attempt (#286).
+     */
+    public CpuAttestationRecord ingestCpuAttestation(
+            Path outputDir,
+            int pairId,
+            Integer attemptNo,
+            String fallbackNodeName,
+            boolean strictOnePairPerCpu,
+            String cpuLimit) {
+        return KubernetesCpuAttestation.recordAttemptCpuAttestation(
+                outputDir, pairId, attemptNo, fallbackNodeName, strictOnePairPerCpu, cpuLimit);
     }
 
     private void warnAboutStuckPod(
