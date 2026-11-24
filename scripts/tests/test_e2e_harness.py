@@ -89,6 +89,59 @@ class E2EHarnessTest(unittest.TestCase):
         failed = [r for r in verify_results if not r["ok"]]
         self.assertEqual(failed, [], f"Drifted endpoint citations: {failed}")
 
+    def test_verify_endpoints_falls_back_to_head_when_pinned_commit_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            sample = repo / "sample.txt"
+            sample.write_text("first line\nENDPOINT_NEEDLE_HERE\n", encoding="utf-8")
+            subprocess.run(["git", "add", "sample.txt"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "commit", "-m", "init"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+
+            missing_sha = "0" * 40
+            fake_registry = {
+                "resolved_at_commit": missing_sha,
+                "endpoints": {
+                    "sample_ep": {
+                        "method": "GET",
+                        "path": "/sample",
+                        "file": "sample.txt",
+                        "line": 2,
+                        "needle": "ENDPOINT_NEEDLE_HERE",
+                    }
+                },
+            }
+            orig_registry = ep._registry
+            try:
+                ep._registry = fake_registry
+                fallback_results = ep.verify(None, repo)
+                self.assertEqual(len(fallback_results), 1)
+                self.assertTrue(fallback_results[0]["ok"], fallback_results)
+                self.assertEqual(fallback_results[0]["commit"], "HEAD")
+
+                explicit_results = ep.verify(missing_sha, repo)
+                self.assertEqual(len(explicit_results), 1)
+                self.assertFalse(explicit_results[0]["ok"], explicit_results)
+            finally:
+                ep._registry = orig_registry
+
     def test_matrix_accounting_is_63_cells_and_never_promotes_blocked_or_cross_mode(self):
         self.assertEqual(len(e2e_matrix.CAPABILITY_ROWS), 21)
         self.assertEqual(len(e2e_matrix.BACKENDS), 3)

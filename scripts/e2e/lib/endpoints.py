@@ -56,11 +56,27 @@ def items():
 
 
 def verify(commit, repo):
-    """Verify citations at an explicit target commit, or their registry source commits by default."""
+    """Verify citations at an explicit target commit, or their registry source commits by default.
+
+    When ``commit`` is ``None`` and a pinned source commit is absent from a shallow clone,
+    falls back cleanly to ``"HEAD"`` instead of failing on missing history.
+    """
     results = []
     cache = {}
+    resolved_cache = {}
     for key, e in items():
-        target_commit = commit if commit is not None else source_commit(e)
+        if commit is not None:
+            target_commit = commit
+        else:
+            pinned = source_commit(e)
+            if pinned not in resolved_cache:
+                exists = subprocess.run(
+                    ["git", "-C", str(repo), "cat-file", "-e", f"{pinned}^{{commit}}"],
+                    capture_output=True,
+                    text=True,
+                )
+                resolved_cache[pinned] = pinned if exists.returncode == 0 else "HEAD"
+            target_commit = resolved_cache[pinned]
         f = e["file"]
         cache_key = (target_commit, f)
         if cache_key not in cache:

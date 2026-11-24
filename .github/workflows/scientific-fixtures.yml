@@ -25,6 +25,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Check wrapper and processor syntax and portability
         run: |
           sh -n scripts/scientific/starexec_run_E-3.3.3-sequential
