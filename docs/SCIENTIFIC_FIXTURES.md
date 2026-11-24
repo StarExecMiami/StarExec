@@ -3,8 +3,8 @@
 The E 3.3.3 recipe supplies a local, reviewable replacement candidate for the
 mislabeled legacy `E---3.3.0.zip` described in #288. It does not replace the
 qualification harness's fixtures automatically, restore the legacy CVC4 fixture
-in #141, or qualify a deployed backend. Processor provenance and TPTP/SZS
-validation remain separate work under #287.
+in #141, or qualify a deployed backend. Reproducible TPTP and SZS processors
+for #287 are documented below alongside the E 3.3.3 solver provenance.
 
 ## Common provenance schema
 
@@ -102,19 +102,96 @@ configuration name, runner image digest, CPU policy and runtime allocation
 evidence. The package manifest alone does not prove exclusive physical-core
 binding (#295, #291, #286).
 
+## TPTP benchmark processor (#287)
+
+[`tptp-benchmark-processor.lock.json`](../scripts/scientific/tptp-benchmark-processor.lock.json)
+pins upstream [TPTPWorld/TPTP4X](https://github.com/TPTPWorld/TPTP4X/tree/79a72402caf33b31b85ba043a42c47ecc2a15cb5)
+(`TPTP4X v8.1.0.1`, commit `79a72402caf33b31b85ba043a42c47ecc2a15cb5`, tarball
+SHA-256 `f12df911e457a1ac49069156591167901e6c938ab488d2a89171cc8315d9259c`) paired
+with [TPTPWorld/JJParser](https://github.com/TPTPWorld/JJParser/tree/b68947d144008b1dfcc4a28a7782b4aa358b58f2)
+(commit `b68947d144008b1dfcc4a28a7782b4aa358b58f2`, tarball SHA-256
+`dae534b44f0a7435fd95c86a0c4cdd1f55ebd53016723f5648a388667fe6487d`, GPL-3.0
+`LICENSE` SHA-256 `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986`).
+
+Build and verify locally against cached upstream tarballs:
+
+```bash
+python3 scripts/scientific/build_tptp_processor.py \
+  --tptp4x-source /path/to/tptp4x.tar.gz \
+  --jjparser-source /path/to/jjparser.tar.gz \
+  --build-dir target/tptp4x-build-1 \
+  --output target/TPTPBenchmarkProcessor.zip
+
+python3 scripts/scientific/verify_fixtures.py \
+  --archive target/TPTPBenchmarkProcessor.zip \
+  --lock scripts/scientific/tptp-benchmark-processor.lock.json
+```
+
+### TPTP validation & extraction contract
+
+- Rejects empty files, NUL bytes, comment-only inputs with zero parsed statements,
+  missing/non-executable `bin/tptp4X`, and any file rejected by `tptp4X -q2`
+  by emitting `starexec-valid=false` and `starexec-validation-error=...`.
+- Accepts valid `fof`, `cnf`, `tff`, `thf`, `tcf`, `tpi`, and `include(...)`
+  problems or axioms (`starexec-valid=true`).
+- Extracts `% Status : <val>` into both `Status=<val>` and
+  `starexec-expected-result=<val>`, plus `% SPC : <val>` into `SPC=<val>`.
+- Extracts active top-level `include(...)` targets into
+  `starexec-dependencies=<N>` and `starexec-dependency-1`..`N`, while rejecting
+  unsafe paths (leading `/`, `\`, `..`, empty, or whitespace segments).
+
+## SZS post-processor (#287)
+
+[`szs-post-processor.lock.json`](../scripts/scientific/szs-post-processor.lock.json)
+pins [`szs_post_processor.sh`](../scripts/scientific/szs_post_processor.sh), a
+pure POSIX `/bin/sh` (`grep`, `sed`, `tr`) post-processor engineered for the
+minimal Alpine `starexec-job-runner` container without Python or Perl.
+
+Build and verify `SZSPostProcessor.zip` locally with zero network access:
+
+```bash
+python3 scripts/scientific/build_szs_processor.py \
+  --output target/SZSPostProcessor.zip
+
+python3 scripts/scientific/verify_fixtures.py \
+  --archive target/SZSPostProcessor.zip \
+  --lock scripts/scientific/szs-post-processor.lock.json
+```
+
+### Formal SZS status & multi-line policy
+
+- **Canonical SZS vocabulary**: accepts standard SZS ontology tokens on
+  `% SZS status <Token> ...` lines (handling CR/LF and trailing `for <Problem>`).
+- **Missing SZS status (`0` lines)**: emits `starexec-result=starexec-unknown`
+  and `szs-multi-status-policy=consistent`, matching StarExec's unknown result
+  convention.
+- **Identical repeated SZS status (`>=1` matching lines)**: emits
+  `starexec-result=<Status>` and `szs-multi-status-policy=consistent`.
+- **Conflicting SZS status lines (e.g. `Theorem` and `CounterSatisfiable`)**:
+  never silently lets the last line overwrite earlier results; emits
+  `starexec-result=Error`, `szs-multi-status-policy=conflict`, and comma-joined
+  `szs-observed-statuses=<...>`.
+- **Unrecognized/empty status token**: emits `starexec-result=Error` and
+  `szs-multi-status-policy=invalid`.
+- **SZS output blocks**: records `szs-has-output`, `szs-output-balanced`, and
+  `szs-output-types` from `% SZS output start/end` markers.
+
 ## Verification and remaining gates
 
 ```bash
 python3 scripts/scientific/verify_fixtures.py
 python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
-sh -n scripts/scientific/starexec_run_E-3.3.3-sequential
-shellcheck -s sh scripts/scientific/starexec_run_E-3.3.3-sequential
+sh -n scripts/scientific/starexec_run_E-3.3.3-sequential scripts/scientific/tptp_benchmark_processor.sh scripts/scientific/szs_post_processor.sh
+shellcheck -s sh scripts/scientific/starexec_run_E-3.3.3-sequential scripts/scientific/tptp_benchmark_processor.sh scripts/scientific/szs_post_processor.sh
 ```
 
-Offline tooling checks use a stub executable to verify argument handling,
-`Axioms/` fallback behavior, inherited affinity, manifest verification, and
-exit codes; they do not compile E or qualify deployed backends.
+Offline tooling checks verify argument handling, `Axioms/` fallback behavior,
+inherited affinity, TPTP syntax/include rejection, SZS multi-line conflict
+handling, manifest verification, and exit codes; they do not compile E or
+`tptp4X` from remote downloads in CI or qualify deployed backends.
 
-Deployed E2E qualification on Local, Podman, and Kubernetes (comparing SZS
-status, certificates, limits, CPU affinity, and effective solver hashes through
-upload, scheduling, ingestion, and download) remains tracked under #288 and #293.
+Deployed E2E qualification on Local, Podman, and Kubernetes (including compiled
+`tptp4X` inside uploaded `TPTPBenchmarkProcessor.zip` and `SZSPostProcessor.zip`
+running inside `starexec-job-runner`, comparing SZS status, certificates,
+limits, CPU affinity, and effective solver hashes through upload, scheduling,
+ingestion, and download) remains tracked under #288, #287, and #293.

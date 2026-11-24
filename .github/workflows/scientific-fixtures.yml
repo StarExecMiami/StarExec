@@ -5,14 +5,12 @@ on:
     paths:
       - '.github/workflows/scientific-fixtures.yml'
       - 'scripts/scientific/**'
-      - 'scripts/tests/test_eprover_fixture.py'
-      - 'scripts/tests/test_verify_fixtures.py'
+      - 'scripts/tests/test_*.py'
   pull_request:
     paths:
       - '.github/workflows/scientific-fixtures.yml'
       - 'scripts/scientific/**'
-      - 'scripts/tests/test_eprover_fixture.py'
-      - 'scripts/tests/test_verify_fixtures.py'
+      - 'scripts/tests/test_*.py'
   workflow_dispatch:
 
 permissions:
@@ -25,13 +23,16 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Check wrapper syntax and portability
+      - name: Check wrapper and processor syntax and portability
         run: |
           sh -n scripts/scientific/starexec_run_E-3.3.3-sequential
           shellcheck -s sh scripts/scientific/starexec_run_E-3.3.3-sequential
+          sh -n scripts/scientific/tptp_benchmark_processor.sh
+          shellcheck -s sh scripts/scientific/tptp_benchmark_processor.sh
+          sh -n scripts/scientific/szs_post_processor.sh
+          shellcheck -s sh scripts/scientific/szs_post_processor.sh
       - name: Verify tracked fixture lockfiles and provenance schema
         run: python3 scripts/scientific/verify_fixtures.py
-      - name: Check source validation, verifier, packaging and wrapper behavior
+      - name: Check source validation, verifier, packaging, wrapper, and processor behavior
         run: |
-          python3 -m unittest discover -s scripts/tests -p 'test_eprover_fixture.py' -v
-          python3 -m unittest discover -s scripts/tests -p 'test_verify_fixtures.py' -v
+          python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v

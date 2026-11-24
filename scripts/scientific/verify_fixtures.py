@@ -108,9 +108,62 @@ def validate_lock_data(lock, repo_root=None):
         url = lock["sourceUrl"]
         if not isinstance(url, str) or not url.startswith("https://"):
             raise ValueError("sourceUrl must use https://")
+    if "jjparserSha256" in lock:
+        validate_sha256_hex(lock.get("jjparserSha256"), "jjparserSha256")
+    if "jjparserUrl" in lock:
+        jurl = lock["jjparserUrl"]
+        if not isinstance(jurl, str) or not jurl.startswith("https://"):
+            raise ValueError("jjparserUrl must use https://")
+    if "jjparserRoot" in lock:
+        validate_relative_posix_path(lock["jjparserRoot"], single_component=True)
+    if "processorScript" in lock:
+        validate_relative_posix_path(lock["processorScript"])
+        if repo_root is not None:
+            verify_regular_file(Path(repo_root) / lock["processorScript"])
+    if "sources" in lock:
+        validate_repo_sources_block(lock, repo_root=repo_root)
     if "fixtures" in lock:
         validate_repo_fixtures_block(lock, repo_root=repo_root)
     return lock
+
+
+def canonical_sources_digest(sources):
+    canonical = {
+        name: {
+            "source": sources[name]["source"],
+            "sha256": sources[name]["sha256"],
+            "size": sources[name]["size"],
+            "executable": bool(sources[name]["executable"]),
+        }
+        for name in sorted(sources)
+    }
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return sha256_bytes(encoded)
+
+
+def validate_repo_sources_block(lock, repo_root=None):
+    sources = lock.get("sources")
+    if not isinstance(sources, dict) or not sources:
+        raise ValueError("sources must be a non-empty JSON object")
+    for member_name, meta in sources.items():
+        validate_relative_posix_path(member_name)
+        if not isinstance(meta, dict):
+            raise ValueError(f"Invalid source metadata for {member_name}")
+        validate_relative_posix_path(meta.get("source"))
+        validate_sha256_hex(meta.get("sha256"), f"sources[{member_name!r}].sha256")
+        size = meta.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise ValueError(f"Invalid source size for {member_name}")
+        if not isinstance(meta.get("executable"), bool):
+            raise ValueError(f"executable flag must be boolean for {member_name}")
+        if repo_root is not None:
+            src_path = Path(repo_root) / meta["source"]
+            _, raw = verify_regular_file(src_path, expected_sha256=meta["sha256"])
+            if len(raw) != size:
+                raise ValueError(f"Source file size mismatch for {meta['source']}")
+    expected_agg = canonical_sources_digest(sources)
+    if lock.get("sourceSha256") != expected_agg:
+        raise ValueError(f"Aggregate sourceSha256 mismatch: expected {expected_agg}, got {lock.get('sourceSha256')}")
 
 
 def canonical_repo_sources_digest(fixtures):
