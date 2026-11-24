@@ -13,6 +13,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -1065,6 +1067,83 @@ public class Uploads {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);
+		}
+	}
+
+	/**
+	 * Incomplete legacy uploads may only be deleted manually after 1 hour so active
+	 * legacy uploads are never removed while in flight.
+	 */
+	public static boolean isLegacyUploadEligibleForDeletion(BenchmarkUploadStatus status) {
+		if (status == null) {
+			return false;
+		}
+		if (status.isEverythingComplete()) {
+			return true;
+		}
+		return status.getUploadDate() != null
+			&& !status.getUploadDate().toInstant().isAfter(Instant.now().minus(Duration.ofHours(1)));
+	}
+
+	public static boolean deleteLegacyUpload(int statusId) {
+		try (Connection con = Common.getConnection()) {
+			return deleteLegacyUpload(con, statusId);
+		} catch (SQLException e) {
+			log.error("deleteLegacyUpload", "Failed to delete legacy upload status " + statusId, e);
+			return false;
+		}
+	}
+
+	public static boolean deleteLegacyUpload(Connection con, int statusId) throws SQLException {
+		final String sql =
+			"DELETE FROM starexec.benchmark_uploads " +
+			"WHERE id = ? " +
+			"  AND (everything_complete = TRUE OR upload_time <= CURRENT_TIMESTAMP - INTERVAL '1 hour')";
+		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			ps.setInt(1, statusId);
+			return ps.executeUpdate() > 0;
+		}
+	}
+
+	public static int clearEligibleLegacyUploadsForUser(int userId) {
+		try (Connection con = Common.getConnection()) {
+			return clearEligibleLegacyUploadsForUser(con, userId);
+		} catch (SQLException e) {
+			log.error("clearEligibleLegacyUploadsForUser", "Failed to clear legacy uploads for user " + userId, e);
+			return -1;
+		}
+	}
+
+	public static int clearEligibleLegacyUploadsForUser(Connection con, int userId) throws SQLException {
+		final String sql =
+			"DELETE FROM starexec.benchmark_uploads " +
+			"WHERE user_id = ? " +
+			"  AND (everything_complete = TRUE OR upload_time <= CURRENT_TIMESTAMP - INTERVAL '1 hour')";
+		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			ps.setInt(1, userId);
+			return ps.executeUpdate();
+		}
+	}
+
+	public static int purgeExpiredLegacyUploads(Connection con, int retentionDays, int batchSize)
+		throws SQLException {
+		if (retentionDays <= 0 || batchSize <= 0) {
+			return 0;
+		}
+		final String sql =
+			"WITH doomed AS (" +
+			"  SELECT id FROM starexec.benchmark_uploads " +
+			"  WHERE upload_time < CURRENT_TIMESTAMP - (? * INTERVAL '1 day') " +
+			"    AND (everything_complete = TRUE OR upload_time <= CURRENT_TIMESTAMP - INTERVAL '1 hour') " +
+			"  ORDER BY upload_time ASC, id ASC " +
+			"  LIMIT ?" +
+			") " +
+			"DELETE FROM starexec.benchmark_uploads bu " +
+			"USING doomed WHERE bu.id = doomed.id";
+		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			ps.setInt(1, retentionDays);
+			ps.setInt(2, batchSize);
+			return ps.executeUpdate();
 		}
 	}
 }

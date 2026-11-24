@@ -5,6 +5,7 @@ import org.starexec.config.EnvironmentConfig;
 import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.to.UploadArtifact;
 import org.starexec.data.to.UploadJob;
+import org.starexec.servlets.UploadArtifactCleanupWorker;
 import org.starexec.util.UploadArtifactPathGuard;
 
 import java.io.IOException;
@@ -96,6 +97,22 @@ public class UploadJobQueue {
     
     private static final String GET_USER_JOBS_SQL = 
         "SELECT * FROM upload_jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?";
+
+    private static final String GET_TERMINAL_JOB_IDS_BY_USER_SQL =
+        "SELECT id FROM starexec.upload_jobs " +
+        "WHERE user_id = ? AND status IN ('COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED', 'CANCELLED') " +
+        "ORDER BY id ASC";
+
+    private static final String DELETE_TERMINAL_JOB_SQL =
+        "DELETE FROM starexec.upload_jobs uj " +
+        "WHERE uj.id = ? " +
+        "  AND uj.status IN ('COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED', 'CANCELLED') " +
+        "  AND NOT EXISTS (" +
+        "    SELECT 1 FROM starexec.upload_artifacts ua " +
+        "    WHERE ua.job_id = uj.id " +
+        "      AND ua.deleted_at IS NULL " +
+        "      AND ua.cleanup_state NOT IN ('DELETED', 'MISSING')" +
+        "  )";
     
     private static final String RETRY_JOB_SQL =
         "UPDATE upload_jobs " +
@@ -922,5 +939,124 @@ public class UploadJobQueue {
         job.setExtractPath(rs.getString("extract_path"));
         job.setCancelRequested(rs.getBoolean("cancel_requested"));
         return job;
+    }
+
+    /**
+     * Outcome of deleting a single upload history entry after PVC artifact cleanup.
+     */
+    public enum DeleteOutcome {
+        DELETED,
+        NOT_FOUND,
+        ACTIVE_UPLOAD,
+        PVC_CLEANUP_FAILED,
+        DB_ERROR
+    }
+
+    /**
+     * Summary for clearing all eligible terminal async upload jobs of a user.
+     */
+    public static final class ClearUserJobsResult {
+        private final int deletedCount;
+        private final int failedPvcCount;
+
+        public ClearUserJobsResult(int deletedCount, int failedPvcCount) {
+            this.deletedCount = deletedCount;
+            this.failedPvcCount = failedPvcCount;
+        }
+
+        public int getDeletedCount() {
+            return deletedCount;
+        }
+
+        public int getFailedPvcCount() {
+            return failedPvcCount;
+        }
+    }
+
+    public static DeleteOutcome deleteTerminalJob(long jobId) {
+        UploadArtifactPathGuard guard = createPathGuardOrNull();
+        try (Connection con = Common.getConnection()) {
+            return deleteTerminalJob(con, jobId, guard);
+        } catch (SQLException e) {
+            log.error("deleteTerminalJob", "Failed to delete upload job " + jobId, e);
+            return DeleteOutcome.DB_ERROR;
+        }
+    }
+
+    public static DeleteOutcome deleteTerminalJob(Connection con, long jobId, UploadArtifactPathGuard guard)
+        throws SQLException {
+        String status = null;
+        try (PreparedStatement ps = con.prepareStatement("SELECT status FROM starexec.upload_jobs WHERE id = ?")) {
+            ps.setLong(1, jobId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    status = rs.getString(1);
+                }
+            }
+        }
+        if (status == null) {
+            return DeleteOutcome.NOT_FOUND;
+        }
+        if (!isTerminalStatus(status)) {
+            return DeleteOutcome.ACTIVE_UPLOAD;
+        }
+        if (!UploadArtifactCleanupWorker.cleanArtifactsForJob(con, jobId, guard)) {
+            return DeleteOutcome.PVC_CLEANUP_FAILED;
+        }
+        try (PreparedStatement ps = con.prepareStatement(DELETE_TERMINAL_JOB_SQL)) {
+            ps.setLong(1, jobId);
+            return ps.executeUpdate() > 0 ? DeleteOutcome.DELETED : DeleteOutcome.PVC_CLEANUP_FAILED;
+        }
+    }
+
+    public static ClearUserJobsResult clearTerminalJobsForUser(int userId) {
+        UploadArtifactPathGuard guard = createPathGuardOrNull();
+        try (Connection con = Common.getConnection()) {
+            return clearTerminalJobsForUser(con, userId, guard);
+        } catch (SQLException e) {
+            log.error("clearTerminalJobsForUser", "Failed to clear terminal upload jobs for user " + userId, e);
+            return new ClearUserJobsResult(0, 1);
+        }
+    }
+
+    public static ClearUserJobsResult clearTerminalJobsForUser(Connection con, int userId, UploadArtifactPathGuard guard)
+        throws SQLException {
+        List<Long> jobIds = new ArrayList<>();
+        try (PreparedStatement ps = con.prepareStatement(GET_TERMINAL_JOB_IDS_BY_USER_SQL)) {
+            ps.setInt(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    jobIds.add(rs.getLong(1));
+                }
+            }
+        }
+
+        int deleted = 0;
+        int failedPvc = 0;
+        for (long jobId : jobIds) {
+            DeleteOutcome outcome = deleteTerminalJob(con, jobId, guard);
+            if (outcome == DeleteOutcome.DELETED) {
+                deleted++;
+            } else if (outcome == DeleteOutcome.PVC_CLEANUP_FAILED) {
+                failedPvc++;
+            }
+        }
+        return new ClearUserJobsResult(deleted, failedPvc);
+    }
+
+    private static boolean isTerminalStatus(String status) {
+        return "COMPLETED".equals(status)
+            || "COMPLETED_WITH_ERRORS".equals(status)
+            || "FAILED".equals(status)
+            || "CANCELLED".equals(status);
+    }
+
+    private static UploadArtifactPathGuard createPathGuardOrNull() {
+        try {
+            return new UploadArtifactPathGuard();
+        } catch (IOException e) {
+            log.warn("createPathGuardOrNull", "UploadArtifactPathGuard unavailable: " + e.getMessage());
+            return null;
+        }
     }
 }

@@ -62,6 +62,46 @@ public class UploadArtifactCleanupRepository {
         "UPDATE starexec.upload_artifacts SET cleanup_state = ?, last_delete_error = ?, " +
         "updated_at = CURRENT_TIMESTAMP WHERE id = ?";
 
+    private static final String CLAIM_ARTIFACTS_FOR_JOB_SQL =
+        "WITH candidates AS (" +
+        "  SELECT ua.id FROM starexec.upload_artifacts ua " +
+        "  JOIN starexec.upload_jobs uj ON uj.id = ua.job_id " +
+        "  WHERE ua.job_id = ? " +
+        "    AND ua.deleted_at IS NULL " +
+        "    AND ua.cleanup_state NOT IN ('DELETED', 'MISSING') " +
+        "    AND (ua.cleanup_state <> 'DELETING' " +
+        "         OR ua.last_delete_attempt_at IS NULL " +
+        "         OR ua.last_delete_attempt_at < CURRENT_TIMESTAMP - INTERVAL '15 minutes') " +
+        "    AND uj.status IN ('COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED', 'CANCELLED') " +
+        "  ORDER BY ua.id ASC " +
+        "  FOR UPDATE OF ua SKIP LOCKED" +
+        ") " +
+        "UPDATE starexec.upload_artifacts ua " +
+        "SET cleanup_state = 'DELETING', last_delete_attempt_at = CURRENT_TIMESTAMP, " +
+        "    delete_attempt_count = delete_attempt_count + 1, updated_at = CURRENT_TIMESTAMP " +
+        "FROM candidates WHERE ua.id = candidates.id RETURNING ua.*";
+
+    private static final String COUNT_UNCLEANED_ARTIFACTS_FOR_JOB_SQL =
+        "SELECT COUNT(*) FROM starexec.upload_artifacts " +
+        "WHERE job_id = ? AND deleted_at IS NULL AND cleanup_state NOT IN ('DELETED', 'MISSING')";
+
+    private static final String PURGE_EXPIRED_TERMINAL_UPLOAD_JOBS_SQL =
+        "WITH doomed AS (" +
+        "  SELECT uj.id FROM starexec.upload_jobs uj " +
+        "  WHERE uj.status IN ('COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED', 'CANCELLED') " +
+        "    AND COALESCE(uj.completed_at, uj.created_at) < CURRENT_TIMESTAMP - (? * INTERVAL '1 day') " +
+        "    AND NOT EXISTS (" +
+        "      SELECT 1 FROM starexec.upload_artifacts ua " +
+        "      WHERE ua.job_id = uj.id " +
+        "        AND ua.deleted_at IS NULL " +
+        "        AND ua.cleanup_state NOT IN ('DELETED', 'MISSING')" +
+        "    ) " +
+        "  ORDER BY COALESCE(uj.completed_at, uj.created_at) ASC, uj.id ASC " +
+        "  LIMIT ?" +
+        ") " +
+        "DELETE FROM starexec.upload_jobs uj " +
+        "USING doomed WHERE uj.id = doomed.id";
+
     private static final String ACTIVATE_SOURCE_ARCHIVE_RETENTION_SQL =
         "UPDATE starexec.upload_artifacts " +
         "SET retention_until = CURRENT_TIMESTAMP + (? * INTERVAL '1 hour'), " +
@@ -333,6 +373,44 @@ public class UploadArtifactCleanupRepository {
             ps.setString(2, truncate(error, 1000));
             ps.setLong(3, artifactId);
             ps.executeUpdate();
+        }
+    }
+
+    public static List<UploadArtifact> claimArtifactsForJob(Connection con, long jobId) throws SQLException {
+        List<UploadArtifact> artifacts = new ArrayList<>();
+        try (PreparedStatement ps = con.prepareStatement(CLAIM_ARTIFACTS_FOR_JOB_SQL)) {
+            ps.setLong(1, jobId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    artifacts.add(mapArtifact(rs));
+                }
+            }
+        }
+        return artifacts;
+    }
+
+    public static int countUncleanedArtifactsForJob(Connection con, long jobId) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(COUNT_UNCLEANED_ARTIFACTS_FOR_JOB_SQL)) {
+            ps.setLong(1, jobId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        }
+    }
+
+    /**
+     * Deletes expired terminal upload_jobs rows only when they have no remaining
+     * uncleaned upload_artifacts rows, avoiding orphaned PVC files on CASCADE delete.
+     */
+    public static int purgeExpiredTerminalUploadJobs(Connection con, int retentionDays, int batchSize)
+        throws SQLException {
+        if (retentionDays <= 0 || batchSize <= 0) {
+            return 0;
+        }
+        try (PreparedStatement ps = con.prepareStatement(PURGE_EXPIRED_TERMINAL_UPLOAD_JOBS_SQL)) {
+            ps.setInt(1, retentionDays);
+            ps.setInt(2, batchSize);
+            return ps.executeUpdate();
         }
     }
 

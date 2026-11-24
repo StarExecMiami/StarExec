@@ -324,6 +324,14 @@ public class EnvironmentConfig {
     }
 
     /**
+     * Number of days to keep terminal upload history rows whose PVC artifacts
+     * have already been cleaned. {@code 0} disables automatic history pruning.
+     */
+    public static int getUploadHistoryRetentionDays() {
+        return Math.max(0, getEnvInt("STAREXEC_UPLOAD_HISTORY_RETENTION_DAYS", 30));
+    }
+
+    /**
      * Enables or disables live SSE streaming for job pair logs.
      */
     public static boolean isPairLogStreamEnabled() {
