@@ -34,7 +34,7 @@ public class UploadArtifactCleanupWorker implements Runnable {
         this(batchSize, pathGuard, 0);
     }
 
-    UploadArtifactCleanupWorker(int batchSize, UploadArtifactPathGuard pathGuard, int historyRetentionDays) {
+    protected UploadArtifactCleanupWorker(int batchSize, UploadArtifactPathGuard pathGuard, int historyRetentionDays) {
         this.batchSize = Math.max(1, batchSize);
         this.pathGuard = pathGuard;
         this.historyRetentionDays = Math.max(0, historyRetentionDays);
@@ -58,7 +58,7 @@ public class UploadArtifactCleanupWorker implements Runnable {
         }
     }
 
-    CleanupSummary runSweep(Connection con) throws SQLException {
+    protected CleanupSummary runSweep(Connection con) throws SQLException {
         List<UploadArtifact> artifacts = UploadArtifactCleanupRepository.claimDueArtifacts(con, batchSize);
         CleanupSummary summary = new CleanupSummary();
         summary.claimed = artifacts.size();
@@ -169,7 +169,7 @@ public class UploadArtifactCleanupWorker implements Runnable {
         }
     }
 
-    static class CleanupSummary {
+    public static class CleanupSummary {
         int claimed;
         int deleted;
         int missing;

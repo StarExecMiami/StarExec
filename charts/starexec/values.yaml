@@ -35,6 +35,11 @@ nodeSelector: {}
 dataDir: "/app/data"
 sandboxDir: "/app/sandbox"
 
+# Upload history DB retention once staged PVC artifacts have been cleaned.
+# Set to 0 to disable automatic background purging of terminal upload history.
+uploads:
+  historyRetentionDays: 30
+
 # ============================================================================
 # BACKEND CONFIGURATION
 # ============================================================================

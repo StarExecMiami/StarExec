@@ -300,6 +300,8 @@ spec:
               value: "/app/data"
             - name: STAREXEC_UPLOAD_STAGING_DIR
               value: "/var/lib/starexec/uploads-private"
+            - name: STAREXEC_UPLOAD_HISTORY_RETENTION_DAYS
+              value: {{ if and .Values.uploads (hasKey .Values.uploads "historyRetentionDays") }}{{ .Values.uploads.historyRetentionDays | quote }}{{ else }}"30"{{ end }}
             - name: STAREXEC_SANDBOX_DIR
               value: "/app/sandbox"
             - name: STAREXEC_LOCAL_CONCURRENCY
