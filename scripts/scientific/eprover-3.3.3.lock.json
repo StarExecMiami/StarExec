@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "version": "3.3.3",
+  "expectedVersionOutput": "E 3.3.3-ho Countess Grey (37fde70d516b57cb64294f8fe39bc16ece8198f8)",
+  "sourceCommit": "627ec5a90dd46da1a837232dc268d6ca2239e2fb",
+  "sourceDateEpoch": 1779470356,
+  "sourceUrl": "https://api.github.com/repos/eprover/eprover/tarball/627ec5a90dd46da1a837232dc268d6ca2239e2fb",
+  "sourceSha256": "6fe63591e36ef61478211376f3cb4021ab33a4c279566123a00aec3eccd8b167",
+  "sourceRoot": "eprover-eprover-627ec5a",
+  "copyingSha256": "691457d152914b339ea7ea591e1a684eca15f29bdedcbe4fc979474440c3920d",
+  "upstreamEmbeddedCommit": "37fde70d516b57cb64294f8fe39bc16ece8198f8",
+  "configuration": "E-3.3.3-sequential",
+  "solverWorkers": 1
+}

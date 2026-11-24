@@ -1,0 +1,38 @@
+#!/bin/sh
+# StarExec supplies the benchmark path, then an optional output directory.
+set -eu
+
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || [ ! -f "$1" ]; then
+    printf '%s\n' 'Expected a benchmark file and an optional output directory.' >&2
+    exit 64
+fi
+
+cpu_limit=${STAREXEC_CPU_LIMIT:-}
+case "$cpu_limit" in
+    ''|*[!0-9]*|0*)
+        printf '%s\n' 'STAREXEC_CPU_LIMIT must be a positive decimal integer.' >&2
+        exit 64
+        ;;
+esac
+if [ "${#cpu_limit}" -gt 9 ]; then
+    printf '%s\n' 'STAREXEC_CPU_LIMIT exceeds the supported range.' >&2
+    exit 64
+fi
+
+# Preserve a configured TPTP root; otherwise locate an ancestor holding Axioms/.
+if [ -z "${TPTP:-}" ]; then
+    search_dir=$(CDPATH='' cd -- "$(dirname -- "$1")" && pwd -P)
+    while [ "$search_dir" != / ]; do
+        if [ -d "$search_dir/Axioms" ] && [ ! -L "$search_dir/Axioms" ]; then
+            TPTP=$search_dir
+            export TPTP
+            break
+        fi
+        search_dir=$(dirname -- "$search_dir")
+    done
+fi
+
+solver_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+# Inherit the runner's affinity and resource limits; never broaden them here.
+exec "$solver_dir/eprover-ho" --auto-schedule=1 --proof-object \
+    --print-statistics --print-version --cpu-limit="$cpu_limit" -- "$1"
