@@ -494,6 +494,82 @@ pipeline {
             }
         }
 
+        // =======================================================================
+        stage('Deployed E2E Matrix (Kubernetes)') {
+        // =======================================================================
+            when {
+                expression { !params.SKIP_DEPLOY && env.IS_PR != 'true' }
+            }
+            steps {
+                script {
+                    def matrixMode = (params.DEPLOY_ENV == 'prod') ? 'upgrade' : 'fresh'
+                    sh """
+                        set -eu
+                        TMP_E2E=\$(mktemp -d /tmp/starexec-k8s-e2e-XXXXXX)
+                        trap 'rm -rf "\${TMP_E2E}"' EXIT
+
+                        mkdir -p target/e2e-reports/kubernetes
+                        python3 -m venv "\${TMP_E2E}/venv"
+                        "\${TMP_E2E}/venv/bin/pip" install --quiet requests bcrypt
+
+                        "\${TMP_E2E}/venv/bin/python" scripts/e2e/run.py --verify-endpoints --commit "${env.GIT_SHA}"
+                        "\${TMP_E2E}/venv/bin/python" scripts/e2e/run.py --fixtures-only --fixture-mode reproducible-offline
+
+                        if [ "${params.DEPLOY_ENV}" = "prod" ] || [ "${env.K8S_NAMESPACE}" = "starexec" ]; then
+                            echo "Refusing mutating E2E password-reset checks against production namespace ${env.K8S_NAMESPACE}; recording BLOCKED matrix report."
+                            set +e
+                            "\${TMP_E2E}/venv/bin/python" scripts/e2e/run.py \\
+                                --record-blocked \\
+                                --backend kubernetes \\
+                                --mode "${matrixMode}" \\
+                                --commit "${env.GIT_SHA}" \\
+                                --reason "disposable sq-* guard forbids E2E account mutation on production namespace" \\
+                                --matrix-out target/e2e-reports/kubernetes
+                            RC=\$?
+                            set -e
+                            test "\${RC}" -eq 2
+                            exit 0
+                        fi
+
+                        SHORT_SHA=\$(printf '%s' "${env.GIT_SHA}" | cut -c1-8)
+                        cat > "\${TMP_E2E}/k8s-e2e-config.json" <<EOF
+                        {
+                          "backend": "kubernetes",
+                          "mode": "${matrixMode}",
+                          "fixture_mode": "reproducible-offline",
+                          "base_url": "${env.APP_URL}",
+                          "deployment_name": "sq-\${SHORT_SHA}-k8s",
+                          "db_exec": ["microk8s", "kubectl", "exec", "-i", "-n", "${env.K8S_NAMESPACE}", "deploy/${env.HELM_RELEASE}", "-c", "postgres", "--", "psql", "-U", "starexec", "-d", "starexec", "-X", "-qAt", "-v", "ON_ERROR_STOP=1"],
+                          "app_exec": ["microk8s", "kubectl", "exec", "-i", "-n", "${env.K8S_NAMESPACE}", "deploy/${env.HELM_RELEASE}", "-c", "app", "--"],
+                          "app_data_root": "/app/data",
+                          "queue_id": "auto",
+                          "commit": "${env.GIT_SHA}",
+                          "image": "${env.PUBLISHED_IMAGE}",
+                          "image_digest": "${env.DEPLOY_IMAGE_DIGEST}",
+                          "report_dir": "\${PWD}/target/e2e-reports/kubernetes",
+                          "allowed_hosts": ["quokka.acorn.miami.edu"],
+                          "admin_user_id": 1,
+                          "enable_browser": false,
+                          "timeouts": {"upload": 300, "job": 1200, "pause": 120, "kill": 120, "dispatch": 180, "smtp": 60}
+                        }
+                        EOF
+
+                        "\${TMP_E2E}/venv/bin/python" scripts/e2e/run.py \\
+                            --config "\${TMP_E2E}/k8s-e2e-config.json" \\
+                            --backend kubernetes \\
+                            --mode "${matrixMode}" \\
+                            --image-digest "${env.DEPLOY_IMAGE_DIGEST}" \\
+                            --matrix-out target/e2e-reports/kubernetes
+                    """
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'target/e2e-reports/kubernetes/**', allowEmptyArchive: true
+                }
+            }
+        }
+
     } // end stages
 
 

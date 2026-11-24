@@ -190,8 +190,8 @@ inherited affinity, TPTP syntax/include rejection, SZS multi-line conflict
 handling, manifest verification, and exit codes; they do not compile E or
 `tptp4X` from remote downloads in CI or qualify deployed backends.
 
-Deployed E2E qualification on Local, Podman, and Kubernetes (including compiled
-`tptp4X` inside uploaded `TPTPBenchmarkProcessor.zip` and `SZSPostProcessor.zip`
-running inside `starexec-job-runner`, comparing SZS status, certificates,
-limits, CPU affinity, and effective solver hashes through upload, scheduling,
-ingestion, and download) remains tracked under #288, #287, and #293.
+Deployed E2E qualification on Local, Podman, and Kubernetes is orchestrated by
+the 63-cell acceptance harness documented in [`docs/E2E_MATRIX.md`](E2E_MATRIX.md),
+consuming `SZSPostProcessor.zip`, `TPTPBenchmarkProcessor.zip`,
+`E-3.3.3-sequential.zip`, and the `#141` fixtures reproducibly across #288,
+#287, #141, and #293.

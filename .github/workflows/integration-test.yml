@@ -5,9 +5,13 @@ on:
     branches: [UMprod, dev, containerised]
     paths:
       - "starexec-app/**"
+      - "scripts/e2e/**"
+      - "scripts/scientific/**"
       - "docker-compose.yml"
+      - "docker-compose.podman.yml"
       - "Dockerfile"
       - "docker/migrations.sh"
+      - "docker/job-runner.Dockerfile"
       - "pom.xml"
       - ".github/scripts/mvn_retry.py"
       - ".github/workflows/integration-test.yml"
@@ -15,9 +19,13 @@ on:
     branches: [UMprod, dev, containerised]
     paths:
       - "starexec-app/**"
+      - "scripts/e2e/**"
+      - "scripts/scientific/**"
       - "docker-compose.yml"
+      - "docker-compose.podman.yml"
       - "Dockerfile"
       - "docker/migrations.sh"
+      - "docker/job-runner.Dockerfile"
       - "pom.xml"
       - ".github/scripts/mvn_retry.py"
       - ".github/workflows/integration-test.yml"
@@ -317,6 +325,69 @@ jobs:
           echo ""
           echo "✓ All integration tests completed successfully"
 
+      - name: Run deployed E2E matrix checks (LocalBackend, fresh)
+        run: |
+          set -euo pipefail
+          TMP_E2E=$(mktemp -d /tmp/starexec-e2e-local-XXXXXX)
+          trap 'rm -rf "$TMP_E2E"' EXIT
+          python3 -m venv "$TMP_E2E/venv"
+          "$TMP_E2E/venv/bin/pip" install --quiet requests bcrypt
+
+          "$TMP_E2E/venv/bin/python" scripts/e2e/run.py --verify-endpoints --commit "${{ github.sha }}"
+          "$TMP_E2E/venv/bin/python" scripts/e2e/run.py --fixtures-only --fixture-mode reproducible-offline
+
+          APP_IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "ghcr.io/starexecmiami/starexec:${{ github.sha }}" 2>/dev/null || docker image inspect --format='{{.Id}}' "ghcr.io/starexecmiami/starexec:${{ github.sha }}")
+          SHORT_SHA=$(printf '%s' "${{ github.sha }}" | cut -c1-8)
+          cat > "$TMP_E2E/local-e2e-config.json" <<EOF
+          {
+            "backend": "local",
+            "mode": "fresh",
+            "fixture_mode": "reproducible-offline",
+            "base_url": "http://127.0.0.1:8080/starexec",
+            "deployment_name": "sq-${SHORT_SHA}-loc",
+            "db_exec": ["docker", "exec", "-i", "starexec-postgres", "psql", "-U", "starexec", "-d", "starexec", "-X", "-qAt", "-v", "ON_ERROR_STOP=1"],
+            "app_exec": ["docker", "exec", "-i", "starexec-app"],
+            "app_data_root": "/app/data",
+            "queue_id": "auto",
+            "commit": "${{ github.sha }}",
+            "image": "ghcr.io/starexecmiami/starexec:${{ github.sha }}",
+            "image_digest": "${APP_IMAGE_DIGEST}",
+            "report_dir": "$PWD/starexec-app/target/e2e-reports/local",
+            "allowed_hosts": [],
+            "admin_user_id": 1,
+            "enable_browser": false,
+            "timeouts": {"upload": 180, "job": 300, "pause": 60, "kill": 60, "dispatch": 120, "smtp": 30}
+          }
+          EOF
+
+          "$TMP_E2E/venv/bin/python" scripts/e2e/run.py \
+            --config "$TMP_E2E/local-e2e-config.json" \
+            --mode fresh \
+            --only 0,1,3,4,5,6,7,8,10,11 \
+            --matrix-out starexec-app/target/e2e-reports/local
+
+          python3 - <<'PY' "${{ github.sha }}"
+          import json, sys
+          sha = sys.argv[1]
+          with open("starexec-app/target/e2e-reports/local/matrix-report.json", encoding="utf-8") as fh:
+              report = json.load(fh)
+          assert report["commitSha"] == sha, report
+          assert report["mode"] == "fresh", report
+          assert report["matrixDenominator"] == 63, report
+          counts = report["countsByStatus"]
+          assert counts["FAIL"] == 0, report
+          assert counts["PASS"] > 0, report
+          print(f"Verified LocalBackend E2E matrix: PASS={counts['PASS']}, BLOCKED={counts['BLOCKED']}, SKIPPED={counts['SKIPPED']}, FAIL={counts['FAIL']}")
+          PY
+
+      - name: Upload LocalBackend E2E matrix artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-matrix-local
+          if-no-files-found: ignore
+          path: starexec-app/target/e2e-reports/local/
+
       - name: Set up Java for legacy TestSequence suite
         uses: actions/setup-java@v4
         with:
@@ -419,11 +490,130 @@ jobs:
           docker compose down -v --remove-orphans
           echo "✓ Cleanup complete"
 
-  # Job 3: Summary
+  # Job 3: PodmanBackend deployed E2E prerequisites and matrix gate
+  podman-e2e:
+    name: PodmanBackend E2E Matrix
+    runs-on: ubuntu-latest
+    needs: verify-migrations
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check Podman rootless prerequisites and execute or record BLOCKED matrix
+        run: |
+          set -euo pipefail
+          TMP_E2E=$(mktemp -d /tmp/starexec-e2e-podman-XXXXXX)
+          cleanup() {
+            docker compose -f docker-compose.yml -f docker-compose.podman.yml down -v --remove-orphans 2>/dev/null || true
+            rm -rf "$TMP_E2E"
+          }
+          trap cleanup EXIT
+
+          mkdir -p starexec-app/target/e2e-reports/podman
+          python3 -m venv "$TMP_E2E/venv"
+          "$TMP_E2E/venv/bin/pip" install --quiet requests bcrypt
+
+          "$TMP_E2E/venv/bin/python" scripts/e2e/run.py --verify-endpoints --commit "${{ github.sha }}"
+          "$TMP_E2E/venv/bin/python" scripts/e2e/run.py --fixtures-only --fixture-mode reproducible-offline
+
+          PODMAN_REASON=""
+          if ! command -v podman >/dev/null 2>&1; then
+            PODMAN_REASON="podman binary is not installed on runner"
+          elif ! grep -q "^$(id -un):" /etc/subuid 2>/dev/null; then
+            PODMAN_REASON="rootless subuid range unavailable for runner user"
+          elif ! podman info >/dev/null 2>&1; then
+            PODMAN_REASON="podman info failed on runner"
+          fi
+
+          if [ -z "$PODMAN_REASON" ]; then
+            SOCK_DIR="${XDG_RUNTIME_DIR:-/tmp/podman-run-$(id -u)}"
+            mkdir -p "$SOCK_DIR/podman"
+            PODMAN_SOCK="$SOCK_DIR/podman/podman.sock"
+            if [ ! -S "$PODMAN_SOCK" ]; then
+              podman system service --time=0 "unix://$PODMAN_SOCK" > "$TMP_E2E/podman-svc.log" 2>&1 &
+              for _ in $(seq 1 15); do
+                if [ -S "$PODMAN_SOCK" ]; then break; fi
+                sleep 1
+              done
+            fi
+            if [ ! -S "$PODMAN_SOCK" ]; then
+              PODMAN_REASON="rootless podman socket could not be started on runner"
+            elif ! podman build -t starexec/job-runner:latest -f docker/job-runner.Dockerfile . >/dev/null 2>&1; then
+              PODMAN_REASON="failed to build starexec/job-runner:latest under rootless podman"
+            fi
+          fi
+
+          if [ -n "$PODMAN_REASON" ]; then
+            echo "::warning::PodmanBackend E2E prerequisites unavailable: $PODMAN_REASON"
+            set +e
+            "$TMP_E2E/venv/bin/python" scripts/e2e/run.py \
+              --record-blocked \
+              --backend podman \
+              --mode fresh \
+              --commit "${{ github.sha }}" \
+              --reason "$PODMAN_REASON" \
+              --matrix-out starexec-app/target/e2e-reports/podman
+            RC=$?
+            set -e
+            test "$RC" -eq 2
+            exit 0
+          fi
+
+          docker build -t "ghcr.io/starexecmiami/starexec:ci-test-latest" -t "ghcr.io/starexecmiami/starexec:${{ github.sha }}" .
+          APP_IMAGE_DIGEST=$(docker image inspect --format='{{.Id}}' "ghcr.io/starexecmiami/starexec:${{ github.sha }}")
+          STAREXEC_DB_PASSWORD=ci_test_password_secure_12345 \
+          STAREXEC_VERSION=ci-test-latest \
+          VOLUME_PREFIX=starexec-podman-ci \
+          CONTAINER_SOCKET="$PODMAN_SOCK" \
+            docker compose -f docker-compose.yml -f docker-compose.podman.yml up -d
+
+          timeout 240 bash -c 'until [ "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/starexec/public/health/readiness)" = "200" ]; do sleep 3; done'
+
+          SHORT_SHA=$(printf '%s' "${{ github.sha }}" | cut -c1-8)
+          cat > "$TMP_E2E/podman-e2e-config.json" <<EOF
+          {
+            "backend": "podman",
+            "mode": "fresh",
+            "fixture_mode": "reproducible-offline",
+            "base_url": "http://127.0.0.1:8080/starexec",
+            "deployment_name": "sq-${SHORT_SHA}-pdm",
+            "db_exec": ["docker", "exec", "-i", "starexec-postgres", "psql", "-U", "starexec", "-d", "starexec", "-X", "-qAt", "-v", "ON_ERROR_STOP=1"],
+            "app_exec": ["docker", "exec", "-i", "starexec-app"],
+            "app_data_root": "/app/data",
+            "queue_id": "auto",
+            "commit": "${{ github.sha }}",
+            "image": "ghcr.io/starexecmiami/starexec:${{ github.sha }}",
+            "image_digest": "${APP_IMAGE_DIGEST}",
+            "report_dir": "$PWD/starexec-app/target/e2e-reports/podman",
+            "allowed_hosts": [],
+            "admin_user_id": 1,
+            "enable_browser": false,
+            "timeouts": {"upload": 180, "job": 300, "pause": 60, "kill": 60, "dispatch": 120, "smtp": 30}
+          }
+          EOF
+
+          "$TMP_E2E/venv/bin/python" scripts/e2e/run.py \
+            --config "$TMP_E2E/podman-e2e-config.json" \
+            --backend podman \
+            --mode fresh \
+            --only 0,1,3,4,5,6,7,8,10,11 \
+            --matrix-out starexec-app/target/e2e-reports/podman
+
+      - name: Upload PodmanBackend E2E matrix artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-matrix-podman
+          if-no-files-found: ignore
+          path: starexec-app/target/e2e-reports/podman/
+
+  # Job 4: Summary
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [verify-migrations, integration-test]
+    needs: [verify-migrations, integration-test, podman-e2e]
     if: always()
 
     steps:
@@ -431,20 +621,23 @@ jobs:
         run: |
           MIGRATIONS_RESULT="${{ needs.verify-migrations.result }}"
           INTEGRATION_RESULT="${{ needs.integration-test.result }}"
+          PODMAN_RESULT="${{ needs.podman-e2e.result }}"
 
-          if [ "$MIGRATIONS_RESULT" = "success" ] && [ "$INTEGRATION_RESULT" = "success" ]; then
+          if [ "$MIGRATIONS_RESULT" = "success" ] && [ "$INTEGRATION_RESULT" = "success" ] && [ "$PODMAN_RESULT" = "success" ]; then
             echo "## ✅ All Integration Tests Passed" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Migrations:** ✅ Verified and packaged correctly" >> $GITHUB_STEP_SUMMARY
-            echo "**Docker Compose:** ✅ Services started successfully" >> $GITHUB_STEP_SUMMARY
+            echo "**Docker Compose (LocalBackend + E2E):** ✅ Passed" >> $GITHUB_STEP_SUMMARY
+            echo "**PodmanBackend E2E Matrix:** ✅ Executed or recorded BLOCKED prereqs" >> $GITHUB_STEP_SUMMARY
             echo "**Credentials:** ✅ Properly redacted in logs" >> $GITHUB_STEP_SUMMARY
             echo "**Application:** ✅ Healthy and responding" >> $GITHUB_STEP_SUMMARY
             echo "**Database:** ✅ Migrations applied successfully" >> $GITHUB_STEP_SUMMARY
-          elif [ "$MIGRATIONS_RESULT" = "cancelled" ] || [ "$INTEGRATION_RESULT" = "cancelled" ]; then
+          elif [ "$MIGRATIONS_RESULT" = "cancelled" ] || [ "$INTEGRATION_RESULT" = "cancelled" ] || [ "$PODMAN_RESULT" = "cancelled" ]; then
             echo "## ⚠️ Integration Tests Cancelled" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Verify Migrations:** $MIGRATIONS_RESULT" >> $GITHUB_STEP_SUMMARY
             echo "**Integration Tests:** $INTEGRATION_RESULT" >> $GITHUB_STEP_SUMMARY
+            echo "**Podman E2E Matrix:** $PODMAN_RESULT" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "This run was superseded by a newer run. No action needed." >> $GITHUB_STEP_SUMMARY
           else
@@ -452,6 +645,7 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Verify Migrations:** $MIGRATIONS_RESULT" >> $GITHUB_STEP_SUMMARY
             echo "**Integration Tests:** $INTEGRATION_RESULT" >> $GITHUB_STEP_SUMMARY
+            echo "**Podman E2E Matrix:** $PODMAN_RESULT" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "See job logs above for details." >> $GITHUB_STEP_SUMMARY
             exit 1

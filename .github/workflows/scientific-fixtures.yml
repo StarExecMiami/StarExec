@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - '.github/workflows/scientific-fixtures.yml'
+      - 'scripts/e2e/**'
       - 'scripts/scientific/**'
       - 'scripts/tests/test_*.py'
   pull_request:
     paths:
       - '.github/workflows/scientific-fixtures.yml'
+      - 'scripts/e2e/**'
       - 'scripts/scientific/**'
       - 'scripts/tests/test_*.py'
   workflow_dispatch:
