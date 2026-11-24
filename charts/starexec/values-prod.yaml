@@ -158,6 +158,13 @@ web:
   proxyPort: 443
   secureCookies: true
 
+uploads:
+  extractionTimeoutSeconds: 3600
+  extractionMaxUncompressedBytes: "107374182400"
+  sessionChunkSizeBytes: 8388608
+  tmpSizeLimit: "10Gi"
+  stagingSizeLimit: "20Gi"
+
 env:
   STAREXEC_EMAIL_SMTP: "mailgw.as.acorn.miami.edu"
   STAREXEC_EMAIL_PORT: "25"

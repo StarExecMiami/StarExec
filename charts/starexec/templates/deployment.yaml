@@ -166,9 +166,11 @@ spec:
 {{- end }}
 {{- end }}
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ if and .Values.uploads (hasKey .Values.uploads "tmpSizeLimit") }}{{ .Values.uploads.tmpSizeLimit | quote }}{{ else }}"10Gi"{{ end }}
         - name: upload-staging
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ if and .Values.uploads (hasKey .Values.uploads "stagingSizeLimit") }}{{ .Values.uploads.stagingSizeLimit | quote }}{{ else }}"20Gi"{{ end }}
 {{- if and (eq .Values.backend.type "podman") .Values.podman.containerSocket.enabled }}
         - name: podman-socket
           hostPath:
@@ -302,6 +304,12 @@ spec:
               value: "/var/lib/starexec/uploads-private"
             - name: STAREXEC_UPLOAD_HISTORY_RETENTION_DAYS
               value: {{ if and .Values.uploads (hasKey .Values.uploads "historyRetentionDays") }}{{ .Values.uploads.historyRetentionDays | quote }}{{ else }}"30"{{ end }}
+            - name: STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS
+              value: {{ if and .Values.uploads (hasKey .Values.uploads "extractionTimeoutSeconds") }}{{ if kindIs "float64" .Values.uploads.extractionTimeoutSeconds }}{{ printf "%.0f" .Values.uploads.extractionTimeoutSeconds | quote }}{{ else }}{{ .Values.uploads.extractionTimeoutSeconds | quote }}{{ end }}{{ else }}"1800"{{ end }}
+            - name: STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES
+              value: {{ if and .Values.uploads (hasKey .Values.uploads "extractionMaxUncompressedBytes") }}{{ if kindIs "float64" .Values.uploads.extractionMaxUncompressedBytes }}{{ printf "%.0f" .Values.uploads.extractionMaxUncompressedBytes | quote }}{{ else }}{{ .Values.uploads.extractionMaxUncompressedBytes | quote }}{{ end }}{{ else }}"107374182400"{{ end }}
+            - name: STAREXEC_UPLOAD_SESSION_CHUNK_SIZE_BYTES
+              value: {{ if and .Values.uploads (hasKey .Values.uploads "sessionChunkSizeBytes") }}{{ if kindIs "float64" .Values.uploads.sessionChunkSizeBytes }}{{ printf "%.0f" .Values.uploads.sessionChunkSizeBytes | quote }}{{ else }}{{ .Values.uploads.sessionChunkSizeBytes | quote }}{{ end }}{{ else }}"8388608"{{ end }}
             - name: STAREXEC_SANDBOX_DIR
               value: "/app/sandbox"
             - name: STAREXEC_LOCAL_CONCURRENCY

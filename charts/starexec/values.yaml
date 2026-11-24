@@ -39,6 +39,15 @@ sandboxDir: "/app/sandbox"
 # Set to 0 to disable automatic background purging of terminal upload history.
 uploads:
   historyRetentionDays: 30
+  # Inactivity window (seconds without progress) for async benchmark archive extraction.
+  extractionTimeoutSeconds: 1800
+  # Hard cap (bytes) for total extracted output size during archive extraction (100 GiB).
+  extractionMaxUncompressedBytes: "107374182400"
+  # Chunk size (bytes) for browser resumable uploads (8 MiB).
+  sessionChunkSizeBytes: 8388608
+  # Size bounds for node-local emptyDir mounts so large uploads cannot exhaust root disk.
+  tmpSizeLimit: "10Gi"
+  stagingSizeLimit: "20Gi"
 
 # ============================================================================
 # BACKEND CONFIGURATION
