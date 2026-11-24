@@ -1,0 +1,15 @@
+#!/bin/bash
+# Synthetic SMT-LIB2 fixture solver replacing legacy CVC4.zip (#141).
+set -eu
+bench="${1:-}"
+if [ -z "$bench" ] || [ ! -f "$bench" ]; then
+    echo "unknown"
+    exit 0
+fi
+if grep -q ':status[[:space:]]\+unsat' "$bench"; then
+    echo "unsat"
+elif grep -q ':status[[:space:]]\+sat' "$bench"; then
+    echo "sat"
+else
+    echo "unknown"
+fi

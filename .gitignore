@@ -6,6 +6,8 @@
 **/target/
 **/build/
 **/bin/
+!starexec-app/src/test/resources/org/starexec/test/resources/fixtures-src/*/bin/
+!starexec-app/src/test/resources/org/starexec/test/resources/fixtures-src/*/bin/*
 **/dist/
 **/junittestoutput/
 **/data_dir/
