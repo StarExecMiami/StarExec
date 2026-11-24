@@ -32,6 +32,10 @@ import org.starexec.test.resources.IResourceLoader;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.URLDecoder;
+import java.nio.file.Paths;
 import java.sql.SQLException;
 import java.util.*;
 import java.time.Duration;
@@ -120,6 +124,16 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 		}
 	}
 
+	public static File toFile(URL resource) {
+		try {
+			return Paths.get(resource.toURI()).toFile();
+		} catch (URISyntaxException | IllegalArgumentException e) {
+			String decodedPath = URLDecoder.decode(
+					resource.getPath().replace("+", "%2B"), StandardCharsets.UTF_8);
+			return new File(decodedPath);
+		}
+	}
+
 	/**
 	 * Returns the path to the resource directory, which is where we are storing
 	 * files like solvers
@@ -134,7 +148,7 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 			throw new IllegalStateException(
 					"Missing test resources directory on classpath: " + classpathLocation);
 		}
-		return resource.getFile();
+		return toFile(resource).getPath();
 	}
 
 	/**
@@ -155,7 +169,7 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 			throw new IllegalStateException(
 					"Missing required test fixture '" + name + "' on classpath at " + classpathLocation);
 		}
-		return new File(resource.getFile());
+		return toFile(resource);
 	}
 
 	/**

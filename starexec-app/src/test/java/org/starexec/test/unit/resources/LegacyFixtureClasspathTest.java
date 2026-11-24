@@ -3,6 +3,7 @@ package org.starexec.test.unit.resources;
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
 import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.starexec.test.resources.ResourceLoader;
 
 import java.io.File;
@@ -10,11 +11,13 @@ import java.io.InputStream;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -137,5 +140,25 @@ public class LegacyFixtureClasspathTest {
             () -> loader.loadSolverIntoDatabase("nonexistent-solver.zip", 1, 1)
         );
         assertTrue(loadErr.getMessage().contains("nonexistent-solver.zip"), loadErr.getMessage());
+    }
+
+    @Test
+    public void resolvesFileUrlsInsideDirectoriesWithSpaces(@TempDir Path tempDir) throws Exception {
+        Path spacedDir = Files.createDirectory(tempDir.resolve("StarExec Containerised"));
+        Path fixtureFile = spacedDir.resolve("CVC4+fixture.txt");
+        Files.writeString(fixtureFile, "config-contents\n", StandardCharsets.UTF_8);
+
+        URL encodedUrl = fixtureFile.toUri().toURL();
+        assertTrue(encodedUrl.toString().contains("StarExec%20Containerised"));
+        File resolvedEncoded = ResourceLoader.toFile(encodedUrl);
+        assertTrue(resolvedEncoded.isFile() && resolvedEncoded.canRead(), resolvedEncoded.getPath());
+        assertEquals("config-contents\n", Files.readString(resolvedEncoded.toPath(), StandardCharsets.UTF_8));
+
+        // Also cover unencoded file: URLs that trigger the URISyntaxException fallback.
+        URL rawSpacedUrl = new URL("file:" + fixtureFile.toAbsolutePath());
+        File resolvedFallback = ResourceLoader.toFile(rawSpacedUrl);
+        assertTrue(resolvedFallback.isFile() && resolvedFallback.canRead(), resolvedFallback.getPath());
+        assertEquals("config-contents\n", Files.readString(resolvedFallback.toPath(), StandardCharsets.UTF_8));
+        assertFalse(new ResourceLoader().getResourcePath().contains("%20"));
     }
 }
