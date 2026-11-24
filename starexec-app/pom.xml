@@ -399,6 +399,7 @@
                             <goal>exec</goal>
                         </goals>
                         <configuration>
+                            <skip>${maven.test.skip}</skip>
                             <executable>python3</executable>
                             <arguments>
                                 <argument>${project.basedir}/../scripts/scientific/generate_test_sequence_fixtures.py</argument>
