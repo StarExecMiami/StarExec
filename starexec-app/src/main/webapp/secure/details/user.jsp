@@ -238,6 +238,21 @@
 			</table>
 		</star:panel>
 		<star:panel test="${owner}" title="uploads" withCount="true">
+			<ul class="actionList">
+				<li>
+					<button id="deleteUpload"
+					        class="deleteButton deleteSelected">delete
+						selected
+					</button>
+				</li>
+				<li>
+					<button id="clearUploadHistory"
+					        class="deleteButton"
+					        title="This will permanently clear all completed, failed, cancelled, or stale upload history entries">
+						clear history
+					</button>
+				</li>
+			</ul>
 		         <table id="uploads" uid="${t_user.id}"
 		               class="selectableTable">
 			        <thead>

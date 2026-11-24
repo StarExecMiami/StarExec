@@ -56,6 +56,10 @@ $(document).ready(function() {
 		deleteOrphanedJobs();
 	});
 
+	$("#deleteUpload").click(deleteSelectedUploads).hide();
+
+	$("#clearUploadHistory").click(clearUserUploadHistory);
+
 	$('#editButton').button({
 		icons: {
 			secondary: "ui-icon-pencil"
@@ -294,6 +298,7 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 			s = parseReturnCode(nextDataTablePage);
 			if (s) {
 				fnCallback(nextDataTablePage);
+				handleSelectChange();
 				makeTableDraggable("#" + tableName, onDragStart, getDragClone);
 
 				if ('j' == tableName[0]) {
@@ -372,6 +377,12 @@ function handleSelectChange() {
 		$("#deleteJob").show();
 	} else {
 		$("#deleteJob").hide();
+	}
+
+	if ($("#uploads tr.row_selected").length > 0) {
+		$("#deleteUpload").show();
+	} else {
+		$("#deleteUpload").hide();
 	}
 }
 
@@ -582,6 +593,64 @@ function deleteOrphanedJobs() {
 			}
 		}
 	});
+}
+
+function confirmAndRunUploadCleanup(confirmText, actionLabel, waitText, url, payload, errorText) {
+	$('#dialog-confirm-delete-txt').text(confirmText);
+	var buttons = {};
+	buttons[actionLabel] = function() {
+		$("#dialog-confirm-delete").dialog("close");
+		createDialog(waitText);
+		$.post(
+			url,
+			payload,
+			function(returnCode) {
+				destroyDialog();
+				s = parseReturnCode(returnCode);
+				if (s) {
+					uploadTable.fnDraw(false);
+					handleSelectChange();
+				}
+			},
+			"json"
+		).fail(function() {
+			destroyDialog();
+			showMessage('error', errorText, 5000);
+		});
+	};
+	buttons.cancel = function() {
+		$(this).dialog("close");
+	};
+	$('#dialog-confirm-delete').dialog({
+		modal: true,
+		buttons: buttons
+	});
+}
+
+function deleteSelectedUploads() {
+	var selectedIds = getSelectedRows(uploadTable);
+	if (selectedIds.length === 0) {
+		return;
+	}
+	confirmAndRunUploadCleanup(
+		'Are you sure you want to permanently delete the selected upload history entries?',
+		'delete permanently',
+		'Deleting the selected upload history entries, please wait.',
+		starexecRoot + 'services/delete/upload',
+		{selectedIds: selectedIds},
+		'Internal error deleting upload history entries'
+	);
+}
+
+function clearUserUploadHistory() {
+	confirmAndRunUploadCleanup(
+		'Are you sure you want to permanently clear your completed, failed, cancelled, and stale upload history?',
+		'clear history',
+		'Clearing upload history, please wait.',
+		starexecRoot + 'services/clear/uploads/' + userId,
+		{},
+		'Internal error clearing upload history'
+	);
 }
 
 /**
