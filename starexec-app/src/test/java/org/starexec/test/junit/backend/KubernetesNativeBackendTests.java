@@ -5251,4 +5251,86 @@ public class KubernetesNativeBackendTests {
             ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).get(71),
             "the attempt is refilled from the same Job as the pair");
     }
+
+    @Test
+    public void strictCpuNodeLabelAppliedOnlyWhenStrictAndNonEmpty() throws Exception {
+        Method build = KubernetesNativeBackend.class.getDeclaredMethod("buildKubernetesJob",
+            int.class, int.class, String.class, String.class, String.class, String.class);
+        build.setAccessible(true);
+
+        Method parseLabel = KubernetesNativeBackend.class.getDeclaredMethod(
+            "parseNodeLabelSelector", String.class);
+        parseLabel.setAccessible(true);
+        String[] parsed = (String[]) parseLabel.invoke(
+            null, "starexec.org/cpu-manager=static");
+        assertNotNull(parsed);
+        assertEquals("starexec.org/cpu-manager", parsed[0]);
+        assertEquals("static", parsed[1]);
+
+        KubernetesNativeBackend strictWithLabel = backendWithCpu("2");
+        setField(strictWithLabel, "strictOnePairPerCpu", true);
+        setField(strictWithLabel, "strictCpuNodeLabelKey", parsed[0]);
+        setField(strictWithLabel, "strictCpuNodeLabelValue", parsed[1]);
+
+        Job strictJob = (Job) build.invoke(
+            strictWithLabel, 501, 1, "strict-job", "/script.sh", "/work", "/work/log.txt");
+        Map<String, String> strictSelector =
+            strictJob.getSpec().getTemplate().getSpec().getNodeSelector();
+        assertEquals("true", strictSelector.get("starexec.org/worker"));
+        assertEquals("static", strictSelector.get("starexec.org/cpu-manager"));
+
+        KubernetesNativeBackend nonStrictWithLabel = backendWithCpu("2");
+        setField(nonStrictWithLabel, "strictOnePairPerCpu", false);
+        setField(nonStrictWithLabel, "strictCpuNodeLabelKey", parsed[0]);
+        setField(nonStrictWithLabel, "strictCpuNodeLabelValue", parsed[1]);
+
+        Job sharedJob = (Job) build.invoke(
+            nonStrictWithLabel, 502, 2, "shared-job", "/script.sh", "/work", "/work/log.txt");
+        Map<String, String> sharedSelector =
+            sharedJob.getSpec().getTemplate().getSpec().getNodeSelector();
+        assertEquals("true", sharedSelector.get("starexec.org/worker"));
+        assertFalse(sharedSelector.containsKey("starexec.org/cpu-manager"));
+
+        KubernetesNativeBackend strictWithoutLabel = backendWithCpu("2");
+        setField(strictWithoutLabel, "strictOnePairPerCpu", true);
+        Job optOutJob = (Job) build.invoke(
+            strictWithoutLabel, 503, 3, "optout-job", "/script.sh", "/work", "/work/log.txt");
+        assertFalse(optOutJob.getSpec().getTemplate().getSpec().getNodeSelector()
+            .containsKey("starexec.org/cpu-manager"));
+    }
+
+    @Test
+    public void parseNodeLabelSelectorRejectsMalformedValues() throws Exception {
+        Method parseLabel = KubernetesNativeBackend.class.getDeclaredMethod(
+            "parseNodeLabelSelector", String.class);
+        parseLabel.setAccessible(true);
+
+        assertNull(parseLabel.invoke(null, (Object) null));
+        assertNull(parseLabel.invoke(null, "   "));
+
+        for (String bad : List.of("missing-equals", "=value", "key=", "a=b=c", "bad key=val")) {
+            var ex = assertThrows(java.lang.reflect.InvocationTargetException.class,
+                () -> parseLabel.invoke(null, bad));
+            assertTrue(ex.getCause() instanceof IllegalStateException,
+                "Expected IllegalStateException for '" + bad + "'");
+        }
+    }
+
+    @Test
+    public void clearStaleAttemptArtifactsRemovesCpuTopologyJson() throws Exception {
+        Path outDir = java.nio.file.Files.createTempDirectory("k8s-clear-topo");
+        outDir.toFile().deleteOnExit();
+        Path topo = outDir.resolve("cpu-topology.json");
+        Path topoTmp = outDir.resolve("cpu-topology.json.tmp");
+        java.nio.file.Files.writeString(topo, "{\"cpus\":[]}");
+        java.nio.file.Files.writeString(topoTmp, "{");
+
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Method clear = KubernetesNativeBackend.class.getDeclaredMethod(
+            "clearStaleAttemptArtifacts", Path.class, int.class);
+        clear.setAccessible(true);
+        assertTrue((Boolean) clear.invoke(backend, outDir, 999));
+        assertFalse(java.nio.file.Files.exists(topo));
+        assertFalse(java.nio.file.Files.exists(topoTmp));
+    }
 }

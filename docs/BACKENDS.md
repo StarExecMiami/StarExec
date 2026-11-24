@@ -645,51 +645,107 @@ not from StarExec.
 
 #### What Kubernetes needs for exclusive cores
 
-StarExec controls the pod. Job pods request exactly their limits, so they are
-in the `Guaranteed` QoS class, and with
-`STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true` StarExec refuses a
-`STAREXEC_K8S_CPU_LIMIT` that is not a whole number of CPUs. The kubelet on each
-worker decides the rest
-([Kubernetes: node resource managers](https://kubernetes.io/docs/concepts/resource-management/resource-managers/)).
-StarExec does not check it: reading a kubelet's configuration needs the
-`nodes/proxy` permission, which the chart does not grant.
+StarExec distinguishes **requesting an integer Guaranteed pod** from **attesting
+physical-core exclusivity**:
+
+- `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true` guarantees that job pods run with
+  `Guaranteed` QoS (`requests == limits`) and refuses a fractional
+  `STAREXEC_K8S_CPU_LIMIT`, because Kubernetes never grants exclusive CPUs to a
+  fractional request. By itself, this setting does **not** enforce kubelet
+  pinning: if a worker runs `cpuManagerPolicy=none`, pods still share all node
+  CPUs under a CFS quota.
+- After each attempt finishes, the runner writes `cpu-topology.json` (capturing
+  `Cpus_allowed_list`, container `cpuset.cpus.effective`, `/sys/devices/system/cpu/online`,
+  and per-CPU sysfs `core_id`, `physical_package_id`, `thread_siblings_list`,
+  and NUMA nodes). `KubernetesJobMonitor` / completion ingestion evaluates that
+  artifact against `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU` and `STAREXEC_K8S_CPU_LIMIT`
+  and persists a fenced row in `attempt_cpu_attestation`:
+  - **`ATTESTED` (`k8s-cpuset-static`, `physical_exclusivity_attested=true`):**
+    exact integer CPU match, strictly fewer CPUs than node online total (system
+    CPUs reserved), and complete SMT sibling groups for every assigned physical core.
+  - **`UNQUALIFIED` (`k8s-shared`, `physical_exclusivity_attested=false`):**
+    strict mode off, missing/malformed `cpu-topology.json`, shared node cpuset
+    (`cpuManagerPolicy=none`), partial SMT siblings, or missing system CPU reservation.
+    Scientific ingestion still completes so unmigrated clusters remain operational,
+    while downstream analysis can filter out `UNQUALIFIED` attempts.
+
+Kubelet policy options required on qualified workers
+([Kubernetes: node resource managers](https://kubernetes.io/docs/concepts/resource-management/resource-managers/)):
 
 - **`cpuManagerPolicy: static`.** Only then does a container of a `Guaranteed`
   pod with an integer CPU request get exclusive CPUs. Under the default `none`
   policy its limit is enforced with a CFS quota, and it shares the node's CPUs
   with other pods. The static policy also requires a CPU reservation
-  (`reservedSystemCPUs`, `kubeReserved` or `systemReserved`).
+  (`reservedSystemCPUs`, `kubeReserved` or `systemReserved`) so OS and kubelet
+  daemons do not run inside solver cores.
 - **`cpuManagerPolicyOptions: {full-pcpus-only: "true"}`, or SMT turned off.**
   Without it, on an SMT machine the static policy can give two containers the
   two hardware threads of one physical core. With it, the static policy gives
   exclusive CPUs only as whole physical cores, and a pod fails with
   `SMTAlignmentError` if a container's exclusive CPUs cannot be given as whole
-  cores. Containers that get no exclusive CPUs are not checked: they run on the
-  shared CPUs. `STAREXEC_K8S_CPU_LIMIT` must then be a multiple of the threads
-  per core, typically 2 on x86 machines with SMT on.
+  cores. `STAREXEC_K8S_CPU_LIMIT` must then be a multiple of the threads per
+  core (typically 2 on x86 SMT workers).
 
-Changing the policy of a node means draining it and removing the kubelet's
-`cpu_manager_state` file; follow
-[Changing the CPU Manager Policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#changing-the-cpu-manager-policy).
+##### MicroK8s Qualification Runbook & Opt-In Rollout (`STAREXEC_K8S_STRICT_CPU_NODE_LABEL`)
 
-To check a node, read the configuration its kubelet is running with. This
-needs `nodes/proxy` access, which a cluster administrator has:
+Follow this sequence per worker node before enabling qualified-node scheduling:
 
-```bash
-kubectl get --raw "/api/v1/nodes/<node>/proxy/configz" \
-  | jq '.kubeletconfig | {cpuManagerPolicy, cpuManagerPolicyOptions, reservedSystemCPUs, kubeReserved, systemReserved}'
-```
+1. **Drain the worker and configure kubelet** (MicroK8s args file, typically
+   `/var/snap/microk8s/current/args/kubelet`):
+   ```text
+   --cpu-manager-policy=static
+   --cpu-manager-policy-options=full-pcpus-only=true
+   --reserved-cpus=0-1
+   ```
+   Remove the previous CPU manager checkpoint before restarting kubelite
+   ([Changing the CPU Manager Policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#changing-the-cpu-manager-policy)):
+   ```bash
+   kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+   sudo rm -f /var/snap/microk8s/common/var/lib/kubelet/cpu_manager_state
+   sudo snap restart microk8s.daemon-kubelite
+   kubectl uncordon <node>
+   ```
+2. **Verify effective kubelet config via `/configz`** (requires cluster-admin
+   `nodes/proxy` permission):
+   ```bash
+   kubectl get --raw "/api/v1/nodes/<node>/proxy/configz" \
+     | jq '.kubeletconfig | {cpuManagerPolicy, cpuManagerPolicyOptions, reservedSystemCPUs, kubeReserved, systemReserved}'
+   ```
+   Confirm `cpuManagerPolicy == "static"`,
+   `cpuManagerPolicyOptions["full-pcpus-only"] == "true"`, and non-empty system
+   CPU reservation.
+3. **Label qualified workers and opt in via Helm:**
+   ```bash
+   kubectl label node <node> starexec.org/cpu-manager=static
+   ```
+   Then set `kubernetes.strictCpuNodeLabel: "starexec.org/cpu-manager=static"`
+   in your Helm values (Jenkins deploys `values-prod.yaml`, where this key
+   stays `""` by default until workers `n021..n025` are qualified and labeled by
+   Ansible so pods do not remain `Pending`). When non-empty and
+   `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true`, `KubernetesNativeBackend` appends
+   this label to every job pod's `nodeSelector`.
 
-To check a run, read the pairs' job logs. Each log records the CPUs its pod was
-allowed to use, in the message
-`Container mode: using the CPUs this container is allowed: <list>`. Pairs that
-ran at the same time on one node must show disjoint lists, and with SMT on,
-each list must hold whole cores: compare it with
-`/sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list` on the node.
-Under the `none` policy no pair gets CPUs of its own, so the lists normally
-overlap, and usually each is the node's full CPU set. Disjoint lists alone do
-not show that the static policy is on: an inherited affinity, or a cpuset set
-outside Kubernetes, can also separate them, so check the node as well.
+##### Concurrent Physical-Core Disjointness E2E Check
+
+To verify physical-core isolation end-to-end on a qualified node:
+
+1. Submit two concurrent solver pairs pinned to the qualified queue with an
+   even integer `STAREXEC_K8S_CPU_LIMIT` (for example `2` on a 2-way SMT node,
+   `<= half` of allocatable non-reserved CPUs so both schedule on the same worker).
+2. Confirm both pods complete on the same `node_name`, inspect
+   `cpu-topology.json` in each pair's output directory, and query PostgreSQL:
+   ```sql
+   SELECT pair_id, attempt_no, node_name, isolation_mode, isolation_mechanism,
+          physical_exclusivity_attested, leased_cpus, reserved_sibling_cpus,
+          topology_core_id, topology_package_id, attestation_status, violation_reason
+   FROM starexec.attempt_cpu_attestation
+   ORDER BY created_at DESC LIMIT 10;
+   ```
+3. Verify both attempts record `attestation_status = 'ATTESTED'`,
+   `physical_exclusivity_attested = true`, `isolation_mechanism = 'k8s-cpuset-static'`,
+   complete SMT sibling groups, and **disjoint** `leased_cpus` / physical cores. Under
+   `cpuManagerPolicy=none` both rows instead record `UNQUALIFIED` with overlapping
+   node-wide CPUs.
 
 ### Configuration
 
@@ -752,6 +808,8 @@ export STAREXEC_K8S_PENDING_TIMEOUT_MINUTES=60
 # Keep enabled for academic / competition workloads unless you have measured
 # evidence that sharing CPU resources does not bias benchmark metrics.
 export STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true
+# Optional opt-in selector confining strict jobs to static-CPU-manager-qualified nodes:
+# export STAREXEC_K8S_STRICT_CPU_NODE_LABEL=starexec.org/cpu-manager=static
 ```
 
 ### Helm Deployment
