@@ -89,6 +89,10 @@ kubernetes:
   maxConcurrentJobs: 6
   nodeSelector:
     starexec.org/worker: "true"
+  # Opt-in node qualification label for strict CPU mode. Keep empty on Quokka
+  # prod until n021..n025 have kubelet cpuManagerPolicy=static + full-pcpus-only
+  # rolled out and labeled by Ansible; setting it beforehand leaves pods Pending.
+  strictCpuNodeLabel: ""
   dataPvc:
     existingClaim: starexec-data-rwx
     name: starexec-data-rwx

@@ -202,6 +202,13 @@ kubernetes:
   # See "What Kubernetes needs for exclusive cores" in docs/BACKENDS.md.
   strictOnePairPerCpu: true
 
+  # Optional opt-in node label selector ("key=value", e.g.
+  # "starexec.org/cpu-manager=static") added to job pods only when
+  # strictOnePairPerCpu=true. Leave empty ("") on clusters whose worker nodes
+  # have not yet been qualified with kubelet cpuManagerPolicy=static and
+  # full-pcpus-only=true to avoid leaving job pods Pending.
+  strictCpuNodeLabel: ""
+
   # Job lifecycle management
   ttlSecondsAfterFinished: 3600 # 1 hour
   backoffLimit: 0 # No retries - StarExec handles retry logic

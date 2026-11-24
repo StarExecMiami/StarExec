@@ -820,6 +820,11 @@ public class KubernetesNativeBackend implements Backend {
     /** Optional node selector value for worker nodes */
     private String workerNodeSelectorValue;
 
+    /** Optional opt-in node label ("key=value") required in strict CPU mode (#286). */
+    private String strictCpuNodeLabel;
+    private String strictCpuNodeLabelKey;
+    private String strictCpuNodeLabelValue;
+
     // =========================================================================
     // Constructor
     // =========================================================================
@@ -961,6 +966,21 @@ public class KubernetesNativeBackend implements Backend {
 
         workerNodeSelectorKey = getEnv("STAREXEC_K8S_WORKER_SELECTOR_KEY", WORKER_LABEL);
         workerNodeSelectorValue = getEnv("STAREXEC_K8S_WORKER_SELECTOR_VALUE", "true");
+        strictCpuNodeLabel = getEnv("STAREXEC_K8S_STRICT_CPU_NODE_LABEL", "").trim();
+        String[] parsedStrictLabel = parseNodeLabelSelector(strictCpuNodeLabel);
+        if (parsedStrictLabel != null) {
+            strictCpuNodeLabelKey = parsedStrictLabel[0];
+            strictCpuNodeLabelValue = parsedStrictLabel[1];
+            if (!strictOnePairPerCpu) {
+                log.warn(
+                    "STAREXEC_K8S_STRICT_CPU_NODE_LABEL=" + strictCpuNodeLabel
+                        + " is ignored because STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=false"
+                );
+            }
+        } else {
+            strictCpuNodeLabelKey = null;
+            strictCpuNodeLabelValue = null;
+        }
 
         // Academic reproducibility policy: a job pair must get whole physical cores that
         // nothing else runs on, so its measurements are not perturbed by a neighbour.
@@ -1020,7 +1040,11 @@ public class KubernetesNativeBackend implements Backend {
                 ", orphanSweepIntervalMs=" +
                 orphanSweepIntervalMs +
                 ", strictOnePairPerCpu=" +
-                strictOnePairPerCpu
+                strictOnePairPerCpu +
+                ", strictCpuNodeLabel=" +
+                (strictCpuNodeLabel != null && !strictCpuNodeLabel.isEmpty()
+                    ? strictCpuNodeLabel
+                    : "<unset>")
         );
     }
 
@@ -1030,6 +1054,35 @@ public class KubernetesNativeBackend implements Backend {
     private String getEnv(String key, String defaultValue) {
         String value = System.getenv(key);
         return (value != null && !value.isEmpty()) ? value : defaultValue;
+    }
+
+    /**
+     * Parses {@code key=value} for {@code STAREXEC_K8S_STRICT_CPU_NODE_LABEL}, returning
+     * {@code null} when unset/blank and throwing {@link IllegalStateException} when malformed.
+     */
+    static String[] parseNodeLabelSelector(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        int eq = trimmed.indexOf('=');
+        if (eq <= 0 || eq >= trimmed.length() - 1) {
+            throw new IllegalStateException(
+                "Invalid STAREXEC_K8S_STRICT_CPU_NODE_LABEL='" + raw
+                    + "'. Expected non-empty 'key=value' format (for example, "
+                    + "'starexec.org/cpu-manager=static')."
+            );
+        }
+        String key = trimmed.substring(0, eq).trim();
+        String val = trimmed.substring(eq + 1).trim();
+        if (key.isEmpty() || val.isEmpty() || val.contains("=")
+                || key.contains(" ") || val.contains(" ")) {
+            throw new IllegalStateException(
+                "Invalid STAREXEC_K8S_STRICT_CPU_NODE_LABEL='" + raw
+                    + "'. Expected 'key=value' with no spaces or extra '=' characters."
+            );
+        }
+        return new String[] { key, val };
     }
 
     /**
@@ -2473,6 +2526,11 @@ public class KubernetesNativeBackend implements Backend {
         Map<String, String> nodeSelector = new HashMap<>();
         if (workerNodeSelectorKey != null && !workerNodeSelectorKey.trim().isEmpty()) {
             nodeSelector.put(workerNodeSelectorKey, workerNodeSelectorValue);
+        }
+        if (strictOnePairPerCpu
+                && strictCpuNodeLabelKey != null
+                && !strictCpuNodeLabelKey.isEmpty()) {
+            nodeSelector.put(strictCpuNodeLabelKey, strictCpuNodeLabelValue);
         }
 
         // Route to the queue's nodes. Without this the selector carried only the worker
