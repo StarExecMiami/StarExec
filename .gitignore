@@ -152,6 +152,7 @@ ops.txt
 **/*-report.json
 **/*-analysis.json
 **/test-*.html
+scripts/e2e/fixtures/
 
 ####################################
 # Agent tooling config — machine-local
