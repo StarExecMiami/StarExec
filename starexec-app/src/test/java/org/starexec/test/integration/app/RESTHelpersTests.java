@@ -64,6 +64,7 @@ public class RESTHelpersTests extends TestSequence {
 		when(request.getParameter("iDisplayLength")).thenReturn(String.valueOf(query.getNumRecords()));
 		HttpSession session = getMockSessionWithUser(userId);
 		when(request.getSession()).thenReturn(session);
+		when(request.getSession(false)).thenReturn(session);
 		return request;
 	}
 	

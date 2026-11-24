@@ -12,6 +12,14 @@ public class LoggingManager {
 	}
 
 	public static boolean setLoggingLevelForClass(StarLevel level, String className) {
+	    if (className == null || className.trim().isEmpty()) {
+		return false;
+	    }
+	    try {
+		Class.forName(className, false, LoggingManager.class.getClassLoader());
+	    } catch (ClassNotFoundException | LinkageError e) {
+		return false;
+	    }
 	    StarLogger logger = StarLogger.getLogger(className);
 	    if (logger == null) {
 		return false;

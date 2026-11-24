@@ -155,8 +155,8 @@ public class SpaceTests extends TestSequence {
 	private void getAllSpacesTest() {
 		List<Space> spaces=Spaces.getAllSpaces();
 		Assertions.assertNotNull(spaces);
-		//add two because the root space itself and the public space are not counted otherwise
-		Assertions.assertEquals(Spaces.getSubSpaceHierarchy(1, admin.getId()).size()+2, spaces.size());
+		// Add one for the root space itself, which is excluded from its own descendant hierarchy.
+		Assertions.assertEquals(Spaces.getSubSpaceHierarchy(1, admin.getId()).size()+1, spaces.size());
 	}
 
 	@StarexecTest

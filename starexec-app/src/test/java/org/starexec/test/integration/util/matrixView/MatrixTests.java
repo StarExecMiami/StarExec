@@ -81,7 +81,7 @@ public class MatrixTests extends TestSequence {
 		benchmarks.sort(Comparator.comparing(b -> b.getName().toLowerCase()));
 
 		try {
-			matrix = Matrix.getMatrixForJobSpaceFromJobAndStageNumber(job, space.getId(), jobPairs.get(0).getPrimaryStageNumber());
+			matrix = Matrix.getMatrixForJobSpaceFromJobAndStageNumber(job, job.getPrimarySpace(), jobPairs.get(0).getPrimaryStageNumber());
 		} catch (StarExecException e) {
 			Assertions.fail("StarExecException thrown while trying to get matrix: " + e.getMessage());
 			return;

@@ -3005,7 +3005,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetJobPairOverview(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobPairOverview(_jobId INT)
-RETURNS TABLE(totalPairs INT, completePairs BIGINT, pendingPairs BIGINT, errorPairs BIGINT, runtime DOUBLE PRECISION) AS $$
+RETURNS TABLE("totalPairs" INT, "completePairs" BIGINT, "pendingPairs" BIGINT, "errorPairs" BIGINT, "runtime" DOUBLE PRECISION) AS $$
 DECLARE
 	total_pairs_val INT;
 	complete_pairs_val BIGINT;
@@ -4603,7 +4603,9 @@ CREATE OR REPLACE FUNCTION starexec.CountPairsByUser(_userId INT)
 RETURNS TABLE(total_pairs BIGINT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT SUM(j.total_pairs)::BIGINT AS total_pairs FROM starexec.jobs j WHERE j.user_id = _userId AND j.deleted = false;
+    SELECT COALESCE(SUM(j.total_pairs), 0)::BIGINT AS total_pairs
+    FROM starexec.jobs j
+    WHERE j.user_id = _userId AND j.deleted = false;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5248,16 +5250,16 @@ DROP FUNCTION IF EXISTS starexec.GetPipelineById CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetPipelineById(_id INT)
 RETURNS TABLE(
     id INT,
-    userId INT,
-    name VARCHAR(64),
+    "userId" INT,
+    name VARCHAR(128),
     uploaded TIMESTAMP,
     description TEXT,
-    primaryStageId INT
+    "primaryStageId" INT
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT solver_pipelines.id, user_id AS userId, name, uploaded, description, primary_stage_id AS primaryStageId
-    FROM starexec.solver_pipelines WHERE id = _id;
+    SELECT sp.id, sp.user_id, sp.name, sp.uploaded, NULL::TEXT AS description, sp.primary_stage_id
+    FROM starexec.solver_pipelines sp WHERE sp.id = _id;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7308,7 +7310,7 @@ BEGIN
     SELECT COUNT(*) AS solverPublic
     FROM starexec.solver_assoc sa
     WHERE sa.solver_id = _solverId
-    AND (SELECT COUNT(*) > 0 FROM starexec.IsPublic(sa.space_id));
+    AND starexec.IsPublic(sa.space_id);
 END;
 $$ LANGUAGE plpgsql;
 
