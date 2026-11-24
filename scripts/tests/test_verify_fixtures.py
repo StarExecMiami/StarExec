@@ -76,8 +76,11 @@ class VerifyFixturesTests(unittest.TestCase):
 
     def test_repo_lock_directory_passes(self):
         results = verifier.verify_lock_directory(SCIENTIFIC_DIR)
-        self.assertEqual([item["lock"] for item in results], ["eprover-3.3.3.lock.json"])
-        self.assertEqual(results[0]["version"], "3.3.3")
+        by_name = {item["lock"]: item for item in results}
+        self.assertIn("eprover-3.3.3.lock.json", by_name)
+        self.assertEqual(by_name["eprover-3.3.3.lock.json"]["version"], "3.3.3")
+        self.assertIn("test-sequence-fixtures.lock.json", by_name)
+        self.assertEqual(by_name["test-sequence-fixtures.lock.json"]["version"], "1.0.0")
 
     def test_valid_fixture_archive_passes_against_lock(self):
         archive = self.root / "E-3.3.3-sequential.zip"
