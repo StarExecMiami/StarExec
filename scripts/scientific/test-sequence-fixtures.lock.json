@@ -1,0 +1,100 @@
+{
+  "assetId": "test-sequence-fixtures",
+  "fixtures": {
+    "CVC4.zip": {
+      "members": {
+        "bin/starexec_run_default": {
+          "executable": true,
+          "sha256": "6164c664407c9d61e6830ecb02bc04687804f80bba4b162b5489fcfba2443341",
+          "size": 351,
+          "source": "starexec-app/src/test/resources/org/starexec/test/resources/fixtures-src/CVC4/bin/starexec_run_default"
+        },
+        "starexec_description.txt": {
+          "executable": false,
+          "sha256": "636cbf64fff5c237199bb23684be45b40d08c5b0e72eef7d6017ad306f40943b",
+          "size": 76,
+          "source": "starexec-app/src/test/resources/org/starexec/test/resources/fixtures-src/CVC4/starexec_description.txt"
+        }
+      },
+      "packageSha256": "8950208883dc1aa2b3f55a4b8409e3c8a695c7f12eb17b303faba2d615f6dd45",
+      "size": 697
+    },
+    "benchmarks.zip": {
+      "members": {
+        "test/sat.smt2": {
+          "executable": false,
+          "sha256": "32bc3a38dac1a25a5964ac984fa8e5587eaafbe9bbfbf1c8b0d8a1cbe12fea6e",
+          "size": 95,
+          "source": "starexec-app/src/test/resources/org/starexec/test/resources/fixtures-src/benchmarks/test/sat.smt2"
+        },
+        "test/starexec_description.txt": {
+          "executable": false,
+          "sha256": "737c477ecbb9ffa4ab8c258ef4cc1b20837d3f084b5fea27488eebfcc46047f5",
+          "size": 15,
+          "source": "starexec-app/src/test/resources/org/starexec/test/resources/fixtures-src/benchmarks/test/starexec_description.txt"
+        },
+        "test/unknown.smt2": {
+          "executable": false,
+          "sha256": "8812a8ef7b5a102c04089be25aa11e4af177d86b2ace04b5f0f742c1d1323a88",
+          "size": 88,
+          "source": "starexec-app/src/test/resources/org/starexec/test/resources/fixtures-src/benchmarks/test/unknown.smt2"
+        },
+        "test/unsat.smt2": {
+          "executable": false,
+          "sha256": "2537f47b78792b66e4af3fd707a737745188e6e648e196c42ee912ac50fec9e4",
+          "size": 111,
+          "source": "starexec-app/src/test/resources/org/starexec/test/resources/fixtures-src/benchmarks/test/unsat.smt2"
+        }
+      },
+      "packageSha256": "5b99dd228dd8aee72b1c664272828ada330dbaced0c7361c7f0945d828ddfdc1",
+      "size": 783
+    },
+    "benchproc.zip": {
+      "members": {
+        "process": {
+          "executable": true,
+          "sha256": "e2a3003d31f8143180d6fec7acd32d5f5315d98eba439bb11babd0829190a5c3",
+          "size": 139,
+          "source": "starexec-app/src/test/resources/org/starexec/test/resources/fixtures-src/benchproc/process"
+        }
+      },
+      "packageSha256": "51bbfe25e6cb6a564ddb55b29b07cb411845f2424d645babbfad1ef5491f8e47",
+      "size": 251
+    },
+    "postproc.zip": {
+      "members": {
+        "mybin/hello.txt": {
+          "executable": false,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size": 0,
+          "source": "starexec-app/src/test/resources/org/starexec/test/resources/fixtures-src/postproc/mybin/hello.txt"
+        },
+        "process": {
+          "executable": true,
+          "sha256": "c042dbd745c80736cae074d08859d8b77b4f3a0590f0c9a951f18661b8ebc538",
+          "size": 339,
+          "source": "starexec-app/src/test/resources/org/starexec/test/resources/postproc.sh"
+        }
+      },
+      "packageSha256": "a84774970188b9243d577c2aca7d36d4fed30dfc2c6860bb5c65197a96b0af3e",
+      "size": 557
+    },
+    "smallsolver.zip": {
+      "members": {
+        "bin/starexec_run_default": {
+          "executable": true,
+          "sha256": "4cffd86461173103a121e0d8d34007ae3cae394c44b9b0b1d8e8910eb76a373f",
+          "size": 21,
+          "source": "starexec-app/src/test/resources/org/starexec/test/resources/fixtures-src/smallsolver/bin/starexec_run_default"
+        }
+      },
+      "packageSha256": "5094e296d5309a1af27019e5893f07cd98673ae7e8b71498bf12509b30594e99",
+      "size": 167
+    }
+  },
+  "license": "Project-authored repository fixtures (MIT); excludes unlicensed app12.zip",
+  "schemaVersion": 1,
+  "sourceSha256": "25853fd26847b1b8f784b52e6085e3ee074fdd8f45f2af1403351d7cf2f57500",
+  "sourceType": "repo-generated",
+  "version": "1.0.0"
+}

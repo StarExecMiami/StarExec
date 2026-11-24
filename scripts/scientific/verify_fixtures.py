@@ -13,6 +13,7 @@ import zipfile
 
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parents[1]
 SCHEMA_VERSION = 1
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_JSON_BYTES = 1024 * 1024
@@ -83,7 +84,7 @@ def verify_regular_file(path, expected_sha256=None):
     return digest, data
 
 
-def validate_lock_data(lock):
+def validate_lock_data(lock, repo_root=None):
     if not isinstance(lock, dict):
         raise ValueError("Lockfile root must be a JSON object")
     schema_version = lock.get("schemaVersion")
@@ -107,13 +108,101 @@ def validate_lock_data(lock):
         url = lock["sourceUrl"]
         if not isinstance(url, str) or not url.startswith("https://"):
             raise ValueError("sourceUrl must use https://")
+    if "fixtures" in lock:
+        validate_repo_fixtures_block(lock, repo_root=repo_root)
     return lock
 
 
-def verify_lock_file(lock_path):
+def canonical_repo_sources_digest(fixtures):
+    canonical = {}
+    for pkg_name in sorted(fixtures):
+        members = fixtures[pkg_name]["members"]
+        canonical[pkg_name] = {
+            m: {
+                "source": members[m]["source"],
+                "sha256": members[m]["sha256"],
+                "size": members[m]["size"],
+                "executable": bool(members[m]["executable"]),
+            }
+            for m in sorted(members)
+        }
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return sha256_bytes(encoded)
+
+
+def validate_repo_fixtures_block(lock, repo_root=None):
+    fixtures = lock.get("fixtures")
+    if not isinstance(fixtures, dict) or not fixtures:
+        raise ValueError("fixtures must be a non-empty JSON object")
+    for pkg_name, pkg_spec in fixtures.items():
+        validate_relative_posix_path(pkg_name, single_component=True)
+        if not isinstance(pkg_spec, dict):
+            raise ValueError(f"Invalid fixture definition for {pkg_name}")
+        validate_sha256_hex(pkg_spec.get("packageSha256"), f"fixtures[{pkg_name!r}].packageSha256")
+        members = pkg_spec.get("members")
+        if not isinstance(members, dict) or not members:
+            raise ValueError(f"fixtures[{pkg_name!r}].members must be non-empty")
+        for member_name, meta in members.items():
+            validate_relative_posix_path(member_name)
+            if not isinstance(meta, dict):
+                raise ValueError(f"Invalid member metadata for {pkg_name}:{member_name}")
+            validate_relative_posix_path(meta.get("source"))
+            validate_sha256_hex(meta.get("sha256"), f"{pkg_name}:{member_name}.sha256")
+            size = meta.get("size")
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                raise ValueError(f"Invalid member size for {pkg_name}:{member_name}")
+            if not isinstance(meta.get("executable"), bool):
+                raise ValueError(f"executable flag must be boolean for {pkg_name}:{member_name}")
+            if repo_root is not None:
+                src_path = Path(repo_root) / meta["source"]
+                _, raw = verify_regular_file(src_path, expected_sha256=meta["sha256"])
+                if len(raw) != size:
+                    raise ValueError(f"Source file size mismatch for {meta['source']}")
+    expected_agg = canonical_repo_sources_digest(fixtures)
+    if lock.get("sourceSha256") != expected_agg:
+        raise ValueError(f"Aggregate sourceSha256 mismatch: expected {expected_agg}, got {lock.get('sourceSha256')}")
+
+
+def verify_generated_fixtures(lock_path, generated_dir, repo_root=REPO_ROOT):
+    lock, _ = verify_lock_file(lock_path, repo_root=repo_root)
+    fixtures = lock.get("fixtures")
+    if not isinstance(fixtures, dict) or not fixtures:
+        raise ValueError(f"No fixtures map found in {lock_path}")
+    verified = {}
+    for pkg_name, pkg_spec in sorted(fixtures.items()):
+        archive_path = Path(generated_dir) / pkg_name
+        pkg_sha, _ = verify_regular_file(archive_path, expected_sha256=pkg_spec["packageSha256"])
+        with zipfile.ZipFile(archive_path, "r") as zf:
+            bad = zf.testzip()
+            if bad is not None:
+                raise ValueError(f"Corrupt ZIP CRC in {pkg_name} member {bad}")
+            seen = set()
+            for info in zf.infolist():
+                validate_relative_posix_path(info.filename)
+                if info.filename in seen:
+                    raise ValueError(f"Duplicate ZIP member in {pkg_name}: {info.filename}")
+                seen.add(info.filename)
+                unix_mode = info.external_attr >> 16
+                if stat.S_ISLNK(unix_mode) or stat.S_IFMT(unix_mode) not in (0, stat.S_IFREG):
+                    raise ValueError(f"Unsafe member mode in {pkg_name}: {info.filename}")
+            expected_members = set(pkg_spec["members"].keys())
+            if seen != expected_members:
+                raise ValueError(f"Member set mismatch in {pkg_name}: expected={sorted(expected_members)}, got={sorted(seen)}")
+            for member_name, meta in pkg_spec["members"].items():
+                data = zf.read(member_name)
+                if sha256_bytes(data) != meta["sha256"] or len(data) != meta["size"]:
+                    raise ValueError(f"Member content mismatch in {pkg_name}:{member_name}")
+                actual_exec = bool((zf.getinfo(member_name).external_attr >> 16) & 0o111)
+                if actual_exec != bool(meta["executable"]):
+                    raise ValueError(f"Executable bit mismatch in {pkg_name}:{member_name}")
+        verified[pkg_name] = pkg_sha
+    return verified
+
+
+def verify_lock_file(lock_path, repo_root=None):
     raw = read_regular_file(lock_path, max_bytes=MAX_JSON_BYTES)
     lock = json.loads(raw.decode("utf-8"))
-    validate_lock_data(lock)
+    validate_lock_data(lock, repo_root=repo_root)
     return lock, sha256_bytes(raw)
 
 
@@ -194,13 +283,13 @@ def verify_fixture_archive(archive_path, lock_path=None, expected_sha256=None):
     }
 
 
-def verify_lock_directory(directory=HERE):
+def verify_lock_directory(directory=HERE, repo_root=REPO_ROOT):
     locks = sorted(Path(directory).glob("*.lock.json"))
     if not locks:
         raise ValueError(f"No *.lock.json files found under {directory}")
     results = []
     for lock_path in locks:
-        lock, digest = verify_lock_file(lock_path)
+        lock, digest = verify_lock_file(lock_path, repo_root=repo_root)
         config = lock.get("configuration")
         if config:
             wrapper = Path(directory) / f"starexec_run_{config}"
@@ -222,6 +311,7 @@ def main():
     parser.add_argument("--lock", type=Path, help="Optional *.lock.json to check individually or against --archive.")
     parser.add_argument("--expected-sha256", help="Optional expected SHA-256 for --archive or --file.")
     parser.add_argument("--locks-dir", type=Path, default=HERE, help="Directory of *.lock.json files to validate.")
+    parser.add_argument("--generated-dir", type=Path, help="Verify repo-generated ZIPs under this directory against --lock.")
     args = parser.parse_args()
 
     try:
@@ -230,11 +320,14 @@ def main():
             output = {"file": str(args.file), "sha256": digest, "bytes": len(data)}
         elif args.archive is not None:
             output = verify_fixture_archive(args.archive, lock_path=args.lock, expected_sha256=args.expected_sha256)
+        elif args.generated_dir is not None:
+            lock_target = args.lock or (HERE / "test-sequence-fixtures.lock.json")
+            output = {"generated": verify_generated_fixtures(lock_target, args.generated_dir)}
         elif args.lock is not None:
-            lock, digest = verify_lock_file(args.lock)
+            lock, digest = verify_lock_file(args.lock, repo_root=REPO_ROOT)
             output = {"lock": str(args.lock), "sha256": digest, "version": lock["version"]}
         else:
-            output = {"locks": verify_lock_directory(args.locks_dir)}
+            output = {"locks": verify_lock_directory(args.locks_dir, repo_root=REPO_ROOT)}
     except (OSError, ValueError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError) as error:
         print(f"Fixture verification failed: {error}", file=sys.stderr)
         return 1

@@ -377,7 +377,38 @@
                 </excludes>
             </resource>
         </resources>
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>**/fixtures-src/**</exclude>
+                </excludes>
+            </testResource>
+        </testResources>
         <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>generate-test-sequence-fixtures</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>python3</executable>
+                            <arguments>
+                                <argument>${project.basedir}/../scripts/scientific/generate_test_sequence_fixtures.py</argument>
+                                <argument>--output-dir</argument>
+                                <argument>${project.build.testOutputDirectory}/org/starexec/test/resources</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-war-plugin</artifactId>
