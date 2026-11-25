@@ -582,22 +582,46 @@ cfg = {
     "image": os.environ["E2E_PUBLISHED_IMAGE"],
     "image_digest": os.environ["E2E_DEPLOY_IMAGE_DIGEST"],
     "report_dir": os.environ["E2E_REPORT_DIR"],
-    "allowed_hosts": ["quokka.acorn.miami.edu"],
+    "allowed_hosts": [],
     "admin_user_id": 1,
     "enable_browser": False,
     "timeouts": {"upload": 300, "job": 1200, "pause": 120, "kill": 120, "dispatch": 180, "smtp": 60},
 }
 with open(os.environ["E2E_CFG_PATH"], "w", encoding="utf-8") as fh:
     json.dump(cfg, fh, indent=2)
-    fh.write("\n")
+    print("", file=fh)
 '
 
+                            set +e
                             "\${TMP_E2E}/venv/bin/python" scripts/e2e/run.py \\
                                 --config "\${E2E_CFG_PATH}" \\
                                 --backend kubernetes \\
                                 --mode "${matrixMode}" \\
                                 --image-digest "${env.DEPLOY_IMAGE_DIGEST}" \\
                                 --matrix-out target/e2e-reports/kubernetes
+                            RC=\$?
+                            set -e
+                            if [ "\${RC}" -ne 0 ] && [ "\${RC}" -ne 2 ] && [ "\${RC}" -ne 3 ]; then
+                                echo "ERROR: scripts/e2e/run.py failed with exit code \${RC}" >&2
+                                exit "\${RC}"
+                            fi
+
+                            "\${TMP_E2E}/venv/bin/python" -c '
+import json, os
+with open("target/e2e-reports/kubernetes/matrix-report.json", encoding="utf-8") as fh:
+    report = json.load(fh)
+assert report["commitSha"] == os.environ["E2E_GIT_SHA"], report
+assert report["mode"] == os.environ["E2E_MATRIX_MODE"], report
+assert report["matrixDenominator"] == 63, report
+counts = report["countsByStatus"]
+assert counts["FAIL"] == 0, counts
+assert counts["PASS"] > 0, counts
+p = counts["PASS"]
+b = counts["BLOCKED"]
+s = counts["SKIPPED"]
+f = counts["FAIL"]
+print(f"Verified KubernetesNativeBackend E2E matrix: PASS={p}, BLOCKED={b}, SKIPPED={s}, FAIL={f}")
+'
                         fi
 
                         for report_file in \\

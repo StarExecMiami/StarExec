@@ -325,6 +325,44 @@ class E2EHarnessTest(unittest.TestCase):
         self.assertIn("Deployed E2E Matrix (Kubernetes)", jenkins)
         self.assertIn("--backend kubernetes", jenkins)
 
+    @staticmethod
+    def _render_groovy_gstring(body):
+        simple_escapes = {
+            "n": "\n",
+            "t": "\t",
+            "r": "\r",
+            "b": "\b",
+            "f": "\f",
+            "\\": "\\",
+            "$": "$",
+            '"': '"',
+            "'": "'",
+        }
+        out = []
+        i = 0
+        n = len(body)
+        while i < n:
+            ch = body[i]
+            if ch == "\\" and i + 1 < n:
+                nxt = body[i + 1]
+                if nxt == "\n":
+                    i += 2
+                    continue
+                if nxt in simple_escapes:
+                    out.append(simple_escapes[nxt])
+                    i += 2
+                    continue
+                raise AssertionError(f"Unsupported Groovy backslash escape \\{nxt!r} in Jenkinsfile GString")
+            if ch == "$" and i + 1 < n and body[i + 1] == "{":
+                end = body.find("}", i + 2)
+                if end != -1:
+                    out.append("stub")
+                    i = end + 1
+                    continue
+            out.append(ch)
+            i += 1
+        return "".join(out)
+
     def test_jenkinsfile_shell_blocks_have_no_indented_heredoc_delimiters(self):
         import re
 
@@ -337,10 +375,7 @@ class E2EHarnessTest(unittest.TestCase):
         self.assertGreaterEqual(len(sh_blocks), 5)
 
         for quote, body in sh_blocks:
-            rendered = body
-            if quote == '"""':
-                rendered = re.sub(r"(?<!\\)\$\{[^}]+\}", "stub", rendered)
-                rendered = rendered.replace("\\\\", "\\").replace("\\$", "$")
+            rendered = self._render_groovy_gstring(body) if quote == '"""' else body
 
             lines = rendered.splitlines()
             idx = 0
@@ -370,6 +405,7 @@ class E2EHarnessTest(unittest.TestCase):
                 idx += 1
 
     def test_jenkinsfile_k8s_e2e_stage_valid_sh_and_enforces_matrix_reports(self):
+        import os
         import re
 
         jenkins = (REPO_ROOT / "Jenkinsfile").read_text(encoding="utf-8")
@@ -383,8 +419,7 @@ class E2EHarnessTest(unittest.TestCase):
 
         sh_match = re.search(r'sh\s*"""(.*?)"""', stage_body, flags=re.DOTALL)
         self.assertIsNotNone(sh_match)
-        rendered = re.sub(r"(?<!\\)\$\{[^}]+\}", "stub", sh_match.group(1))
-        rendered = rendered.replace("\\\\", "\\").replace("\\$", "$")
+        rendered = self._render_groovy_gstring(sh_match.group(1))
 
         proc = subprocess.run(
             ["sh", "-n"],
@@ -398,6 +433,49 @@ class E2EHarnessTest(unittest.TestCase):
             rendered,
             r'(?m)^\s*"\$\{TMP_E2E\}/venv/bin/python"\s+scripts/e2e/run\.py\s+\\\n\s+--config\s+',
         )
+        py_snippets = re.findall(
+            r'"\$\{TMP_E2E\}/venv/bin/python"\s+-c\s+\'(.*?)\'',
+            rendered,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(len(py_snippets), 2)
+        for py_src in py_snippets:
+            ast.parse(py_src)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "k8s-e2e-config.json"
+            gen_env = dict(os.environ)
+            gen_env.update(
+                {
+                    "E2E_CFG_PATH": str(cfg_path),
+                    "E2E_MATRIX_MODE": "fresh",
+                    "E2E_APP_URL": "http://localhost:30081/starexec",
+                    "E2E_SHORT_SHA": "86a325c7",
+                    "E2E_K8S_NAMESPACE": "starexec-dev",
+                    "E2E_HELM_RELEASE": "starexec-dev",
+                    "E2E_GIT_SHA": "86a325c7eb952ff6d8eed9f7506fe863832df4e4",
+                    "E2E_PUBLISHED_IMAGE": "ghcr.io/starexecmiami/starexec:sha-86a325c7eb952ff6d8eed9f7506fe863832df4e4",
+                    "E2E_DEPLOY_IMAGE_DIGEST": "sha256:" + "a" * 64,
+                    "E2E_REPORT_DIR": tmp,
+                }
+            )
+            gen = subprocess.run(
+                [sys.executable, "-c", py_snippets[0]],
+                env=gen_env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(gen.returncode, 0, gen.stderr)
+            loaded = e2e_config.load(cfg_path)
+            self.assertEqual(loaded.backend, "kubernetes")
+            self.assertEqual(loaded.mode, "fresh")
+            self.assertEqual(loaded.base_url, "http://localhost:30081/starexec")
+            self.assertEqual(loaded.deployment_name, "sq-86a325c7-k8s")
+            self.assertEqual(loaded.queue_id, "auto")
+            self.assertEqual(loaded.allowed_hosts, [])
+            self.assertTrue(e2e_config.is_disposable(loaded))
+
         for artifact in (
             "target/e2e-reports/kubernetes/matrix-report.json",
             "target/e2e-reports/kubernetes/matrix-report.csv",
