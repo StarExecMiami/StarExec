@@ -5475,6 +5475,50 @@ public class KubernetesNativeBackendTests {
     }
 
     @Test
+    public void releasingSlotsCoalescesAsyncDispatchRefillIntoSingleCheck() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        AtomicInteger refillRuns = new AtomicInteger(0);
+        setField(backend, "initialized", true);
+        setField(backend, "dispatchRefillAction", (Runnable) refillRuns::incrementAndGet);
+        Method startExec = KubernetesNativeBackend.class.getDeclaredMethod("startDispatchRefillExecutor");
+        startExec.setAccessible(true);
+        startExec.invoke(backend);
+
+        try {
+            Method acquire = KubernetesNativeBackend.class.getDeclaredMethod("tryAcquireSubmissionSlot", int.class);
+            acquire.setAccessible(true);
+            acquire.invoke(backend, 101);
+            acquire.invoke(backend, 102);
+            acquire.invoke(backend, 103);
+            acquire.invoke(backend, 104);
+
+            // Rollback releases (triggerRefill=false) must not schedule a refill.
+            Method releaseWithFlag = KubernetesNativeBackend.class.getDeclaredMethod(
+                "releaseSubmissionSlot", int.class, boolean.class);
+            releaseWithFlag.setAccessible(true);
+            releaseWithFlag.invoke(backend, 104, false);
+            Thread.sleep(350);
+            assertEquals(0, refillRuns.get(), "Rollback release must not trigger dispatch refill");
+
+            // Burst of real completion slot releases coalesces into one refill pass.
+            Method release = KubernetesNativeBackend.class.getDeclaredMethod("releaseSubmissionSlot", int.class);
+            release.setAccessible(true);
+            release.invoke(backend, 101);
+            release.invoke(backend, 102);
+            release.invoke(backend, 103);
+
+            long deadline = System.currentTimeMillis() + 2_000L;
+            while (refillRuns.get() == 0 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(25);
+            }
+            Thread.sleep(350);
+            assertEquals(1, refillRuns.get(), "Burst of slot releases must coalesce into one refill");
+        } finally {
+            backend.destroyIf();
+        }
+    }
+
+    @Test
     public void readWriteOnceRegistersPinnedAppNodeBeforePlacementAndStats() throws Exception {
         KubernetesNativeBackend rwoBackend = new KubernetesNativeBackend();
         setField(rwoBackend, "dataPvcAccessMode", "ReadWriteOnce");

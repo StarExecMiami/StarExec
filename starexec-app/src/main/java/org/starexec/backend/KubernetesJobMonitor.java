@@ -114,6 +114,12 @@ public class KubernetesJobMonitor {
     /** Poll interval while informer integration is pending */
     private static final long POLL_INTERVAL_MS = 5_000;
 
+    /** Shorter initial interval when finished jobs are awaiting output visibility */
+    private static final long FAST_RETRY_INTERVAL_MS = 1_000;
+
+    /** Number of consecutive fast retry polls before backing off to POLL_INTERVAL_MS */
+    private static final int MAX_FAST_RETRY_POLLS = 5;
+
     /**
      * How long a pod may stay Pending before it is worth an operator's attention.
      *
@@ -195,6 +201,9 @@ public class KubernetesJobMonitor {
      * never replaces it.
      */
     private volatile LongSupplier clock = System::currentTimeMillis;
+
+    /** Consecutive polls where a finished job remained unprocessed awaiting visibility */
+    private int consecutiveRetryPolls = 0;
 
     /** Monitor thread */
     private Thread monitorThread;
@@ -339,13 +348,16 @@ public class KubernetesJobMonitor {
         log.info("Starting Kubernetes job monitor polling loop");
 
         while (running.get()) {
+            long sleepMs = POLL_INTERVAL_MS;
             try {
-                pollJobsOnce();
+                boolean retryPending = pollJobsOnce();
+                sleepMs = nextPollIntervalMs(retryPending);
             } catch (Exception e) {
+                consecutiveRetryPolls = 0;
                 log.error("Error in polling loop", e);
             }
             try {
-                Thread.sleep(POLL_INTERVAL_MS);
+                Thread.sleep(sleepMs);
             } catch (InterruptedException e) {
                 log.info("Polling loop interrupted");
                 Thread.currentThread().interrupt();
@@ -356,7 +368,26 @@ public class KubernetesJobMonitor {
         log.info("Kubernetes job monitor polling loop exited");
     }
 
-    private void pollJobsOnce() {
+    /**
+     * Computes the next polling sleep interval in milliseconds.
+     *
+     * <p>When a finished Job is waiting for shared-storage visibility, starts with a short
+     * 1s retry interval for the first few attempts before backing off to 5s.
+     */
+    public long nextPollIntervalMs(boolean retryPending) {
+        if (!retryPending) {
+            consecutiveRetryPolls = 0;
+            return POLL_INTERVAL_MS;
+        }
+        if (consecutiveRetryPolls < MAX_FAST_RETRY_POLLS) {
+            consecutiveRetryPolls++;
+            return FAST_RETRY_INTERVAL_MS;
+        }
+        return POLL_INTERVAL_MS;
+    }
+
+    private boolean pollJobsOnce() {
+        boolean retryPending = false;
         List<Job> jobs = kubernetesClient
             .batch()
             .v1()
@@ -403,6 +434,8 @@ public class KubernetesJobMonitor {
 
             if (processed) {
                 completedExecutions.add(execution);
+            } else {
+                retryPending = true;
             }
 
             runningExecutions.remove(execution);
@@ -416,6 +449,7 @@ public class KubernetesJobMonitor {
         recordedNodes.keySet().retainAll(executionsInListing);
 
         drainCleanupPending(executionsInListing);
+        return retryPending;
     }
 
     /**

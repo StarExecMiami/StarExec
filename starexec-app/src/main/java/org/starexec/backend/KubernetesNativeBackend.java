@@ -124,6 +124,7 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -770,6 +771,12 @@ public class KubernetesNativeBackend implements Backend {
     /** Periodic cleanup task that deletes orphaned managed K8s Jobs */
     private ScheduledExecutorService orphanSweepExecutor;
 
+    /** Coalesces asynchronous job-dispatch refills triggered when a concurrency slot frees up */
+    private static final long DISPATCH_REFILL_DEBOUNCE_MS = 250L;
+    private ScheduledExecutorService dispatchRefillExecutor;
+    private final AtomicBoolean dispatchRefillScheduled = new AtomicBoolean(false);
+    private Runnable dispatchRefillAction = org.starexec.jobs.JobManager::checkPendingJobs;
+
     // =========================================================================
     // Configuration (loaded from environment)
     // =========================================================================
@@ -878,6 +885,7 @@ public class KubernetesNativeBackend implements Backend {
             jobMonitor.start();
 
             startOrphanSweepScheduler();
+            startDispatchRefillExecutor();
 
             initialized = true;
             log.info("KubernetesNativeBackend initialized successfully");
@@ -1331,6 +1339,11 @@ public class KubernetesNativeBackend implements Backend {
             orphanSweepExecutor.shutdownNow();
             orphanSweepExecutor = null;
         }
+        if (dispatchRefillExecutor != null) {
+            dispatchRefillExecutor.shutdownNow();
+            dispatchRefillExecutor = null;
+        }
+        dispatchRefillScheduled.set(false);
 
         // 4. Close the Kubernetes client.
         //    K8s Jobs are left in place so startup reconciliation can find
@@ -2091,7 +2104,7 @@ public class KubernetesNativeBackend implements Backend {
                     "Could not read the current attempt of pair " + pairId +
                     "; deferring its submission", e
                 );
-                releaseSubmissionSlot(execId);
+                releaseSubmissionSlot(execId, false);
                 throw new SubmissionDeferredException(
                     "attempt of pair " + pairId + " unreadable; pair stays queued"
                 );
@@ -2153,7 +2166,7 @@ public class KubernetesNativeBackend implements Backend {
                     " a previous attempt's classification artifacts could not be removed"
                 );
                 // No Job was created, so the reservation taken above must go back.
-                releaseSubmissionSlot(execId);
+                releaseSubmissionSlot(execId, false);
                 return -1;
             }
 
@@ -2416,7 +2429,7 @@ public class KubernetesNativeBackend implements Backend {
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
             execIdToAttemptNo.remove(execId);
-            releaseSubmissionSlot(execId);
+            releaseSubmissionSlot(execId, false);
             log.warn(
                 "Submission of pair " + pairId + " failed and the cluster confirms nothing" +
                 " was created (job " + jobName + " absent, " + census.safety() +
@@ -3103,6 +3116,45 @@ public class KubernetesNativeBackend implements Backend {
         }
     }
 
+    private void startDispatchRefillExecutor() {
+        dispatchRefillExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "k8s-dispatch-refill");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    private void scheduleDispatchRefill() {
+        ScheduledExecutorService executor = dispatchRefillExecutor;
+        if (!initialized || shuttingDown || executor == null || executor.isShutdown()) {
+            return;
+        }
+        if (!dispatchRefillScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            executor.schedule(
+                this::runDispatchRefill,
+                DISPATCH_REFILL_DEBOUNCE_MS,
+                TimeUnit.MILLISECONDS
+            );
+        } catch (RejectedExecutionException ignored) {
+            dispatchRefillScheduled.set(false);
+        }
+    }
+
+    private void runDispatchRefill() {
+        dispatchRefillScheduled.set(false);
+        if (!initialized || shuttingDown) {
+            return;
+        }
+        try {
+            dispatchRefillAction.run();
+        } catch (Exception e) {
+            log.warn("Triggered dispatch refill after slot release failed", e);
+        }
+    }
+
     /**
      * Releases the concurrency slot held by {@code execId}, if any.
      *
@@ -3110,14 +3162,20 @@ public class KubernetesNativeBackend implements Backend {
      * same execution is a no-op rather than a double decrement.
      */
     private void releaseSubmissionSlot(int execId) {
+        releaseSubmissionSlot(execId, true);
+    }
+
+    private void releaseSubmissionSlot(int execId, boolean triggerRefill) {
         if (kubernetesClient != null && !conserveBuildStops(execId)) {
             buildJobs.values().stream().filter(b -> b.identity().execution().execId() == execId)
                 .forEach(this::restoreBuildTracking);
             recordUnverified(execId, "build termination evidence is unresolved");
             return;
         }
+        boolean released;
         synchronized (slotLock) {
-            if (jobsHoldingSlot.remove(execId)) {
+            released = jobsHoldingSlot.remove(execId);
+            if (released) {
                 activeJobCount.set(jobsHoldingSlot.size());
                 log.debug(
                     "Released K8s concurrency slot (execId=" +
@@ -3135,6 +3193,9 @@ public class KubernetesNativeBackend implements Backend {
                 build.accountingSettled = true;
                 retireBuildTracking(build);
             }
+        }
+        if (released && triggerRefill) {
+            scheduleDispatchRefill();
         }
     }
 

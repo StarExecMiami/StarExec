@@ -135,6 +135,21 @@ public class KubernetesJobMonitorPollLoopTests {
         assertFalse(loop.isAlive(), "the polling loop is still running a second after stop()");
     }
 
+    @Test
+    public void retryPendingUsesShortInitialIntervalThenBacksOffToDefault() {
+        org.junit.jupiter.api.Assertions.assertEquals(1_000L, monitor.nextPollIntervalMs(true));
+        org.junit.jupiter.api.Assertions.assertEquals(1_000L, monitor.nextPollIntervalMs(true));
+        org.junit.jupiter.api.Assertions.assertEquals(1_000L, monitor.nextPollIntervalMs(true));
+        org.junit.jupiter.api.Assertions.assertEquals(1_000L, monitor.nextPollIntervalMs(true));
+        org.junit.jupiter.api.Assertions.assertEquals(1_000L, monitor.nextPollIntervalMs(true));
+        org.junit.jupiter.api.Assertions.assertEquals(5_000L, monitor.nextPollIntervalMs(true));
+        org.junit.jupiter.api.Assertions.assertEquals(5_000L, monitor.nextPollIntervalMs(true));
+
+        // Returning to normal polling resets the fast-retry counter.
+        org.junit.jupiter.api.Assertions.assertEquals(5_000L, monitor.nextPollIntervalMs(false));
+        org.junit.jupiter.api.Assertions.assertEquals(1_000L, monitor.nextPollIntervalMs(true));
+    }
+
     private Thread monitorThread() throws Exception {
         Field field = KubernetesJobMonitor.class.getDeclaredField("monitorThread");
         field.setAccessible(true);
