@@ -1193,6 +1193,19 @@ public class RESTServices {
 	@Path("/cluster/loads/{queueId}")
 	@Produces("text/plain")
 	public String getLoadsForQueue(@PathParam("queueId") int queueId, @Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		if (userId <= 0 || userId == R.PUBLIC_USER_ID) {
+			throw RESTException.NOT_FOUND;
+		}
+		org.starexec.data.to.Queue queue = Queues.get(queueId);
+		if (queue == null) {
+			log.warn("getLoadsForQueue", "Queue not found: " + queueId);
+			throw RESTException.NOT_FOUND;
+		}
+		if (!R.QUEUE_STATUS_ACTIVE.equals(queue.getStatus())
+				&& !GeneralSecurity.hasAdminReadPrivileges(userId)) {
+			throw RESTException.NOT_FOUND;
+		}
 		String loads = JobManager.getLoadRepresentationForQueue(queueId);
 		if (Util.isNullOrEmpty(loads)) {
 			log.warn("getLoadsForQueue", "Queue not found: " + queueId);

@@ -1,6 +1,7 @@
 var jobPairTable;
 var qid = 0; // ID of the selected queue, or the queue that owns the selected node
 var selectedId = 0;  // ID of the selected primitive
+var selectedNodeType = ""; // Node rel type of the selected primitive
 var qIdForQueueGraph = 1; // queue id used to select which queuegraph image is displayed; default is 1 because
                           // all.q always exists
 
@@ -288,13 +289,39 @@ $(document).ready(function() {
 	}, 10000);
 });
 
+function findInitialQueueNode(tree) {
+	var root = tree.get_node("#");
+	var children = (root && Array.isArray(root.children)) ? root.children : [];
+	var firstInactive = null;
+	for (var i = 0; i < children.length; i++) {
+		var node = tree.get_node(children[i]);
+		if (!node || !node.data) {
+			continue;
+		}
+		if (node.data.rel === "active_queue") {
+			return node.id;
+		}
+		if (!firstInactive && node.data.rel === "inactive_queue") {
+			firstInactive = node.id;
+		}
+	}
+	return firstInactive;
+}
+
 function initClusterExplorer() {
 	star.mountTree($("#exploreList").on("ready.jstree refresh.jstree", addNodeCountsToTree),
 		starexecRoot + "services/cluster/queues", {
 			rootId: -1,
 			queues: true,
 			stateKey: "cluster",
-			initial: "queue-1",
+			ready: function(tree) {
+				if (!tree.get_selected().length) {
+					var initialQueueId = findInitialQueueNode(tree);
+					if (initialQueueId) {
+						star.selectTreeNode(tree, initialQueueId);
+					}
+				}
+			},
 			select: function(node, tree) {
 				var parent = tree.get_node(node.parent);
 				var parentId = parent && parent.data ? parent.data.id : null;
@@ -434,6 +461,7 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 function getDetails(id, type, parentId) {
 	var url = '';
 	selectedId = id;
+	selectedNodeType = type || '';
 	jobPairTable.fnClearTable();	//immediately get rid of the current data, which makes it look more responsive
 	//get the queue, not that the global is set later so we can't use it
 	if (!(id === undefined)) {
@@ -517,6 +545,10 @@ function loadQstatOutput() {
 }
 
 function loadQueueLoads() {
+	if (selectedNodeType === "inactive_queue") {
+		$("#loadOutput").val("Queue is inactive (no active load data).");
+		return;
+	}
 	$.get(
 		starexecRoot + "services/cluster/loads/" + qid,
 		{},
@@ -524,7 +556,11 @@ function loadQueueLoads() {
 			$("#loadOutput").val(data);
 		},
 		"text"
-	).fail(function() {
+	).fail(function(jqXHR) {
+		if (jqXHR && jqXHR.status === 404) {
+			$("#loadOutput").val("Queue load data is not available for this queue.");
+			return;
+		}
 		showMessage('error', "Internal error loading queue loads", 5000);
 	});
 }

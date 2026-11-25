@@ -85,10 +85,13 @@ public abstract class JobManager {
 		}
 
 		Queue queue = Queues.get(queueId);
-		if (queue != null && R.QUEUE_STATUS_ACTIVE.equals(queue.getStatus())) {
-			LoadBalanceMonitor initializedMonitor = getMonitor(queueId);
-			initializedMonitor.setUserLoadDataFormattedString();
-			return initializedMonitor.toString();
+		if (queue != null) {
+			if (R.QUEUE_STATUS_ACTIVE.equals(queue.getStatus())) {
+				LoadBalanceMonitor initializedMonitor = getMonitor(queueId);
+				initializedMonitor.setUserLoadDataFormattedString();
+				return initializedMonitor.toString();
+			}
+			return formatInactiveQueueLoadMessage(queue);
 		}
 
 		String knownQueues = queueToMonitor.keySet().toString();
@@ -97,6 +100,11 @@ public abstract class JobManager {
 				"queue not found: " + queueId
 						+ "\n\tknown queues:" + knownQueues);
 		return null;
+	}
+
+	private static String formatInactiveQueueLoadMessage(Queue queue) {
+		String name = queue.getName() == null ? String.valueOf(queue.getId()) : queue.getName();
+		return "Queue " + name + " is inactive (no active load data).\n";
 	}
 
 	/**
