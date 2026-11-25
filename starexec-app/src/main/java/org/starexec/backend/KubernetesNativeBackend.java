@@ -2523,44 +2523,6 @@ public class KubernetesNativeBackend implements Backend {
             .addToLimits("memory", new Quantity(memoryLimit))
             .addToLimits("cpu", new Quantity(cpuLimit));
 
-        Map<String, String> nodeSelector = new HashMap<>();
-        if (workerNodeSelectorKey != null && !workerNodeSelectorKey.trim().isEmpty()) {
-            nodeSelector.put(workerNodeSelectorKey, workerNodeSelectorValue);
-        }
-        if (strictOnePairPerCpu
-                && strictCpuNodeLabelKey != null
-                && !strictCpuNodeLabelKey.isEmpty()) {
-            nodeSelector.put(strictCpuNodeLabelKey, strictCpuNodeLabelValue);
-        }
-
-        // Route to the queue's nodes. Without this the selector carried only the worker
-        // label, so a pair submitted to one queue could execute on any worker node in any
-        // other -- the queue was recorded in the database and shown in the UI while
-        // meaning nothing to the scheduler. Queues separate competitions and hardware
-        // classes, so that is a correctness failure, not a scheduling inefficiency.
-        //
-        // Membership of the default queue is "not claimed by any other queue", which a
-        // nodeSelector cannot express -- it matches label values, and this is the absence
-        // of a label. That is why the default queue used to carry no queue constraint at
-        // all, which left it selecting on the worker label alone: on a cluster where some
-        // workers are labelled for another queue, a default-queue pair could be scheduled
-        // onto that queue's hardware. It is the same defect the queue selector was added
-        // to fix, surviving in the one case the selector could not state.
-        //
-        // nodeAffinity can state it. DoesNotExist is a required match on the absence of
-        // the key, so a default-queue pod is confined to nodes no other queue claims.
-        // Applied alongside the nodeSelector, which Kubernetes ANDs with it.
-        String queueName = pendingQueueName.get();
-        boolean queueLabelUsable = queueLabelKey != null && !queueLabelKey.trim().isEmpty();
-        Affinity queueAffinity = null;
-        if (queueName != null && queueLabelUsable) {
-            if (isDefaultQueueName(queueName)) {
-                queueAffinity = defaultQueueAffinity();
-            } else {
-                nodeSelector.put(queueLabelKey, queueName);
-            }
-        }
-
         boolean pinToAppNode = requiresSameNodeDataPvc();
         String pinnedNodeName = null;
         if (pinToAppNode && appNodeName != null && !appNodeName.trim().isEmpty()) {
@@ -2572,6 +2534,55 @@ public class KubernetesNativeBackend implements Backend {
                 dataPvcAccessMode +
                 " but STAREXEC_K8S_APP_NODE_NAME is unavailable; job scheduling may fail"
             );
+        }
+
+        Map<String, String> nodeSelector = new HashMap<>();
+        Affinity queueAffinity = null;
+        if (pinnedNodeName != null) {
+            // kubelet still enforces nodeSelector and nodeAffinity even when spec.nodeName
+            // is pinned directly, so worker/queue selectors on an unlabelled app node trigger
+            // Predicate NodeAffinity failed when mounting a ReadWriteOnce PVC.
+            log.debug(
+                "Omitting worker nodeSelector and queue affinity because job " + jobName +
+                " is pinned to app node '" + pinnedNodeName + "' for " + dataPvcAccessMode +
+                " data PVC"
+            );
+        } else {
+            if (workerNodeSelectorKey != null && !workerNodeSelectorKey.trim().isEmpty()) {
+                nodeSelector.put(workerNodeSelectorKey, workerNodeSelectorValue);
+            }
+            if (strictOnePairPerCpu
+                    && strictCpuNodeLabelKey != null
+                    && !strictCpuNodeLabelKey.isEmpty()) {
+                nodeSelector.put(strictCpuNodeLabelKey, strictCpuNodeLabelValue);
+            }
+
+            // Route to the queue's nodes. Without this the selector carried only the worker
+            // label, so a pair submitted to one queue could execute on any worker node in any
+            // other -- the queue was recorded in the database and shown in the UI while
+            // meaning nothing to the scheduler. Queues separate competitions and hardware
+            // classes, so that is a correctness failure, not a scheduling inefficiency.
+            //
+            // Membership of the default queue is "not claimed by any other queue", which a
+            // nodeSelector cannot express -- it matches label values, and this is the absence
+            // of a label. That is why the default queue used to carry no queue constraint at
+            // all, which left it selecting on the worker label alone: on a cluster where some
+            // workers are labelled for another queue, a default-queue pair could be scheduled
+            // onto that queue's hardware. It is the same defect the queue selector was added
+            // to fix, surviving in the one case the selector could not state.
+            //
+            // nodeAffinity can state it. DoesNotExist is a required match on the absence of
+            // the key, so a default-queue pod is confined to nodes no other queue claims.
+            // Applied alongside the nodeSelector, which Kubernetes ANDs with it.
+            String queueName = pendingQueueName.get();
+            boolean queueLabelUsable = queueLabelKey != null && !queueLabelKey.trim().isEmpty();
+            if (queueName != null && queueLabelUsable) {
+                if (isDefaultQueueName(queueName)) {
+                    queueAffinity = defaultQueueAffinity();
+                } else {
+                    nodeSelector.put(queueLabelKey, queueName);
+                }
+            }
         }
 
         return new JobBuilder()
@@ -2598,7 +2609,7 @@ public class KubernetesNativeBackend implements Backend {
                         .withSecurityContext(jobPodSecurityContext())
                         .withRestartPolicy("Never")
                         .withNodeName(pinnedNodeName)
-                        .withNodeSelector(nodeSelector)
+                        .withNodeSelector(nodeSelector.isEmpty() ? null : nodeSelector)
                         .withAffinity(queueAffinity)
                         .addNewContainer()
                             .withName("job-runner")

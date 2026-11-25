@@ -5333,4 +5333,74 @@ public class KubernetesNativeBackendTests {
         assertFalse(java.nio.file.Files.exists(topo));
         assertFalse(java.nio.file.Files.exists(topoTmp));
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void readWriteOncePinnedAppNodeOmitsWorkerNodeSelectorAndQueueAffinity() throws Exception {
+        Method build = KubernetesNativeBackend.class.getDeclaredMethod(
+            "buildKubernetesJob",
+            int.class, int.class, String.class, String.class, String.class, String.class);
+        build.setAccessible(true);
+
+        Field pendingQueueField = KubernetesNativeBackend.class.getDeclaredField("pendingQueueName");
+        pendingQueueField.setAccessible(true);
+
+        KubernetesNativeBackend rwoBackend = backendWithCpu("1");
+        setField(rwoBackend, "dataPvcAccessMode", "ReadWriteOnce");
+        setField(rwoBackend, "appNodeName", "quokka");
+        setField(rwoBackend, "queueLabelKey", "starexec/queue");
+        setField(rwoBackend, "strictOnePairPerCpu", true);
+        setField(rwoBackend, "strictCpuNodeLabelKey", "starexec.org/cpu-manager");
+        setField(rwoBackend, "strictCpuNodeLabelValue", "static");
+
+        ThreadLocal<String> rwoQueue = (ThreadLocal<String>) pendingQueueField.get(rwoBackend);
+        rwoQueue.set("kubernetes.q");
+        Job rwoNamedJob;
+        try {
+            rwoNamedJob = (Job) build.invoke(
+                rwoBackend, 601, 11, "rwo-named-job", "/script.sh", "/work", "/work/log.txt");
+        } finally {
+            rwoQueue.remove();
+        }
+        PodSpec rwoNamedSpec = rwoNamedJob.getSpec().getTemplate().getSpec();
+        assertEquals("quokka", rwoNamedSpec.getNodeName());
+        assertTrue(rwoNamedSpec.getNodeSelector() == null || rwoNamedSpec.getNodeSelector().isEmpty(),
+            "RWO nodeName pinning must omit nodeSelector so kubelet does not reject unlabelled app node: "
+                + rwoNamedSpec.getNodeSelector());
+        assertNull(rwoNamedSpec.getAffinity(),
+            "RWO nodeName pinning must omit queue affinity");
+
+        rwoQueue.set("all.q");
+        Job rwoDefaultJob;
+        try {
+            rwoDefaultJob = (Job) build.invoke(
+                rwoBackend, 602, 12, "rwo-default-job", "/script.sh", "/work", "/work/log.txt");
+        } finally {
+            rwoQueue.remove();
+        }
+        PodSpec rwoDefaultSpec = rwoDefaultJob.getSpec().getTemplate().getSpec();
+        assertEquals("quokka", rwoDefaultSpec.getNodeName());
+        assertTrue(rwoDefaultSpec.getNodeSelector() == null || rwoDefaultSpec.getNodeSelector().isEmpty());
+        assertNull(rwoDefaultSpec.getAffinity());
+
+        KubernetesNativeBackend rwxBackend = backendWithCpu("31");
+        setField(rwxBackend, "dataPvcAccessMode", "ReadWriteMany");
+        setField(rwxBackend, "appNodeName", "quokka");
+        setField(rwxBackend, "queueLabelKey", "starexec/queue");
+
+        ThreadLocal<String> rwxQueue = (ThreadLocal<String>) pendingQueueField.get(rwxBackend);
+        rwxQueue.set("kubernetes.q");
+        Job rwxJob;
+        try {
+            rwxJob = (Job) build.invoke(
+                rwxBackend, 603, 13, "rwx-job", "/script.sh", "/work", "/work/log.txt");
+        } finally {
+            rwxQueue.remove();
+        }
+        PodSpec rwxSpec = rwxJob.getSpec().getTemplate().getSpec();
+        assertNull(rwxSpec.getNodeName());
+        assertNotNull(rwxSpec.getNodeSelector());
+        assertEquals("true", rwxSpec.getNodeSelector().get("starexec.org/worker"));
+        assertEquals("kubernetes.q", rwxSpec.getNodeSelector().get("starexec/queue"));
+    }
 }
