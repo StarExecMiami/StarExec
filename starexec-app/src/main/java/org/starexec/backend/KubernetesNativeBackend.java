@@ -2524,11 +2524,8 @@ public class KubernetesNativeBackend implements Backend {
             .addToLimits("cpu", new Quantity(cpuLimit));
 
         boolean pinToAppNode = requiresSameNodeDataPvc();
-        String pinnedNodeName = null;
-        if (pinToAppNode && appNodeName != null && !appNodeName.trim().isEmpty()) {
-            pinnedNodeName = appNodeName;
-        }
-        if (pinToAppNode && (appNodeName == null || appNodeName.trim().isEmpty())) {
+        String pinnedNodeName = getPinnedAppNodeName();
+        if (pinToAppNode && pinnedNodeName == null) {
             log.warn(
                 "Shared data PVC uses " +
                 dataPvcAccessMode +
@@ -2747,6 +2744,35 @@ public class KubernetesNativeBackend implements Backend {
                 .endRequiredDuringSchedulingIgnoredDuringExecution()
             .endNodeAffinity()
             .build();
+    }
+
+    private String getPinnedAppNodeName() {
+        if (!requiresSameNodeDataPvc() || appNodeName == null) {
+            return null;
+        }
+        String trimmed = appNodeName.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
+     * Registers the pinned app node on demand in {@code starexec.nodes} when a
+     * {@code ReadWriteOnce} data PVC routes pods onto the app host, since that node may lack the
+     * worker label queried during cluster refresh and {@code UpdatePairRunSolverStats} rejects
+     * unknown nodes with {@code P0002}.
+     */
+    private void ensurePinnedAppNodeRegistered(String nodeName) {
+        if (nodeName == null) {
+            return;
+        }
+        String pinnedNode = getPinnedAppNodeName();
+        if (pinnedNode == null || !pinnedNode.equals(nodeName.trim())) {
+            return;
+        }
+        if (Cluster.getNodeIdByName(pinnedNode) > 0) {
+            return;
+        }
+        Cluster.addNodeIfNotExists(pinnedNode);
+        Cluster.setNodeStatus(pinnedNode, R.NODE_STATUS_ACTIVE);
     }
 
     private boolean requiresSameNodeDataPvc() {
@@ -4888,6 +4914,10 @@ public class KubernetesNativeBackend implements Backend {
                     nodeNames.add(node.getMetadata().getName());
                 }
             }
+            String pinnedNode = getPinnedAppNodeName();
+            if (pinnedNode != null && !nodeNames.contains(pinnedNode)) {
+                nodeNames.add(pinnedNode);
+            }
             return nodeNames.toArray(new String[0]);
         } catch (Exception e) {
             log.warn("Failed to read Kubernetes worker nodes", e);
@@ -5266,6 +5296,7 @@ public class KubernetesNativeBackend implements Backend {
                 return false;
             }
 
+            ensurePinnedAppNodeRegistered(nodeName);
             int nodeId = Cluster.getNodeIdByName(nodeName);
             if (nodeId <= 0) {
                 if (unregisteredNodesWarned.add(nodeName)) {
@@ -6457,6 +6488,7 @@ public class KubernetesNativeBackend implements Backend {
                         continue;
                     }
                     // Null attempt (a Job from before #185) keeps the unfenced overload.
+                    ensurePinnedAppNodeRegistered(nodeName);
                     boolean ok = attemptNo == null
                         ? JobPairs.updateRunSolverStats(
                             pairId,

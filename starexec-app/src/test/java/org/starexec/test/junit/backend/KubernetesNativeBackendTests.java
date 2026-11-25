@@ -44,6 +44,8 @@ import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.backend.KubernetesJobMonitor;
 import org.starexec.backend.PodPhaseView;
 import org.starexec.backend.StageStatusSnapshots;
+import org.starexec.constants.R;
+import org.starexec.data.database.Cluster;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.SolverBuildArtifacts;
 import org.starexec.data.to.JobPair;
@@ -5402,5 +5404,102 @@ public class KubernetesNativeBackendTests {
         assertNotNull(rwxSpec.getNodeSelector());
         assertEquals("true", rwxSpec.getNodeSelector().get("starexec.org/worker"));
         assertEquals("kubernetes.q", rwxSpec.getNodeSelector().get("starexec/queue"));
+    }
+
+    @Test
+    public void readWriteOnceWorkerNodesIncludesPinnedAppNodeWithoutPollutingReadWriteMany()
+            throws Exception {
+        KubernetesNativeBackend rwoBackend = backendSeeingNodes(nodeWithQueueLabel("n021", "all.q"));
+        setField(rwoBackend, "dataPvcAccessMode", "ReadWriteOnce");
+        setField(rwoBackend, "appNodeName", " quokka ");
+        assertEquals(
+            List.of("n021", "quokka"),
+            java.util.Arrays.asList(rwoBackend.getWorkerNodes())
+        );
+
+        KubernetesNativeBackend rwoAlreadyWorker = backendSeeingNodes(
+            nodeWithQueueLabel("n021", "all.q"),
+            nodeWithQueueLabel("quokka", "all.q")
+        );
+        setField(rwoAlreadyWorker, "dataPvcAccessMode", "ReadWriteOnce");
+        setField(rwoAlreadyWorker, "appNodeName", "quokka");
+        assertEquals(
+            List.of("n021", "quokka"),
+            java.util.Arrays.asList(rwoAlreadyWorker.getWorkerNodes())
+        );
+
+        KubernetesNativeBackend rwxBackend = backendSeeingNodes(nodeWithQueueLabel("n021", "all.q"));
+        setField(rwxBackend, "dataPvcAccessMode", "ReadWriteMany");
+        setField(rwxBackend, "appNodeName", "quokka");
+        assertEquals(
+            List.of("n021"),
+            java.util.Arrays.asList(rwxBackend.getWorkerNodes())
+        );
+    }
+
+    @Test
+    public void readWriteOnceRegistersPinnedAppNodeBeforePlacementAndStats() throws Exception {
+        KubernetesNativeBackend rwoBackend = new KubernetesNativeBackend();
+        setField(rwoBackend, "dataPvcAccessMode", "ReadWriteOnce");
+        setField(rwoBackend, "appNodeName", "quokka");
+
+        Path out = fencedOutput(612, COMPLETE, 1, true);
+        java.nio.file.Files.writeString(
+            out.resolve("stats.json"),
+            "{\"pairId\":612,\"stageNumber\":1,\"wallclockTime\":1.5,\"cpuTime\":1.5,"
+                + "\"userTime\":1.0,\"systemTime\":0.5,\"maxVirtualMemory\":10,"
+                + "\"maxResidentSetSize\":10,\"diskSize\":10,\"hostname\":\"quokka\"}"
+        );
+        KubernetesJobMonitor.JobCompletionCallback rwoCallback =
+            armFenced(rwoBackend, 62, 612, out, 2);
+
+        try (MockedStatic<Cluster> cluster = Mockito.mockStatic(Cluster.class);
+                MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            cluster.when(() -> Cluster.getNodeIdByName("quokka")).thenReturn(-1, 42, 42);
+            cluster.when(() -> Cluster.setNodeStatus("quokka", R.NODE_STATUS_ACTIVE))
+                .thenReturn(true);
+            stubOpenPair(jp, 612);
+            jp.when(() -> JobPairs.tryUpdatePairExecutionHost(612, 42))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
+            jp.when(() -> JobPairs.setPairStatusPreciseResult(
+                    612, 1, COMPLETE, NOT_REACHED, false, 2))
+                .thenReturn(PairStatusResult.APPLIED);
+            jp.when(() -> JobPairs.updateRunSolverStats(
+                    Mockito.eq(612), Mockito.eq("quokka"), Mockito.anyDouble(),
+                    Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyDouble(),
+                    Mockito.anyDouble(), Mockito.anyLong(), Mockito.eq(1), Mockito.anyLong(),
+                    Mockito.eq(Integer.valueOf(2))))
+                .thenReturn(true);
+            jp.when(() -> JobPairs.addJobPairAttributes(
+                    Mockito.eq(612), Mockito.eq(1), Mockito.any(java.util.Properties.class),
+                    Mockito.eq(Integer.valueOf(2))))
+                .thenReturn(true);
+
+            assertTrue(rwoCallback.onJobPlaced(execution(62, "job-62"), "quokka"));
+            assertTrue(rwoCallback.onJobComplete(execution(62, "job-62")));
+
+            cluster.verify(() -> Cluster.addNodeIfNotExists("quokka"));
+            cluster.verify(() -> Cluster.setNodeStatus("quokka", R.NODE_STATUS_ACTIVE));
+            jp.verify(() -> JobPairs.tryUpdatePairExecutionHost(612, 42));
+            jp.verify(() -> JobPairs.updateRunSolverStats(
+                Mockito.eq(612), Mockito.eq("quokka"), Mockito.anyDouble(), Mockito.anyDouble(),
+                Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyLong(),
+                Mockito.eq(1), Mockito.anyLong(), Mockito.eq(Integer.valueOf(2))));
+        }
+
+        KubernetesNativeBackend rwxBackend = new KubernetesNativeBackend();
+        setField(rwxBackend, "dataPvcAccessMode", "ReadWriteMany");
+        setField(rwxBackend, "appNodeName", "quokka");
+        Path rwxOut = fencedOutput(613, COMPLETE, 1, true);
+        KubernetesJobMonitor.JobCompletionCallback rwxCallback =
+            armFenced(rwxBackend, 63, 613, rwxOut, 3);
+
+        try (MockedStatic<Cluster> cluster = Mockito.mockStatic(Cluster.class);
+                MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            cluster.when(() -> Cluster.getNodeIdByName("node-a")).thenReturn(-1);
+            assertFalse(rwxCallback.onJobPlaced(execution(63, "job-63"), "node-a"));
+            cluster.verify(() -> Cluster.addNodeIfNotExists(Mockito.any()), Mockito.never());
+            jp.verifyNoInteractions();
+        }
     }
 }
