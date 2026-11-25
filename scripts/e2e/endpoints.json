@@ -1,5 +1,5 @@
 {
-  "resolved_at_commit": "b79eb4a532b0c7b2f7c37b29f6f0cf38cf8c8e72",
+  "resolved_at_commit": "efadbfca7ccf30fc9712acc1123b86577588109f",
   "endpoints": {
     "login": {
       "method": "POST",
