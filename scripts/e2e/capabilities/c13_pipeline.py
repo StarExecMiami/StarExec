@@ -33,6 +33,12 @@ EXPECTED = {
         "szs-observed-statuses": "Theorem",
     },
 }
+
+
+def stage_attrs_match(stage, stage_attrs):
+    if stage == 1:
+        return stage_attrs == EXPECTED[1]
+    return all(stage_attrs.get(k) == v for k, v in EXPECTED[stage].items())
 MARKER = [
     "% SZS status Success for theBenchmark.p",
     "% SZS output start Assurance for theBenchmark.p",
@@ -212,10 +218,7 @@ def run_pipeline(cap, ctx):
             attrs.setdefault(int(s), {})[k] = v
         for s in (1, 2):
             stage_attrs = attrs.get(s, {})
-            if s == 1:
-                matched = stage_attrs == EXPECTED[1]
-            else:
-                matched = all(stage_attrs.get(k) == v for k, v in EXPECTED[2].items())
+            matched = stage_attrs_match(s, stage_attrs)
             cap.check(
                 f"{pid}-attrs-{s}",
                 f"pair {pid}: stage {s} attributes match SZSPostProcessor contract (#179)",

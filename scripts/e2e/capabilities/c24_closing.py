@@ -30,7 +30,7 @@ from lib.steps import (
 )
 from lib import oracle
 from capabilities.c07_solvers import configs_of, upload_solver
-from capabilities.c13_pipeline import EXPECTED, FIELDS, WATCHER, parse_events, utc
+from capabilities.c13_pipeline import EXPECTED, FIELDS, WATCHER, parse_events, stage_attrs_match, utc
 
 
 # ------------------------------------------------------------------------------------------- 24: #183
@@ -128,13 +128,14 @@ def run_pipeline_rerun(cap, ctx):
     ):
         attrs.setdefault(int(s), {})[k] = v
     for s in (1, 2):
+        stage_attrs = attrs.get(s, {})
         cap.check(
             f"attrs-{s}",
             f"stage {s} attributes after the rerun are exactly the new attempt's (#183)",
             f"job_attributes for stage {s} are exactly the SZSPostProcessor output of that stage",
             EXPECTED[s],
-            attrs.get(s, {}),
-            attrs.get(s, {}) == EXPECTED[s],
+            stage_attrs,
+            stage_attrs_match(s, stage_attrs),
             ["pair_rerun"],
         )
     cap.check(

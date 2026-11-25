@@ -149,9 +149,37 @@ def _session(cap, ctx, space, processor, fixture):
                 headers={"Content-Type": "application/octet-stream"},
             )
         fin = owner.request(
-            "POST", f"/services/uploads/sessions/{int(sid)}/finalize", keep=["jobId"]
+            "POST",
+            f"/services/uploads/sessions/{int(sid)}/finalize",
+            keep=["status", "jobId", "errorMessage"],
         )
-        job = (owner.json(fin) or {}).get("jobId")
+        fin_data = owner.json(fin) or {}
+        job = fin_data.get("jobId")
+        if not job and fin_data.get("status") not in ("COMPLETE", "FAILED", "ERROR", "CANCELLED"):
+            fin_state = dict(fin_data)
+
+            def _poll_finalize():
+                sr = owner.get(
+                    f"/services/uploads/sessions/{int(sid)}",
+                    keep=["status", "jobId", "errorMessage"],
+                )
+                sd = owner.json(sr) or {}
+                fin_state.update(sd)
+                return (
+                    bool(sd.get("jobId"))
+                    or sd.get("status") in ("COMPLETE", "FAILED", "ERROR", "CANCELLED"),
+                    sd.get("status"),
+                )
+
+            _, _, _ = ctx.wait(
+                f"upload session {int(sid)} finalize",
+                _poll_finalize,
+                ctx.cfg.timeout("upload", 300),
+                interval=1.0,
+            )
+            job = fin_state.get("jobId")
+            if not job:
+                state = fin_state
         if job:
             done, state, _ = wait_upload(
                 ctx, owner, job, ctx.cfg.timeout("upload", 300)
