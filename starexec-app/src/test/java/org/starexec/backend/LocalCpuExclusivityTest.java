@@ -619,7 +619,7 @@ public class LocalCpuExclusivityTest {
                 System::nanoTime,
                 50L,
                 0L,
-                250_000_000L,
+                2_000_000_000L,
                 monitor);
     }
 
@@ -872,13 +872,17 @@ public class LocalCpuExclusivityTest {
         }
 
         @Override
-        public void assignPid(LocalCpuExclusivity.SlotReservation reservation, long pid)
+        public synchronized void assignPid(LocalCpuExclusivity.SlotReservation reservation, long pid)
                 throws IOException {
             Path procs = reservation.getCgroupProcsPath();
             String existing = Files.exists(procs) ? Files.readString(procs, StandardCharsets.UTF_8) : "";
             if (!existing.contains(Long.toString(pid))) {
                 Files.writeString(
-                        procs, existing + pid + "\n", StandardCharsets.UTF_8);
+                        procs,
+                        pid + "\n",
+                        StandardCharsets.UTF_8,
+                        java.nio.file.StandardOpenOption.CREATE,
+                        java.nio.file.StandardOpenOption.APPEND);
             }
         }
 

@@ -1041,7 +1041,7 @@ public class LocalBackend implements Backend {
             // attempts never execute outside their reserved sibling partition.
             command.add("/bin/sh");
             command.add("-c");
-            command.add("printf '%s\\n' \"$$\" > \"$1\" && shift && exec \"$@\"");
+            command.add("printf '%s\\n' \"$$\" >> \"$1\" && shift && exec \"$@\"");
             command.add("starexec-cgroup-enter");
             command.add(cgroupProcs.toString());
         }
