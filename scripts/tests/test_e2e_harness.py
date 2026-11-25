@@ -87,7 +87,11 @@ class E2EHarnessTest(unittest.TestCase):
 
         verify_results = ep.verify(None, REPO_ROOT)
         failed = [r for r in verify_results if not r["ok"]]
-        self.assertEqual(failed, [], f"Drifted endpoint citations: {failed}")
+        self.assertEqual(failed, [], f"Drifted endpoint citations at pinned commit: {failed}")
+
+        head_results = ep.verify("HEAD", REPO_ROOT)
+        head_failed = [r for r in head_results if not r["ok"]]
+        self.assertEqual(head_failed, [], f"Drifted endpoint citations against HEAD: {head_failed}")
 
     def test_verify_endpoints_falls_back_to_head_when_pinned_commit_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
