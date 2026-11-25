@@ -546,44 +546,75 @@ pipeline {
                             RC=\$?
                             set -e
                             test "\${RC}" -eq 2
-                            exit 0
+                        else
+                            SHORT_SHA=\$(printf '%s' "${env.GIT_SHA}" | cut -c1-8)
+                            export E2E_CFG_PATH="\${TMP_E2E}/k8s-e2e-config.json"
+                            export E2E_MATRIX_MODE="${matrixMode}"
+                            export E2E_APP_URL="${env.APP_URL}"
+                            export E2E_SHORT_SHA="\${SHORT_SHA}"
+                            export E2E_K8S_NAMESPACE="${env.K8S_NAMESPACE}"
+                            export E2E_HELM_RELEASE="${env.HELM_RELEASE}"
+                            export E2E_GIT_SHA="${env.GIT_SHA}"
+                            export E2E_PUBLISHED_IMAGE="${env.PUBLISHED_IMAGE}"
+                            export E2E_DEPLOY_IMAGE_DIGEST="${env.DEPLOY_IMAGE_DIGEST}"
+                            export E2E_REPORT_DIR="\${PWD}/target/e2e-reports/kubernetes"
+
+                            "\${TMP_E2E}/venv/bin/python" -c '
+import json, os
+cfg = {
+    "backend": "kubernetes",
+    "mode": os.environ["E2E_MATRIX_MODE"],
+    "fixture_mode": "reproducible-offline",
+    "base_url": os.environ["E2E_APP_URL"],
+    "deployment_name": "sq-" + os.environ["E2E_SHORT_SHA"] + "-k8s",
+    "db_exec": [
+        "microk8s", "kubectl", "exec", "-i", "-n", os.environ["E2E_K8S_NAMESPACE"],
+        "deploy/" + os.environ["E2E_HELM_RELEASE"], "-c", "postgres", "--",
+        "psql", "-U", "starexec", "-d", "starexec", "-X", "-qAt", "-v", "ON_ERROR_STOP=1",
+    ],
+    "app_exec": [
+        "microk8s", "kubectl", "exec", "-i", "-n", os.environ["E2E_K8S_NAMESPACE"],
+        "deploy/" + os.environ["E2E_HELM_RELEASE"], "-c", "app", "--",
+    ],
+    "app_data_root": "/app/data",
+    "queue_id": "auto",
+    "commit": os.environ["E2E_GIT_SHA"],
+    "image": os.environ["E2E_PUBLISHED_IMAGE"],
+    "image_digest": os.environ["E2E_DEPLOY_IMAGE_DIGEST"],
+    "report_dir": os.environ["E2E_REPORT_DIR"],
+    "allowed_hosts": ["quokka.acorn.miami.edu"],
+    "admin_user_id": 1,
+    "enable_browser": False,
+    "timeouts": {"upload": 300, "job": 1200, "pause": 120, "kill": 120, "dispatch": 180, "smtp": 60},
+}
+with open(os.environ["E2E_CFG_PATH"], "w", encoding="utf-8") as fh:
+    json.dump(cfg, fh, indent=2)
+    fh.write("\n")
+'
+
+                            "\${TMP_E2E}/venv/bin/python" scripts/e2e/run.py \\
+                                --config "\${E2E_CFG_PATH}" \\
+                                --backend kubernetes \\
+                                --mode "${matrixMode}" \\
+                                --image-digest "${env.DEPLOY_IMAGE_DIGEST}" \\
+                                --matrix-out target/e2e-reports/kubernetes
                         fi
 
-                        SHORT_SHA=\$(printf '%s' "${env.GIT_SHA}" | cut -c1-8)
-                        cat > "\${TMP_E2E}/k8s-e2e-config.json" <<EOF
-                        {
-                          "backend": "kubernetes",
-                          "mode": "${matrixMode}",
-                          "fixture_mode": "reproducible-offline",
-                          "base_url": "${env.APP_URL}",
-                          "deployment_name": "sq-\${SHORT_SHA}-k8s",
-                          "db_exec": ["microk8s", "kubectl", "exec", "-i", "-n", "${env.K8S_NAMESPACE}", "deploy/${env.HELM_RELEASE}", "-c", "postgres", "--", "psql", "-U", "starexec", "-d", "starexec", "-X", "-qAt", "-v", "ON_ERROR_STOP=1"],
-                          "app_exec": ["microk8s", "kubectl", "exec", "-i", "-n", "${env.K8S_NAMESPACE}", "deploy/${env.HELM_RELEASE}", "-c", "app", "--"],
-                          "app_data_root": "/app/data",
-                          "queue_id": "auto",
-                          "commit": "${env.GIT_SHA}",
-                          "image": "${env.PUBLISHED_IMAGE}",
-                          "image_digest": "${env.DEPLOY_IMAGE_DIGEST}",
-                          "report_dir": "\${PWD}/target/e2e-reports/kubernetes",
-                          "allowed_hosts": ["quokka.acorn.miami.edu"],
-                          "admin_user_id": 1,
-                          "enable_browser": false,
-                          "timeouts": {"upload": 300, "job": 1200, "pause": 120, "kill": 120, "dispatch": 180, "smtp": 60}
-                        }
-                        EOF
-
-                        "\${TMP_E2E}/venv/bin/python" scripts/e2e/run.py \\
-                            --config "\${TMP_E2E}/k8s-e2e-config.json" \\
-                            --backend kubernetes \\
-                            --mode "${matrixMode}" \\
-                            --image-digest "${env.DEPLOY_IMAGE_DIGEST}" \\
-                            --matrix-out target/e2e-reports/kubernetes
+                        for report_file in \\
+                            target/e2e-reports/kubernetes/matrix-report.json \\
+                            target/e2e-reports/kubernetes/matrix-report.csv \\
+                            target/e2e-reports/kubernetes/matrix-summary.md; do
+                            if [ ! -s "\${report_file}" ]; then
+                                echo "ERROR: expected non-empty E2E matrix report artifact: \${report_file}" >&2
+                                exit 1
+                            fi
+                        done
                     """
                 }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'target/e2e-reports/kubernetes/**', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'target/e2e-reports/kubernetes/**', allowEmptyArchive: false
                 }
             }
         }

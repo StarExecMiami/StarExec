@@ -325,6 +325,88 @@ class E2EHarnessTest(unittest.TestCase):
         self.assertIn("Deployed E2E Matrix (Kubernetes)", jenkins)
         self.assertIn("--backend kubernetes", jenkins)
 
+    def test_jenkinsfile_shell_blocks_have_no_indented_heredoc_delimiters(self):
+        import re
+
+        jenkins = (REPO_ROOT / "Jenkinsfile").read_text(encoding="utf-8")
+        sh_blocks = re.findall(
+            r"""\bsh\s*(?:\(\s*script\s*:\s*)?('''|\"\"\")(.*?)\1""",
+            jenkins,
+            flags=re.DOTALL,
+        )
+        self.assertGreaterEqual(len(sh_blocks), 5)
+
+        for quote, body in sh_blocks:
+            rendered = body
+            if quote == '"""':
+                rendered = re.sub(r"(?<!\\)\$\{[^}]+\}", "stub", rendered)
+                rendered = rendered.replace("\\\\", "\\").replace("\\$", "$")
+
+            lines = rendered.splitlines()
+            idx = 0
+            while idx < len(lines):
+                match = re.search(
+                    r"<<(-?)\s*(?:'([^']+)'|\"([^\"]+)\"|([A-Za-z_][A-Za-z0-9_]*))",
+                    lines[idx],
+                )
+                if not match:
+                    idx += 1
+                    continue
+                strip_tabs = bool(match.group(1))
+                delimiter = match.group(2) or match.group(3) or match.group(4)
+                idx += 1
+                closed = False
+                while idx < len(lines):
+                    candidate = lines[idx].lstrip("\t") if strip_tabs else lines[idx]
+                    self.assertFalse(
+                        lines[idx].lstrip(" \t") == delimiter and candidate != delimiter,
+                        f"Heredoc closing delimiter {delimiter!r} is space-indented in Jenkinsfile: {lines[idx]!r}",
+                    )
+                    if candidate == delimiter:
+                        closed = True
+                        break
+                    idx += 1
+                self.assertTrue(closed, f"Unterminated heredoc {delimiter!r} in Jenkinsfile sh block")
+                idx += 1
+
+    def test_jenkinsfile_k8s_e2e_stage_valid_sh_and_enforces_matrix_reports(self):
+        import re
+
+        jenkins = (REPO_ROOT / "Jenkinsfile").read_text(encoding="utf-8")
+        stage_match = re.search(
+            r"stage\('Deployed E2E Matrix \(Kubernetes\)'\)\s*\{(?P<body>.*?)^\s*\}\s*// end stages",
+            jenkins,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+        self.assertIsNotNone(stage_match)
+        stage_body = stage_match.group("body")
+
+        sh_match = re.search(r'sh\s*"""(.*?)"""', stage_body, flags=re.DOTALL)
+        self.assertIsNotNone(sh_match)
+        rendered = re.sub(r"(?<!\\)\$\{[^}]+\}", "stub", sh_match.group(1))
+        rendered = rendered.replace("\\\\", "\\").replace("\\$", "$")
+
+        proc = subprocess.run(
+            ["sh", "-n"],
+            input=rendered,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertRegex(
+            rendered,
+            r'(?m)^\s*"\$\{TMP_E2E\}/venv/bin/python"\s+scripts/e2e/run\.py\s+\\\n\s+--config\s+',
+        )
+        for artifact in (
+            "target/e2e-reports/kubernetes/matrix-report.json",
+            "target/e2e-reports/kubernetes/matrix-report.csv",
+            "target/e2e-reports/kubernetes/matrix-summary.md",
+        ):
+            self.assertIn(artifact, rendered)
+        self.assertIn('[ ! -s "${report_file}" ]', rendered)
+        self.assertIn("allowEmptyArchive: false", stage_body)
+
     def test_ci_only_selections_close_complete_matrix_rows(self):
         import re
         from capabilities import BY_NUMBER
