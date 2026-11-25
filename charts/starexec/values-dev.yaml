@@ -48,19 +48,27 @@ kubernetes:
   # would quietly pin development to whatever image each node happened to cache.
   jobImagePullPolicy: Always
   jobServiceAccount: starexec-job
-  maxConcurrentJobs: 10
+  # Because dataPvc uses ReadWriteOnce (microk8s-hostpath pinned to quokka),
+  # KubernetesNativeBackend binds job pods directly via spec.nodeName=quokka
+  # (8 CPUs / 64GiB allocatable, ~5.8 CPUs free beside app/system pods),
+  # bypassing kube-scheduler queuing. Keep maxConcurrentJobs <= 4 and per-job
+  # limits at integer 1 CPU (required by strictOnePairPerCpu=true) / 2Gi so
+  # kubelet on quokka never rejects concurrent E2E pods with OutOfcpu.
+  maxConcurrentJobs: 4
   nodeSelector:
     starexec.org/worker: "true"
   dataPvc:
     accessModes:
       - ReadWriteOnce
   resources:
+    # KubernetesNativeBackend always creates Guaranteed QoS pods with
+    # requests == limits from STAREXEC_K8S_{CPU,MEMORY}_LIMIT.
     requests:
-      cpu: "100m"
-      memory: "256Mi"
+      cpu: "1"
+      memory: "2Gi"
     limits:
-      cpu: "31"
-      memory: "250Gi"
+      cpu: "1"
+      memory: "2Gi"
 
 persistence:
   enabled: true
