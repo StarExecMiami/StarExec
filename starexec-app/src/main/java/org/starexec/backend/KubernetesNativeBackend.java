@@ -4910,9 +4910,13 @@ public class KubernetesNativeBackend implements Backend {
 
             List<String> nodeNames = new ArrayList<>();
             for (Node node : nodes.getItems()) {
-                if (node.getMetadata() != null && node.getMetadata().getName() != null) {
-                    nodeNames.add(node.getMetadata().getName());
+                if (node.getMetadata() == null || node.getMetadata().getName() == null) {
+                    continue;
                 }
+                if (!isNodeSchedulable(node)) {
+                    continue;
+                }
+                nodeNames.add(node.getMetadata().getName());
             }
             String pinnedNode = getPinnedAppNodeName();
             if (pinnedNode != null && !nodeNames.contains(pinnedNode)) {
@@ -4999,6 +5003,9 @@ public class KubernetesNativeBackend implements Backend {
 
             for (Node node : nodes.getItems()) {
                 if (node.getMetadata() == null || node.getMetadata().getName() == null) {
+                    continue;
+                }
+                if (!isNodeSchedulable(node)) {
                     continue;
                 }
 

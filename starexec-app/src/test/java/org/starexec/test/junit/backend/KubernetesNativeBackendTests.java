@@ -4035,20 +4035,35 @@ public class KubernetesNativeBackendTests {
         String name,
         String queueLabelValue
     ) {
+        return nodeWithQueueLabel(name, queueLabelValue, Boolean.FALSE, "True");
+    }
+
+    private io.fabric8.kubernetes.api.model.Node nodeWithQueueLabel(
+        String name,
+        String queueLabelValue,
+        Boolean unschedulable,
+        String readyStatus
+    ) {
         java.util.Map<String, String> labels = new java.util.HashMap<>();
         labels.put("starexec.org/worker", "true");
         if (queueLabelValue != null) {
             labels.put("starexec.org/queue", queueLabelValue);
         }
-        io.fabric8.kubernetes.api.model.Node node =
-            new io.fabric8.kubernetes.api.model.Node();
-        node.setMetadata(
-            new io.fabric8.kubernetes.api.model.ObjectMetaBuilder()
-                .withName(name)
-                .withLabels(labels)
-                .build()
-        );
-        return node;
+        io.fabric8.kubernetes.api.model.NodeBuilder builder =
+            new io.fabric8.kubernetes.api.model.NodeBuilder()
+                .withNewMetadata()
+                    .withName(name)
+                    .withLabels(labels)
+                .endMetadata()
+                .withNewSpec()
+                    .withUnschedulable(unschedulable)
+                .endSpec();
+        if (readyStatus != null) {
+            builder = builder.withNewStatus()
+                .addNewCondition().withType("Ready").withStatus(readyStatus).endCondition()
+                .endStatus();
+        }
+        return builder.build();
     }
 
     private KubernetesNativeBackend backendSeeingNodes(
@@ -5434,6 +5449,28 @@ public class KubernetesNativeBackendTests {
         assertEquals(
             List.of("n021"),
             java.util.Arrays.asList(rwxBackend.getWorkerNodes())
+        );
+    }
+
+    @Test
+    public void getWorkerNodesAndAssociationsExcludeNotReadyAndCordonedNodes() throws Exception {
+        KubernetesNativeBackend backend = backendSeeingNodes(
+            nodeWithQueueLabel("n021", "kubernetes.q", Boolean.FALSE, "True"),
+            nodeWithQueueLabel("n022", "kubernetes.q", Boolean.FALSE, "False"),
+            nodeWithQueueLabel("n023", "kubernetes.q", Boolean.TRUE, "True"),
+            nodeWithQueueLabel("n024", "kubernetes.q", Boolean.FALSE, "Unknown")
+        );
+        setField(backend, "dataPvcAccessMode", "ReadWriteMany");
+
+        assertEquals(
+            List.of("n021"),
+            java.util.Arrays.asList(backend.getWorkerNodes()),
+            "Only Ready, uncordoned worker nodes should be reported as active worker nodes"
+        );
+        assertEquals(
+            Map.of("n021", "kubernetes.q"),
+            backend.getNodeQueueAssociations(),
+            "Only Ready, uncordoned worker nodes should be associated with queues"
         );
     }
 
