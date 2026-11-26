@@ -5,11 +5,10 @@ import org.starexec.logger.StarLogger;
 import java.sql.Date;
 import java.sql.SQLException;
 
-import java.util.Iterator;
 import java.util.Map;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Analytics keeps a record of how often events happen.
@@ -31,19 +30,15 @@ public enum Analytics {
 
 	private static final StarLogger log = StarLogger.getLogger(Analytics.class);
 
-	private final int id;
-	private final HashMap<Date, Data> events;
+	private volatile int id;
+	private final ConcurrentHashMap<Date, Data> events;
 
 	private static final class Data {
-		private final Set<Integer> users;
-		public int count = 0;
-
-		Data() {
-			users = new HashSet<>();
-		}
+		private final Set<Integer> users = ConcurrentHashMap.newKeySet();
+		private final AtomicInteger count = new AtomicInteger(0);
 
 		void record(Integer user) {
-			++count;
+			count.incrementAndGet();
 			if (user != null) {
 				users.add(user);
 			}
@@ -57,33 +52,48 @@ public enum Analytics {
 	 * on with life. It is not worth throwing an exception.
 	 */
 	Analytics() {
-		events = new HashMap<>();
-		id = id();
+		events = new ConcurrentHashMap<>();
+		id = resolveEventId(true);
 	}
 
 	/**
 	 * Look up the ID for this event in the DB
-	 * @return ID if found, -1 if not found
+	 * @param logOnMissing whether missing/error lookup should log an error
+	 * @return ID if found, -1 if not found or pool is uninitialized
 	 */
-	private int id() {
-		int id = -1;
+	private int resolveEventId(boolean logOnMissing) {
+		if (!Common.isPoolInitialized()) {
+			return -1;
+		}
+		int resolved = -1;
 		try {
-			id = Common.query(
+			Integer queried = Common.query(
 					"{SELECT * FROM starexec.GetEventId(?)}",
 					procedure -> procedure.setString(1, this.name()),
-					results -> {
-						results.next();
-						return results.getInt("event_id");
-					}
+					results -> results.next() ? results.getInt("event_id") : -1
 			);
-		} catch (SQLException e) {
-			/* Cannot access `static log`
-			 * because it has not been initialized yet
-			 */
-			final StarLogger log = StarLogger.getLogger(Analytics.class);
-			log.error("Event not found in database: " + this.name());
+			resolved = (queried != null && queried > 0) ? queried : -1;
+			if (resolved == -1 && logOnMissing) {
+				StarLogger.getLogger(Analytics.class).error("Event not found in database: " + this.name());
+			}
+		} catch (SQLException | RuntimeException e) {
+			if (logOnMissing) {
+				/* Cannot reliably access `static log` while enum constants are still initializing. */
+				StarLogger.getLogger(Analytics.class).error("Event not found in database: " + this.name());
+			}
 		}
-		return id;
+		return resolved;
+	}
+
+	private int ensureEventId() {
+		int current = id;
+		if (current == -1) {
+			current = resolveEventId(false);
+			if (current != -1) {
+				id = current;
+			}
+		}
+		return current;
 	}
 
 	/**
@@ -105,50 +115,53 @@ public enum Analytics {
 	public static void saveToDB() {
 		Date now = now();
 		for (Analytics event : Analytics.values()) {
-			if (event.id != -1) {
-				Iterator<Map.Entry<Date, Data>> it = event.events.entrySet().iterator();
-				while (it.hasNext()) {
-					Map.Entry<Date,Data> kv = it.next();
-					Date date = kv.getKey();
-					Data v = kv.getValue();
+			int eventId = event.ensureEventId();
+			if (eventId == -1) {
+				continue;
+			}
+			for (Map.Entry<Date, Data> kv : event.events.entrySet()) {
+				Date date = kv.getKey();
+				Data v = kv.getValue();
+				int delta = v.count.getAndSet(0);
+				if (delta > 0) {
 					try {
-						event.saveToDB(date, v.count);
-						v.users.forEach(user -> {
-							try {
-								event.saveUserToDB(date, user);
-							} catch (SQLException e) {
-								log.error("Cannot record user " + user + " event: " + event.name(), e);
-							}
-						});
-						if (date.equals(now)) {
-							v.count = 0;
-						} else {
-							it.remove();
-						}
+						event.saveToDB(eventId, date, delta);
 					} catch (SQLException e) {
+						v.count.addAndGet(delta);
 						log.error("Cannot record event: " + event.name(), e);
+						continue;
 					}
+				}
+				for (Integer user : v.users) {
+					try {
+						event.saveUserToDB(eventId, date, user);
+					} catch (SQLException e) {
+						log.error("Cannot record user " + user + " event: " + event.name(), e);
+					}
+				}
+				if (!date.equals(now) && v.count.get() == 0) {
+					event.events.remove(date, v);
 				}
 			}
 		}
 	}
 
-	private void saveToDB(Date date, int count) throws SQLException {
+	private void saveToDB(int eventId, Date date, int count) throws SQLException {
 		Common.update(
 			"{call starexec.RecordEvent(?,?,?)}",
 			procedure -> {
-				procedure.setInt(1, id);
+				procedure.setInt(1, eventId);
 				procedure.setDate(2, date);
 				procedure.setInt(3, count);
 			}
 		);
 	}
 
-	private void saveUserToDB(Date date, int userId) throws SQLException {
+	private void saveUserToDB(int eventId, Date date, int userId) throws SQLException {
 		Common.update(
 			"{call starexec.RecordEventUser(?,?,?)}",
 			procedure -> {
-				procedure.setInt(1, id);
+				procedure.setInt(1, eventId);
 				procedure.setDate(2, date);
 				procedure.setInt(3, userId);
 			}

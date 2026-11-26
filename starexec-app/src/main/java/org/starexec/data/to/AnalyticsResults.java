@@ -25,7 +25,7 @@ public class AnalyticsResults {
     );
 
     public AnalyticsResults(String event, int count, int users) {
-        this.event = Analytics.valueOf(event);
+        this.event = Analytics.valueOf(event != null ? event.trim() : null);
         this.count = count;
         this.users = users;
     }
@@ -41,9 +41,9 @@ public class AnalyticsResults {
         while (results.next()) {
             list.add(
                 new AnalyticsResults(
-                    results.getString("event"),
-                    results.getInt("count"),
-                    results.getInt("users")
+                    results.getString("event_name"),
+                    results.getInt("event_count"),
+                    results.getInt("user_count")
                 )
             );
         }

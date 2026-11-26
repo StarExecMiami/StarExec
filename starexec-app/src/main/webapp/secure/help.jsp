@@ -26,7 +26,7 @@
 	}
 
 	int userId = SessionUtil.getUserId(request);
-	Analytics.JOB_ATTRIBUTES.record(userId);
+	Analytics.PAGEVIEW_HELP.record(userId);
 %>
 <star:template title="Help Center"
                js="lib/jquery.dataTables.min, help/help, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min"
