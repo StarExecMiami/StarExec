@@ -37,6 +37,9 @@ public class Users {
 	// Cache for isAdmin results to reduce database calls
 	private static final ConcurrentHashMap<Integer, CacheEntry<Boolean>> isAdminCache = new ConcurrentHashMap<>();
 	private static final long CACHE_DURATION_MS = TimeUnit.MINUTES.toMillis(5); // Cache for 5 minutes
+	private static final int DELETE_USER_SOCKET_TIMEOUT_MS = 180_000;
+	private static final String DELETE_USER_STATEMENT_TIMEOUT_EXTENDED = "150s";
+	private static final String DELETE_USER_STATEMENT_TIMEOUT_DEFAULT = "25s";
 
 	private static class CacheEntry<T> {
 		final T value;
@@ -1408,12 +1411,29 @@ public class Users {
 		log.debug("User with id=" + userToDeleteId + " is about to be deleted");
 		Connection con = null;
 		PreparedStatement procedure = null;
+		Integer previousNetworkTimeoutMs = null;
+		boolean discardConnection = false;
 		try {
 			// Serialize deletion against new jobs owned by this user. AddJob and this
 			// transaction acquire the same advisory lock; unlike a users-row lock, it
 			// does not conflict with foreign-key checks while stopping running jobs.
 			con = Common.getConnection();
+			String statementTimeout = DELETE_USER_STATEMENT_TIMEOUT_DEFAULT;
+			try {
+				previousNetworkTimeoutMs = con.getNetworkTimeout();
+				con.setNetworkTimeout(Runnable::run, DELETE_USER_SOCKET_TIMEOUT_MS);
+				statementTimeout = DELETE_USER_STATEMENT_TIMEOUT_EXTENDED;
+			} catch (SQLException | AbstractMethodError | RuntimeException timeoutUnsupported) {
+				previousNetworkTimeoutMs = null;
+				log.debug("deleteUser: could not extend JDBC network timeout, bounding statement_timeout to "
+						+ statementTimeout, timeoutUnsupported);
+			}
 			Common.beginTransaction(con);
+			try (PreparedStatement timeoutStmt = con.prepareStatement(
+					"SELECT set_config('statement_timeout', ?, true)")) {
+				timeoutStmt.setString(1, statementTimeout);
+				timeoutStmt.execute();
+			}
 			lockUserJobLifecycleForDeletion(con, userToDeleteId);
 
 			// First, get information needed for cleanup
@@ -1547,6 +1567,10 @@ public class Users {
 			log.debug("Successfully deleted user with id=" + userToDeleteId + " and all associated data");
 			return true;
 		} catch (PSQLException e) {
+			if (hasSocketTimeoutCause(e)) {
+				discardConnection = true;
+				cancelQuietly(procedure);
+			}
 			if ("P0002".equals(e.getSQLState())) {
 				throw new StarExecDatabaseException("User not found: " + userToDeleteId, e);
 			}
@@ -1565,19 +1589,80 @@ public class Users {
 			// deliberate refusal to act, and the message names the candidate spaces
 			// so an admin can resolve it. Swallowing it here made that refusal
 			// indistinguishable from any other internal error.
+			if (hasSocketTimeoutCause(e)) {
+				discardConnection = true;
+				cancelQuietly(procedure);
+			}
 			throw e;
 		} catch (Exception e) {
+			if (hasSocketTimeoutCause(e)) {
+				discardConnection = true;
+				cancelQuietly(procedure);
+			}
 			log.error("deleteUser", e);
 		} finally {
 			// No-op once the commit above re-enabled autoCommit; on every failure
 			// path this rolls the transaction back and restores autoCommit before
-			// the connection returns to the pool.
-			Common.doRollback(con);
-			Common.safeClose(con);
+			// the connection returns to the pool. Timed-out or unrestorable connections
+			// are discarded and aborted so LockUserJobLifecycle never remains held on
+			// a pooled socket.
+			SQLException cleanupFailure = null;
+			if (con != null) {
+				if (!discardConnection) {
+					try {
+						if (!con.getAutoCommit()) {
+							con.rollback();
+							con.setAutoCommit(true);
+							log.warn("doRollback", "Database transaction rollback.");
+						}
+					} catch (SQLException rollbackEx) {
+						discardConnection = true;
+						cleanupFailure = rollbackEx;
+					}
+				}
+				if (!discardConnection && previousNetworkTimeoutMs != null) {
+					try {
+						con.setNetworkTimeout(Runnable::run, previousNetworkTimeoutMs);
+					} catch (SQLException | AbstractMethodError | RuntimeException restoreEx) {
+						discardConnection = true;
+						cleanupFailure = (restoreEx instanceof SQLException)
+								? (SQLException) restoreEx
+								: new SQLException("could not restore connection network timeout", restoreEx);
+					}
+				}
+				if (discardConnection) {
+					Common.discardConnection(con,
+							cleanupFailure != null ? cleanupFailure : new SQLException("discarding unrestorable deleteUser connection"));
+				}
+			}
 			Common.safeClose(procedure);
+			Common.safeClose(con);
 		}
 		log.debug("internal error trying to delete user with id = " + userToDeleteId);
 		return false;
+	}
+
+	private static boolean hasSocketTimeoutCause(Throwable error) {
+		Throwable current = error;
+		int depth = 0;
+		while (current != null && depth++ < 16) {
+			if (current instanceof java.net.SocketTimeoutException) {
+				return true;
+			}
+			current = current.getCause();
+		}
+		return false;
+	}
+
+	private static void cancelQuietly(PreparedStatement statement) {
+		if (statement == null) {
+			return;
+		}
+		try {
+			statement.cancel();
+		} catch (SQLException | RuntimeException ignored) {
+			// Best-effort cancellation before aborting the physical connection.
+		}
 	}
 
 	/** Refuses symbolic or inaccessible ancestors before committing recursive cleanup. */

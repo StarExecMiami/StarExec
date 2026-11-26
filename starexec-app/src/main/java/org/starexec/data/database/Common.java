@@ -350,6 +350,12 @@ public class Common {
 		}
 	}
 
+	static void discardConnection(Connection con, SQLException reason) {
+		if (con != null) {
+			discard(con, reason);
+		}
+	}
+
 	/** As {@link #runTransactional}, acquiring and returning the connection as well. */
 	public static <T> T inTransaction(TransactionalWork<T> work) throws SQLException {
 		Connection con = null;

@@ -378,8 +378,9 @@ function sendDeleteUserRequest(userId) {
     starexecRoot + "services/delete/user/" + userId,
     {},
     function (validatorStatusCode) {
-      parseReturnCode(validatorStatusCode);
-      window.location.replace(starexecRoot);
+      if (parseReturnCode(validatorStatusCode)) {
+        window.location.replace(starexecRoot);
+      }
     },
     "json"
   ).fail(function () {
