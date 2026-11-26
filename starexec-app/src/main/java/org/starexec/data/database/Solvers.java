@@ -424,18 +424,21 @@ public class Solvers {
 	 */
 	public static boolean cleanOrphanedDeletedSolvers() {
 		try {
-			List<Integer> candidates = new ArrayList<>();
-			try (Connection connection = Common.getConnection(); PreparedStatement statement = connection.prepareStatement(
-					"SELECT s.id FROM starexec.solvers s WHERE s.deleted IS TRUE"
-					+ " AND NOT starexec.solver_storage_requires_retention(s.id,s.path)"
-					+ " AND (s.disk_size>0 OR NOT EXISTS (SELECT 1 FROM starexec.solver_assoc sa WHERE sa.solver_id=s.id))"
-					+ " ORDER BY s.id"); ResultSet result = statement.executeQuery()) {
-				while (result.next()) candidates.add(result.getInt(1));
-			}
+			List<Integer> candidates = Common.withLongConnection(connection -> {
+				List<Integer> ids = new ArrayList<>();
+				try (PreparedStatement statement = connection.prepareStatement(
+						"SELECT s.id FROM starexec.solvers s WHERE s.deleted IS TRUE"
+						+ " AND NOT starexec.solver_storage_requires_retention(s.id,s.path)"
+						+ " AND (s.disk_size>0 OR NOT EXISTS (SELECT 1 FROM starexec.solver_assoc sa WHERE sa.solver_id=s.id))"
+						+ " ORDER BY s.id"); ResultSet result = statement.executeQuery()) {
+					while (result.next()) ids.add(result.getInt(1));
+				}
+				return ids;
+			});
 			boolean success = true;
 			for (int id : candidates) {
 				if (!delete(id)) { success = false; continue; }
-				Common.inTransaction(connection -> {
+				Common.inLongTransaction(connection -> {
 					try (PreparedStatement statement = connection.prepareStatement("SELECT starexec.remove_deleted_solver_metadata(?)")) {
 						statement.setInt(1, id);
 						try (ResultSet result = statement.executeQuery()) { return result.next() && result.getBoolean(1); }

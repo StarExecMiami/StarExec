@@ -33,6 +33,10 @@ public class Common {
 
 	// args to append to the database URL
 	private static final String POSTGRES_URL_ARGUMENTS = "?sslmode=disable&stringtype=unspecified&currentSchema=starexec,public&ApplicationName=StarExec&socketTimeout=30&connectTimeout=10&tcpKeepAlive=true";
+	public static final int LONG_OPERATION_SOCKET_TIMEOUT_MS = 180_000;
+	public static final String LONG_OPERATION_STATEMENT_TIMEOUT_EXTENDED = "150s";
+	public static final String LONG_OPERATION_STATEMENT_TIMEOUT_FALLBACK = "25s";
+	public static final String LONG_OPERATION_IDLE_TX_TIMEOUT = "180s";
 
 	/**
 	 * Removes surrounding JDBC ODBC escape braces if present. Callers historically pass strings like
@@ -365,6 +369,224 @@ public class Common {
 		} finally {
 			safeClose(con);
 		}
+	}
+
+	/**
+	 * Runs {@code work} inside a transaction with extended JDBC socket timeout and bounded
+	 * PostgreSQL {@code statement_timeout}/{@code idle_in_transaction_session_timeout}.
+	 * Timed-out or unrestorable connections are aborted and discarded instead of returning
+	 * to the pool with dangling locks or half-closed sockets.
+	 */
+	public static <T> T inLongTransaction(TransactionalWork<T> work) throws SQLException {
+		Connection con = null;
+		Integer previousTimeoutMs = null;
+		boolean discardConnection = false;
+		SQLException failure = null;
+		T result = null;
+		boolean committed = false;
+		try {
+			con = getConnection();
+			previousTimeoutMs = extendNetworkTimeout(con, LONG_OPERATION_SOCKET_TIMEOUT_MS);
+			String statementTimeout = (previousTimeoutMs != null)
+					? LONG_OPERATION_STATEMENT_TIMEOUT_EXTENDED
+					: LONG_OPERATION_STATEMENT_TIMEOUT_FALLBACK;
+			if (!con.getAutoCommit()) {
+				throw new SQLException("inLongTransaction was given a connection that is already in a"
+						+ " transaction; it will not commit or roll back a transaction it does not own");
+			}
+			con.setAutoCommit(false);
+			applyTransactionTimeouts(con, statementTimeout, LONG_OPERATION_IDLE_TX_TIMEOUT);
+			result = work.run(con);
+			con.commit();
+			committed = true;
+		} catch (Exception e) {
+			failure = (e instanceof SQLException)
+					? (SQLException) e
+					: new SQLException("Long transaction rolled back: " + e.getMessage(), e);
+			if (hasSocketTimeoutCause(e)) {
+				discardConnection = true;
+			}
+		} finally {
+			if (con != null) {
+				if (failure != null && !committed && !discardConnection) {
+					try {
+						if (!con.getAutoCommit()) {
+							con.rollback();
+						}
+					} catch (SQLException rollbackFailure) {
+						discardConnection = true;
+						if (failure != rollbackFailure) {
+							failure.addSuppressed(rollbackFailure);
+						}
+					}
+				}
+				if (!discardConnection) {
+					try {
+						if (!con.getAutoCommit()) {
+							con.setAutoCommit(true);
+						}
+					} catch (SQLException restoreFailure) {
+						discardConnection = true;
+						if (failure != null) {
+							if (failure != restoreFailure) {
+								failure.addSuppressed(restoreFailure);
+							}
+						} else {
+							log.error("inLongTransaction", "transaction COMMITTED but autoCommit could"
+									+ " not be restored; connection discarded.", restoreFailure);
+						}
+					}
+				}
+				if (!discardConnection && !restoreNetworkTimeout(con, previousTimeoutMs, failure)) {
+					discardConnection = true;
+				}
+				if (discardConnection) {
+					discard(con, failure != null ? failure : new SQLException("discarding unrestorable long connection"));
+				}
+			}
+			safeClose(con);
+		}
+		if (failure != null) {
+			throw failure;
+		}
+		return result;
+	}
+
+	/**
+	 * Runs {@code work} on a pooled connection with extended JDBC socket timeout and
+	 * session-scoped {@code statement_timeout} (reset before returning to the pool).
+	 * Timed-out or unrestorable connections are aborted and discarded cleanly.
+	 */
+	public static <T> T withLongConnection(TransactionalWork<T> work) throws SQLException {
+		Connection con = null;
+		Integer previousTimeoutMs = null;
+		boolean discardConnection = false;
+		boolean sessionTimeoutApplied = false;
+		SQLException failure = null;
+		T result = null;
+		try {
+			con = getConnection();
+			previousTimeoutMs = extendNetworkTimeout(con, LONG_OPERATION_SOCKET_TIMEOUT_MS);
+			String statementTimeout = (previousTimeoutMs != null)
+					? LONG_OPERATION_STATEMENT_TIMEOUT_EXTENDED
+					: LONG_OPERATION_STATEMENT_TIMEOUT_FALLBACK;
+			sessionTimeoutApplied = applySessionStatementTimeout(con, statementTimeout);
+			result = work.run(con);
+		} catch (Exception e) {
+			failure = (e instanceof SQLException)
+					? (SQLException) e
+					: new SQLException("Long operation failed: " + e.getMessage(), e);
+			if (hasSocketTimeoutCause(e)) {
+				discardConnection = true;
+			}
+		} finally {
+			if (con != null) {
+				if (!discardConnection && sessionTimeoutApplied) {
+					try (Statement reset = con.createStatement()) {
+						reset.execute("RESET statement_timeout");
+					} catch (SQLException resetEx) {
+						discardConnection = true;
+						if (failure != null && failure != resetEx) {
+							failure.addSuppressed(resetEx);
+						}
+					}
+				}
+				if (!discardConnection && !restoreNetworkTimeout(con, previousTimeoutMs, failure)) {
+					discardConnection = true;
+				}
+				if (discardConnection) {
+					discard(con, failure != null ? failure : new SQLException("discarding unrestorable long connection"));
+				}
+			}
+			safeClose(con);
+		}
+		if (failure != null) {
+			throw failure;
+		}
+		return result;
+	}
+
+	static Integer extendNetworkTimeout(Connection con, int timeoutMs) {
+		try {
+			int prev = con.getNetworkTimeout();
+			con.setNetworkTimeout(Runnable::run, timeoutMs);
+			return prev;
+		} catch (SQLException | AbstractMethodError | RuntimeException timeoutUnsupported) {
+			log.debug("extendNetworkTimeout", "Could not extend JDBC network timeout", timeoutUnsupported);
+			return null;
+		}
+	}
+
+	static boolean restoreNetworkTimeout(Connection con, Integer previousTimeoutMs, Throwable failure) {
+		if (previousTimeoutMs == null) {
+			return true;
+		}
+		try {
+			con.setNetworkTimeout(Runnable::run, previousTimeoutMs);
+			return true;
+		} catch (SQLException | AbstractMethodError | RuntimeException restoreEx) {
+			if (failure != null && failure != restoreEx) {
+				failure.addSuppressed(restoreEx);
+			}
+			return false;
+		}
+	}
+
+	static void applyTransactionTimeouts(
+			Connection con, String statementTimeout, String idleInTransactionTimeout) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT set_config('statement_timeout', ?, true)")) {
+			if (ps != null) {
+				ps.setString(1, statementTimeout);
+				ps.execute();
+			}
+		}
+		if (idleInTransactionTimeout != null) {
+			try (PreparedStatement ps = con.prepareStatement(
+					"SELECT set_config('idle_in_transaction_session_timeout', ?, true)")) {
+				if (ps != null) {
+					ps.setString(1, idleInTransactionTimeout);
+					ps.execute();
+				}
+			}
+		}
+	}
+
+	private static boolean applySessionStatementTimeout(Connection con, String statementTimeout) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT set_config('statement_timeout', ?, false)")) {
+			if (ps == null) {
+				return false;
+			}
+			ps.setString(1, statementTimeout);
+			ps.execute();
+			return true;
+		}
+	}
+
+	static boolean hasSocketTimeoutCause(Throwable error) {
+		Throwable current = error;
+		int depth = 0;
+		while (current != null && depth++ < 16) {
+			if (current instanceof java.net.SocketTimeoutException) {
+				return true;
+			}
+			current = current.getCause();
+		}
+		return false;
+	}
+
+	static void cancelQuietly(Statement statement) {
+		if (statement == null) {
+			return;
+		}
+		try {
+			statement.cancel();
+		} catch (SQLException | RuntimeException ignored) {
+			// Best-effort cancellation before aborting the physical connection.
+		}
+	}
+
+	static boolean isPoolInitialized() {
+		return dataPool != null;
 	}
 
 	/**

@@ -992,60 +992,50 @@ public class Benchmarks {
 	 * @return True on success, false on error
 	 */
 	public static boolean cleanOrphanedDeletedBenchmarks() {
-		Connection con = null;
-		PreparedStatement procedure = null;
-		ResultSet results = null;
-
 		// will contain the id of every benchmark that is associated with either a space
 		// or a pair
 		HashSet<Integer> parentedBenchmarks = new HashSet<>();
 		try {
-			con = Common.getConnection();
-
-			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarksAssociatedWithSpaces()");
-			results = procedure.executeQuery();
-			while (results.next()) {
-				parentedBenchmarks.add(results.getInt("id"));
-			}
-			Common.safeClose(procedure);
-			Common.safeClose(results);
-
-			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarksAssociatedWithPairs()");
-			results = procedure.executeQuery();
-			while (results.next()) {
-				parentedBenchmarks.add(results.getInt("id"));
-			}
-			Common.safeClose(procedure);
-			Common.safeClose(results);
-			procedure = con.prepareStatement("SELECT * FROM starexec.GetDeletedBenchmarks()");
-			results = procedure.executeQuery();
-			while (results.next()) {
-				Benchmark b = resultToBenchmark(results);
-				if (new File(b.getPath()).exists()) {
-					log.warn("a deleted benchmark still exists on disk! id = " + b.getId());
-					if (!Util.safeDeleteFileAndEmptyParents(b.getPath(), R.getBenchmarkPath())) {
-						log.warn("the benchmark could not be deleted! Not removing benchmark from the database");
-						continue;
+			return Common.withLongConnection(con -> {
+				try (PreparedStatement procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarksAssociatedWithSpaces()");
+						ResultSet results = procedure.executeQuery()) {
+					while (results.next()) {
+						parentedBenchmarks.add(results.getInt("id"));
 					}
 				}
-				// the benchmark has been deleted AND it is not associated with any spaces or
-				// job pairs
-				if (!parentedBenchmarks.contains(b.getId())) {
-					try {
-						removeBenchmarkFromDatabase(b.getId(), con);
-					} catch (StarExecDatabaseException e) {
-						log.error("Failed to remove orphaned benchmark from database: " + b.getId(), e);
-						// Continue with other benchmarks
+				try (PreparedStatement procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarksAssociatedWithPairs()");
+						ResultSet results = procedure.executeQuery()) {
+					while (results.next()) {
+						parentedBenchmarks.add(results.getInt("id"));
 					}
 				}
-			}
-			return true;
+				try (PreparedStatement procedure = con.prepareStatement("SELECT * FROM starexec.GetDeletedBenchmarks()");
+						ResultSet results = procedure.executeQuery()) {
+					while (results.next()) {
+						Benchmark b = resultToBenchmark(results);
+						if (new File(b.getPath()).exists()) {
+							log.warn("a deleted benchmark still exists on disk! id = " + b.getId());
+							if (!Util.safeDeleteFileAndEmptyParents(b.getPath(), R.getBenchmarkPath())) {
+								log.warn("the benchmark could not be deleted! Not removing benchmark from the database");
+								continue;
+							}
+						}
+						// the benchmark has been deleted AND it is not associated with any spaces or
+						// job pairs
+						if (!parentedBenchmarks.contains(b.getId())) {
+							try {
+								removeBenchmarkFromDatabase(b.getId(), con);
+							} catch (StarExecDatabaseException e) {
+								log.error("Failed to remove orphaned benchmark from database: " + b.getId(), e);
+								// Continue with other benchmarks
+							}
+						}
+					}
+				}
+				return true;
+			});
 		} catch (Exception e) {
 			log.error("cleanOrphanedDeletedBenchmarks", e);
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(procedure);
-			Common.safeClose(results);
 		}
 		return false;
 	}

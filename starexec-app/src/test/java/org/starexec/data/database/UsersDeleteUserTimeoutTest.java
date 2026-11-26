@@ -58,6 +58,7 @@ public class UsersDeleteUserTimeoutTest {
 		Connection con = statefulConnection(autoCommit);
 
 		PreparedStatement timeoutPs = mock(PreparedStatement.class);
+		PreparedStatement idleTimeoutPs = mock(PreparedStatement.class);
 		PreparedStatement lockLifecyclePs = mock(PreparedStatement.class);
 		ResultSet lockLifecycleRs = mock(ResultSet.class);
 		when(lockLifecyclePs.executeQuery()).thenReturn(lockLifecycleRs);
@@ -77,6 +78,8 @@ public class UsersDeleteUserTimeoutTest {
 				new SocketTimeoutException("Read timed out")));
 
 		when(con.prepareStatement("SELECT set_config('statement_timeout', ?, true)")).thenReturn(timeoutPs);
+		when(con.prepareStatement("SELECT set_config('idle_in_transaction_session_timeout', ?, true)"))
+				.thenReturn(idleTimeoutPs);
 		when(con.prepareStatement("SELECT starexec.LockUserJobLifecycle(?)")).thenReturn(lockLifecyclePs);
 		when(con.prepareStatement("SELECT id FROM starexec.users WHERE id = ?")).thenReturn(userExistsPs);
 		when(con.prepareStatement("SELECT starexec.lock_user_solver_storage_for_deletion(?)")).thenReturn(lockStoragePs);
@@ -101,11 +104,13 @@ public class UsersDeleteUserTimeoutTest {
 			boolean result = Users.deleteUser(44);
 			assertFalse(result);
 
-			var order = inOrder(con, timeoutPs, deleteUserPs);
+			var order = inOrder(con, timeoutPs, idleTimeoutPs, deleteUserPs);
 			order.verify(con).setNetworkTimeout(any(Executor.class), eq(180_000));
 			order.verify(con).setAutoCommit(false);
 			order.verify(timeoutPs).setString(1, "150s");
 			order.verify(timeoutPs).execute();
+			order.verify(idleTimeoutPs).setString(1, "180s");
+			order.verify(idleTimeoutPs).execute();
 			order.verify(deleteUserPs).execute();
 
 			verify(deleteUserPs).cancel();
@@ -123,6 +128,7 @@ public class UsersDeleteUserTimeoutTest {
 		doThrow(new SQLFeatureNotSupportedExceptionSafe()).when(con).setNetworkTimeout(any(), anyInt());
 
 		PreparedStatement timeoutPs = mock(PreparedStatement.class);
+		PreparedStatement idleTimeoutPs = mock(PreparedStatement.class);
 		PreparedStatement lockLifecyclePs = mock(PreparedStatement.class);
 		ResultSet lockLifecycleRs = mock(ResultSet.class);
 		when(lockLifecyclePs.executeQuery()).thenReturn(lockLifecycleRs);
@@ -138,6 +144,8 @@ public class UsersDeleteUserTimeoutTest {
 		PreparedStatement deleteUserPs = mock(PreparedStatement.class);
 
 		when(con.prepareStatement("SELECT set_config('statement_timeout', ?, true)")).thenReturn(timeoutPs);
+		when(con.prepareStatement("SELECT set_config('idle_in_transaction_session_timeout', ?, true)"))
+				.thenReturn(idleTimeoutPs);
 		when(con.prepareStatement("SELECT starexec.LockUserJobLifecycle(?)")).thenReturn(lockLifecyclePs);
 		when(con.prepareStatement("SELECT id FROM starexec.users WHERE id = ?")).thenReturn(userExistsPs);
 		when(con.prepareStatement("SELECT starexec.lock_user_solver_storage_for_deletion(?)")).thenReturn(lockStoragePs);

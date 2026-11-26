@@ -180,6 +180,7 @@ public class UploadArtifactCleanupRepository {
     public static <T> T withCleanupLock(CleanupDatabaseWork<T> work) throws Exception {
         Connection con = null;
         boolean locked = false;
+        boolean discardConnection = false;
         try {
             con = Common.getConnection();
             locked = tryAcquireCleanupLock(con);
@@ -187,8 +188,15 @@ public class UploadArtifactCleanupRepository {
                 return null;
             }
             return work.run(con);
+        } catch (Exception e) {
+            if (Common.hasSocketTimeoutCause(e)) {
+                discardConnection = true;
+            }
+            throw e;
         } finally {
-            if (locked && con != null) {
+            if (discardConnection && con != null) {
+                Common.discardConnection(con, new SQLException("discarding timed-out cleanup lock connection"));
+            } else if (locked && con != null) {
                 releaseCleanupLock(con);
             }
             Common.safeClose(con);
@@ -209,7 +217,8 @@ public class UploadArtifactCleanupRepository {
             ps.setLong(1, ADVISORY_LOCK_KEY);
             ps.executeQuery();
         } catch (SQLException e) {
-            log.warn("releaseCleanupLock", "Failed to release upload cleanup advisory lock", e);
+            log.warn("releaseCleanupLock", "Failed to release upload cleanup advisory lock; discarding physical connection", e);
+            Common.discardConnection(con, e);
         }
     }
 

@@ -870,79 +870,69 @@ public class Jobs {
      * @return True on success, false on error
      */
     public static boolean cleanOrphanedDeletedJobs() {
-        Connection con = null;
-        PreparedStatement procedure = null;
-        ResultSet results = null;
         try {
-            con = Common.getConnection();
-            // will contain the id of every job that is associated with a space
-            HashSet<Integer> parentedJobs = new HashSet<>();
-            procedure = con.prepareStatement(
-                "SELECT * FROM starexec.GetJobsAssociatedWithSpaces()"
-            );
-            results = procedure.executeQuery();
-            while (results.next()) {
-                parentedJobs.add(results.getInt("id"));
-            }
-            Common.safeClose(procedure);
-            Common.safeClose(results);
-
-            procedure = con.prepareStatement(
-                "SELECT * FROM starexec.GetDeletedJobs()"
-            );
-            results = procedure.executeQuery();
-
-            while (results.next()) {
-                Job j = resultsToJob(results);
-                int jobId = j.getId();
-
-                if (isReadOnly(jobId)) {
-                    log.info(
-                        "cleanOrphanedDeletedJobs",
-                        "Job " + jobId + " is readonly. Not cleaning."
-                    );
-                    continue;
-                }
-
-                // A deleted job with pairs still in flight is delete()'s to finish, because
-                // delete() confirms every execution stopped before removing anything.
-                // Purging it here removed its directory and rows with no such check.
-                // Not isJobComplete: GetJobStatusDetail answers DELETED for every deleted
-                // job, so it would hold every one of them back.
-                if (hasPairsInFlight(jobId)) {
-                    log.info(
-                        "cleanOrphanedDeletedJobs",
-                        "Job " + jobId + " still has pairs in flight; leaving it to" +
-                            " retryRefusedDeletions."
-                    );
-                    continue;
-                }
-
-                File jobDir = new File(Jobs.getDirectory(jobId));
-                if (jobDir.exists()) {
-                    log.warn(
-                        "a deleted job still exists on disk! id = " + jobId
-                    );
-                    if (!FileUtils.deleteQuietly(jobDir)) {
-                        log.warn(
-                            "the job could not be deleted! Not removing job from the database"
-                        );
-                        continue;
+            return Common.withLongConnection(con -> {
+                // will contain the id of every job that is associated with a space
+                HashSet<Integer> parentedJobs = new HashSet<>();
+                try (PreparedStatement procedure = con.prepareStatement(
+                        "SELECT * FROM starexec.GetJobsAssociatedWithSpaces()");
+                        ResultSet results = procedure.executeQuery()) {
+                    while (results.next()) {
+                        parentedJobs.add(results.getInt("id"));
                     }
                 }
-                // the benchmark has been deleted AND it is not associated with any spaces or
-                // job pairs
-                if (!parentedJobs.contains(jobId)) {
-                    removeJobFromDatabase(jobId);
+
+                try (PreparedStatement procedure = con.prepareStatement(
+                        "SELECT * FROM starexec.GetDeletedJobs()");
+                        ResultSet results = procedure.executeQuery()) {
+                    while (results.next()) {
+                        Job j = resultsToJob(results);
+                        int jobId = j.getId();
+
+                        if (isReadOnly(jobId)) {
+                            log.info(
+                                "cleanOrphanedDeletedJobs",
+                                "Job " + jobId + " is readonly. Not cleaning."
+                            );
+                            continue;
+                        }
+
+                        // A deleted job with pairs still in flight is delete()'s to finish, because
+                        // delete() confirms every execution stopped before removing anything.
+                        // Purging it here removed its directory and rows with no such check.
+                        // Not isJobComplete: GetJobStatusDetail answers DELETED for every deleted
+                        // job, so it would hold every one of them back.
+                        if (hasPairsInFlight(jobId)) {
+                            log.info(
+                                "cleanOrphanedDeletedJobs",
+                                "Job " + jobId + " still has pairs in flight; leaving it to" +
+                                    " retryRefusedDeletions."
+                            );
+                            continue;
+                        }
+
+                        File jobDir = new File(Jobs.getDirectory(jobId));
+                        if (jobDir.exists()) {
+                            log.warn(
+                                "a deleted job still exists on disk! id = " + jobId
+                            );
+                            if (!FileUtils.deleteQuietly(jobDir)) {
+                                log.warn(
+                                    "the job could not be deleted! Not removing job from the database"
+                                );
+                                continue;
+                            }
+                        }
+                        // the job has been deleted AND it is not associated with any spaces
+                        if (!parentedJobs.contains(jobId)) {
+                            removeJobFromDatabase(jobId);
+                        }
+                    }
                 }
-            }
-            return true;
+                return true;
+            });
         } catch (Exception e) {
             log.error("cleanOrphanedDeletedJobs", e);
-        } finally {
-            Common.safeClose(con);
-            Common.safeClose(procedure);
-            Common.safeClose(results);
         }
         return false;
     }
@@ -1029,20 +1019,16 @@ public class Jobs {
      * @return true on success and false otherwise
      */
     public static boolean setDeletedColumn(int jobId) {
-        Connection con = null;
-        PreparedStatement procedure = null;
         try {
-            con = Common.getConnection();
-
-            procedure = con.prepareStatement("SELECT starexec.DeleteJob(?)");
-            procedure.setInt(1, jobId);
-            procedure.execute();
-            return true;
+            return Common.inLongTransaction(con -> {
+                try (PreparedStatement procedure = con.prepareStatement("SELECT starexec.DeleteJob(?)")) {
+                    procedure.setInt(1, jobId);
+                    procedure.execute();
+                }
+                return true;
+            });
         } catch (Exception e) {
             log.error("setDeletedColumn", e);
-        } finally {
-            Common.safeClose(con);
-            Common.safeClose(procedure);
         }
         return false;
     }
@@ -1076,70 +1062,63 @@ public class Jobs {
     }
 
     private static boolean deleteOnce(int jobId) throws SQLException {
-        Connection con = null;
-        PreparedStatement procedure = null;
-
         if (Jobs.isReadOnly(jobId)) return false;
 
-        try {
-            List<Integer> previouslyKilledPairIds = getKilledPairIds(jobId);
-            if (previouslyKilledPairIds == null) {
-                return false;
-            }
-            // we should kill jobs before deleting them so no additional pairs are run
-            if (!Jobs.isJobComplete(jobId)) {
-                try (Connection killCon = Common.getConnection()) {
-                    if (!killCon.getAutoCommit()) {
-                        throw new SQLException(
-                            "Cannot delete job using a pooled connection with an open transaction"
-                        );
-                    }
-                    if (!kill(jobId, killCon)) {
-                        log.warn(
-                            "delete: refusing to delete job " + jobId +
-                                " because every active pair was not confirmed stopped and retired"
-                        );
-                        return false;
-                    }
+        List<Integer> previouslyKilledPairIds = getKilledPairIds(jobId);
+        if (previouslyKilledPairIds == null) {
+            return false;
+        }
+        // we should kill jobs before deleting them so no additional pairs are run
+        if (!Jobs.isJobComplete(jobId)) {
+            try (Connection killCon = Common.getConnection()) {
+                if (!killCon.getAutoCommit()) {
+                    throw new SQLException(
+                        "Cannot delete job using a pooled connection with an open transaction"
+                    );
+                }
+                if (!kill(jobId, killCon)) {
+                    log.warn(
+                        "delete: refusing to delete job " + jobId +
+                            " because every active pair was not confirmed stopped and retired"
+                    );
+                    return false;
                 }
             }
-            if (!clearTrackingForKilledPairs(previouslyKilledPairIds)) {
-                log.warn(
-                    "delete: refusing to delete job " + jobId +
-                        " because tracking for a confirmed-stopped pair could not be retired"
-                );
-                return false;
-            }
-            if (!Jobs.setDeletedColumn(jobId)) {
-                log.warn(
-                    "delete: refusing to delete job " + jobId +
-                        " because its deleted marker could not be stored"
-                );
-                return false;
-            }
-            con = Common.getConnection();
-
+        }
+        if (!clearTrackingForKilledPairs(previouslyKilledPairIds)) {
+            log.warn(
+                "delete: refusing to delete job " + jobId +
+                    " because tracking for a confirmed-stopped pair could not be retired"
+            );
+            return false;
+        }
+        if (!Jobs.setDeletedColumn(jobId)) {
+            log.warn(
+                "delete: refusing to delete job " + jobId +
+                    " because its deleted marker could not be stored"
+            );
+            return false;
+        }
+        Common.inLongTransaction(con -> {
             // Remove the jobs stats from the database.
             Jobs.removeCachedJobStats(jobId, con);
 
-            procedure = con.prepareStatement(
-                "SELECT starexec.DeleteAllJobPairsInJob(?)"
-            );
-            procedure.setInt(1, jobId);
-            procedure.execute();
-
-            // we should delete on disk second. This takes a long time, and
-            // we want users to quickly see that a job has been deleted
-            if (!Util.safeDeleteDirectory(getDirectory(jobId))) {
-                log.error("there was an error deleting the job directory!");
-                return false;
+            try (PreparedStatement procedure = con.prepareStatement(
+                    "SELECT starexec.DeleteAllJobPairsInJob(?)")) {
+                procedure.setInt(1, jobId);
+                procedure.execute();
             }
+            return null;
+        });
 
-            return true;
-        } finally {
-            Common.safeClose(con);
-            Common.safeClose(procedure);
+        // we should delete on disk second. This takes a long time, and
+        // we want users to quickly see that a job has been deleted
+        if (!Util.safeDeleteDirectory(getDirectory(jobId))) {
+            log.error("there was an error deleting the job directory!");
+            return false;
         }
+
+        return true;
     }
 
     /**
@@ -1918,23 +1897,24 @@ public class Jobs {
     ) throws StarExecException {
         final String method = "getDetailed";
         log.info("getting detailed info for job " + jobId);
-        Connection con = null;
-        ResultSet results = null;
-        PreparedStatement procedure = null;
         try {
-            con = Common.getConnection();
-            procedure = con.prepareStatement(
-                "SELECT * FROM starexec.GetJobById(?)"
-            );
-            procedure.setInt(1, jobId);
-            results = procedure.executeQuery();
-
-            if (!results.next()) {
+            final Job j = Common.withLongConnection(con -> {
+                try (PreparedStatement procedure = con.prepareStatement(
+                        "SELECT * FROM starexec.GetJobById(?)")) {
+                    procedure.setInt(1, jobId);
+                    try (ResultSet results = procedure.executeQuery()) {
+                        if (!results.next()) {
+                            return null;
+                        }
+                        Job loaded = resultsToJob(results);
+                        loaded.setStageAttributes(Jobs.getStageAttrsForJob(jobId, con));
+                        return loaded;
+                    }
+                }
+            });
+            if (j == null) {
                 return null;
             }
-
-            final Job j = resultsToJob(results);
-            j.setStageAttributes(Jobs.getStageAttrsForJob(jobId, con));
             if (getCompletedPairsOnly) {
                 log.debug(
                     method,
@@ -1956,11 +1936,6 @@ public class Jobs {
         } catch (Exception e) {
             log.error("getDetailed", "jobId: " + jobId, e);
             return null;
-        } finally {
-            // Close in reverse order of acquisition: ResultSet -> Statement -> Connection
-            Common.safeClose(results);
-            Common.safeClose(procedure);
-            Common.safeClose(con);
         }
     }
 
@@ -4290,67 +4265,60 @@ public class Jobs {
         int jobId,
         int since
     ) {
-        Connection con = null;
-
-        ResultSet results = null;
-        PreparedStatement procedure = null;
         try {
-            con = Common.getConnection();
-
-            log.info("getting detailed pairs for job " + jobId);
-
-            procedure = con.prepareStatement(
-                "SELECT * FROM starexec.GetNewCompletedJobPairsByJob(?, ?)"
-            );
-            procedure.setInt(1, jobId);
-            procedure.setInt(2, since);
-            results = procedure.executeQuery();
-            List<JobPair> pairs = getPairsDetailed(jobId, results, true);
-            HashMap<Integer, HashMap<Integer, Properties>> props =
-                Jobs.getNewJobAttributes(con, jobId, since);
-
-            for (JobPair jp : pairs) {
-                if (props.containsKey(jp.getId())) {
-                    HashMap<Integer, Properties> pairInfo = props.get(
-                        jp.getId()
-                    );
-                    if (
-                        pairInfo.containsKey(
-                            jp.getPrimaryStage().getStageNumber()
-                        )
-                    ) {
-                        jp
-                            .getPrimaryStage()
-                            .setAttributes(
-                                pairInfo.get(
-                                    jp.getPrimaryStage().getStageNumber()
-                                )
-                            );
+            return Common.withLongConnection(con -> {
+                log.info("getting detailed pairs for job " + jobId);
+                List<JobPair> pairs;
+                try (PreparedStatement procedure = con.prepareStatement(
+                        "SELECT * FROM starexec.GetNewCompletedJobPairsByJob(?, ?)")) {
+                    procedure.setInt(1, jobId);
+                    procedure.setInt(2, since);
+                    try (ResultSet results = procedure.executeQuery()) {
+                        pairs = getPairsDetailed(jobId, results, true);
                     }
                 }
-                // Add the pair's benchmark's expected result to the pair's attributes.
-                TreeMap<String, String> jpBenchProps =
-                    Benchmarks.getSortedAttributes(jp.getBench().getId());
-                // Make sure the benchmark properties has an expected result
-                if (jpBenchProps.containsKey(R.EXPECTED_RESULT)) {
-                    String expectedResult = jpBenchProps.get(R.EXPECTED_RESULT);
-                    List<JoblineStage> jpStages = jp.getStages();
-                    for (JoblineStage stage : jpStages) {
-                        // Set all the stages expected results to the benchmark's expected result.
-                        stage
-                            .getAttributes()
-                            .setProperty(R.EXPECTED_RESULT, expectedResult);
+                HashMap<Integer, HashMap<Integer, Properties>> props =
+                    Jobs.getNewJobAttributes(con, jobId, since);
+
+                for (JobPair jp : pairs) {
+                    if (props.containsKey(jp.getId())) {
+                        HashMap<Integer, Properties> pairInfo = props.get(
+                            jp.getId()
+                        );
+                        if (
+                            pairInfo.containsKey(
+                                jp.getPrimaryStage().getStageNumber()
+                            )
+                        ) {
+                            jp
+                                .getPrimaryStage()
+                                .setAttributes(
+                                    pairInfo.get(
+                                        jp.getPrimaryStage().getStageNumber()
+                                    )
+                                );
+                        }
+                    }
+                    // Add the pair's benchmark's expected result to the pair's attributes.
+                    TreeMap<String, String> jpBenchProps =
+                        Benchmarks.getSortedAttributes(jp.getBench().getId());
+                    // Make sure the benchmark properties has an expected result
+                    if (jpBenchProps.containsKey(R.EXPECTED_RESULT)) {
+                        String expectedResult = jpBenchProps.get(R.EXPECTED_RESULT);
+                        List<JoblineStage> jpStages = jp.getStages();
+                        for (JoblineStage stage : jpStages) {
+                            // Set all the stages expected results to the benchmark's expected result.
+                            stage
+                                .getAttributes()
+                                .setProperty(R.EXPECTED_RESULT, expectedResult);
+                        }
                     }
                 }
-            }
 
-            return pairs;
+                return pairs;
+            });
         } catch (Exception e) {
             log.error("getNewCompletedPairsDetailed", e);
-        } finally {
-            Common.safeClose(con);
-            Common.safeClose(results);
-            Common.safeClose(procedure);
         }
         return null;
     }

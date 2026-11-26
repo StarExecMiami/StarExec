@@ -2514,7 +2514,7 @@ public class Spaces {
 		}
 
 		try {
-			Common.inTransaction(con -> {
+			Common.inLongTransaction(con -> {
 				try (PreparedStatement ps = con.prepareStatement("SELECT starexec.RemoveSubspace(?)")) {
 					for (int subspaceId : subspaceIds) {
 						log.debug("subspaceId = " + subspaceId);

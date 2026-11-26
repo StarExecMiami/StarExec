@@ -1418,22 +1418,15 @@ public class Users {
 			// transaction acquire the same advisory lock; unlike a users-row lock, it
 			// does not conflict with foreign-key checks while stopping running jobs.
 			con = Common.getConnection();
-			String statementTimeout = DELETE_USER_STATEMENT_TIMEOUT_DEFAULT;
-			try {
-				previousNetworkTimeoutMs = con.getNetworkTimeout();
-				con.setNetworkTimeout(Runnable::run, DELETE_USER_SOCKET_TIMEOUT_MS);
-				statementTimeout = DELETE_USER_STATEMENT_TIMEOUT_EXTENDED;
-			} catch (SQLException | AbstractMethodError | RuntimeException timeoutUnsupported) {
-				previousNetworkTimeoutMs = null;
-				log.debug("deleteUser: could not extend JDBC network timeout, bounding statement_timeout to "
-						+ statementTimeout, timeoutUnsupported);
-			}
+			previousNetworkTimeoutMs = Common.extendNetworkTimeout(con, DELETE_USER_SOCKET_TIMEOUT_MS);
+			String statementTimeout = (previousNetworkTimeoutMs != null)
+					? DELETE_USER_STATEMENT_TIMEOUT_EXTENDED
+					: DELETE_USER_STATEMENT_TIMEOUT_DEFAULT;
 			Common.beginTransaction(con);
-			try (PreparedStatement timeoutStmt = con.prepareStatement(
-					"SELECT set_config('statement_timeout', ?, true)")) {
-				timeoutStmt.setString(1, statementTimeout);
-				timeoutStmt.execute();
-			}
+			// LockUserJobLifecycle intentionally wraps Jobs.killUsersJobs so AddJob cannot slip
+			// in after active jobs are stopped; idle_in_transaction_session_timeout bounds the lock
+			// if an external backend kill stalls.
+			Common.applyTransactionTimeouts(con, statementTimeout, Common.LONG_OPERATION_IDLE_TX_TIMEOUT);
 			lockUserJobLifecycleForDeletion(con, userToDeleteId);
 
 			// First, get information needed for cleanup
@@ -1567,9 +1560,9 @@ public class Users {
 			log.debug("Successfully deleted user with id=" + userToDeleteId + " and all associated data");
 			return true;
 		} catch (PSQLException e) {
-			if (hasSocketTimeoutCause(e)) {
+			if (Common.hasSocketTimeoutCause(e)) {
 				discardConnection = true;
-				cancelQuietly(procedure);
+				Common.cancelQuietly(procedure);
 			}
 			if ("P0002".equals(e.getSQLState())) {
 				throw new StarExecDatabaseException("User not found: " + userToDeleteId, e);
@@ -1589,15 +1582,15 @@ public class Users {
 			// deliberate refusal to act, and the message names the candidate spaces
 			// so an admin can resolve it. Swallowing it here made that refusal
 			// indistinguishable from any other internal error.
-			if (hasSocketTimeoutCause(e)) {
+			if (Common.hasSocketTimeoutCause(e)) {
 				discardConnection = true;
-				cancelQuietly(procedure);
+				Common.cancelQuietly(procedure);
 			}
 			throw e;
 		} catch (Exception e) {
-			if (hasSocketTimeoutCause(e)) {
+			if (Common.hasSocketTimeoutCause(e)) {
 				discardConnection = true;
-				cancelQuietly(procedure);
+				Common.cancelQuietly(procedure);
 			}
 			log.error("deleteUser", e);
 		} finally {
@@ -1620,15 +1613,9 @@ public class Users {
 						cleanupFailure = rollbackEx;
 					}
 				}
-				if (!discardConnection && previousNetworkTimeoutMs != null) {
-					try {
-						con.setNetworkTimeout(Runnable::run, previousNetworkTimeoutMs);
-					} catch (SQLException | AbstractMethodError | RuntimeException restoreEx) {
-						discardConnection = true;
-						cleanupFailure = (restoreEx instanceof SQLException)
-								? (SQLException) restoreEx
-								: new SQLException("could not restore connection network timeout", restoreEx);
-					}
+				if (!discardConnection && !Common.restoreNetworkTimeout(con, previousNetworkTimeoutMs, null)) {
+					discardConnection = true;
+					cleanupFailure = new SQLException("could not restore connection network timeout");
 				}
 				if (discardConnection) {
 					Common.discardConnection(con,
@@ -1640,29 +1627,6 @@ public class Users {
 		}
 		log.debug("internal error trying to delete user with id = " + userToDeleteId);
 		return false;
-	}
-
-	private static boolean hasSocketTimeoutCause(Throwable error) {
-		Throwable current = error;
-		int depth = 0;
-		while (current != null && depth++ < 16) {
-			if (current instanceof java.net.SocketTimeoutException) {
-				return true;
-			}
-			current = current.getCause();
-		}
-		return false;
-	}
-
-	private static void cancelQuietly(PreparedStatement statement) {
-		if (statement == null) {
-			return;
-		}
-		try {
-			statement.cancel();
-		} catch (SQLException | RuntimeException ignored) {
-			// Best-effort cancellation before aborting the physical connection.
-		}
 	}
 
 	/** Refuses symbolic or inaccessible ancestors before committing recursive cleanup. */
