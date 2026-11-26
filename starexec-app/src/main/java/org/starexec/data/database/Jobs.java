@@ -699,12 +699,14 @@ public class Jobs {
             // connections they committed whether or not the job did, so a rolled-back job
             // still reported itself as initiated.
             Reports.addToEventOccurrencesNotRelatedToQueue("jobs initiated", 1, con);
-            Reports.addToEventOccurrencesForQueue(
-                "jobs initiated",
-                1,
-                job.getQueue().getName(),
-                con
-            );
+            if (job.getQueue() != null && job.getQueue().getName() != null) {
+                Reports.addToEventOccurrencesForQueue(
+                    "jobs initiated",
+                    1,
+                    job.getQueue().getName(),
+                    con
+                );
+            }
 
             Analytics.JOB_CREATE.record(job.getUserId());
 
@@ -782,7 +784,11 @@ public class Jobs {
             procedure.setInt(1, job.getUserId());
             procedure.setString(2, job.getName());
             procedure.setString(3, job.getDescription());
-            procedure.setInt(4, job.getQueue().getId());
+            if (job.getQueue() != null && job.getQueue().getId() > 0) {
+                procedure.setInt(4, job.getQueue().getId());
+            } else {
+                procedure.setNull(4, java.sql.Types.INTEGER);
+            }
             procedure.setInt(5, job.getPrimarySpace());
             procedure.setLong(6, job.getSeed());
             procedure.setInt(7, job.getCpuTimeout());
@@ -8583,7 +8589,10 @@ public class Jobs {
      */
     public static String getSlotsInJobQueue(Job job) {
         final String methodName = "getSlotsInJobQueue";
-        if (R.BACKEND_TYPE.equals(R.SGE_TYPE)) {
+        if (R.BACKEND_TYPE.equals(R.SGE_TYPE)
+                && job != null
+                && job.getQueue() != null
+                && job.getQueue().getName() != null) {
             GridEngineBackend backend = new GridEngineBackend();
             try {
                 Integer slots = backend.getSlotsInQueue(

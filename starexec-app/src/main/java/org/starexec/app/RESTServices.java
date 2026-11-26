@@ -2423,7 +2423,11 @@ public class RESTServices {
 		if (!valid.isSuccess()) {
 			return gson.toJson(valid);
 		}
-		int jobId = Spaces.getJobSpace(jobSpaceId).getJobId();
+		JobSpace jobSpace = Spaces.getJobSpace(jobSpaceId);
+		if (jobSpace == null) {
+			throw RESTException.NOT_FOUND;
+		}
+		int jobId = jobSpace.getJobId();
 
 		final String method = "getFinishedJobPairsForMatrix";
 		log.entry(method);
@@ -2432,26 +2436,35 @@ public class RESTServices {
 		Map<String, SimpleMatrixElement> benchSolverConfigElementMap = new HashMap<>();
 		// Get all the latest new completed job pairs.
 		List<JobPair> completedJobPairs = Jobs.getNewCompletedPairsDetailed(jobId, 0);
-		for (JobPair pair : completedJobPairs) {
-			JoblineStage stage = pair.getStageFromNumber(stageNumber);
-			if (stage != null) {
-				// Get the three primitives that uniquely identify the MatrixElement we want to
-				// send back to the server.
-				Benchmark benchmark = pair.getBench();
-				Solver solver = stage.getSolver();
-				Configuration configuration = stage.getConfiguration();
-				// Build a unique string from the three primitives.
-				String benchSolverConfigIdentifier = String.format(R.MATRIX_ELEMENT_ID_FORMAT, benchmark.getName(),
-						benchmark.getId(),
-						solver.getName(), solver.getId(), configuration.getName(), configuration.getId());
-				// Get the element associated with the job pair.
-				String status = Jobs.getStatusFromStage(stage);
-				String cpuTime = String.valueOf(stage.getCpuTime());
-				String wallclock = String.valueOf(stage.getWallclockTime());
-				String memUsage = String.valueOf(stage.getMaxVirtualMemory());
-				SimpleMatrixElement element = new SimpleMatrixElement(status, cpuTime, memUsage, wallclock);
-				// Associate the unique string with the element
-				benchSolverConfigElementMap.put(benchSolverConfigIdentifier, element);
+		if (completedJobPairs != null) {
+			for (JobPair pair : completedJobPairs) {
+				JoblineStage stage = pair.getStageFromNumber(stageNumber);
+				if (stage != null) {
+					// Get the three primitives that uniquely identify the MatrixElement we want to
+					// send back to the server.
+					Benchmark benchmark = pair.getBench();
+					Solver solver = stage.getSolver();
+					Configuration configuration = stage.getConfiguration();
+					String benchName = (benchmark != null && benchmark.getName() != null) ? benchmark.getName() : "";
+					int benchId = (benchmark != null) ? benchmark.getId() : -1;
+					String solverName = (solver != null && solver.getName() != null) ? solver.getName() : "";
+					int solverId = (solver != null) ? solver.getId() : -1;
+					String configName = (configuration != null && configuration.getName() != null)
+							? configuration.getName()
+							: "";
+					int configId = (configuration != null) ? configuration.getId() : -1;
+					// Build a unique string from the three primitives.
+					String benchSolverConfigIdentifier = String.format(R.MATRIX_ELEMENT_ID_FORMAT, benchName, benchId,
+							solverName, solverId, configName, configId);
+					// Get the element associated with the job pair.
+					String status = Jobs.getStatusFromStage(stage);
+					String cpuTime = String.valueOf(stage.getCpuTime());
+					String wallclock = String.valueOf(stage.getWallclockTime());
+					String memUsage = String.valueOf(stage.getMaxVirtualMemory());
+					SimpleMatrixElement element = new SimpleMatrixElement(status, cpuTime, memUsage, wallclock);
+					// Associate the unique string with the element
+					benchSolverConfigElementMap.put(benchSolverConfigIdentifier, element);
+				}
 			}
 		}
 

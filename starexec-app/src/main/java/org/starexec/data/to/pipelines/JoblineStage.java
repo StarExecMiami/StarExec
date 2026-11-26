@@ -51,9 +51,10 @@ public class JoblineStage {
 	public void setConfiguration(Configuration configuration) {
 		this.configuration = configuration;
 
-		// print status
-		log.debug( "in JoblineStage.setConfiguration(): current configId = " + configuration.getId() +
-				"; current deleted status = " + configuration.isDeleted() );
+		if (configuration != null) {
+			log.debug( "in JoblineStage.setConfiguration(): current configId = " + configuration.getId() +
+					"; current deleted status = " + configuration.isDeleted() );
+		}
 	}
 
 	public double getMaxResidenceSetSize() {

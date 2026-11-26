@@ -1393,31 +1393,41 @@ public class RESTHelpers {
 
 			// Create the job link
 			// Job job = Jobs.get(j.getJobId());
+			Job owningJob = j.getOwningJob();
 			StringBuilder sb = new StringBuilder();
 			sb.append("<a href='");
 			sb.append(baseUrl);
 			sb.append(j.getJobId());
 			sb.append("' target='_blank'>");
-			sb.append(j.getOwningJob().getName());
+			sb.append(owningJob != null ? safeHtml(owningJob.getName()) : "");
 			RESTHelpers.addImg(sb);
 			sb.append(getHiddenJobPairLink(j.getId()));
 			String jobLink = sb.toString();
 
 			User user = j.getOwningUser();
 
-			String userLink = getUserLink(user.getId(), user.getFullName(), userId);
+			String userLink = (user != null)
+					? getUserLink(user.getId(), user.getFullName(), userId)
+					: "N/A";
 
-			String benchLink = getBenchLinkWithHiddenPairId(j.getBench(), j.getId(), PrimitivesToAnonymize.NONE);
+			String benchLink = (j.getBench() != null)
+					? getBenchLinkWithHiddenPairId(j.getBench(), j.getId(), PrimitivesToAnonymize.NONE)
+					: "N/A";
 
 			// Create the solver link
-			String solverLink = getSolverLink(j.getPrimarySolver().getId(), j.getPrimarySolver().getName(),
-					PrimitivesToAnonymize.NONE);
+			Solver primarySolver = j.getPrimarySolver();
+			String solverLink = (primarySolver != null)
+					? getSolverLink(primarySolver.getId(), primarySolver.getName(), PrimitivesToAnonymize.NONE)
+					: "N/A";
 
 			// Create the configuration link
 			String configLink;
-			if (!j.getPrimarySolver().getConfigurations().isEmpty()) {
-				configLink = getConfigLink(j.getPrimarySolver().getConfigurations().get(0).getId(),
-						j.getPrimarySolver().getConfigurations().get(0).getName(), PrimitivesToAnonymize.NONE);
+			if (primarySolver != null && primarySolver.getConfigurations() != null
+					&& !primarySolver.getConfigurations().isEmpty()) {
+				Configuration cfg = primarySolver.getConfigurations().get(0);
+				configLink = (cfg != null)
+						? getConfigLink(cfg.getId(), cfg.getName(), PrimitivesToAnonymize.NONE)
+						: "N/A";
 			} else {
 				configLink = "N/A";
 			}
@@ -1431,7 +1441,7 @@ public class RESTHelpers {
 			entry.add(new JsonPrimitive(benchLink));
 			entry.add(new JsonPrimitive(solverLink));
 			entry.add(new JsonPrimitive(configLink));
-			entry.add(new JsonPrimitive(j.getPath()));
+			entry.add(new JsonPrimitive(j.getPath() != null ? j.getPath() : ""));
 			dataTablePageEntries.add(entry);
 		}
 		return createPageDataJsonObject(query, dataTablePageEntries);
@@ -1706,23 +1716,35 @@ public class RESTHelpers {
 		for (JobPair jp : pairs) {
 			JoblineStage stage = jp.getStageFromNumber(stageNumber);
 
-			String benchLink = getBenchLinkWithHiddenPairId(jp.getBench(), jp.getId(), primitivesToAnonymize);
+			String benchLink = (jp.getBench() != null)
+					? getBenchLinkWithHiddenPairId(jp.getBench(), jp.getId(), primitivesToAnonymize)
+					: "N/A";
 
-			// Create the solver link
-			solverLink = getSolverLink(stage.getSolver().getId(), stage.getSolver().getName(), primitivesToAnonymize);
-			// Create the configuration link
-			if (!stage.getSolver().getConfigurations().isEmpty()) {
-				configLink = getConfigLink(stage.getSolver().getConfigurations().get(0).getId(),
-						stage.getSolver().getConfigurations().get(0).getName(), primitivesToAnonymize);
+			Solver stageSolver = (stage != null) ? stage.getSolver() : null;
+			if (stageSolver != null) {
+				solverLink = getSolverLink(stageSolver.getId(), stageSolver.getName(), primitivesToAnonymize);
+				if (stageSolver.getConfigurations() != null && !stageSolver.getConfigurations().isEmpty()
+						&& stageSolver.getConfigurations().get(0) != null) {
+					configLink = getConfigLink(stageSolver.getConfigurations().get(0).getId(),
+							stageSolver.getConfigurations().get(0).getName(), primitivesToAnonymize);
+				} else {
+					configLink = "N/A";
+				}
 			} else {
+				solverLink = "N/A";
 				configLink = "N/A";
 			}
 
 			// Create the status field
-			String status = "<a title=\"" + safeAttr(stage.getStatus().getDescription()) + "\">"
-					+ safeHtml(stage.getStatus().getStatus())
-					+ " (" +
-					stage.getStatus().getCode().getVal() + ")" + "</a>";
+			Status stageStatus = (stage != null) ? stage.getStatus() : null;
+			String statusDesc = (stageStatus != null) ? stageStatus.getDescription() : "";
+			String statusName = (stageStatus != null) ? stageStatus.getStatus() : "";
+			int statusCodeVal = (stageStatus != null && stageStatus.getCode() != null)
+					? stageStatus.getCode().getVal()
+					: 0;
+			String status = "<a title=\"" + safeAttr(statusDesc) + "\">"
+					+ safeHtml(statusName)
+					+ " (" + statusCodeVal + ")" + "</a>";
 
 			// Create an object, and inject the above HTML, to represent an
 			// entry in the DataTable
@@ -1733,16 +1755,16 @@ public class RESTHelpers {
 
 			entry.add(new JsonPrimitive(status));
 			if (useWallclock) {
-				double displayWC = Math.round(stage.getWallclockTime() * 100) / 100.0;
+				double displayWC = (stage != null) ? Math.round(stage.getWallclockTime() * 100) / 100.0 : 0.0;
 
 				entry.add(new JsonPrimitive(displayWC + " s"));
 			} else {
-				double displayCpu = Math.round(stage.getCpuTime() * 100) / 100.0;
+				double displayCpu = (stage != null) ? Math.round(stage.getCpuTime() * 100) / 100.0 : 0.0;
 
 				entry.add(new JsonPrimitive(displayCpu + " s"));
 			}
 
-			entry.add(new JsonPrimitive(safeHtml(stage.getStarexecResult())));
+			entry.add(new JsonPrimitive(stage != null ? safeHtml(stage.getStarexecResult()) : ""));
 			dataTablePageEntries.add(entry);
 		}
 		return createPageDataJsonObject(query, dataTablePageEntries);
@@ -2114,7 +2136,10 @@ public class RESTHelpers {
 			JsonArray entry = new JsonArray();
 			entry.add(new JsonPrimitive(solverLink));
 			entry.add(new JsonPrimitive(safeHtml(solver.getDescription())));
-			entry.add(new JsonPrimitive(solver.getType().toString().toLowerCase()));
+			String solverType = (solver.getType() != null)
+					? solver.getType().toString().toLowerCase()
+					: "unknown";
+			entry.add(new JsonPrimitive(solverType));
 			dataTablePageEntries.add(entry);
 		}
 		return createPageDataJsonObject(query, dataTablePageEntries);
@@ -2244,10 +2269,12 @@ public class RESTHelpers {
 		for (SolverStats js : stats) {
 			JsonArray entries = new JsonArray();
 
-			entries.add(js.getSolver().getId());
-			entries.add(js.getConfiguration().getId());
-			entries.add(js.getSolver().getName());
-			entries.add(js.getConfiguration().getName());
+			Solver statsSolver = js.getSolver();
+			Configuration statsConfig = js.getConfiguration();
+			entries.add(statsSolver != null ? statsSolver.getId() : -1);
+			entries.add(statsConfig != null ? statsConfig.getId() : -1);
+			entries.add(statsSolver != null && statsSolver.getName() != null ? statsSolver.getName() : "");
+			entries.add(statsConfig != null && statsConfig.getName() != null ? statsConfig.getName() : "");
 			entries.add(js.getCorrectOverCompleted());
 
 			if (wallTime) {
@@ -2359,8 +2386,12 @@ public class RESTHelpers {
 		} else {
 			// if the id given is 0, we want to get the root space
 			Job j = Jobs.get(jobId);
-			JobSpace s = Spaces.getJobSpace(j.getPrimarySpace());
-			subspaces.add(s);
+			if (j != null) {
+				JobSpace s = Spaces.getJobSpace(j.getPrimarySpace());
+				if (s != null) {
+					subspaces.add(s);
+				}
+			}
 		}
 		return subspaces;
 	}
@@ -2372,10 +2403,16 @@ public class RESTHelpers {
 	 */
 	private static void buildFullJsTreeHelper(int parentId, int jobId, List<JSTreeItem> root, boolean firstRecursion) {
 		List<JobSpace> subspaces = getSubspacesOrRootSpace(parentId, jobId);
+		if (subspaces == null) {
+			return;
+		}
 
 		String className = (firstRecursion ? "rootNode" : null);
 
 		for (JobSpace js : subspaces) {
+			if (js == null) {
+				continue;
+			}
 			JSTreeItem node = null;
 			if (Spaces.getCountInJobSpace(js.getId()) > 0) {
 				node = new JSTreeItem(js.getName(), js.getId(), "closed", R.SPACE, js.getMaxStages(), className);
