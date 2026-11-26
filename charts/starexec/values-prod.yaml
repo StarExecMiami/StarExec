@@ -76,15 +76,13 @@ kubernetes:
   # Maximum in-flight StarExec Kubernetes Jobs queued in the cluster.
   # Raised to 40 so Kubernetes keeps Pending pods ready to backfill workers
   # immediately as jobs complete, without waiting for the 20s periodic dispatcher.
-  # Note: per-pod limits remain cpu: "31" / memory: "250Gi" (1 pair per worker)
-  # until confirmed; ensure namespace ResourceQuota (starexec-quota) permits the
-  # queued pod requests before deploying higher concurrency.
+  # Sized for 2 pairs per worker (14 CPUs / 120Gi each) within namespace
+  # ResourceQuota (starexec-quota: 640 CPU / 5120Gi memory).
   maxConcurrentJobs: 40
   nodeSelector:
     starexec.org/worker: "true"
-  # Opt-in node qualification label for strict CPU mode. Keep empty on Quokka
-  # prod until n021..n025 have kubelet cpuManagerPolicy=static + full-pcpus-only
-  # rolled out and labeled by Ansible; setting it beforehand leaves pods Pending.
+  # Opt-in node qualification label for strict CPU mode. Leave empty when all
+  # n021..n025 workers already enforce cpuManagerPolicy=static + full-pcpus-only.
   strictCpuNodeLabel: ""
   dataPvc:
     existingClaim: starexec-data-rwx
@@ -95,12 +93,17 @@ kubernetes:
       - ReadWriteMany
   resources:
     # Job pods request exactly these limits. KubernetesNativeBackend sets requests equal to
-    # limits (Guaranteed QoS, which the static CPU manager needs before it grants exclusive
-    # cores), and no template reads a separate requests block, so none is set here: the
-    # 100m/256Mi that used to be here never reached a pod.
+    # limits (Guaranteed QoS, which static cpuManagerPolicy + full-pcpus-only requires for
+    # exclusive cores), and no template reads a separate requests block.
+    # Sized for 2 pairs per worker on dual-socket 32-thread / ~249GiB-allocatable nodes
+    # (n021..n025 with topologyManagerPolicy=single-numa-node and kube-reserved=cpu=2,memory=2Gi):
+    # - cpu: "14" = 7 full physical SMT cores (even thread count required by full-pcpus-only=true)
+    #   pinned cleanly to a single NUMA socket per pod (28/30 allocatable CPUs, leaving 2 for system).
+    # - memory: "120Gi" = 240Gi per node, leaving headroom below ~249GiB allocatable to avoid OOM/evictions.
+    # - 40 queued pods fit inside starexec-quota (560/640 CPU, 4800Gi/5120Gi memory + app overhead).
     limits:
-      cpu: "31"
-      memory: "250Gi"
+      cpu: "14"
+      memory: "120Gi"
 
 persistence:
   enabled: true
