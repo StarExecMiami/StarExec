@@ -227,11 +227,12 @@ RUN cd /tmp && \
     tar xzf tomcat.tar.gz && \
     mv apache-tomcat-${TOMCAT_VERSION} ${CATALINA_HOME} && \
     rm tomcat.tar.gz tomcat.tar.gz.sha512 && \
-    # Remove default webapps for security (keep ROOT for loading page)
+    # Remove default webapps for security (clear ROOT so Tomcat's default favicon/assets are removed)
     rm -rf ${CATALINA_HOME}/webapps/examples \
     ${CATALINA_HOME}/webapps/docs \
     ${CATALINA_HOME}/webapps/manager \
-    ${CATALINA_HOME}/webapps/host-manager && \
+    ${CATALINA_HOME}/webapps/host-manager \
+    ${CATALINA_HOME}/webapps/ROOT && \
     # Create minimal ROOT webapp with loading page placeholder
     mkdir -p ${CATALINA_HOME}/webapps/ROOT && \
     # Create necessary directories
@@ -298,8 +299,10 @@ RUN chown -R starexec:starexec /config
 # Copy build metadata
 COPY --from=builder --chown=starexec:starexec /build/build-metadata/build-info.properties /tmp/build-info.properties
 
-# Copy loading page for startup
+# Copy loading page and StarExec favicons for Tomcat ROOT
 COPY --chown=starexec:starexec docker/loading.html ${CATALINA_HOME}/webapps/ROOT/index.html
+COPY --chown=starexec:starexec starexec-app/src/main/webapp/images/favicon.ico ${CATALINA_HOME}/webapps/ROOT/favicon.ico
+COPY --chown=starexec:starexec starexec-app/src/main/webapp/images/favicon.svg ${CATALINA_HOME}/webapps/ROOT/favicon.svg
 
 # Copy entrypoint and configuration scripts
 COPY --chown=starexec:starexec docker/entrypoint.sh /usr/local/bin/entrypoint.sh

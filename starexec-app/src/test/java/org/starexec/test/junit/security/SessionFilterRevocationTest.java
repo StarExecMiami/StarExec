@@ -334,10 +334,11 @@ public class SessionFilterRevocationTest {
 
 	// ------------------------------------------------------------ scope
 
-	@Test
-	public void staticResourcesAreServedWithoutAnAccountLookup() throws Exception {
+	@ParameterizedTest
+	@ValueSource(strings = {"/css/common/table.css", "/images/favicon.svg", "/favicon.ico"})
+	public void staticResourcesAreServedWithoutAnAccountLookup(String assetPath) throws Exception {
 		SessionDoubles.Session session = sessionHolding(user(7, R.DEFAULT_USER_ROLE_NAME));
-		HttpServletRequest req = SessionDoubles.request(session, CTX + "/css/common/table.css", CTX, "Mozilla/5.0");
+		HttpServletRequest req = SessionDoubles.request(session, CTX + assetPath, CTX, "Mozilla/5.0");
 		CountingChain chain = new CountingChain();
 
 		try (MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
@@ -345,7 +346,7 @@ public class SessionFilterRevocationTest {
 			users.verify(() -> Users.loadAuthenticatedUserState(anyInt()), never());
 		}
 
-		assertEquals(1, chain.calls, "static assets must not pay for revalidation");
+		assertEquals(1, chain.calls, "static assets must not pay for revalidation: " + assetPath);
 	}
 
 	@Test

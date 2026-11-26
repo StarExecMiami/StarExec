@@ -97,7 +97,8 @@ public class SessionFilter implements Filter {
 					requestURI.startsWith(contextPath + "/assets/") ||
 					requestURI.startsWith(contextPath + "/css/") ||
 					requestURI.startsWith(contextPath + "/js/") ||
-					requestURI.startsWith(contextPath + "/images/")) {
+					requestURI.startsWith(contextPath + "/images/") ||
+					requestURI.equals(contextPath + "/favicon.ico")) {
 				chain.doFilter(request, response);
 				return;
 			}

@@ -50,5 +50,6 @@
 	<c:forEach var="jsFile" items="${js}">
 		<script type="text/javascript" src="${starexecRoot}/js/${fn:trim(jsFile)}.js"></script>
 	</c:forEach>
-	<link type="image/ico" rel="icon" href="${starexecRoot}/images/favicon.ico">
+	<link rel="icon" type="image/svg+xml" href="${starexecRoot}/images/favicon.svg">
+	<link rel="icon" type="image/x-icon" sizes="any" href="${starexecRoot}/images/favicon.ico">
 </head>
