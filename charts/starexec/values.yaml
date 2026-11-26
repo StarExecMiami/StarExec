@@ -49,6 +49,18 @@ uploads:
   tmpSizeLimit: "10Gi"
   stagingSizeLimit: "20Gi"
 
+# Startup probe parameters for the StarExec app container.
+# Suspends livenessProbe and readinessProbe until Tomcat responds so
+# EmbeddedFlywayLauncher can finish long migrations (e.g. V0140/V0141).
+# Default budget: 15s + (60 - 1) * 10s = 605s (> 10 minutes).
+app:
+  probes:
+    startup:
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 60
+
 # ============================================================================
 # BACKEND CONFIGURATION
 # ============================================================================

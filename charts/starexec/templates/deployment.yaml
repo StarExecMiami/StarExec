@@ -370,6 +370,26 @@ spec:
 {{- end }}
           resources:
 {{ toYaml .Values.resources.app | indent 12 }}
+          {{- $startup := dict -}}
+          {{- if and .Values.app (kindIs "map" .Values.app) -}}
+            {{- if and .Values.app.probes (kindIs "map" .Values.app.probes) -}}
+              {{- if and .Values.app.probes.startup (kindIs "map" .Values.app.probes.startup) -}}
+                {{- $startup = .Values.app.probes.startup -}}
+              {{- end -}}
+            {{- end -}}
+          {{- end }}
+          # Startup gates livenessProbe and readinessProbe until Tomcat responds,
+          # giving EmbeddedFlywayLauncher time to finish long schema migrations
+          # (e.g. V0140/V0141) before kubelet counts liveness failures.
+          startupProbe:
+            httpGet:
+              path: /starexec/public/health/liveness
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: {{ if hasKey $startup "initialDelaySeconds" }}{{ $startup.initialDelaySeconds }}{{ else }}15{{ end }}
+            periodSeconds: {{ if hasKey $startup "periodSeconds" }}{{ $startup.periodSeconds }}{{ else }}10{{ end }}
+            timeoutSeconds: {{ if hasKey $startup "timeoutSeconds" }}{{ $startup.timeoutSeconds }}{{ else }}5{{ end }}
+            failureThreshold: {{ if hasKey $startup "failureThreshold" }}{{ $startup.failureThreshold }}{{ else }}60{{ end }}
           # Liveness asks only whether the process still serves. It must not
           # check the database: restarting cannot fix a database, so a DB-aware
           # liveness probe turns an outage into a restart storm.
