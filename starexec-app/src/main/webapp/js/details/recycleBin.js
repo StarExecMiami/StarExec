@@ -189,6 +189,7 @@ function deleteAll(prim) {
 					postCallback,
 					"json"
 				).fail(function() {
+					destroyDialog();
 					showMessage('error', "Internal error deleting " + prim + "s",
 						5000);
 				});
@@ -215,6 +216,7 @@ function restoreAll(prim) {
 					postCallback,
 					"json"
 				).fail(function() {
+					destroyDialog();
 					showMessage('error', "Internal error restoring " + prim + "s",
 						5000);
 				});
@@ -247,6 +249,7 @@ function deleteSelected(prim) {
 					postCallback,
 					"json"
 				).fail(function() {
+					destroyDialog();
 					showMessage('error', "Internal error deleting " + prim + "s",
 						5000);
 				});
@@ -278,6 +281,7 @@ function restoreSelected(prim) {
 					postCallback,
 					"json"
 				).fail(function() {
+					destroyDialog();
 					showMessage('error', "Internal error restoring " + prim + "s",
 						5000);
 				});

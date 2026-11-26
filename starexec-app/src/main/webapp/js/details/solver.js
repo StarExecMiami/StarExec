@@ -169,8 +169,30 @@ function attachButtonActions() {
 						"data": {"id": solverId},
 						"dataType": "json",
 						"complete": function(jqXHR) {
-							var s = parseReturnCode(JSON.parse(jqXHR.responseText));
 							destroyDialog();
+							var parsed = null;
+							if (jqXHR && typeof jqXHR.responseText === "string" && jqXHR.responseText.trim().length > 0) {
+								try {
+									parsed = JSON.parse(jqXHR.responseText);
+								} catch (e) {
+									showMessage("error", "Invalid server response while rebuilding solver", 5000);
+									return;
+								}
+							} else if (jqXHR && jqXHR.responseJSON && typeof jqXHR.responseJSON === "object") {
+								parsed = jqXHR.responseJSON;
+							}
+							var isHttpError = !jqXHR || (typeof jqXHR.status === "number" && (jqXHR.status < 200 || jqXHR.status >= 300));
+							if (!parsed) {
+								showMessage("error", "Internal error rebuilding solver", 5000);
+								return;
+							}
+							var s = parseReturnCode(parsed);
+							if (isHttpError) {
+								if (s) {
+									showMessage("error", "Internal error rebuilding solver", 5000);
+								}
+								return;
+							}
 							if (s) {
 								var msg="Rebuilding solver";
 								window.location.replace("?id="+solverId+"&buildmsg="+encodeURIComponent(msg));

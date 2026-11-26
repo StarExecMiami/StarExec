@@ -122,11 +122,14 @@ function handleRequest(code, isApproved) {
     starexecRoot + "public/verification/email",
     requestData,
     function (data) {
-      parseReturnCode(data);
-      $("#commRequests").DataTable().ajax.reload();
+      if (parseReturnCode(data)) {
+        $("#commRequests").DataTable().ajax.reload();
+      }
     },
     "json",
-  );
+  ).fail(function () {
+    showMessage("error", "Internal error processing community request", 5000);
+  });
 }
 
 function getCommunityRequestConstants() {

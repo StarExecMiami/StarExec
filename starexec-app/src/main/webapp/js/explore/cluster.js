@@ -2,8 +2,7 @@ var jobPairTable;
 var qid = 0; // ID of the selected queue, or the queue that owns the selected node
 var selectedId = 0;  // ID of the selected primitive
 var selectedNodeType = ""; // Node rel type of the selected primitive
-var qIdForQueueGraph = 1; // queue id used to select which queuegraph image is displayed; default is 1 because
-                          // all.q always exists
+var qIdForQueueGraph = null; // queue id used to select which queuegraph image is displayed; resolved dynamically
 
 /**
  * StarExec QueueGraph Module
@@ -22,7 +21,7 @@ star.QueueGraph = (function($) {
     };
 
     var state = {
-        queueId: 1,
+        queueId: null,
         currentInterval: config.initialInterval,
         consecutiveEmpty: 0,
         timer: null,
@@ -38,7 +37,7 @@ star.QueueGraph = (function($) {
     }
 
     function updateChart() {
-        if (state.isUpdating) return;
+        if (!state.queueId || state.isUpdating) return;
         state.isUpdating = true;
 
         fetchData()
@@ -203,14 +202,18 @@ star.QueueGraph = (function($) {
             // Add event listener to static select menu
             $("#timeWindowSelect").off("change").on("change", function() {
                 config.dataPoints = parseInt($(this).val());
+                if (!state.queueId) return;
                 state.currentInterval = config.initialInterval;
                 clearTimeout(state.timer);
                 updateChart();
             });
             
-            updateChart();
+            if (state.queueId) {
+                updateChart();
+            }
         },
         setQueue: function(queueId) {
+            if (!queueId) return;
             if (state.queueId !== queueId) {
                 state.queueId = queueId;
                 state.currentInterval = config.initialInterval;
@@ -219,6 +222,7 @@ star.QueueGraph = (function($) {
             }
         },
         refresh: function() {
+            if (!state.queueId) return;
             state.currentInterval = config.initialInterval;
             updateChart();
         }
@@ -285,7 +289,9 @@ $(document).ready(function() {
 	$("#detailField").expandable(true);
 
 	setInterval(function() {
-		jobPairTable.fnDraw(false);
+		if (selectedId) {
+			jobPairTable.fnDraw(false);
+		}
 	}, 10000);
 });
 
@@ -308,6 +314,20 @@ function findInitialQueueNode(tree) {
 	return firstInactive;
 }
 
+function resolveActiveQueueId() {
+	var $tree = $("#exploreList");
+	var tree = ($tree && typeof $tree.jstree === "function") ? $tree.jstree(true) : null;
+	if (!tree || typeof tree.get_node !== "function") {
+		return null;
+	}
+	var initialNodeId = findInitialQueueNode(tree);
+	if (!initialNodeId) {
+		return null;
+	}
+	var node = tree.get_node(initialNodeId);
+	return (node && node.data && node.data.id) ? node.data.id : null;
+}
+
 function initClusterExplorer() {
 	star.mountTree($("#exploreList").on("ready.jstree refresh.jstree", addNodeCountsToTree),
 		starexecRoot + "services/cluster/queues", {
@@ -315,10 +335,20 @@ function initClusterExplorer() {
 			queues: true,
 			stateKey: "cluster",
 			ready: function(tree) {
-				if (!tree.get_selected().length) {
+				var selected = tree.get_selected();
+				if (!selected.length) {
 					var initialQueueId = findInitialQueueNode(tree);
 					if (initialQueueId) {
 						star.selectTreeNode(tree, initialQueueId);
+					}
+				} else {
+					var selectedNode = tree.get_node(selected[0]);
+					if (selectedNode && selectedNode.data) {
+						var parent = tree.get_node(selectedNode.parent);
+						var parentId = parent && parent.data ? parent.data.id : null;
+						getDetails(selectedNode.data.id, selectedNode.data.rel, parentId);
+						qIdForQueueGraph = parentId || selectedNode.data.id;
+						updateQueueGraph();
 					}
 				}
 			},
@@ -433,7 +463,22 @@ function initDataTables() {
 }
 
 function fnPaginationHandler(sSource, aoData, fnCallback) {
-	var id = selectedId || 1;
+	var id = selectedId || resolveActiveQueueId();
+	if (!id) {
+		if (typeof fnCallback === 'function') {
+			var echo = 0;
+			if (Array.isArray(aoData)) {
+				for (var i = 0; i < aoData.length; i++) {
+					if (aoData[i] && aoData[i].name === 'sEcho') {
+						echo = aoData[i].value;
+						break;
+					}
+				}
+			}
+			fnCallback({ sEcho: echo, iTotalRecords: 0, iTotalDisplayRecords: 0, aaData: [] });
+		}
+		return;
+	}
 
 	//In case the paginate happens before type is set
 	if (typeof type == 'undefined') {
@@ -545,6 +590,9 @@ function loadQstatOutput() {
 }
 
 function loadQueueLoads() {
+	if (!qid) {
+		return;
+	}
 	if (selectedNodeType === "inactive_queue") {
 		$("#loadOutput").val("Queue is inactive (no active load data).");
 		return;

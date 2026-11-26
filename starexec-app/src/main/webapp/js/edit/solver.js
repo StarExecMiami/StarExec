@@ -116,7 +116,9 @@ function attachButtonActions() {
 							}
 						},
 						"json"
-					);
+					).fail(function() {
+						showMessage('error', "Internal error deleting solver", 5000);
+					});
 				},
 				"cancel": function() {
 					log('user canceled solver deletion');
@@ -153,7 +155,9 @@ function attachButtonActions() {
 
 				},
 				"json"
-			);
+			).fail(function() {
+				showMessage('error', "Internal error updating solver", 5000);
+			});
 		}
 	});
 
@@ -264,7 +268,9 @@ function attachWebsiteMonitor() {
 				}
 			},
 			"json"
-		);
+		).fail(function() {
+			showMessage('error', "Internal error adding website", 5000);
+		});
 
 	});
 }

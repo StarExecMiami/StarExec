@@ -1019,6 +1019,8 @@ function setupResumeJobButton() {
 				var s = parseReturnCode(returnCode);
 				if (s) {
 					document.location.reload(true);
+				} else {
+					destroyDialog();
 				}
 			},
 			"json"

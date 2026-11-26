@@ -173,8 +173,22 @@ function initUI() {
         benchmarkingFramework: getNewBenchmarkingFramework(),
       },
       function (returnCode) {
-        showMessage("success", "Profile settings updated successfully", 5000);
-        location.reload();
+        var parsed = returnCode;
+        if (typeof returnCode === "string") {
+          if (returnCode.trim().length > 0) {
+            try {
+              parsed = JSON.parse(returnCode);
+            } catch (e) {
+              showMessage("error", "Invalid server response", 5000);
+              return;
+            }
+          } else {
+            parsed = {};
+          }
+        }
+        if (parseReturnCode(parsed || {})) {
+          location.reload();
+        }
       }
     ).fail(function (xhr, textStatus, errorThrown) {
       log("xhr: ");
@@ -212,8 +226,22 @@ function initUI() {
               benchmarkingFramework: getNewBenchmarkingFramework(),
             },
             function (returnCode) {
-              showMessage("success", "Profile created successfully", 5000);
-              location.reload();
+              var parsed = returnCode;
+              if (typeof returnCode === "string") {
+                if (returnCode.trim().length > 0) {
+                  try {
+                    parsed = JSON.parse(returnCode);
+                  } catch (e) {
+                    showMessage("error", "Invalid server response", 5000);
+                    return;
+                  }
+                } else {
+                  parsed = {};
+                }
+              }
+              if (parseReturnCode(parsed || {})) {
+                location.reload();
+              }
             }
           ).fail(function (xhr, textStatus, errorThrown) {
             log(xhr.statusText);

@@ -1,7 +1,7 @@
 /** Global Variables */
 var userTable;
 var addUsersTable;
-var spaceId = 1;            // id of the current space
+var spaceId = null;         // id of the current space
 var spaceName;              // name of the current space
 var currentUserId;
 var lastSelectedUserId = null;
@@ -166,6 +166,8 @@ function addUsersPaginationHandler(sSource, aoData, fnCallback) {
 				sSource,
 				aoData,
 				fnCallback);
+		}).fail(function() {
+			showMessage('error', "Internal error getting community id", 5000);
 		});
 }
 
@@ -191,7 +193,9 @@ function fillTableWithPaginatedPrimitives(
 			}
 		},
 		"json"
-	);
+	).fail(function() {
+		showMessage('error', "Internal error populating table", 5000);
+	});
 }
 
 function getIdOfSelectedSpace() {
@@ -243,6 +247,9 @@ function initDataTables() {
 	$('#usersTable tbody').on("mousedown", "tr", function() {
 		var uid = $(($(this).find(":input"))[0]).attr('value');
 		var sid = spaceId;
+		if (!sid) {
+			return;
+		}
 		lastSelectedUserId = uid;
 		getPermissionDetails(uid, sid);
 	});
@@ -285,11 +292,11 @@ function isRoot(space_id) {
 }
 
 function isCommunity(space_id) {
-	return ($.inArray(space_id.toString(), communityIdList) != -1);
+	return space_id != null && ($.inArray(space_id.toString(), communityIdList) != -1);
 }
 
 function canChangePermissions(user_id) {
-	return curIsLeader && !isRoot(spaceId) && (user_id != currentUserId);
+	return spaceId != null && curIsLeader && !isRoot(spaceId) && (user_id != currentUserId);
 }
 
 function populatePermissionDetails(data, user_id) {
@@ -410,13 +417,21 @@ function makePromoteData() {
  **/
 function changePermissions(hier, changingLeadership) {
 
+	var $confirmDialog = $('#dialog-confirm-update');
+	if ($confirmDialog.length && typeof $confirmDialog.dialog === 'function' && (typeof $confirmDialog.hasClass !== 'function' || $confirmDialog.hasClass('ui-dialog-content'))) {
+		$confirmDialog.dialog('close');
+	}
+
+	if (!spaceId || !lastSelectedUserId) {
+		showMessage('error', !spaceId ? 'No space selected' : 'No user selected', 5000);
+		return;
+	}
+
 	var url = starexecRoot + "services/space/" + spaceId + "/edit/perm/";
 	if (hier) {
 		url = url + "hier/";
 	}
 	url = url + lastSelectedUserId;
-
-	$('#dialog-confirm-update').dialog('close');
 
 	var data = null;
 
@@ -452,7 +467,9 @@ function changePermissions(hier, changingLeadership) {
 			}
 		},
 		"json"
-	);
+	).fail(function() {
+		showMessage('error', "Internal error updating permissions", 5000);
+	});
 }
 
 /**
@@ -481,8 +498,8 @@ function setUpButtons() {
 	$("#resetPermChanges").off("click");
 	$("#resetPermChanges").click(function(e) {
 
-		if (lastSelectedUserId == null) {
-			showMessage('error', 'No user selected', 5000);
+		if (!spaceId || lastSelectedUserId == null) {
+			showMessage('error', !spaceId ? 'No space selected' : 'No user selected', 5000);
 		} else {
 			getPermissionDetails(lastSelectedUserId, spaceId);
 		}
@@ -513,6 +530,10 @@ function setUpButtons() {
 
 	$('#addUsersButton').off('click');
 	$('#addUsersButton').click(function(e) {
+		if (!spaceId) {
+			showMessage('error', 'No space selected', 5000);
+			return;
+		}
 		var selectedUsersIds = getSelectedRows(addUsersTable);
 		var selectedSpace = spaceId;
 		if (selectedUsersIds.length > 0) {
@@ -534,6 +555,8 @@ function setUpButtons() {
 									communityIdOfSelectedSpace,
 									true,
 									doUserCopyPostCB);
+							}).fail(function() {
+								showMessage('error', "Internal error getting community id", 5000);
 							});
 					},
 					'space': function() {
@@ -547,6 +570,8 @@ function setUpButtons() {
 									communityIdOfSelectedSpace,
 									false,
 									doUserCopyPostCB);
+							}).fail(function() {
+								showMessage('error', "Internal error getting community id", 5000);
 							});
 					},
 					"cancel": function() {
@@ -570,19 +595,31 @@ function setUpButtons() {
 		}
 	});
 
+	$("#makePublic").off("click");
 	$("#makePublic").click(function() {
+		if (!spaceId) {
+			showMessage('error', 'No space selected', 5000);
+			return;
+		}
 		var changingToPublic = !currentSpacePublic;
-		var doPost = (function(hierarchy) {
-			var postUrl = starexecRoot + "services/space/changePublic/" + spaceId + "/" + hierarchy + "/" + changingToPublic;
-			return (function() {
+		var doPost = function(hierarchy) {
+			return function() {
+				$(this).dialog("close");
+				var postUrl = starexecRoot + "services/space/changePublic/" + spaceId + "/" + hierarchy + "/" + changingToPublic;
 				$.post(
 					postUrl,
 					{},
-					star.reloadOnSucess.bind(this),
+					function(returnCode) {
+						if (parseReturnCode(returnCode)) {
+							window.location.reload(true);
+						}
+					},
 					"json"
-				);
-			});
-		});
+				).fail(function() {
+					showMessage('error', "Internal error changing space visibility", 5000);
+				});
+			};
+		};
 		var message =
 			"Do you want to make " + spaceName + 
 			(changingToPublic ? " public" : " private") +
@@ -595,8 +632,8 @@ function setUpButtons() {
 			modal: true,
 			width: 380,
 			buttons: {
-				"space": doPost(false).bind(this),
-				"space and all subspaces": doPost(true).bind(this),
+				"space": doPost(false),
+				"space and all subspaces": doPost(true),
 				"cancel": function() {
 					log('user canceled making public action');
 					$(this).dialog("close");

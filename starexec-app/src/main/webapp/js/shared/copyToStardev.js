@@ -4,14 +4,17 @@ $(document).ready(function() {
 	log('root: ' + starexecRoot);
 
 	function makeCopyPost(url, username, password, spaceId, procId) {
+		var payload = {
+			username: username,
+			password: password,
+			spaceId: spaceId
+		};
+		if (procId !== undefined && procId !== null && String(procId).trim() !== '') {
+			payload.procId = procId;
+		}
 		$.post(
 			url,
-			{
-				username: username,
-				password: password,
-				spaceId: spaceId,
-				procId: procId
-			},
+			payload,
 			function(statusCode) {
 				if (statusCode) {
 					parseReturnCode(statusCode);
@@ -86,7 +89,7 @@ $(document).ready(function() {
 					if (copyWithProcessor && type === benchmarkType) {
 						log('uploading benchmark with processor');
 						var url = starexecRoot + 'services/copy-bench-with-proc-to-stardev/' + instance + '/' + primId;
-						makeCopyPost(url, username, password, spaceId, 1);
+						makeCopyPost(url, username, password, spaceId, null);
 					} else {
 						log('copying to stardev');
 						// by default use the no type proc ID, this won't matter for anything other than benchmark uploads.

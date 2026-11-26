@@ -83,13 +83,14 @@ function removeUser(userid, id) {
 		starexecRoot + "services/remove/user/" + id,
 		{selectedIds: idArray},
 		function(returnCode) {
-			parseReturnCode(returnCode);
+			if (parseReturnCode(returnCode)) {
+				setTimeout(function() {document.location.reload(true);}, 1000);
+			}
 		},
 		"json"
 	).fail(function() {
 		showMessage('error', "Internal error removing user", 5000);
 	});
-	setTimeout(function() {document.location.reload(true);}, 1000);
 }
 
 function promoteUser(userid, id) {
@@ -197,7 +198,9 @@ function attachWebsiteMonitor() {
 				}
 			},
 			"json"
-		);
+		).fail(function() {
+			showMessage('error', "Internal error adding website", 5000);
+		});
 
 	});
 }
@@ -317,7 +320,9 @@ function initUI() {
 				}
 			},
 			'json'
-		);
+		).fail(function() {
+			showMessage('error', "Internal error deleting benchmark", 5000);
+		});
 	});
 
 	$('#newWebsite').hide();

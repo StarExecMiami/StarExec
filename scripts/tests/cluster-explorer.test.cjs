@@ -11,8 +11,10 @@ const source = fs.readFileSync(
 
 function setup() {
   const gets = [];
+  const ajaxCalls = [];
   const messages = [];
   const elements = new Map();
+  let treeInstance = null;
   const el = (id) => {
     if (!elements.has(id)) {
       elements.set(id, {
@@ -34,9 +36,14 @@ function setup() {
         css() { return this; },
         html() { return this; },
         on() { return this; },
+        off() { return this; },
         ready() { return this; },
         button() { return this; },
         expandable() { return this; },
+        jstree(arg) {
+          if (arg === true) return treeInstance;
+          return this;
+        },
         dataTable() { return { api: () => ({ ajax: { url: () => ({ load() {} }) } }), fnClearTable() {}, fnDraw() {} }; },
         DataTable() { return { data: () => [] }; },
       });
@@ -61,7 +68,19 @@ function setup() {
     gets.push(req);
     return req;
   };
-  $.ajax = () => ({ done() { return this; }, fail() { return this; }, always() { return this; } });
+  $.ajax = (options) => {
+    const req = {
+      options,
+      doneCb: null,
+      failCb: null,
+      alwaysCb: null,
+      done(fn) { this.doneCb = fn; return this; },
+      fail(fn) { this.failCb = fn; return this; },
+      always(fn) { this.alwaysCb = fn; return this; },
+    };
+    ajaxCalls.push(req);
+    return req;
+  };
 
   const selectedCalls = [];
   const star = {
@@ -82,6 +101,7 @@ function setup() {
     document: {},
     starexecRoot: '/',
     addNodeCountsToTree: () => {},
+    parseReturnCode: code => !code || code.success !== false,
     showMessage: (...args) => messages.push(args),
     setInterval: () => 1,
     clearInterval: () => {},
@@ -90,7 +110,16 @@ function setup() {
   };
   vm.runInNewContext(source, context);
   context.jobPairTable = el('#details').dataTable();
-  return { context, gets, messages, el, mountedOptions: () => mountedOptions, selectedCalls };
+  return {
+    context,
+    gets,
+    ajaxCalls,
+    messages,
+    el,
+    mountedOptions: () => mountedOptions,
+    selectedCalls,
+    setTreeInstance: t => { treeInstance = t; },
+  };
 }
 
 test('initClusterExplorer selects the first active_queue instead of hardcoding queue-1', () => {
@@ -135,4 +164,37 @@ test('loadQueueLoads ignores 404 but reports 500 errors for active queues', () =
   assert.equal(messages.length, 1);
   assert.equal(messages[0][0], 'error');
   assert.equal(messages[0][1], 'Internal error loading queue loads');
+});
+
+test('QueueGraph and fnPaginationHandler do not hardcode queue 1 before a queue is selected', () => {
+  const { context, gets, ajaxCalls, setTreeInstance } = setup();
+  assert.equal(context.qIdForQueueGraph, null);
+
+  context.star.QueueGraph.init(context.qIdForQueueGraph);
+  assert.equal(ajaxCalls.length, 0);
+
+  let emptyPage = null;
+  context.fnPaginationHandler('/services/cluster/', [{ name: 'sEcho', value: 3 }], page => {
+    emptyPage = JSON.parse(JSON.stringify(page));
+  });
+  assert.equal(gets.length, 0);
+  assert.deepEqual(emptyPage, { sEcho: 3, iTotalRecords: 0, iTotalDisplayRecords: 0, aaData: [] });
+
+  context.loadQueueLoads();
+  assert.equal(gets.length, 0);
+
+  const nodes = {
+    '#': { id: '#', children: ['queue-9', 'queue-14235'] },
+    'queue-9': { id: 'queue-9', data: { id: '9', rel: 'inactive_queue' } },
+    'queue-14235': { id: 'queue-14235', data: { id: '14235', rel: 'active_queue' } },
+  };
+  setTreeInstance({ get_node: id => nodes[id] });
+
+  context.fnPaginationHandler('/services/cluster/', [{ name: 'sEcho', value: 4 }], () => {});
+  assert.equal(gets.length, 1);
+  assert.equal(gets[0].url, '/services/cluster/queues/14235/pagination');
+
+  context.star.QueueGraph.setQueue('14235');
+  assert.equal(ajaxCalls.length, 1);
+  assert.equal(ajaxCalls[0].options.url, '/services/cluster/queues/14235/metrics/history');
 });

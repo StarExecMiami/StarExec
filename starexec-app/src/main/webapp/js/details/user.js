@@ -433,6 +433,7 @@ function recycleSelected(prim) {
 					},
 					"json"
 				).fail(function() {
+					destroyDialog();
 					showMessage('error', "Internal error trashing " + prim + "s",
 						5000);
 				});
@@ -471,6 +472,7 @@ function linkAllOrphaned() {
 					},
 					"json"
 				).fail(function() {
+					destroyDialog();
 					showMessage('error',
 						"Internal error linking primitives",
 						5000);
@@ -509,6 +511,7 @@ function recycleOrphaned(prim) {
 					},
 					"json"
 				).fail(function() {
+					destroyDialog();
 					showMessage('error', "Internal error trashing " + prim + "s",
 						5000);
 				});
@@ -546,6 +549,7 @@ function deleteSelectedJobs() {
 					},
 					"json"
 				).fail(function() {
+					destroyDialog();
 					showMessage('error',
 						"Internal error deleting job(s)",
 						5000);
@@ -583,6 +587,7 @@ function deleteOrphanedJobs() {
 					},
 					"json"
 				).fail(function() {
+					destroyDialog();
 					showMessage('error',
 						"Internal error deleting job(s)",
 						5000);

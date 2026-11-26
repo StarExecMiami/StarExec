@@ -7,13 +7,13 @@ $(document).ready(function() {
 			starexecRoot + 'services/' + subscribeOrUnsubscribe + '/user/' + currentUserId,
 			{},
 			function(returnCode) {
-				parseReturnCode(returnCode);
+				if (parseReturnCode(returnCode)) {
+					setTimeout(function() {document.location.reload(true);}, 1000);
+				}
 			},
 			'json'
-		).done(function() {
-			setTimeout(function() {document.location.reload(true);}, 1000);
-		}).fail(function() {
-			showMessage('error', 'Internal error subscribing user', 5000);
+		).fail(function() {
+			showMessage('error', 'Internal error ' + (subscribeOrUnsubscribe === 'unsubscribe' ? 'unsubscribing' : 'subscribing') + ' user', 5000);
 		});
 	};
 
