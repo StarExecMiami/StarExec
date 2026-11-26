@@ -489,9 +489,10 @@ public class JspHelpers {
 		StringBuilder js = new StringBuilder(
 				"common/delaySpinner, lib/jquery.dataTables.min, shared/copyToStardev, details/shared, lib/prettify, details/benchmark");
 		StringBuilder lang = new StringBuilder();
-		if (b.getType().getSyntax().js != null) {
-			js.append(", ").append(b.getType().getSyntax().js);
-			lang.append(b.getType().getSyntax().classname);
+		Processor benchType = b.getType();
+		if (benchType != null && benchType.getSyntax() != null && benchType.getSyntax().js != null) {
+			js.append(", ").append(benchType.getSyntax().js);
+			lang.append(benchType.getSyntax().classname);
 		}
 		request.setAttribute("js", js.toString());
 		request.setAttribute("lang", lang.toString());
@@ -511,7 +512,7 @@ public class JspHelpers {
 		request.setAttribute("bench", b);
 		request.setAttribute("diskSize", Util.byteCountToDisplaySize(b.getDiskSize()));
 
-		Space s = Communities.getDetails(b.getType().getCommunityId());
+		Space s = (benchType != null) ? Communities.getDetails(benchType.getCommunityId()) : null;
 		if (s == null) {
 			s = new Space();
 			s.setName("none");

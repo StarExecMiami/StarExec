@@ -1987,11 +1987,12 @@ public class RESTServices {
 			response.put("uploadDate", b.getUploadDate());
 			response.put("downloadable", b.isDownloadable());
 			response.put("diskSize", b.getDiskSize());
-			response.put("type", b.getType());
+			Processor type = b.getType();
+			response.put("type", type);
 			response.put("attributes", Benchmarks.getSortedAttributes(id));
 			response.put("dependencies", Benchmarks.getBenchDependencies(id));
 			response.put("owner", Users.get(b.getUserId()));
-			Space community = Communities.getDetails(b.getType().getCommunityId());
+			Space community = (type != null) ? Communities.getDetails(type.getCommunityId()) : null;
 			response.put("community", community);
 			response.put("content", Benchmarks.getContents(b, limit).orElse(null));
 			return gson.toJson(response);
@@ -3755,7 +3756,8 @@ public class RESTServices {
 			// Get the id of the community we are going to copy the space to and add the
 			// processor to that community.
 			int communityId = commandConnection.getCommunityIdOfSpace(spaceId);
-			int procId = Benchmarks.get(benchmarkId).getType().getId();
+			Processor benchType = Benchmarks.get(benchmarkId).getType();
+			int procId = (benchType != null) ? benchType.getId() : R.NO_TYPE_PROC_ID;
 			ValidatorStatusCode procStatus = RESTHelpers.copyProcessorToStarDev(commandConnection, procId, communityId);
 			if (!procStatus.isSuccess()) {
 				return gson.toJson(procStatus);
@@ -6503,7 +6505,7 @@ public class RESTServices {
 		Benchmark b = Benchmarks.get(benchId);
 		final Integer benchType = type;
 		// means we need to reprocess this benchmark
-		if (b.getType().getId() != type) {
+		if (b.getType() == null || b.getType().getId() != type) {
 			log.debug("executing new processor on benchmark");
 			List<Benchmark> bench = new ArrayList<>();
 			bench.add(Benchmarks.get(benchId));

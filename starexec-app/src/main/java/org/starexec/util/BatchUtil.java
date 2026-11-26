@@ -195,7 +195,8 @@ public class BatchUtil {
 				updateElement.setAttribute("name", benchmark.getName());
 				updateElement.setAttribute("id", Integer.toString(benchmark.getId()));
 				updateElement.setAttribute("pid", Integer.toString(upid));
-				updateElement.setAttribute("bid", Integer.toString(benchmark.getType().getId()));
+				int benchTypeId = (benchmark.getType() != null) ? benchmark.getType().getId() : R.NO_TYPE_PROC_ID;
+				updateElement.setAttribute("bid", Integer.toString(benchTypeId));
 				spaceElement.appendChild(updateElement);
 			} else {
 				Element benchElement = doc.createElement("Benchmark");
@@ -872,8 +873,9 @@ public class BatchUtil {
 
 
 				// Set the benchmark processor of the benchmark to the bid attribute of the Update element if provided.
-				int benchmarkProcessorId = (bp != null) ? bp.getId() : b.getType().getId();
-				log.debug("addUpdates - Benchmark processor ID of original benchmark: " + b.getType().getId());
+				int origProcessorId = (b.getType() != null) ? b.getType().getId() : R.NO_TYPE_PROC_ID;
+				int benchmarkProcessorId = (bp != null) ? bp.getId() : origProcessorId;
+				log.debug("addUpdates - Benchmark processor ID of original benchmark: " + origProcessorId);
 				log.debug("addUpdates - Benchmark processor ID of updated benchmark: " + benchmarkProcessorId);
 				int newBenchID = UploadBenchmark
 						.addBenchmarkFromFile(renamedFile, b.getUserId(), benchmarkProcessorId, b.isDownloadable());

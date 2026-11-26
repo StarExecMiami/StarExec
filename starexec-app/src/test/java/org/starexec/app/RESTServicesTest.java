@@ -292,6 +292,51 @@ public class RESTServicesTest {
 	}
 
 	@Test
+	public void getBenchmarkMetadataHandlesNullType() {
+		final int benchId = 11;
+		final int userId = 5;
+		final int ownerId = 20;
+		final int limit = 0;
+
+		Benchmark benchmark = new Benchmark();
+		benchmark.setId(benchId);
+		benchmark.setUserId(ownerId);
+		benchmark.setName("untyped-benchmark");
+		benchmark.setDescription("benchmark without processor");
+		benchmark.setUploadDate(Timestamp.valueOf("2026-03-26 12:00:00"));
+		benchmark.setType(null);
+
+		User owner = new User();
+		owner.setId(ownerId);
+
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<BenchmarkSecurity> benchmarkSecurity = Mockito.mockStatic(BenchmarkSecurity.class);
+			 MockedStatic<Benchmarks> benchmarks = Mockito.mockStatic(Benchmarks.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(userId);
+			benchmarkSecurity.when(() -> BenchmarkSecurity.canUserSeeBenchmarkContents(benchId, userId))
+					.thenReturn(new ValidatorStatusCode(true));
+			benchmarks.when(() -> Benchmarks.get(benchId)).thenReturn(benchmark);
+			benchmarks.when(() -> Benchmarks.getSortedAttributes(benchId)).thenReturn(new TreeMap<>());
+			benchmarks.when(() -> Benchmarks.getBenchDependencies(benchId)).thenReturn(new ArrayList<>());
+			benchmarks.when(() -> Benchmarks.getContents(benchmark, limit)).thenReturn(Optional.of("content"));
+			users.when(() -> Users.get(ownerId)).thenReturn(owner);
+
+			RESTServices service = new RESTServices();
+			String json = service.getBenchmarkMetadata(benchId, limit, request);
+
+			JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+			assertEquals(benchId, obj.get("id").getAsInt());
+			assertEquals("untyped-benchmark", obj.get("name").getAsString());
+			assertFalse(obj.has("type") && !obj.get("type").isJsonNull());
+			assertFalse(obj.has("community") && !obj.get("community").isJsonNull());
+		}
+	}
+
+	@Test
 	public void getBenchmarkMetadataThrowsForbiddenWhenPermissionDenied() {
 		final int benchId = 10;
 		final int userId = 5;

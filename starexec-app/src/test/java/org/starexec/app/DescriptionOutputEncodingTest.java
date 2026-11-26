@@ -153,6 +153,26 @@ public class DescriptionOutputEncodingTest {
 		assertEquals(Integer.valueOf(31), HTMLParser.extractIDFromJson(benchCell));
 		assertEquals("bench.smt2", HTMLParser.extractNameFromJson(benchCell, "benchmarks"));
 
+		Benchmark untypedBench = new Benchmark();
+		untypedBench.setId(32);
+		untypedBench.setName("untyped.smt2");
+		untypedBench.setType(null);
+
+		Processor blankType = Mockito.mock(Processor.class);
+		Mockito.when(blankType.getName()).thenReturn(null);
+		Mockito.when(blankType.getDescription()).thenReturn(null);
+		Benchmark nullFieldTypeBench = new Benchmark();
+		nullFieldTypeBench.setId(33);
+		nullFieldTypeBench.setName("blank-type.smt2");
+		nullFieldTypeBench.setType(blankType);
+
+		JsonObject untypedJson = RESTHelpers.convertBenchmarksToJsonObject(
+				List.of(bench, untypedBench, nullFieldTypeBench), new DataTablesQuery());
+		JsonArray untypedRows = untypedJson.getAsJsonArray("aaData");
+		assertEquals("<span title=\"\">none</span>", untypedRows.get(1).getAsJsonArray().get(1).getAsString());
+		assertEquals("<span title=\"\">none</span>", untypedRows.get(2).getAsJsonArray().get(1).getAsString());
+		assertTrue(untypedRows.get(0).getAsJsonArray().get(1).getAsString().contains("proc&lt;1&gt;"));
+
 		User user = new User();
 		user.setId(41);
 		user.setFirstName("Ada");

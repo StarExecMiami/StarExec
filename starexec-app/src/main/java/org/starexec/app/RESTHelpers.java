@@ -2187,10 +2187,11 @@ public class RESTHelpers {
 		JsonArray dataTablePageEntries = new JsonArray();
 		for (Benchmark bench : benchmarks) {
 			String benchLink = getBenchLink(bench, contextSpaceId);
-			// Create the benchmark type tag
-			// Set the tooltip to be the benchmark type's description
-			String typeSpan = "<span title=\"" + safeAttr(bench.getType().getDescription()) + "\">"
-					+ safeHtml(bench.getType().getName())
+			Processor type = bench.getType();
+			String typeDescription = (type != null && type.getDescription() != null) ? type.getDescription() : "";
+			String typeName = (type != null && type.getName() != null) ? type.getName() : "none";
+			String typeSpan = "<span title=\"" + safeAttr(typeDescription) + "\">"
+					+ safeHtml(typeName)
 					+ "</span>";
 
 			// Create an object, and inject the above HTML, to represent an

@@ -46,6 +46,17 @@ public class ComparatorTests {
 			b2.setType(p2);
 			Assertions.assertTrue(comp.compare(b1, b2)==a.compareToIgnoreCase(b));
 		}
+
+		Benchmark untyped = new Benchmark();
+		untyped.setName("a-untyped");
+		untyped.setType(null);
+		Benchmark typed = new Benchmark();
+		typed.setName("b-typed");
+		Processor t = new Processor();
+		t.setName("z-proc");
+		typed.setType(t);
+		Assertions.assertTrue(comp.compare(untyped, typed) < 0);
+		Assertions.assertEquals(0, comp.compare(untyped, new Benchmark()));
 	}
 	
 	@Test

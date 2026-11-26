@@ -24,8 +24,9 @@ public class BenchmarkComparator implements Comparator<Benchmark> {
 			o2 = temp;
 		}
 		if (column == 1) {
-
-			return o1.getType().getName().compareToIgnoreCase(o2.getType().getName());
+			String name1 = (o1.getType() != null && o1.getType().getName() != null) ? o1.getType().getName() : "none";
+			String name2 = (o2.getType() != null && o2.getType().getName() != null) ? o2.getType().getName() : "none";
+			return name1.compareToIgnoreCase(name2);
 		}
 		return o1.getName().compareToIgnoreCase(o2.getName());
 	}

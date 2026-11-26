@@ -374,7 +374,10 @@ public class Benchmarks {
 					procedure.setString(2, benchmark.getPath());
 					procedure.setBoolean(3, benchmark.isDownloadable());
 					procedure.setInt(4, benchmark.getUserId());
-					procedure.setInt(5, Benchmarks.isBenchValid(attrs) ? benchmark.getType().getId() : R.NO_TYPE_PROC_ID);
+					procedure.setInt(5,
+							(Benchmarks.isBenchValid(attrs) && benchmark.getType() != null)
+									? benchmark.getType().getId()
+									: R.NO_TYPE_PROC_ID);
 					procedure.setLong(6, FileUtils.sizeOf(new File(benchmark.getPath())));
 					procedure.setString(7, benchmark.getDescription());
 					try (ResultSet results = procedure.executeQuery()) {
@@ -703,7 +706,8 @@ public class Benchmarks {
 
 		// The processor of the first benchmark stands for the batch -- they all come
 		// from the same upload and therefore share a type.
-		int processorId = benchmarks.get(0).getType().getId();
+		Processor firstType = benchmarks.get(0).getType();
+		int processorId = (firstType != null) ? firstType.getId() : R.NO_TYPE_PROC_ID;
 		log.info("About to attach attributes to " + benchmarks.size());
 
 		if (processorId == R.NO_TYPE_PROC_ID) {
