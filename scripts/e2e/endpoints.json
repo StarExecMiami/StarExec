@@ -1,5 +1,5 @@
 {
-  "resolved_at_commit": "efadbfca7ccf30fc9712acc1123b86577588109f",
+  "resolved_at_commit": "caf0dd47f67dcced50077cf609510a414c668216",
   "endpoints": {
     "login": {
       "method": "POST",
@@ -19,14 +19,14 @@
       "method": "GET",
       "path": "/services/session/logged-in",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 3678,
+      "line": 3679,
       "needle": "@Path(\"/session/logged-in\")"
     },
     "users_getid": {
       "method": "GET",
       "path": "/services/users/getid",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 7004,
+      "line": 7006,
       "needle": "@Path(\"/users/getid\")"
     },
     "registration": {
@@ -117,21 +117,21 @@
       "method": "POST",
       "path": "/services/space/{spaceId}/perm/{userId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 3634,
+      "line": 3635,
       "needle": "@Path(\"/space/{spaceId}/perm/{userId}\")"
     },
     "space_perm_edit": {
       "method": "POST",
       "path": "/services/space/{spaceId}/edit/perm/{userId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6656,
+      "line": 6658,
       "needle": "@Path(\"/space/{spaceId}/edit/perm/{userId}\")"
     },
     "space_add_user": {
       "method": "POST",
       "path": "/services/spaces/{spaceId}/add/user",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5044,
+      "line": 5046,
       "needle": "@Path(\"/spaces/{spaceId}/add/user\")"
     },
     "processor_manager": {
@@ -166,7 +166,7 @@
       "method": "POST",
       "path": "/services/set/defaultSettings/{id}/{userIdOfOwner}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4194,
+      "line": 4196,
       "needle": "@Path(\"/set/defaultSettings/{id}/{userIdOfOwner}\")"
     },
     "upload_solver": {
@@ -208,7 +208,7 @@
       "method": "GET",
       "path": "/services/solvers/{id}/buildoutput",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 2030,
+      "line": 2031,
       "needle": "@Path(\"/solvers/{id}/buildoutput\")"
     },
     "upload_benchmarks": {
@@ -285,14 +285,14 @@
       "method": "POST",
       "path": "/services/jobs/solvers/pagination/{jobSpaceId}/{shortFormat}/{wallclock}/{stageNum}/{includeUnknown}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 3141,
+      "line": 3142,
       "needle": "@Path(\"/jobs/solvers/pagination/{jobSpaceId}/{shortFormat}/{wallclock}/{stageNum}/{includeUnknown}\")"
     },
     "job_stats_row_layout": {
       "method": "-",
       "path": "aaData row layout",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTHelpers.java",
-      "line": 2250,
+      "line": 2251,
       "needle": "entries.add(js.getCorrectOverCompleted());"
     },
     "stats_accumulate": {
@@ -327,7 +327,7 @@
       "method": "POST",
       "path": "/services/jobs/pairs/pagination/{jobSpaceId}/{configId}/{type}/{wallclock}/{stageNumber}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 2386,
+      "line": 2387,
       "needle": "@Path(\"/jobs/pairs/pagination/{jobSpaceId}/{configId}/{type}/{wallclock}/{stageNumber}\")"
     },
     "pairs_by_config_closure": {
@@ -348,42 +348,42 @@
       "method": "GET",
       "path": "/services/jobs/pairs/{id}/stdout/{stageNumber}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 2127,
+      "line": 2128,
       "needle": "@Path(\"/jobs/pairs/{id}/stdout/{stageNumber}\")"
     },
     "pair_rerun": {
       "method": "POST",
       "path": "/services/jobs/pairs/rerun/{pairid}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 2348,
+      "line": 2349,
       "needle": "@Path(\"/jobs/pairs/rerun/{pairid}\")"
     },
     "rerun_all": {
       "method": "POST",
       "path": "/services/jobs/rerunallpairs/{id}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 2083,
+      "line": 2084,
       "needle": "@Path(\"/jobs/rerunallpairs/{id}\")"
     },
     "pause_job": {
       "method": "POST",
       "path": "/services/pause/job/{id}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6381,
+      "line": 6383,
       "needle": "@Path(\"/pause/job/{id}\")"
     },
     "resume_job": {
       "method": "POST",
       "path": "/services/resume/job/{id}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6406,
+      "line": 6408,
       "needle": "@Path(\"/resume/job/{id}\")"
     },
     "delete_job": {
       "method": "POST",
       "path": "/services/delete/job",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6066,
+      "line": 6068,
       "needle": "@Path(\"/delete/job\")"
     },
     "delete_kills_incomplete": {
@@ -432,42 +432,42 @@
       "method": "POST",
       "path": "/services/recycle/benchmark",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4913,
+      "line": 4915,
       "needle": "@Path(\"/recycle/benchmark\")"
     },
     "restore_benchmark": {
       "method": "POST",
       "path": "/services/restore/benchmark",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4999,
+      "line": 5001,
       "needle": "@Path(\"/restore/benchmark\")"
     },
     "delete_benchmark": {
       "method": "POST",
       "path": "/services/delete/benchmark",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4954,
+      "line": 4956,
       "needle": "@Path(\"/delete/benchmark\")"
     },
     "recycle_solver": {
       "method": "POST",
       "path": "/services/recycle/solver",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5881,
+      "line": 5883,
       "needle": "@Path(\"/recycle/solver\")"
     },
     "restore_solver": {
       "method": "POST",
       "path": "/services/restore/solver",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5520,
+      "line": 5522,
       "needle": "@Path(\"/restore/solver\")"
     },
     "delete_solver": {
       "method": "POST",
       "path": "/services/delete/solver",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5730,
+      "line": 5732,
       "needle": "@Path(\"/delete/solver\")"
     },
     "conflicting_benchmarks_page": {
@@ -502,7 +502,7 @@
       "method": "-",
       "path": "table %.4f (RESTHelpers.getAttributesTable)",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTHelpers.java",
-      "line": 2676,
+      "line": 2677,
       "needle": "countWallclockCpu.getLeft(), String.format(\"%.4f\", countWallclockCpu.getMiddle()),"
     },
     "attributes_sum_sql": {
@@ -530,49 +530,49 @@
       "method": "POST",
       "path": "/services/edit/user/{userId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 3988,
+      "line": 3990,
       "needle": "@Path(\"/edit/user/{userId}\")"
     },
     "edit_user_password": {
       "method": "POST",
       "path": "/services/edit/user/password/{userId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6548,
+      "line": 6550,
       "needle": "@Path(\"/edit/user/password/{userId}\")"
     },
     "session_logout": {
       "method": "POST",
       "path": "/services/session/logout",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 3669,
+      "line": 3670,
       "needle": "@Path(\"/session/logout\")"
     },
     "suspend_user": {
       "method": "POST",
       "path": "/services/suspend/user/{userId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 7667,
+      "line": 7669,
       "needle": "@Path(\"/suspend/user/{userId}\")"
     },
     "reinstate_user": {
       "method": "POST",
       "path": "/services/reinstate/user/{userId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 7689,
+      "line": 7691,
       "needle": "@Path(\"/reinstate/user/{userId}\")"
     },
     "website_add": {
       "method": "POST",
       "path": "/services/website/add/{type}/{id}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 3824,
+      "line": 3826,
       "needle": "@Path(\"/website/add/{type}/{id}\")"
     },
     "website_delete": {
       "method": "POST",
       "path": "/services/websites/delete/{websiteId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 3862,
+      "line": 3864,
       "needle": "@Path(\"/websites/delete/{websiteId}\")"
     },
     "password_reset": {
@@ -614,7 +614,7 @@
       "method": "-",
       "path": "admin caller updates email directly",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4032,
+      "line": 4034,
       "needle": "if (adminDirectChange) {"
     },
     "user_name_pattern": {
@@ -628,7 +628,7 @@
       "method": "-",
       "path": "suspended role denies a revalidated session",
       "file": "starexec-app/src/main/java/org/starexec/data/database/Users.java",
-      "line": 473,
+      "line": 476,
       "needle": "if (R.SUSPENDED_ROLE_NAME.equals(role) || R.UNAUTHORIZED_ROLE_NAME.equals(role)) {"
     },
     "get_picture_default": {
@@ -671,35 +671,35 @@
       "method": "POST",
       "path": "/services/edit/space/{id}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4507,
+      "line": 4509,
       "needle": "@Path(\"/edit/space/{id}\")"
     },
     "space_change_public": {
       "method": "POST",
       "path": "/services/space/changePublic/{id}/{hierarchy}/{makePublic}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 7254,
+      "line": 7256,
       "needle": "@Path(\"/space/changePublic/{id}/{hierarchy}/{makePublic}\")"
     },
     "space_is_public": {
       "method": "POST",
       "path": "/services/space/isSpacePublic/{id}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 7283,
+      "line": 7285,
       "needle": "@Path(\"/space/isSpacePublic/{id}\")"
     },
     "move_space": {
       "method": "POST",
       "path": "/services/move/space",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6872,
+      "line": 6874,
       "needle": "@Path(\"/move/space\")"
     },
     "copy_space": {
       "method": "POST",
       "path": "/services/spaces/{spaceId}/copySpace",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6922,
+      "line": 6924,
       "needle": "@Path(\"/spaces/{spaceId}/copySpace\")"
     },
     "copy_primitives_option": {
@@ -748,14 +748,14 @@
       "method": "POST",
       "path": "/services/makeLeader/{spaceId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6744,
+      "line": 6746,
       "needle": "@Path(\"/makeLeader/{spaceId}\")"
     },
     "make_leader_quota": {
       "method": "-",
       "path": "promotion sets CL_DEFAULT_DISK_QUOTA / CL_PAIR_QUOTA",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6814,
+      "line": 6816,
       "needle": "if (!Users.setDiskQuota(userId, R.CL_DEFAULT_DISK_QUOTA)) {"
     },
     "cl_quota": {
@@ -769,7 +769,7 @@
       "method": "POST",
       "path": "/services/demoteLeader/{spaceId}/{userId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6838,
+      "line": 6840,
       "needle": "@Path(\"/demoteLeader/{spaceId}/{userId}\")"
     },
     "demote_leader_rule": {
@@ -783,14 +783,14 @@
       "method": "POST",
       "path": "/services/remove/user/{spaceId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5365,
+      "line": 5367,
       "needle": "@Path(\"/remove/user/{spaceId}\")"
     },
     "leave_space": {
       "method": "POST",
       "path": "/services/leave/space/{spaceId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4804,
+      "line": 4806,
       "needle": "@Path(\"/leave/space/{spaceId}\")"
     },
     "leave_hierarchy_sql": {
@@ -818,28 +818,28 @@
       "method": "GET",
       "path": "/services/community/pending/requests/",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 7302,
+      "line": 7304,
       "needle": "@Path(\"/community/pending/requests/\")"
     },
     "delete_profile": {
       "method": "POST",
       "path": "/services/delete/defaultSettings/{id}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4220,
+      "line": 4222,
       "needle": "@Path(\"/delete/defaultSettings/{id}\")"
     },
     "clear_default_profile": {
       "method": "POST",
       "path": "/services/clear/defaultSettings/{userIdOfOwner}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4256,
+      "line": 4258,
       "needle": "@Path(\"/clear/defaultSettings/{userIdOfOwner}\")"
     },
     "edit_community_defaults": {
       "method": "POST",
       "path": "/services/edit/defaultSettings/{attr}/{id}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4329,
+      "line": 4331,
       "needle": "@Path(\"/edit/defaultSettings/{attr}/{id}\")"
     },
     "users_default_profile_fk": {
@@ -874,14 +874,14 @@
       "method": "POST",
       "path": "/services/edit/processor/{procId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4719,
+      "line": 4721,
       "needle": "@Path(\"/edit/processor/{procId}\")"
     },
     "delete_processor": {
       "method": "POST",
       "path": "/services/delete/processor",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4604,
+      "line": 4606,
       "needle": "@Path(\"/delete/processor\")"
     },
     "delete_processor_sql": {
@@ -916,14 +916,14 @@
       "method": "-",
       "path": "reprocessing reports through benchmark_uploads",
       "file": "starexec-app/src/main/java/org/starexec/data/database/Benchmarks.java",
-      "line": 2906,
+      "line": 2910,
       "needle": "Integer statusId = Uploads.createBenchmarkUploadStatus(spaceId, userId);"
     },
     "postprocess_job": {
       "method": "POST",
       "path": "/services/postprocess/job/{jobId}/{procId}/{stageNumber}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4576,
+      "line": 4578,
       "needle": "@Path(\"/postprocess/job/{jobId}/{procId}/{stageNumber}\")"
     },
     "postprocess_job_sql": {
@@ -965,7 +965,7 @@
       "method": "-",
       "path": "jobs/pairs/rerun uses the manual Jobs.rerunPair, not rerunPairAutomatic",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 2361,
+      "line": 2362,
       "needle": "boolean success = Jobs.rerunPair(pairId);"
     },
     "upload_bench_convert": {
@@ -979,7 +979,7 @@
       "method": "POST",
       "path": "/services/edit/benchmark/{benchId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6459,
+      "line": 6461,
       "needle": "@Path(\"/edit/benchmark/{benchId}\")"
     },
     "benchmark_contents": {
@@ -1035,14 +1035,14 @@
       "method": "POST",
       "path": "/services/edit/configuration/{id}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6695,
+      "line": 6697,
       "needle": "@Path(\"/edit/configuration/{id}\")"
     },
     "delete_configuration": {
       "method": "POST",
       "path": "/services/delete/configuration",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5921,
+      "line": 5923,
       "needle": "@Path(\"/delete/configuration\")"
     },
     "rebuild_solver": {
@@ -1056,21 +1056,21 @@
       "method": "POST",
       "path": "/services/spaces/{spaceId}/add/solver",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5134,
+      "line": 5136,
       "needle": "@Path(\"/spaces/{spaceId}/add/solver\")"
     },
     "copy_solver_copies": {
       "method": "-",
       "path": "copy=true duplicates the solver",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5179,
+      "line": 5181,
       "needle": "List<Integer> copied = Solvers.copySolvers(oldSolvers, requestUserId, spaceId);"
     },
     "remove_solver_from_space": {
       "method": "POST",
       "path": "/services/remove/solver/{spaceId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5427,
+      "line": 5429,
       "needle": "@Path(\"/remove/solver/{spaceId}\")"
     },
     "download_solver": {
@@ -1091,49 +1091,49 @@
       "method": "POST",
       "path": "/services/spaces/{spaceId}/add/benchmark",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5231,
+      "line": 5233,
       "needle": "@Path(\"/spaces/{spaceId}/add/benchmark\")"
     },
     "associate_job_with_space": {
       "method": "POST",
       "path": "/services/spaces/{spaceId}/add/job",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5320,
+      "line": 5322,
       "needle": "@Path(\"/spaces/{spaceId}/add/job\")"
     },
     "remove_bench_from_space": {
       "method": "POST",
       "path": "/services/remove/benchmark/{spaceId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 4833,
+      "line": 4835,
       "needle": "@Path(\"/remove/benchmark/{spaceId}\")"
     },
     "remove_job_from_space": {
       "method": "POST",
       "path": "/services/remove/job/{spaceId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5965,
+      "line": 5967,
       "needle": "@Path(\"/remove/job/{spaceId}\")"
     },
     "remove_subspace": {
       "method": "POST",
       "path": "/services/remove/subspace",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6246,
+      "line": 6248,
       "needle": "@Path(\"/remove/subspace\")"
     },
     "remove_subspace_recycle": {
       "method": "-",
       "path": "recyclePrims=true recycles the hierarchy's solvers and benchmarks",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 6270,
+      "line": 6272,
       "needle": "final boolean recycleAllAllowed = Util.paramExists(\"recyclePrims\", request) &&"
     },
     "link_all_orphaned": {
       "method": "POST",
       "path": "/services/linkAllOrphaned/{userId}/{spaceId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5770,
+      "line": 5772,
       "needle": "@Path(\"/linkAllOrphaned/{userId}/{spaceId}\")"
     },
     "add_job_pairs": {
@@ -1161,49 +1161,49 @@
       "method": "POST",
       "path": "/services/jobs/addJobPairs/confirmation",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 3159,
+      "line": 3160,
       "needle": "@Path(\"/jobs/addJobPairs/confirmation\")"
     },
     "edit_job_name": {
       "method": "POST",
       "path": "/services/job/edit/name/{jobId}/{newName}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 3465,
+      "line": 3466,
       "needle": "@Path(\"/job/edit/name/{jobId}/{newName}\")"
     },
     "edit_job_description": {
       "method": "POST",
       "path": "/services/job/edit/description/{jobId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 3502,
+      "line": 3503,
       "needle": "@Path(\"/job/edit/description/{jobId}\")"
     },
     "job_high_priority": {
       "method": "POST",
       "path": "/services/jobs/setHighPriority/{jobId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 2821,
+      "line": 2822,
       "needle": "@Path(\"/jobs/setHighPriority/{jobId}\")"
     },
     "job_low_priority": {
       "method": "POST",
       "path": "/services/jobs/setLowPriority/{jobId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 2839,
+      "line": 2840,
       "needle": "@Path(\"/jobs/setLowPriority/{jobId}\")"
     },
     "anonymous_link": {
       "method": "POST",
       "path": "/services/anonymousLink/{primitiveType}/{primitiveId}/{primitivesToAnonymizeName}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 3359,
+      "line": 3360,
       "needle": "@Path(\"/anonymousLink/{primitiveType}/{primitiveId}/{primitivesToAnonymizeName}\")"
     },
     "job_matrix": {
       "method": "GET",
       "path": "/services/matrix/finished/{jobSpaceId}/{stageId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 2416,
+      "line": 2417,
       "needle": "@Path(\"/matrix/finished/{jobSpaceId}/{stageId}\")"
     },
     "job_space_closure_insert": {
@@ -1224,7 +1224,7 @@
       "method": "POST",
       "path": "/services/delete/user/{userId}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5642,
+      "line": 5644,
       "needle": "@Path(\"/delete/user/{userId}\")"
     },
     "delete_user_cascades": {
@@ -1245,14 +1245,14 @@
       "method": "-",
       "path": "primitive directories are removed after the commit",
       "file": "starexec-app/src/main/java/org/starexec/data/database/Users.java",
-      "line": 1545,
+      "line": 1565,
       "needle": "deleteUsersPrimitiveDirectories(userToDeleteId, preGatheredJobDirectories, preGatheredSolverIds, preGatheredBenchmarkIds);"
     },
     "delete_picture": {
       "method": "POST",
       "path": "/services/delete/picture/{type}/{id}",
       "file": "starexec-app/src/main/java/org/starexec/app/RESTServices.java",
-      "line": 5569,
+      "line": 5571,
       "needle": "@Path(\"/delete/picture/{type}/{id}\")",
       "note": "added by feat/delete-profile-picture (8843d686b); absent before it, so C28.4 probes at runtime"
     },
