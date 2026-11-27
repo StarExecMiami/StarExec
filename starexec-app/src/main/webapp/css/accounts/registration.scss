@@ -15,7 +15,6 @@
 // =============================================================================
 
 .registration-page {
-    min-height: 100vh;
     background: $background-color;
 }
 
@@ -53,8 +52,13 @@
 
 .container {
     max-width: 800px;
+    box-sizing: border-box;
     margin: 0 auto;
     padding: 0 $spacing-lg;
+
+    @include mobile {
+        padding: 0 $spacing-md;
+    }
 }
 
 // =============================================================================

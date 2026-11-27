@@ -1,8 +1,9 @@
 @use "../global/mixins" as m;
 
 #editSpaceForm fieldset {
-	width: 600px;
-	margin: 50px auto 30px;	
+	width: 100%;
+	max-width: 640px;
+	margin: 30px auto;
 }
 
 #tblDefaultPerm tr td {

@@ -1,7 +1,8 @@
 @use "../global/mixins" as m;
 
 fieldset {
-	width:750px;
+	width: 100%;
+	max-width: 760px;
 }
 
 #benchHead {

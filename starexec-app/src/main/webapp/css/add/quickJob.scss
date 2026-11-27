@@ -26,14 +26,9 @@
 }
 
 #content fieldset {
-  width: 700px;
-  margin: s.$spacing-2xl auto s.$spacing-2xl auto;
-}
-
-@media only screen and (width <= 1023px) {
-  #content fieldset {
-    width: 90%;
-  }
+  width: 100%;
+  max-width: 720px;
+  margin: s.$spacing-xl auto;
 }
 
 @include m.mobile {

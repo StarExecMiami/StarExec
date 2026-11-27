@@ -1,14 +1,9 @@
 @use "../global/mixins" as m;
 
 #content fieldset {
-	width: 600px;
-	margin: 50px auto 30px;
-}
-
-@media only screen and (width <= 1023px) {
-	#content fieldset {
-		width: 90%;
-	}
+	width: 100%;
+	max-width: 640px;
+	margin: 30px auto;
 }
 
 #tblUploadBench {

@@ -14,7 +14,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: calc(100vh - 200px);
+    min-height: clamp(380px, calc(100vh - 260px), 680px);
+    box-sizing: border-box;
     padding: 20px;
 
     section {
@@ -43,8 +44,9 @@
 // ============================================================================
 
 .login-form {
-    width: 370px;
-    margin: 50px auto auto;
+    width: 100%;
+    max-width: 370px;
+    margin: 0 auto;
 
     #loginFieldset {
         width: auto;

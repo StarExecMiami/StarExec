@@ -4,10 +4,12 @@
 // Shared styles for edit pages
 // =============================================================================
 
+@use "../global/mixins" as m;
 @import "../global/colors";
 
 fieldset {
-	width: 600px;
+	width: 100%;
+	max-width: 640px;
 	margin: auto auto 20px;
 }
 
@@ -38,6 +40,10 @@ table tr td:first-child {
 	width: 180px;
 	padding-left: 10px;
 	vertical-align: middle;
+
+	@include m.mobile {
+		width: auto;
+	}
 }
 
 input[type="text"], textarea, select {

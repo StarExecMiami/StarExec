@@ -24,15 +24,15 @@
 	> section {
 		// Like fieldsets: the width includes padding and border, never past the page.
 		box-sizing: border-box;
-		width: 600px;
-		max-width: 100%;
+		width: 100%;
+		max-width: 640px;
 		margin: 0 auto 30px;
 		border: 3px solid $background-color;
 		border-radius: 3px;
 		padding: 10px;
 
 		@include m.mobile {
-			width: 95%;
+			width: 100%;
 		}
 
 		// Section headings (replaces legend)
