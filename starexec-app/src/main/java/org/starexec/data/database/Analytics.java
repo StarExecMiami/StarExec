@@ -193,6 +193,21 @@ public enum Analytics {
 	}
 
 	/**
+	 * Clears all in-memory pending counts, users, event buckets, and cached event IDs.
+	 * Intended for test isolation in shared-JVM runs.
+	 */
+	static void resetPendingStateForTest() {
+		for (Analytics event : Analytics.values()) {
+			for (Data data : event.events.values()) {
+				data.count.set(0);
+				data.users.clear();
+			}
+			event.events.clear();
+			event.id = -1;
+		}
+	}
+
+	/**
 	 * Get the Data for this event today
 	 * If Data does not already exist for today, create it
 	 * @return Data
