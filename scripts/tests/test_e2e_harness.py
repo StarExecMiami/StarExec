@@ -485,6 +485,129 @@ class E2EHarnessTest(unittest.TestCase):
         self.assertIn('[ ! -s "${report_file}" ]', rendered)
         self.assertIn("allowEmptyArchive: false", stage_body)
 
+    def test_jenkinsfile_resolve_published_image_and_unit_tests_fail_fast_jq(self):
+        import json
+        import re
+        import shutil
+
+        jenkins = (REPO_ROOT / "Jenkinsfile").read_text(encoding="utf-8")
+        stage_match = re.search(
+            r"stage\('Resolve Image & Verify Tests'\)\s*\{(?P<body>.*?)stage\('Pre-deploy Validation'\)",
+            jenkins,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(stage_match)
+        stage_body = stage_match.group("body")
+
+        self.assertIn("failFast true", stage_body)
+        self.assertIn("container-publish.yml/runs?per_page=100", stage_body)
+        self.assertIn("maven-test.yml/runs?per_page=100", stage_body)
+        self.assertNotIn("status=completed", stage_body)
+        self.assertNotIn("head_sha=", stage_body)
+
+        sh_blocks = re.findall(r'sh\s*\(\s*script\s*:\s*"""(.*?)"""', stage_body, flags=re.DOTALL)
+        self.assertEqual(len(sh_blocks), 2)
+        rendered_blocks = []
+        for body in sh_blocks:
+            rendered = self._render_groovy_gstring(body)
+            rendered_blocks.append(rendered)
+            proc = subprocess.run(["sh", "-n"], input=rendered, text=True, capture_output=True, check=False)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            bash_proc = subprocess.run(["bash", "-n"], input=rendered, text=True, capture_output=True, check=False)
+            self.assertEqual(bash_proc.returncode, 0, bash_proc.stderr)
+
+        if shutil.which("jq") is None:
+            self.skipTest("jq binary not available")
+
+        target_sha = "93e4de964fda675f8e1e7e3da48d52c3129f209b"
+        other_sha = "16be8b7c2b9cc4fd8eaae5d1cadfa9f9fca2c382"
+
+        def eval_jq(expr, payload):
+            proc = subprocess.run(
+                ["jq", "-r", "--arg", "sha", target_sha, expr],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            return proc.stdout.strip()
+
+        resolve_jq_match = re.search(r"jq -r --arg sha '[^']+'\s+'(.*?)'\)", rendered_blocks[0], flags=re.DOTALL)
+        self.assertIsNotNone(resolve_jq_match)
+        resolve_jq = resolve_jq_match.group(1)
+
+        # 1. Success state (even alongside an earlier failed run for the same SHA)
+        self.assertEqual(
+            eval_jq(resolve_jq, {
+                "total_count": 2,
+                "workflow_runs": [
+                    {"id": 100, "head_sha": target_sha, "status": "completed", "conclusion": "failure", "updated_at": "2026-11-27T04:38:01Z", "created_at": "2026-11-27T04:30:00Z", "html_url": "https://example/runs/100"},
+                    {"id": 101, "head_sha": target_sha, "status": "completed", "conclusion": "success", "updated_at": "2026-11-27T04:45:00Z", "created_at": "2026-11-27T04:40:00Z", "html_url": "https://example/runs/101"},
+                ],
+            }),
+            "success|101|success|https://example/runs/101",
+        )
+
+        # 2. Active/in-progress state (keeps polling while rerun or initial run executes)
+        for active_status in ("queued", "in_progress", "waiting", "pending", "requested"):
+            self.assertEqual(
+                eval_jq(resolve_jq, {
+                    "total_count": 2,
+                    "workflow_runs": [
+                        {"id": 100, "head_sha": target_sha, "status": "completed", "conclusion": "failure", "updated_at": "2026-11-27T04:38:01Z", "created_at": "2026-11-27T04:30:00Z", "html_url": "https://example/runs/100"},
+                        {"id": 102, "head_sha": target_sha, "status": active_status, "conclusion": None, "updated_at": "2026-11-27T04:42:00Z", "created_at": "2026-11-27T04:41:00Z", "html_url": "https://example/runs/102"},
+                    ],
+                }),
+                f"pending|102|{active_status}|https://example/runs/102",
+            )
+
+        # 3. Fail-fast state: all matching runs completed without success
+        for fail_conclusion in ("failure", "cancelled", "timed_out", "action_required", "startup_failure"):
+            self.assertEqual(
+                eval_jq(resolve_jq, {
+                    "total_count": 1,
+                    "workflow_runs": [
+                        {"id": 103, "head_sha": target_sha, "status": "completed", "conclusion": fail_conclusion, "updated_at": "2026-11-27T04:38:01Z", "created_at": "2026-11-27T04:30:00Z", "html_url": "https://example/runs/103"},
+                    ],
+                }),
+                f"failed|103|{fail_conclusion}|https://example/runs/103",
+            )
+
+        # 4. Not yet registered state (0 runs for target SHA): waits instead of failing
+        self.assertEqual(
+            eval_jq(resolve_jq, {
+                "total_count": 1,
+                "workflow_runs": [
+                    {"id": 99, "head_sha": other_sha, "status": "completed", "conclusion": "success", "updated_at": "2026-11-27T00:48:08Z", "created_at": "2026-11-27T00:40:00Z", "html_url": "https://example/runs/99"},
+                ],
+            }),
+            f"none|||total_count=1, page_runs=1, matching_sha=0, latest_shas={other_sha[:12]}(success)",
+        )
+
+        # Unit Tests jq preserves fallback on empty match and handles active/failed/success consistently
+        unit_jq_match = re.search(r"jq -r --arg sha '[^']+'\s+'(.*?)'\)", rendered_blocks[1], flags=re.DOTALL)
+        self.assertIsNotNone(unit_jq_match)
+        unit_jq = unit_jq_match.group(1)
+        self.assertEqual(eval_jq(unit_jq, {"total_count": 1, "workflow_runs": [{"id": 99, "head_sha": other_sha, "status": "completed", "conclusion": "success"}]}), "")
+        self.assertEqual(
+            eval_jq(unit_jq, {
+                "workflow_runs": [
+                    {"id": 200, "head_sha": target_sha, "status": "completed", "conclusion": "failure", "updated_at": "2026-11-27T04:30:00Z", "created_at": "2026-11-27T04:25:00Z", "html_url": "https://example/runs/200"},
+                    {"id": 201, "head_sha": target_sha, "status": "in_progress", "conclusion": "", "updated_at": "2026-11-27T04:31:00Z", "created_at": "2026-11-27T04:31:00Z", "html_url": "https://example/runs/201"},
+                ],
+            }),
+            "201|in_progress||https://example/runs/201",
+        )
+        self.assertEqual(
+            eval_jq(unit_jq, {
+                "workflow_runs": [
+                    {"id": 202, "head_sha": target_sha, "status": "completed", "conclusion": "failure", "updated_at": "2026-11-27T04:32:00Z", "created_at": "2026-11-27T04:31:00Z", "html_url": "https://example/runs/202"},
+                ],
+            }),
+            "202|completed|failure|https://example/runs/202",
+        )
+
     def test_ci_only_selections_close_complete_matrix_rows(self):
         import re
         from capabilities import BY_NUMBER

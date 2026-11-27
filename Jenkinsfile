@@ -158,7 +158,7 @@ pipeline {
                                     command -v jq >/dev/null
                                     command -v podman >/dev/null
 
-                                    WORKFLOW_RUNS_URL="https://api.github.com/repos/StarExecMiami/StarExec/actions/workflows/container-publish.yml/runs?status=completed&per_page=100"
+                                    WORKFLOW_RUNS_URL="https://api.github.com/repos/StarExecMiami/StarExec/actions/workflows/container-publish.yml/runs?per_page=100"
                                     RUN_ID=""
                                     DIAG="no response"
                                     for attempt in \$(seq 1 60); do
@@ -169,19 +169,62 @@ pipeline {
                                             sleep 15
                                             continue
                                         fi
-                                        RUN_ID="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' \\
-                                            '[.workflow_runs[] | select(.head_sha == \$sha and .conclusion == "success")] | sort_by(.updated_at) | last | .id // empty')"
-                                        if [ -n "\${RUN_ID}" ]; then
-                                            break
+                                        if ! RUN_INFO="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' '
+                                            ([(.workflow_runs // [])[] | select(.head_sha == \$sha)] | sort_by([.updated_at, .created_at, .id])) as \$runs
+                                            | (\$runs | map(select(.status == "completed" and .conclusion == "success")) | last) as \$ok
+                                            | (\$runs | map(select(.status != "completed")) | last) as \$active
+                                            | (\$runs | last) as \$latest
+                                            | if \$ok != null then
+                                                ["success", (\$ok.id | tostring), (\$ok.conclusion // "success"), (\$ok.html_url // "")] | join("|")
+                                              elif \$active != null then
+                                                ["pending", (\$active.id | tostring), (\$active.status // "unknown"), (\$active.html_url // "")] | join("|")
+                                              elif \$latest != null then
+                                                ["failed", (\$latest.id | tostring), (\$latest.conclusion // "unknown"), (\$latest.html_url // "")] | join("|")
+                                              else
+                                                [
+                                                  "none",
+                                                  "",
+                                                  "",
+                                                  (
+                                                    "total_count=" + ((.total_count // 0) | tostring)
+                                                    + ", page_runs=" + (((.workflow_runs // []) | length) | tostring)
+                                                    + ", matching_sha=0"
+                                                    + ", latest_shas=" + (([(.workflow_runs // [])[:5][] | ((.head_sha // "unknown")[0:12] + "(" + (.conclusion // .status // "unknown") + ")")] | join(",")) | if . == "" then "none" else . end)
+                                                  )
+                                                ] | join("|")
+                                              end
+                                        ')"; then
+                                            DIAG="github api response parse failed"
+                                            echo "GitHub Container Publish response parse failed (attempt \${attempt}/60); retrying..." >&2
+                                            sleep 15
+                                            continue
                                         fi
 
-                                        DIAG="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' '
-                                            "total_count=" + ((.total_count // 0) | tostring)
-                                            + ", page_runs=" + (((.workflow_runs // []) | length) | tostring)
-                                            + ", matching_sha=" + (([(.workflow_runs // [])[] | select(.head_sha == \$sha)] | length) | tostring)
-                                            + ", latest_shas=" + (([(.workflow_runs // [])[:5][] | ((.head_sha // "unknown")[0:12] + "(" + (.conclusion // .status // "unknown") + ")")] | join(",")) | if . == "" then "none" else . end)
-                                        ' 2>/dev/null || echo 'diagnostics unavailable')"
-                                        echo "Waiting for successful Container Publish workflow for ${env.GIT_SHA} (attempt \${attempt}/60; \${DIAG})" >&2
+                                        RUN_STATE="\${RUN_INFO%%|*}"
+                                        REST="\${RUN_INFO#*|}"
+                                        CANDIDATE_ID="\${REST%%|*}"
+                                        REST="\${REST#*|}"
+                                        RUN_DETAIL="\${REST%%|*}"
+                                        RUN_EXTRA="\${REST#*|}"
+
+                                        case "\${RUN_STATE}" in
+                                            success)
+                                                RUN_ID="\${CANDIDATE_ID}"
+                                                break
+                                                ;;
+                                            pending)
+                                                DIAG="run=\${CANDIDATE_ID} status=\${RUN_DETAIL}"
+                                                echo "Waiting for Container Publish run \${CANDIDATE_ID} for ${env.GIT_SHA} (status=\${RUN_DETAIL}; \${RUN_EXTRA}; attempt \${attempt}/60)" >&2
+                                                ;;
+                                            failed)
+                                                echo "ERROR: Container Publish run \${CANDIDATE_ID} for ${env.GIT_SHA} finished with conclusion='\${RUN_DETAIL}' (\${RUN_EXTRA}); aborting immediately (fail-fast)." >&2
+                                                exit 1
+                                                ;;
+                                            *)
+                                                DIAG="\${RUN_EXTRA}"
+                                                echo "Waiting for Container Publish workflow to register for ${env.GIT_SHA} (attempt \${attempt}/60; \${DIAG})" >&2
+                                                ;;
+                                        esac
                                         sleep 15
                                     done
 
@@ -251,8 +294,10 @@ pipeline {
 
                                             if ! RUN_INFO="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' '
                                                 ([(.workflow_runs // [])[] | select(.head_sha == \$sha)]
-                                                 | sort_by([.updated_at, .created_at, .id])
-                                                 | last) as \$run
+                                                 | sort_by([.updated_at, .created_at, .id])) as \$runs
+                                                | (\$runs | map(select(.status == "completed" and .conclusion == "success")) | last) as \$ok
+                                                | (\$runs | map(select(.status != "completed")) | last) as \$active
+                                                | (\$ok // \$active // (\$runs | last)) as \$run
                                                 | if \$run == null then ""
                                                   else [(\$run.id | tostring), (\$run.status // ""), (\$run.conclusion // ""), (\$run.html_url // "")] | join("|")
                                                   end
