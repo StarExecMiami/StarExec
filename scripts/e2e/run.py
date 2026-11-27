@@ -22,11 +22,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from capabilities import BY_NUMBER, CAPABILITIES  # noqa: E402
+from capabilities import BY_NUMBER, CAPABILITIES, after_for, bucket_for  # noqa: E402
 from capabilities.c00_deployment import readiness  # noqa: E402
 from lib import config as config_mod  # noqa: E402
 from lib import endpoints, fixtures, matrix  # noqa: E402
 from lib.context import Context  # noqa: E402
+from lib.dag import DAGValidationError, build_dag, run_dag  # noqa: E402
 from lib.report import Capability, Run, new_runid  # noqa: E402
 from lib.state import State  # noqa: E402
 
@@ -125,6 +126,54 @@ def cmd_record_blocked(args):
     return 2
 
 
+def _parse_only(only_arg):
+    selected = [c[0] for c in CAPABILITIES]
+    if not only_arg:
+        return selected
+    wanted = [int(x) for x in only_arg.split(",") if x.strip()]
+    unknown = [n for n in wanted if n not in BY_NUMBER]
+    if unknown:
+        raise SystemExit(f"unknown capability numbers {unknown}")
+    return [n for n in selected if n in wanted]
+
+
+def cmd_validate_dag(args):
+    selected = _parse_only(args.only)
+    seeded_keys = set()
+    if args.state:
+        prior = json.loads(Path(args.state).read_text())
+        seeded_keys = set(prior.get("ids", {}).keys()) | set(prior.get("facts", {}).keys())
+    try:
+        dag = build_dag(
+            CAPABILITIES,
+            selected=selected,
+            seeded_keys=seeded_keys,
+            buckets=bucket_for,
+            after_map=after_for,
+        )
+    except DAGValidationError as exc:
+        print(f"DAG validation failed: {exc}", file=sys.stderr)
+        return 1
+    for warning in dag.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    bucket_counts = {}
+    for num in dag.order:
+        b = dag.buckets[num]
+        bucket_counts[b] = bucket_counts.get(b, 0) + 1
+    print(
+        json.dumps(
+            {
+                "valid": True,
+                "capabilities": len(dag.order),
+                "edges": sum(len(v) for v in dag.succs.values()),
+                "buckets": bucket_counts,
+                "warnings": dag.warnings,
+            }
+        )
+    )
+    return 0
+
+
 def cmd_run(args):
     cfg = config_mod.load(args.config)
     if args.mode:
@@ -145,13 +194,25 @@ def cmd_run(args):
         jjparser_source=args.jjparser_source,
         datasets_dir=args.datasets_dir,
     )
-    selected = [c[0] for c in CAPABILITIES]
-    if args.only:
-        wanted = [int(x) for x in args.only.split(",")]
-        unknown = [n for n in wanted if n not in BY_NUMBER]
-        if unknown:
-            raise SystemExit(f"unknown capability numbers {unknown}")
-        selected = [n for n in selected if n in wanted]
+    selected = _parse_only(args.only)
+    seeded_keys = set()
+    if args.state:
+        prior = json.loads(Path(args.state).read_text())
+        seeded_keys = set(prior.get("ids", {}).keys()) | set(
+            prior.get("facts", {}).keys()
+        )
+    try:
+        dag = build_dag(
+            CAPABILITIES,
+            selected=selected,
+            seeded_keys=seeded_keys,
+            buckets=bucket_for,
+            after_map=after_for,
+        )
+    except DAGValidationError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+
     runid = new_runid()
     owners = {}
     for n, _, _, _, creates in CAPABILITIES:
@@ -162,32 +223,56 @@ def cmd_run(args):
         seed=args.state,
         owners=owners,
     )
+
     run = Run(cfg, runid, state.path, sys.argv[1:])
     run.data["fixtures_manifest"] = str(fixtures.MANIFEST)
     run.data["fixture_mode"] = cfg.fixture_mode
     run.data["selected"] = selected
     ctx = Context(cfg, run, state, fx)
-    for number in selected:
-        _, name, fn, needs, creates = BY_NUMBER[number]
-        ready = readiness(ctx)
-        if ready != 200:
-            run.data["stopped"] = {"before_capability": number, "readiness": ready}
+    parallel_stats = None
+    try:
+        if args.workers == 1:
+            for warning in dag.warnings:
+                print(f"warning: {warning}", file=sys.stderr, flush=True)
+            for number in selected:
+                _, name, fn, needs, creates = BY_NUMBER[number]
+                ready = readiness(ctx)
+                if ready != 200:
+                    run.data["stopped"] = {"before_capability": number, "readiness": ready}
+                    print(
+                        f"[{number}] not started: readiness returned {ready}; stopping the run",
+                        flush=True,
+                    )
+                    break
+                print(f"[{number}] {name}", flush=True)
+                cap = Capability(run, number, name, ctx)
+                state.act_as(number, creates)
+                error = None
+                try:
+                    fn(cap, ctx)
+                except Exception as exc:
+                    error = exc
+                status = cap.close(error)
+                print(f"[{number}] {status}", flush=True)
+            run.finish()
+        else:
+            parallel_stats = run_dag(
+                dag,
+                ctx,
+                workers=args.workers,
+                k8s_job_slots=args.k8s_job_slots,
+                readiness_fn=readiness,
+            )
+            run.finish(order_numbers=selected)
             print(
-                f"[{number}] not started: readiness returned {ready}; stopping the run",
+                f"DAG execution complete: workers={parallel_stats['workers']}, "
+                f"k8s_job_slots={parallel_stats['k8s_job_slots']}, "
+                f"wall_clock_s={parallel_stats['wall_clock_s']}, "
+                f"sum_capability_s={parallel_stats['sum_capability_s']}",
                 flush=True,
             )
-            break
-        print(f"[{number}] {name}", flush=True)
-        cap = Capability(run, number, name, ctx)
-        state.act_as(number, creates)
-        error = None
-        try:
-            fn(cap, ctx)
-        except Exception as exc:
-            error = exc
-        status = cap.close(error)
-        print(f"[{number}] {status}", flush=True)
-    run.finish()
+    finally:
+        ctx.close()
 
     matrix_dir = Path(args.matrix_out) if args.matrix_out else cfg.report_dir
     matrix_report = matrix.build_matrix_report(
@@ -273,13 +358,27 @@ def main():
     p.add_argument("--matrix-out", default=None)
     p.add_argument("--only")
     p.add_argument("--state")
+    p.add_argument("--validate-dag", action="store_true", help="validate capability DAG and exit")
+    p.add_argument("--workers", type=int, default=1, help="concurrent DAG workers (default: 1, serial)")
+    p.add_argument(
+        "--k8s-job-slots",
+        type=int,
+        default=2,
+        help="max concurrent Bucket C (k8s) capabilities when --workers > 1 (default: 2)",
+    )
     p.add_argument("--record-blocked", action="store_true")
     p.add_argument("--reason", default="prerequisite check failed")
     args = p.parse_args()
+    if args.workers < 1:
+        p.error("--workers must be >= 1")
+    if args.k8s_job_slots < 1:
+        p.error("--k8s-job-slots must be >= 1")
     if args.list:
         return cmd_list()
     if args.verify_endpoints:
         return cmd_verify(args.commit)
+    if args.validate_dag:
+        return cmd_validate_dag(args)
     if args.fixtures_only:
         return cmd_fixtures(args)
     if args.record_blocked:

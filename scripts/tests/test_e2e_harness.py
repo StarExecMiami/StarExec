@@ -535,5 +535,290 @@ class E2EHarnessTest(unittest.TestCase):
             self.assertEqual(passed, ["C11", "C17", "C18", "C20"])
 
 
+class E2EDAGExecutorTest(unittest.TestCase):
+    def _dummy_run(self, tmp, state, selected):
+        from lib import endpoints as ep
+        from lib.report import Run
+
+        cfg = e2e_config.Config(
+            backend="kubernetes",
+            mode="fresh",
+            fixture_mode="reproducible-offline",
+            base_url="http://localhost:30081/starexec",
+            deployment_name="sq-testdag-k8s",
+            db_exec=["true"],
+            app_exec=[],
+            app_logs=[],
+            app_data_root="/app/data",
+            queue_id="1",
+            commit="0" * 40,
+            image="example/starexec:test",
+            image_digest="sha256:" + "0" * 64,
+            report_dir=Path(tmp) / "reports",
+            allowed_hosts=["localhost"],
+            admin_user_id=1,
+            enable_browser=False,
+            timeouts={"upload": 10, "job": 10, "pause": 10, "kill": 10, "dispatch": 10, "smtp": 10},
+        )
+        run = Run(cfg, "testdag-1", state.path, ["--workers", "4"])
+        run.data["selected"] = list(selected)
+        return cfg, run
+
+    def test_real_capabilities_dag_valid_and_enforce_explicit_edges(self):
+        from capabilities import CAPABILITIES, after_for, bucket_for
+        from lib.dag import build_dag
+
+        dag = build_dag(CAPABILITIES, buckets=bucket_for, after_map=after_for)
+        self.assertEqual(len(dag.order), 45)
+        self.assertIn(30, dag.preds[35])
+        self.assertTrue({11, 12, 15, 20}.issubset(dag.preds[14]))
+        self.assertIn(25, dag.preds[24])
+        self.assertIn(10, dag.preds[15])
+        self.assertIn(10, dag.preds[20])
+        for n in dag.order:
+            if n != 22:
+                self.assertIn(n, dag.preds[22])
+
+        cli = subprocess.run(
+            [sys.executable, str(E2E_DIR / "run.py"), "--validate-dag"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        payload = json.loads(cli.stdout)
+        self.assertTrue(payload["valid"])
+        self.assertEqual(payload["capabilities"], 45)
+
+    def test_dag_validator_detects_cycles_orphan_needs_and_duplicates(self):
+        from lib.dag import DAGValidationError, build_dag
+
+        noop = lambda cap, ctx: None
+        with self.assertRaises(DAGValidationError) as ctx_cycle:
+            build_dag(
+                [(1, "a", noop, ["k2"], ["k1"]), (2, "b", noop, ["k1"], ["k2"])],
+                buckets={1: "parallel", 2: "parallel"},
+            )
+        self.assertIn("cycle", str(ctx_cycle.exception).lower())
+
+        with self.assertRaises(DAGValidationError):
+            build_dag([(1, "a", noop, ["missing_key"], [])], buckets={1: "parallel"})
+
+        seeded = build_dag(
+            [(1, "a", noop, ["seeded_key"], [])],
+            seeded_keys={"seeded_key"},
+            buckets={1: "parallel"},
+        )
+        self.assertEqual(seeded.order, [1])
+
+        with self.assertRaises(DAGValidationError):
+            build_dag(
+                [(1, "a", noop, [], ["dup"]), (2, "b", noop, [], ["dup"])],
+                buckets={1: "parallel", 2: "parallel"},
+            )
+
+        partial = build_dag(
+            [(1, "a", noop, [], []), (2, "b", noop, [], [])],
+            selected=[2],
+            buckets={1: "parallel", 2: "parallel"},
+            after_map={2: (1,)},
+        )
+        self.assertEqual(len(partial.warnings), 1)
+
+    def test_parallel_workers_speedup_state_and_context_isolation(self):
+        import threading
+        import time
+        from lib.context import Context
+        from lib.dag import build_dag, run_dag
+        from lib.state import State, StateWriteRefused
+
+        order_seen = []
+        kept_refs = []
+        client_objs = []
+        lock = threading.Lock()
+
+        def make_worker(key_name, sleep_s=0.14):
+            def _fn(cap, ctx):
+                client = ctx.run.recorder  # Worker _RunView points to isolated Recorder
+                with lock:
+                    kept_refs.append((cap.number, ctx._sessions, client))
+                    order_seen.append(cap.number)
+                ctx.recorder.note(f"worker-{cap.number}-private-note")
+                ctx.state.set(key_name, cap.number)
+                time.sleep(sleep_s)
+                cap.check("1", "ok", "worker isolated", key_name, key_name, True)
+
+            return _fn
+
+        def bad_writer(cap, ctx):
+            with lock:
+                kept_refs.append((cap.number, ctx._sessions, ctx.run.recorder))
+            with self.assertRaises(StateWriteRefused):
+                ctx.state.set("owned_a", 999)
+            cap.check("1", "guarded", "undeclared write refused", True, True, True)
+
+        caps = [
+            (1, "p1", make_worker("owned_a"), [], ["owned_a"]),
+            (2, "p2", make_worker("owned_b"), [], ["owned_b"]),
+            (3, "p3", make_worker("owned_c"), [], ["owned_c"]),
+            (4, "bad", bad_writer, [], []),
+        ]
+        buckets = {n: "parallel" for n, *_ in caps}
+        with tempfile.TemporaryDirectory() as tmp:
+            owners = {k: (n,) for n, _, _, _, cr in caps for k in cr}
+            state = State(Path(tmp) / "state.json", owners=owners)
+            cfg, run = self._dummy_run(tmp, state, [1, 2, 3, 4])
+            ctx = Context(cfg, run, state, {})
+            # Track real HTTP session objects closed at worker teardown
+            from lib.http import Client
+
+            def tracked_session(cap_num):
+                cli = Client(cfg.base_url, ctx.recorder, f"w{cap_num}")
+                with lock:
+                    client_objs.append(cli)
+                return cli
+
+            orig_fork = ctx.fork_for_worker
+
+            def wrapped_fork(scoped_state, worker_recorder=None):
+                w = orig_fork(scoped_state, worker_recorder)
+                w._sessions["synthetic"] = tracked_session(scoped_state.number)
+                return w
+
+            ctx.fork_for_worker = wrapped_fork
+            dag = build_dag(caps, buckets=buckets)
+            stats = run_dag(dag, ctx, workers=4, k8s_job_slots=2)
+            run.finish(order_numbers=[1, 2, 3, 4])
+
+            self.assertLess(stats["wall_clock_s"], 0.36)
+            self.assertEqual(len(kept_refs), 4)
+            self.assertEqual(len({id(sess) for _, sess, _ in kept_refs}), 4)
+            self.assertEqual(len({id(rec) for _, _, rec in kept_refs}), 4)
+            self.assertTrue(all(sess is not ctx._sessions for _, sess, _ in kept_refs))
+            self.assertTrue(all(len(sess) == 0 for _, sess, _ in kept_refs))
+            self.assertEqual(state.get("owned_a"), 1)
+            self.assertEqual(state.get("owned_b"), 2)
+            self.assertEqual(state.get("owned_c"), 3)
+            for cap_entry in run.data["capabilities"]:
+                num = cap_entry["number"]
+                if num in (1, 2, 3):
+                    notes = [n["text"] for n in cap_entry["checks"][0]["evidence"].get("notes", [])]
+                    self.assertEqual(notes, [f"worker-{num}-private-note"])
+
+    def test_k8s_semaphore_and_exclusive_bucket_d_mutual_exclusion(self):
+        import threading
+        import time
+        from lib.context import Context
+        from lib.dag import build_dag, run_dag
+        from lib.state import State
+
+        state_lock = threading.Lock()
+        active_total = 0
+        active_k8s = 0
+        max_k8s = 0
+        max_during_exclusive = 0
+
+        def runner(bucket):
+            def _fn(cap, ctx):
+                nonlocal active_total, active_k8s, max_k8s, max_during_exclusive
+                with state_lock:
+                    active_total += 1
+                    if bucket == "k8s":
+                        active_k8s += 1
+                        max_k8s = max(max_k8s, active_k8s)
+                    if bucket == "exclusive":
+                        max_during_exclusive = max(max_during_exclusive, active_total)
+                time.sleep(0.06)
+                with state_lock:
+                    if bucket == "exclusive":
+                        max_during_exclusive = max(max_during_exclusive, active_total)
+                    if bucket == "k8s":
+                        active_k8s -= 1
+                    active_total -= 1
+                cap.check("1", "done", "bucket rule respected", True, True, True)
+
+            return _fn
+
+        caps = [
+            (10, "k1", runner("k8s"), [], []),
+            (11, "k2", runner("k8s"), [], []),
+            (12, "k3", runner("k8s"), [], []),
+            (13, "k4", runner("k8s"), [], []),
+            (19, "k5", runner("k8s"), [], []),
+            (27, "p1", runner("parallel"), [], []),
+            (28, "p2", runner("parallel"), [], []),
+            (34, "excl", runner("exclusive"), [], []),
+        ]
+        buckets = {10: "k8s", 11: "k8s", 12: "k8s", 13: "k8s", 19: "k8s", 27: "parallel", 28: "parallel", 34: "exclusive"}
+        with tempfile.TemporaryDirectory() as tmp:
+            state = State(Path(tmp) / "state.json", owners={})
+            cfg, run = self._dummy_run(tmp, state, [c[0] for c in caps])
+            ctx = Context(cfg, run, state, {})
+            dag = build_dag(caps, buckets=buckets)
+            run_dag(dag, ctx, workers=4, k8s_job_slots=2)
+            run.finish(order_numbers=[c[0] for c in caps])
+            self.assertLessEqual(max_k8s, 2)
+            self.assertEqual(max_k8s, 2)
+            self.assertEqual(max_during_exclusive, 1)
+
+    def test_failed_producer_unblocks_dependents_and_matches_serial_report(self):
+        import time
+        from lib.context import Context
+        from lib.dag import build_dag, run_dag
+        from lib.report import Capability
+        from lib.state import State
+
+        def producer_fail(cap, ctx):
+            raise RuntimeError("boom")
+
+        def consumer_needs(cap, ctx):
+            ctx.state.need("prod_key")
+            cap.check("1", "unreachable", "should be blocked", True, True, True)
+
+        def indep_ok(cap, ctx):
+            time.sleep(0.02)
+            cap.check("1", "ok", "independent passes", True, True, True)
+
+        caps = [
+            (1, "prod", producer_fail, [], ["prod_key"]),
+            (2, "cons", consumer_needs, ["prod_key"], []),
+            (3, "indep", indep_ok, [], []),
+        ]
+        buckets = {1: "setup", 2: "parallel", 3: "parallel"}
+        selected = [1, 2, 3]
+
+        reports = {}
+        for mode_workers in (1, 4):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = State(Path(tmp) / "state.json", owners={"prod_key": (1,)})
+                cfg, run = self._dummy_run(tmp, state, selected)
+                ctx = Context(cfg, run, state, {})
+                if mode_workers == 1:
+                    for num, name, fn, _, cr in caps:
+                        cap = Capability(run, num, name, ctx)
+                        state.act_as(num, cr)
+                        err = None
+                        try:
+                            fn(cap, ctx)
+                        except Exception as exc:
+                            err = exc
+                        cap.close(err)
+                    run.finish()
+                else:
+                    dag = build_dag(caps, buckets=buckets)
+                    run_dag(dag, ctx, workers=4, k8s_job_slots=2)
+                    run.finish(order_numbers=selected)
+                reports[mode_workers] = (
+                    [c["number"] for c in run.data["capabilities"]],
+                    [c["status"] for c in run.data["capabilities"]],
+                    run.data["summary"],
+                    run.data["verdict"],
+                )
+
+        self.assertEqual(reports[1], reports[4])
+        self.assertEqual(reports[4][0], [1, 2, 3])
+        self.assertEqual(reports[4][1], ["FAIL", "BLOCKED", "PASS"])
+
+
 if __name__ == "__main__":
     unittest.main()
