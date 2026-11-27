@@ -267,7 +267,7 @@ CAPABILITIES = [
         35,
         "settings profiles: delete default, clear, ownership, community defaults",
         c35_settings_profiles.run_settings_profiles,
-        ["acct_user"],
+        ["acct_user", "leader_user", "membership_community"],
         [],
     ),
     (
@@ -383,3 +383,80 @@ CAPABILITIES = [
     for n, name, fn, needs, creates in CAPABILITIES
 ]
 BY_NUMBER = {c[0]: c for c in CAPABILITIES}
+
+VALID_BUCKETS = ("setup", "parallel", "k8s", "exclusive", "teardown")
+
+_BUCKET_GROUPS = {
+    "setup": (0, 1, 3, 4, 5, 6, 7, 8),
+    "teardown": (22,),
+    "parallel": (2, 9, 15, 17, 18, 20, 27, 28, 29, 30, 35, 39, 40, 41, 42, 43, 44),
+    "k8s": (10, 11, 12, 13, 19, 21, 23, 24, 25, 26, 31, 32, 33, 36, 37, 38),
+    "exclusive": (14, 16, 34),
+}
+
+CONCURRENCY_BUCKETS = {
+    number: bucket
+    for bucket, numbers in _BUCKET_GROUPS.items()
+    for number in numbers
+}
+
+# Explicit ordering edges beyond state needs/creates:
+# - c14 mutates/reruns job_single, so it must wait for readers c11, c12, c15, c20.
+# - c15 and c20 read job_single produced by c10.
+# - c24 reruns job_pipeline pairs, so it must run after c25 inspects attributes/totals.
+AFTER = {
+    14: (11, 12, 15, 20),
+    15: (10,),
+    20: (10,),
+    24: (25,),
+}
+
+
+def bucket_for(number):
+    """Return the concurrency bucket name for capability ``number``."""
+    if number not in CONCURRENCY_BUCKETS:
+        raise KeyError(f"unknown capability number for concurrency bucket: {number!r}")
+    return CONCURRENCY_BUCKETS[number]
+
+
+def after_for(number):
+    """Return the tuple of explicit prerequisite capability numbers for ``number``."""
+    if number not in BY_NUMBER:
+        raise KeyError(f"unknown capability number: {number!r}")
+    return AFTER.get(number, ())
+
+
+def _validate_registry():
+    """Verify CAPABILITIES, CONCURRENCY_BUCKETS, and AFTER are consistent."""
+    cap_numbers = [c[0] for c in CAPABILITIES]
+    if len(cap_numbers) != len(BY_NUMBER):
+        raise ValueError("duplicate capability number in CAPABILITIES")
+
+    grouped = [n for nums in _BUCKET_GROUPS.values() for n in nums]
+    if len(grouped) != len(set(grouped)):
+        raise ValueError("duplicate capability number in _BUCKET_GROUPS")
+
+    known = set(BY_NUMBER)
+    unknown_buckets = set(CONCURRENCY_BUCKETS) - known
+    missing_buckets = known - set(CONCURRENCY_BUCKETS)
+    if unknown_buckets or missing_buckets:
+        raise ValueError(
+            f"CONCURRENCY_BUCKETS mismatch: unknown={sorted(unknown_buckets)}, "
+            f"missing={sorted(missing_buckets)}"
+        )
+
+    invalid_buckets = {b for b in CONCURRENCY_BUCKETS.values() if b not in VALID_BUCKETS}
+    if invalid_buckets:
+        raise ValueError(f"invalid bucket names: {sorted(invalid_buckets)}")
+
+    for num, deps in AFTER.items():
+        if num not in known:
+            raise ValueError(f"unknown capability {num} in AFTER")
+        unknown_deps = set(deps) - known
+        if unknown_deps:
+            raise ValueError(f"unknown AFTER prerequisites for {num}: {sorted(unknown_deps)}")
+        if num in deps:
+            raise ValueError(f"capability {num} cannot depend on itself in AFTER")
+
+
+_validate_registry()
