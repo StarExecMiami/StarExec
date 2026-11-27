@@ -50,6 +50,16 @@ pipeline {
             defaultValue: false,
             description: 'Build and test only — skip deployment'
         )
+        string(
+            name: 'E2E_WORKERS',
+            defaultValue: '4',
+            description: 'Concurrent DAG workers for dev E2E matrix (set 1 for serial)'
+        )
+        string(
+            name: 'E2E_K8S_JOB_SLOTS',
+            defaultValue: '2',
+            description: 'Max concurrent Kubernetes job capabilities during dev E2E matrix'
+        )
     }
 
     // ---------------------------------------------------------------------------
@@ -731,7 +741,9 @@ with open(os.environ["E2E_CFG_PATH"], "w", encoding="utf-8") as fh:
                                 --backend kubernetes \\
                                 --mode "${matrixMode}" \\
                                 --image-digest "${env.DEPLOY_IMAGE_DIGEST}" \\
-                                --matrix-out target/e2e-reports/kubernetes
+                                --matrix-out target/e2e-reports/kubernetes \\
+                                --workers "${params.E2E_WORKERS}" \\
+                                --k8s-job-slots "${params.E2E_K8S_JOB_SLOTS}"
                             RC=\$?
                             set -e
                             if [ "\${RC}" -ne 0 ] && [ "\${RC}" -ne 2 ] && [ "\${RC}" -ne 3 ]; then
