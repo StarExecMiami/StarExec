@@ -4,6 +4,8 @@
 // files that @use mixins as m write m.mobile.
 $breakpoint-tablet: 768px;
 $breakpoint-desktop: 1025px;
+$breakpoint-desktop-lg: 1280px;
+$breakpoint-desktop-xl: 1440px;
 
 // Phones: narrower than 768px.
 @mixin mobile {
@@ -29,6 +31,27 @@ $breakpoint-desktop: 1025px;
 // Phones and tablets: up to 1024px.
 @mixin tablet-down {
   @media only screen and (max-width: #{$breakpoint-desktop - 1px}) {
+    @content;
+  }
+}
+
+// Desktops: 1025px and wider.
+@mixin desktop {
+  @media only screen and (min-width: #{$breakpoint-desktop}) {
+    @content;
+  }
+}
+
+// Large desktops: 1280px and wider.
+@mixin desktop-lg {
+  @media only screen and (min-width: #{$breakpoint-desktop-lg}) {
+    @content;
+  }
+}
+
+// Wide desktops: 1440px and wider.
+@mixin desktop-xl {
+  @media only screen and (min-width: #{$breakpoint-desktop-xl}) {
     @content;
   }
 }

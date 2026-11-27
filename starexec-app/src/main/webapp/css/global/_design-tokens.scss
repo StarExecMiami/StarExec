@@ -101,7 +101,10 @@
   
   // --- Container ---
   --container-max-width: #{s.$container-max-width};
+  --container-wide-max-width: #{s.$container-wide-max-width};
+  --container-measure-max-width: #{s.$container-measure-max-width};
   --container-padding: #{s.$container-padding};
+  --container-gutter: #{s.$container-gutter};
   
   // ===========================================================================
   // BORDER TOKENS

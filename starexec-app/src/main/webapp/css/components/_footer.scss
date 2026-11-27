@@ -65,6 +65,8 @@ $footer-line-height: 1.5 !default;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: $footer-space-md;
   margin-top: $footer-margin-top;
   margin-bottom: $footer-margin-bottom;
   padding-top: $footer-padding-top;

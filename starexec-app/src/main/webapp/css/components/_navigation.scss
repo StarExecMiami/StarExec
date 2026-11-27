@@ -112,11 +112,17 @@ $nav-transition-timing: ease-out !default;
   > ul {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: $nav-item-gap;
     list-style: none;
     margin: 0;
     padding: 0;
-    
+
+    @include tablet {
+      gap: $nav-space-sm;
+    }
+
     @include mobile {
       flex-wrap: wrap;
       justify-content: center;
@@ -132,6 +138,12 @@ $nav-transition-timing: ease-out !default;
     @include nav-item-base;
 
     list-style: none;
+
+    @include tablet {
+      min-width: 76px;
+      min-height: var(--touch-target-tablet, 46px);
+      padding: 0 $nav-space-sm;
+    }
     
     // Hover state
     &:hover {
@@ -275,6 +287,17 @@ $nav-transition-timing: ease-out !default;
   > ul > li:focus-within > .nav-dropdown,
   > ul > li:focus-within > ul.subnav {
     display: block;
+  }
+
+  // Prevent right-side dropdowns from overflowing narrow desktop/tablet viewports
+  > ul > li:nth-last-child(-n+2) {
+    > .nav-dropdown,
+    > ul.subnav {
+      @include not-mobile {
+        left: auto;
+        right: 0;
+      }
+    }
   }
 }
 

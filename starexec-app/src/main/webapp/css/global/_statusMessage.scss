@@ -54,9 +54,10 @@
     z-index: var(--z-index-tooltip, 700);
 
     p {
-        max-width: 1024px;
+        max-width: var(--container-wide-max-width, 1440px);
+        box-sizing: border-box;
         margin: 0 auto;
-        padding: 0 10px;
+        padding: 0 var(--container-gutter, 16px);
 
         a {
             margin: 0 0 0 1em;

@@ -13,5 +13,8 @@ $spacing-3xl: 4rem;     // 64px
 $spacing-4xl: 6rem;     // 96px
 
 // Layout containers
-$container-max-width: 1200px;
+$container-max-width: 1280px;
+$container-wide-max-width: 1440px;
+$container-measure-max-width: 45rem; // ~720px optimal prose measure
 $container-padding: $spacing-xl;
+$container-gutter: clamp(0.75rem, 2vw, 1.5rem);

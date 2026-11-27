@@ -2,18 +2,20 @@
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
-	height: 75px;
+	flex-wrap: wrap;
+	gap: 12px;
+	min-height: 75px;
 	margin-bottom: 10px;
 
 	img {
 		width: 100%;
-		max-width: 300px;
+		max-width: clamp(190px, 24vw, 300px);
 		height: auto;
 		max-height: 70px;
 	}
 
 	h1 {
-		font-size: 60px;
+		font-size: clamp(2.25rem, 4vw, 3.75rem);
 		display: inline;
 		margin-left: 10px;
 		text-align: center;
@@ -26,6 +28,7 @@
 
 	@include mobile {
 		flex-direction: column;
+		min-height: 0;
 		height: auto;
 		width: 100%;
 		padding: 10px 0;
