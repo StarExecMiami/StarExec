@@ -135,15 +135,39 @@ public enum Analytics {
 				for (Integer user : v.users) {
 					try {
 						event.saveUserToDB(eventId, date, user);
+						// Drain persisted users so subsequent flushes do not re-attempt deleted accounts.
+						v.users.remove(user);
 					} catch (SQLException e) {
-						log.error("Cannot record user " + user + " event: " + event.name(), e);
+						if (isForeignKeyViolation(e)) {
+							// Purge deleted/non-existent user IDs instead of retrying every 10 minutes
+							// or persisting recurring rows to error_logs.
+							v.users.remove(user);
+							log.info("Discarding analytics user " + user + " for event " + event.name()
+									+ " (foreign key violation: " + e.getMessage() + ")");
+						} else {
+							log.error("Cannot record user " + user + " event: " + event.name(), e);
+						}
 					}
 				}
-				if (!date.equals(now) && v.count.get() == 0) {
+				if (!date.equals(now) && v.count.get() == 0 && v.users.isEmpty()) {
 					event.events.remove(date, v);
 				}
 			}
 		}
+	}
+
+	private static boolean isForeignKeyViolation(SQLException e) {
+		for (Throwable t = e; t != null; t = t.getCause()) {
+			if (t instanceof SQLException sqlEx && "23503".equals(sqlEx.getSQLState())) {
+				return true;
+			}
+		}
+		for (SQLException next = e.getNextException(); next != null; next = next.getNextException()) {
+			if ("23503".equals(next.getSQLState())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void saveToDB(int eventId, Date date, int count) throws SQLException {

@@ -44,7 +44,9 @@ $$ LANGUAGE plpgsql;
 --   a particular event on
 --   a particular day
 -- If we have already recorded this user/event/day, we can just ignore the
--- DUPLICATE KEY warning
+-- DUPLICATE KEY warning.
+-- Skip deleted/non-existent users so flushed in-memory analytics do not fail
+-- on the analytics_users_to_users foreign key constraint.
 DROP ROUTINE IF EXISTS starexec.RecordEventUser(INT, DATE, INT) CASCADE;
 CREATE OR REPLACE PROCEDURE starexec.RecordEventUser(
 		_event_id INT,
@@ -53,8 +55,11 @@ CREATE OR REPLACE PROCEDURE starexec.RecordEventUser(
 	)
 AS $$
 	BEGIN
-		INSERT INTO analytics_users (event_id, date_recorded, user_id)
-			VALUES (_event_id, _date_recorded, _user_id)
+		INSERT INTO starexec.analytics_users (event_id, date_recorded, user_id)
+		SELECT _event_id, _date_recorded, _user_id
+		WHERE EXISTS (
+			SELECT 1 FROM starexec.users u WHERE u.id = _user_id
+		)
 		ON CONFLICT DO NOTHING;
 	END;
 $$ LANGUAGE plpgsql;
