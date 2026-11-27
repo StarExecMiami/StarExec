@@ -137,11 +137,13 @@ pipeline {
                             command -v jq >/dev/null
                             command -v podman >/dev/null
 
-                            WORKFLOW_RUNS_URL="https://api.github.com/repos/StarExecMiami/StarExec/actions/workflows/container-publish.yml/runs?head_sha=${env.GIT_SHA}&status=completed&per_page=100"
+                            WORKFLOW_RUNS_URL="https://api.github.com/repos/StarExecMiami/StarExec/actions/workflows/container-publish.yml/runs?status=completed&per_page=100"
                             RUN_ID=""
+                            DIAG="no response"
                             for attempt in \$(seq 1 30); do
                                 if ! WORKFLOW_RUNS="\$(curl --fail --silent --show-error --retry 3 --retry-delay 2 --retry-all-errors \\
                                     -H 'Accept: application/vnd.github+json' "\${WORKFLOW_RUNS_URL}")"; then
+                                    DIAG="github api lookup failed"
                                     echo "GitHub workflow lookup failed (attempt \${attempt}/30); retrying..." >&2
                                     sleep 30
                                     continue
@@ -152,12 +154,18 @@ pipeline {
                                     break
                                 fi
 
-                                echo "Waiting for successful Container Publish workflow (attempt \${attempt}/30)" >&2
+                                DIAG="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' '
+                                    "total_count=" + ((.total_count // 0) | tostring)
+                                    + ", page_runs=" + (((.workflow_runs // []) | length) | tostring)
+                                    + ", matching_sha=" + (([(.workflow_runs // [])[] | select(.head_sha == \$sha)] | length) | tostring)
+                                    + ", latest_shas=" + (([(.workflow_runs // [])[:5][] | ((.head_sha // "unknown")[0:12] + "(" + (.conclusion // .status // "unknown") + ")")] | join(",")) | if . == "" then "none" else . end)
+                                ' 2>/dev/null || echo 'diagnostics unavailable')"
+                                echo "Waiting for successful Container Publish workflow for ${env.GIT_SHA} (attempt \${attempt}/30; \${DIAG})" >&2
                                 sleep 30
                             done
 
                             if [ -z "\${RUN_ID}" ]; then
-                                echo "ERROR: no successful Container Publish workflow completed within 15 minutes for ${env.GIT_SHA}" >&2
+                                echo "ERROR: no successful Container Publish workflow completed within 15 minutes for ${env.GIT_SHA} (\${DIAG})" >&2
                                 exit 1
                             fi
 
