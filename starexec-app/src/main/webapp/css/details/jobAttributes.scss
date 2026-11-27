@@ -5,15 +5,14 @@
 
 // Keep explorer compact and aligned with other detail pages
 #explorer {
-  margin-right: s.$spacing-md;
-
   h3 {
     margin: 0 0 s.$spacing-sm;
   }
 }
 
 #detailPanel.jobAttributesDetails {
-  width: 70%;
+  width: 77%;
+  min-width: 0;
   float: right;
   margin-top: s.$spacing-lg;
   padding-left: s.$spacing-md;

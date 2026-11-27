@@ -1,4 +1,6 @@
 
+@use "../global/mixins" as m;
+
 #topicList a.active {
 	border: 1px dashed rgb(230 46 37);
 }
@@ -21,6 +23,7 @@
 	overflow: auto;
 	overflow-y:hidden;
 	position: relative; 
+	box-sizing: border-box;
 }
 
 #helpTopics a:link {
@@ -28,11 +31,13 @@
 }
 
 #detailPanel {
-	padding-left: 10px;
-	padding-right:55px;
+	padding-left: 16px;
+	padding-right: 16px;
 	margin-top: 15px;
 	float:right;	
-	width: 65%;
+	width: 72%;
+	min-width: 0;
+	box-sizing: border-box;
 	border-left: solid 3px #111111;	
 	min-height:700px;
 }
@@ -133,4 +138,22 @@
 
 #topicList .stub {
 	display:none;
+}
+
+@include m.mobile {
+	#helpTopics {
+		width: 100%;
+		float: none;
+		min-height: auto;
+		height: auto;
+	}
+
+	#detailPanel {
+		width: 100%;
+		float: none;
+		border-left: none;
+		min-height: auto;
+		padding-left: 0;
+		padding-right: 0;
+	}
 }

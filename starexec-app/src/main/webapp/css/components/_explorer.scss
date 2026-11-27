@@ -30,8 +30,8 @@ $explorer-width: 28% !default;
 $explorer-width-narrow: 23% !default;     // For job details
 $explorer-width-job: 23% !default;        // Alias for job details page
 $explorer-width-mobile: 100% !default;
-$detail-panel-width: 68% !default;
-$detail-panel-width-wide: 72% !default;   // Companion to narrow explorer
+$detail-panel-width: 72% !default;
+$detail-panel-width-wide: 77% !default;   // Companion to narrow explorer
 
 // Layout - Spacing
 $explorer-margin-top: $space-lg !default;
@@ -73,7 +73,7 @@ $node-count-margin-left: $space-xs !default;
 
 // Detail panel
 $detail-panel-padding-left: $space-md !default;
-$detail-panel-padding-right: $space-xl !default;
+$detail-panel-padding-right: $space-md !default;
 $detail-panel-padding-mobile: $space-sm !default;
 
 // =============================================================================
@@ -252,13 +252,14 @@ $tree-node-icons: (
   padding-right: $detail-panel-padding-right;
   margin-top: $explorer-margin-top;
   float: right;
-  width: 65%;
+  width: $detail-panel-width;
+  min-width: 0;
   border-left: solid 3px $explorer-border-color;
   box-sizing: border-box;
   
   // Variant for job details
   &.jobDetails {
-    width: 70%;
+    width: $detail-panel-width-wide;
   }
   
   // Heading

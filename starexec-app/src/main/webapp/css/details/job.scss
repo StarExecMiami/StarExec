@@ -2,7 +2,8 @@
 @import "../global/colors";
 
 fieldset {
-	width: 750px;
+	width: 100%;
+	max-width: 760px;
 }
 
 #displayJobSpaceID {
@@ -33,38 +34,26 @@ fieldset {
 
 #detailPanel {
 	&.jobDetails {
-		width: 70%;
+		width: 77%;
 	}
 
 	fieldset {
 		width: 100%;
+		max-width: none;
 	}
 
-	#spaceOverviewOptionField {
-		float: left;
-		width: 290px;
-
-		/* text-align:center; */
-	}
-
-	#solverComparisonOptionField {
-		float: left;
-		width: 290px;
-
-		/* text-align:center; */
-
-		/* needs to be determined whether we want everything centered */
+	#spaceOverviewOptionField,
+	#solverComparisonOptionField,
+	#pairTimeOptionField {
+		float: none;
+		width: 100%;
+		max-width: 340px;
 	}
 
 	#spaceOverviewUpdate, #solverComparisonUpdate {
 		margin-top: 10px;
 		margin-right: auto;
 		margin-left: auto;
-	}
-
-	#pairTimeOptionField {
-		float: left;
-		width: 290px;
 	}
 }
 
@@ -119,8 +108,9 @@ thead {
 .job-chart {
 	position: relative;
 	width: 100%;
-	max-width: 360px;
-	height: 360px;
+	max-width: 420px;
+	aspect-ratio: 1 / 1;
+	height: auto;
 	padding: 8px;
 	box-sizing: border-box;
 	background-color: $background-color;
@@ -255,8 +245,9 @@ p.accent {
 	}
 
 	.panelField {
-		max-width: 47%;
-		width: 47%;
+		max-width: none;
+		width: calc(50% - 10px);
+		box-sizing: border-box;
 		float: left;
 		padding-right: 1px;
 		border: 1px solid $background-color;
@@ -317,18 +308,20 @@ table.panel {
 			float: none;
 		}
 
-		fieldset {
-			&.panelField {
-				max-width: 100%;
-				width: 100%;
-				float: none;
-			}
+		#subspaceSummaryField fieldset.panelField,
+		fieldset.panelField {
+			max-width: 100%;
+			width: 100%;
+			float: none;
 		}
 
-		#detailPanel {
+		#detailPanel,
+		#detailPanel.jobDetails {
 			width: 100%;
 			float: none;
 			margin: 0;
+			padding-left: 0;
+			padding-right: 0;
 			border-left: initial;
 		}
 

@@ -154,7 +154,7 @@ $(document).ready(function() {
 		}
 	}).click(function() {
 		if (!$("#explorer").is(":visible")) {
-			$("#detailPanel").css("width", "65%");
+			$("#detailPanel").css("width", "");
 			$("#showSpaceExplorer .ui-button-text").html("hide space explorer");
 			$("#linkOrphanedButton").show();
 		}
