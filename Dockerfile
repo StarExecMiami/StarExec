@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # ==============================================================================
 # Stage 1: Compile SCSS/CSS Assets
 # ==============================================================================
@@ -74,9 +75,11 @@ RUN set -eux; \
 FROM docker.io/library/maven:3.9-eclipse-temurin-17-alpine AS credential-handler
 
 WORKDIR /build
+COPY .mvn ./.mvn
 COPY tomcat-credential-handler/pom.xml ./pom.xml
 COPY tomcat-credential-handler/src ./src
-RUN mvn clean package -B -q
+RUN --mount=type=cache,id=starexec-m2,target=/root/.m2/repository,sharing=locked \
+    mvn clean package -B -q
 
 # ==============================================================================
 # Stage 4: Build Application with Maven (Multi-Module Structure)
@@ -90,7 +93,8 @@ WORKDIR /build
 # Set Maven options for faster builds in containers
 ENV MAVEN_OPTS="-XX:+TieredCompilation -XX:TieredStopAtLevel=1 -Xmx3g"
 
-# Copy POM and NPM files first for dependency caching
+# Copy Maven resolver throttling/retry config and POM/NPM files for dependency caching
+COPY .mvn ./.mvn
 COPY pom.xml ./
 COPY starexec-app/pom.xml ./starexec-app/
 
@@ -99,7 +103,8 @@ COPY package.json package-lock.json* ./
 COPY package.json package-lock.json* ./starexec-app/
 
 # Download dependencies
-RUN mvn dependency:go-offline -B -pl starexec-app
+RUN --mount=type=cache,id=starexec-m2,target=/root/.m2/repository,sharing=locked \
+    mvn dependency:go-offline -B -pl starexec-app
 
 # Copy source code
 COPY starexec-app/src ./starexec-app/src
@@ -119,7 +124,8 @@ RUN mkdir -p /build/build-metadata && \
     echo "BUILD_USER=docker" >> /build/build-metadata/build-info.properties
 
 # Build the WAR (skip tests to speed iteration)
-RUN mvn clean install -DskipTests -Dmaven.test.skip=true -Dskip.sass=true -B -V -pl starexec-app && \
+RUN --mount=type=cache,id=starexec-m2,target=/root/.m2/repository,sharing=locked \
+    mvn clean install -DskipTests -Dmaven.test.skip=true -Dskip.sass=true -B -V -pl starexec-app && \
     mkdir -p /build/output && \
     cp starexec-app/target/starexec.war /build/output/starexec.war
 

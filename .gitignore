@@ -77,6 +77,8 @@ ops.txt
 # Legacy/Ant / Maven wrapper
 ####################################
 **/.mvn/
+!/.mvn/
+!/.mvn/maven.config
 
 ####################################
 # Maven build artifacts

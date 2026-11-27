@@ -9,6 +9,7 @@ on:
       - "scripts/build-war-css.cjs"
       - "package*.json"
       - "pom.xml"
+      - ".mvn/**"
       - ".github/scripts/mvn_retry.py"
       - ".github/scripts/test_mvn_retry.py"
       - ".github/workflows/maven-test.yml"
@@ -20,6 +21,7 @@ on:
       - "scripts/build-war-css.cjs"
       - "package*.json"
       - "pom.xml"
+      - ".mvn/**"
       - ".github/scripts/mvn_retry.py"
       - ".github/scripts/test_mvn_retry.py"
       # Without this, a PR that changes only this workflow gets no Maven
