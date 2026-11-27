@@ -50,7 +50,6 @@ $container-max-width: s.$container-max-width;
 // ============================================================================
 
 .starexeccommand-container {
-  min-height: 100vh;
   background: $background-color;
   padding-bottom: $spacing-2xl;
 }
@@ -58,10 +57,11 @@ $container-max-width: s.$container-max-width;
 .container {
   max-width: $container-max-width;
   margin: 0 auto;
-  padding: $spacing-lg $spacing-lg;
+  padding: $spacing-md $spacing-md;
+  box-sizing: border-box;
 
   @include m.mobile {
-    padding: $spacing-md $spacing-md;
+    padding: $spacing-sm $spacing-xs;
   }
 }
 
@@ -757,6 +757,7 @@ pre {
 }
 
 .mode-card {
+  min-width: 0;
   background: $foreground-color;
   border: 1px solid color.adjust($foreground-color, $lightness: 10%);
   border-radius: 12px;
@@ -803,7 +804,7 @@ pre {
 
 @include m.mobile {
   .starexeccommand-container {
-    padding: $spacing-md;
+    padding-bottom: $spacing-lg;
   }
 
   // A card is too narrow for terms and descriptions side by side.

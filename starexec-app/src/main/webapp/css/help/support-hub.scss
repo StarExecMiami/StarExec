@@ -47,17 +47,17 @@ $container-max-width: s.$container-max-width;
 // ============================================================================
 
 .support-hub {
-  min-height: 100vh;
   background: $background-color;
 }
 
 .container {
   max-width: $container-max-width;
   margin: 0 auto;
-  padding: $spacing-lg $spacing-lg;
+  padding: $spacing-md $spacing-md;
+  box-sizing: border-box;
 
   @include m.mobile {
-    padding: $spacing-md $spacing-md;
+    padding: $spacing-sm $spacing-xs;
   }
 }
 

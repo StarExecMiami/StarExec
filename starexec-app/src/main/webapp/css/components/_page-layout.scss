@@ -16,7 +16,6 @@
 // =============================================================================
 
 .page {
-  min-height: 100vh;
   background: c.$background-color;
   
   &--padded {
@@ -31,12 +30,12 @@
 .container {
   max-width: s.$container-max-width;
   margin: 0 auto;
-  padding: 0 s.$spacing-lg;
+  padding: 0 s.$spacing-md;
   width: 100%;
   box-sizing: border-box;
 
   @include m.mobile {
-    padding: 0 s.$spacing-md;
+    padding: 0 s.$spacing-xs;
   }
   
   &--narrow {

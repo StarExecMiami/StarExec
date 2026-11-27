@@ -46,7 +46,6 @@ $spacing-2xs: s.$spacing-2xs;
 // ============================================================================
 
 .about-page {
-  min-height: 100vh;
   background: $background-color;
   padding-bottom: $spacing-2xl;
 }
@@ -126,6 +125,7 @@ $spacing-2xs: s.$spacing-2xs;
   margin-bottom: $spacing-lg;
   
   p {
+    max-width: s.$container-measure-max-width;
     margin-bottom: $spacing-md;
     
     &:last-child {

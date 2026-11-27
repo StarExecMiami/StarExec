@@ -55,17 +55,17 @@ $container-max-width: s.$container-max-width;
 // ============================================================================
 
 .quick-ref-guide {
-  min-height: 100vh;
   background: $background-color;
 }
 
 .container {
   max-width: $container-max-width;
   margin: 0 auto;
-  padding: 0 $spacing-lg;
+  padding: 0 $spacing-md;
+  box-sizing: border-box;
 
   @include m.mobile {
-    padding: 0 $spacing-md;
+    padding: 0 $spacing-xs;
   }
 }
 
@@ -258,7 +258,8 @@ $container-max-width: s.$container-max-width;
 // ============================================================================
 
 .guide-content {
-  max-width: 900px;
+  min-width: 0;
+  max-width: none;
 }
 
 .content-section {
@@ -294,6 +295,7 @@ $container-max-width: s.$container-max-width;
   margin-bottom: $spacing-lg;
 
   p {
+    max-width: s.$container-measure-max-width;
     font-size: $font-size-lg;
     color: $text-secondary;
     line-height: 1.7;
@@ -855,6 +857,11 @@ kbd {
   padding: $spacing-sm;
   background: $surface-secondary;
   border-radius: 6px;
+
+  @include m.mobile {
+    flex-direction: column;
+    gap: $spacing-xs;
+  }
 }
 
 .variable-name {
