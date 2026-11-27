@@ -663,9 +663,9 @@
       "method": "-",
       "path": "image copies default-pics into /app/data/pictures",
       "file": "Dockerfile",
-      "line": 291,
+      "line": 297,
       "needle": "COPY --from=builder /build/starexec-app/src/main/resources/static/default-pics/* /app/data/pictures/",
-      "source_commit": "169c93c5db1573aead634ec048dc5c7fff50091f"
+      "source_commit": "44aaeffc0e895851c5b3ee3094d96cae354be291"
     },
     "edit_space": {
       "method": "POST",
