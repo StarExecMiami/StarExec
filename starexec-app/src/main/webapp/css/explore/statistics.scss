@@ -10,6 +10,19 @@
 	max-width: 1200px;
 	margin-left: auto;
 	margin-right: auto;
+	box-sizing: border-box;
+}
+
+#statsTableField {
+	overflow-x: auto;
+}
+
+#graph {
+	canvas,
+	svg {
+		max-width: 100%;
+		height: auto;
+	}
 }
 
 .metric-definitions > summary {

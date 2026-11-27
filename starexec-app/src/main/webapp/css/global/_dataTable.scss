@@ -440,7 +440,7 @@ table.dataTable {
 			display: inline-block;
 			min-width: 1.5em;
 			padding: 0.5em 1em;
-			margin-left: 2px;
+			margin: 0 0 4px 2px;
 
 			@extend %text-align-center;
 
@@ -530,27 +530,28 @@ table.dataTable {
 
 @include mobile {
 	:is(.dataTables_wrapper, .dt-container) {
-		:is(.dataTables_info, .dt-info) {
-			float: none;
-			text-align: center;
-		}
-
-		:is(.dataTables_paginate, .dt-paging) {
-			float: none;
-			text-align: center;
-			margin-top: 0.5em;
-		}
-	}
-}
-
-@media screen and (width <= 640px) {
-	:is(.dataTables_wrapper, .dt-container) {
 		:is(.dataTables_length, .dt-length) {
 			float: none;
 			text-align: center;
 		}
 
 		:is(.dataTables_filter, .dt-search) {
+			float: none;
+			text-align: center;
+			margin-top: 0.5em;
+
+			input {
+				max-width: 100%;
+				margin-left: 0;
+			}
+		}
+
+		:is(.dataTables_info, .dt-info) {
+			float: none;
+			text-align: center;
+		}
+
+		:is(.dataTables_paginate, .dt-paging) {
 			float: none;
 			text-align: center;
 			margin-top: 0.5em;

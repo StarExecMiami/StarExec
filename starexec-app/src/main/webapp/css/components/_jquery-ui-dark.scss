@@ -133,7 +133,11 @@ a.ui-button:active,
   background: colors.$foreground-color !important;
   border: 2px solid colors.$background-color !important;
   box-shadow: 0 0 10px rgb(0 0 0 / 50%);
+  box-sizing: border-box;
   max-width: calc(100vw - 16px) !important;
+  max-height: calc(100vh - 24px);
+  display: flex;
+  flex-direction: column;
 }
 
 .ui-dialog .ui-dialog-titlebar {
@@ -188,6 +192,8 @@ a.ui-button:active,
   color: colors.$text-main-color !important;
   padding: 16px !important;
   line-height: 1.5;
+  overflow: auto;
+  flex: 1 1 auto;
 }
 
 .ui-dialog .ui-dialog-buttonpane {
