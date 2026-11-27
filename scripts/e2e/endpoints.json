@@ -1,5 +1,5 @@
 {
-  "resolved_at_commit": "ad34fff2b8c2ba44270da8bfe7963303c74fa151",
+  "resolved_at_commit": "72b33798f59f784fb05a22a8399154196d3a480e",
   "endpoints": {
     "login": {
       "method": "POST",
@@ -509,14 +509,14 @@
       "method": "-",
       "path": "GetSumOfJobAttributes",
       "file": "starexec-app/src/main/resources/db/migration/R__procedures_and_views.sql",
-      "line": 4682,
+      "line": 4687,
       "needle": "CREATE OR REPLACE FUNCTION starexec.GetSumOfJobAttributes(_jobSpaceId INT)"
     },
     "conflicts_sql": {
       "method": "-",
       "path": "GetConflictsForConfigInJob",
       "file": "starexec-app/src/main/resources/db/migration/R__procedures_and_views.sql",
-      "line": 6897,
+      "line": 6902,
       "needle": "CREATE OR REPLACE FUNCTION starexec.GetConflictsForConfigInJob(_jobId INT, _configId INT, _stageNumber INT)"
     },
     "solver_env_wallclock": {
@@ -734,14 +734,14 @@
       "method": "-",
       "path": "closure: ancestors of parent + (parent,id) + (id,id)",
       "file": "starexec-app/src/main/resources/db/migration/R__procedures_and_views.sql",
-      "line": 7708,
+      "line": 7713,
       "needle": "CREATE OR REPLACE FUNCTION starexec.AddSpace("
     },
     "closure_move_space": {
       "method": "-",
       "path": "MoveSpace deletes and rebuilds closure",
       "file": "starexec-app/src/main/resources/db/migration/R__procedures_and_views.sql",
-      "line": 7809,
+      "line": 7814,
       "needle": "CREATE OR REPLACE FUNCTION starexec.MoveSpace(_parentId INT, _childId INT)"
     },
     "make_leader": {
@@ -797,7 +797,7 @@
       "method": "-",
       "path": "LeaveHierarchy deletes user_assoc for closure descendants",
       "file": "starexec-app/src/main/resources/db/migration/R__procedures_and_views.sql",
-      "line": 1407,
+      "line": 1412,
       "needle": "CREATE OR REPLACE FUNCTION starexec.LeaveHierarchy(_userId INT, _spaceId INT)"
     },
     "community_request": {
@@ -888,7 +888,7 @@
       "method": "-",
       "path": "DeleteProcessor removes the row",
       "file": "starexec-app/src/main/resources/db/migration/R__procedures_and_views.sql",
-      "line": 5466,
+      "line": 5471,
       "needle": "CREATE OR REPLACE FUNCTION starexec.DeleteProcessor(_id INT)"
     },
     "processor_type_enum": {
@@ -930,7 +930,7 @@
       "method": "-",
       "path": "COMPLETE pairs of the stage go to PROCESSING",
       "file": "starexec-app/src/main/resources/db/migration/R__procedures_and_views.sql",
-      "line": 4304,
+      "line": 4309,
       "needle": "CREATE OR REPLACE FUNCTION starexec.PrepareJobForPostProcessing(_jobId INT, _procId INT, _completeStatus INT, _processingStatus INT, _stageNumber INT)"
     },
     "preprocessor_invocation": {
@@ -1007,7 +1007,7 @@
       "method": "-",
       "path": "delete sets deleted=true and returns the path to unlink",
       "file": "starexec-app/src/main/resources/db/migration/R__procedures_and_views.sql",
-      "line": 514,
+      "line": 519,
       "needle": "CREATE OR REPLACE FUNCTION starexec.SetBenchmarkToDeletedById(_benchmarkId INT)"
     },
     "upload_bench_dump": {
@@ -1210,14 +1210,14 @@
       "method": "-",
       "path": "InsertIntoJobSpaceClosure(ancestor, descendant, time)",
       "file": "starexec-app/src/main/resources/db/migration/R__procedures_and_views.sql",
-      "line": 7766,
+      "line": 7771,
       "needle": "CREATE OR REPLACE FUNCTION starexec.InsertIntoJobSpaceClosure(_ancestor INT, _descendant INT, _time TIMESTAMP)"
     },
     "job_space_closure_refresh": {
       "method": "-",
       "path": "RefreshEntriesByAncestor moves last_used and counts rows",
       "file": "starexec-app/src/main/resources/db/migration/R__procedures_and_views.sql",
-      "line": 3160,
+      "line": 3165,
       "needle": "CREATE OR REPLACE FUNCTION starexec.RefreshEntriesByAncestor(_id INT, _time TIMESTAMP)"
     },
     "delete_user": {
