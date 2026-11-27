@@ -14,6 +14,8 @@ run until a named gate (an unmerged PR, a missing endpoint) opens.
 import json
 import os
 import re
+import tempfile
+import threading
 import time
 import traceback
 from datetime import datetime, timezone
@@ -33,6 +35,7 @@ TRACKER_TAG = re.compile(r"^#\d+$")
 LEDGER = Path(__file__).resolve().parents[3] / "docs" / "findings-ledger.md"
 
 _ledger_ids = None
+_ledger_lock = threading.Lock()
 
 
 def ledger_ids():
@@ -48,17 +51,18 @@ def ledger_ids():
     be a worse instrument than one that occasionally lets a bad tag through.
     """
     global _ledger_ids
-    if _ledger_ids is None:
-        try:
-            text = LEDGER.read_text()
-        except OSError:
-            _ledger_ids = set()
-        else:
-            ids = set(re.findall(r"^\|\s*\*{0,2}([A-Za-z][\w#-]*)\*{0,2}\s*\|", text, re.M))
-            ids |= set(re.findall(r"^##\s+([A-Za-z#][\w#-]*)\s+\u2014", text, re.M))
-            ids.discard("ID")
-            _ledger_ids = ids
-    return _ledger_ids
+    with _ledger_lock:
+        if _ledger_ids is None:
+            try:
+                text = LEDGER.read_text()
+            except OSError:
+                _ledger_ids = set()
+            else:
+                ids = set(re.findall(r"^\|\s*\*{0,2}([A-Za-z][\w#-]*)\*{0,2}\s*\|", text, re.M))
+                ids |= set(re.findall(r"^##\s+([A-Za-z#][\w#-]*)\s+\u2014", text, re.M))
+                ids.discard("ID")
+                _ledger_ids = ids
+        return _ledger_ids
 
 
 def check_tag(known):
@@ -92,10 +96,17 @@ class Blocked(Exception):
 
 class Recorder:
     def __init__(self):
+        self._lock = threading.Lock()
         self.buffer = {"http": [], "sql": [], "notes": []}
 
+    def fork(self):
+        """Return a fresh, isolated Recorder for a concurrent worker."""
+        return Recorder()
+
     def http(self, label, item):
-        self.buffer["http"].append({"as": label, "at": utc(), **item})
+        entry = {"as": label, "at": utc(), **item}
+        with self._lock:
+            self.buffer["http"].append(entry)
 
     def sql(self, statement, output, error=None):
         rows = None if output is None else output.splitlines()
@@ -106,18 +117,23 @@ class Recorder:
             entry["rows"] = rows[:200]
             if rows and len(rows) > 200:
                 entry["rows_truncated"] = len(rows)
-        self.buffer["sql"].append(entry)
+        with self._lock:
+            self.buffer["sql"].append(entry)
 
     def note(self, text):
-        self.buffer["notes"].append({"at": utc(), "text": text})
+        entry = {"at": utc(), "text": text}
+        with self._lock:
+            self.buffer["notes"].append(entry)
 
     def take(self):
-        out, self.buffer = self.buffer, {"http": [], "sql": [], "notes": []}
+        with self._lock:
+            out, self.buffer = self.buffer, {"http": [], "sql": [], "notes": []}
         return {k: v for k, v in out.items() if v}
 
 
 class Run:
     def __init__(self, cfg, runid, state_path, argv):
+        self._lock = threading.RLock()
         self.cfg = cfg
         self.runid = runid
         self.path = cfg.report_dir / f"e2e-{cfg.backend}-{runid}.json"
@@ -143,30 +159,76 @@ class Run:
         self.save()
 
     def save(self):
-        tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(self.data, indent=2, default=str) + "\n")
-        os.replace(tmp, self.path)
+        with self._lock:
+            payload = json.dumps(self.data, indent=2, default=str) + "\n"
+            fd, tmp_name = tempfile.mkstemp(
+                dir=self.path.parent,
+                prefix=f".{self.path.name}.",
+                suffix=".tmp",
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(payload)
+                os.replace(tmp_name, self.path)
+            except BaseException:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
 
-    def finish(self):
+    def _recompute_locked(self, order_numbers=None):
+        if order_numbers is not None:
+            order_list = list(order_numbers)
+            rank = {num: idx for idx, num in enumerate(order_list)}
+            fallback = len(order_list)
+            self.data["capabilities"].sort(
+                key=lambda c: (rank.get(c.get("number"), fallback), c.get("number", 0))
+            )
+            self.data["findings"].sort(
+                key=lambda f: (
+                    rank.get(f.get("capability"), fallback),
+                    f.get("capability", 0),
+                )
+            )
         caps = self.data["capabilities"]
-        self.data["finished_at"] = utc()
         self.data["summary"] = {
-            s: sum(1 for c in caps if c["status"] == s) for s in ORDER
+            s: sum(1 for c in caps if c.get("status") == s) for s in ORDER
         }
         self.data["verdict"] = max(
-            (c["status"] for c in caps), key=ORDER.get, default="BLOCKED"
+            (c.get("status", "BLOCKED") for c in caps),
+            key=ORDER.get,
+            default="BLOCKED",
         )
-        self.save()
+
+    def finalize_capabilities(self, order_numbers=None):
+        """Sort capabilities and findings in canonical order and recompute summary/verdict."""
+        with self._lock:
+            self._recompute_locked(order_numbers)
+            self.save()
+
+    def finish(self, order_numbers=None):
+        with self._lock:
+            self._recompute_locked(order_numbers)
+            self.data["finished_at"] = utc()
+            self.save()
 
 
 class Capability:
     """The per-capability context handed to capability modules."""
 
-    def __init__(self, run, number, name, ctx):
-        self.run = run
+    def __init__(self, run, number, name, ctx, recorder=None):
+        real_run = getattr(run, "_run", run)
+        self.run = real_run
         self.number = number
         self.name = name
         self.ctx = ctx
+        if recorder is not None:
+            self.recorder = recorder
+        elif ctx is not None and getattr(ctx, "recorder", None) is not None:
+            self.recorder = ctx.recorder
+        else:
+            self.recorder = real_run.recorder
         self.checks = []
         self.entry = {
             "number": number,
@@ -174,8 +236,9 @@ class Capability:
             "started_at": utc(),
             "checks": self.checks,
         }
-        run.data["capabilities"].append(self.entry)
-        run.recorder.take()
+        with real_run._lock:
+            real_run.data["capabilities"].append(self.entry)
+        self.recorder.take()
 
     def check(
         self,
@@ -210,13 +273,14 @@ class Capability:
             "expected": expected,
             "observed": observed,
             "endpoints": [ep.cite(k) for k in endpoints],
-            "evidence": self.run.recorder.take(),
+            "evidence": self.recorder.take(),
             "at": utc(),
         }
         if extra:
             item["detail"] = extra
-        self.checks.append(item)
-        self.run.save()
+        with self.run._lock:
+            self.checks.append(item)
+            self.run.save()
         mark = {"PASS": "PASS", "FAIL": "FAIL", "BLOCKED": "BLKD", "EXPECTED-FAIL": "XFAIL",
                 "SKIPPED-GATED": "GATE"}[status]
         print(f"  {mark} {item['id']} {name}", flush=True)
@@ -239,16 +303,17 @@ class Capability:
         return self.check(cid, name, "gated on: " + gate, None, None, False, endpoints, status="SKIPPED-GATED")
 
     def finding(self, fid, title, text, evidence=None):
-        self.run.data["findings"].append(
-            {
-                "capability": self.number,
-                "id": fid,
-                "title": title,
-                "text": text,
-                "evidence": evidence,
-            }
-        )
-        self.run.save()
+        with self.run._lock:
+            self.run.data["findings"].append(
+                {
+                    "capability": self.number,
+                    "id": fid,
+                    "title": title,
+                    "text": text,
+                    "evidence": evidence,
+                }
+            )
+            self.run.save()
 
     def close(self, error=None):
         if error is not None:
@@ -264,11 +329,12 @@ class Capability:
                     False,
                     extra={"traceback": traceback.format_exception(error)[-6:]},
                 )
-        statuses = [c["status"] for c in self.checks] or ["BLOCKED"]
-        self.entry["status"] = max(statuses, key=ORDER.get)
-        self.entry["finished_at"] = utc()
-        self.run.save()
-        return self.entry["status"]
+        with self.run._lock:
+            statuses = [c["status"] for c in self.checks] or ["BLOCKED"]
+            self.entry["status"] = max(statuses, key=ORDER.get)
+            self.entry["finished_at"] = utc()
+            self.run.save()
+            return self.entry["status"]
 
 
 def new_runid():

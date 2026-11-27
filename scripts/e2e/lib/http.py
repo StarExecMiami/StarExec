@@ -102,6 +102,11 @@ class Client:
         self.recorder.note(f"login {self.label}: {'ok' if ok else 'failed'}")
         return ok
 
+    def close(self):
+        """Close the underlying requests session."""
+        if self.s is not None:
+            self.s.close()
+
     def datatables(self, length=1000):
         """The DataTables form fields RESTHelpers reads (endpoint datatables_params)."""
         return {

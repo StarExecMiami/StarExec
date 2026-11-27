@@ -8,6 +8,7 @@ so an installation that uses another scheme is never locked out by a foreign has
 
 import secrets
 import subprocess
+import threading
 import time
 
 import bcrypt
@@ -18,14 +19,73 @@ from .http import Client
 from .report import Blocked
 
 
+class _RunView:
+    """Worker-scoped view of Run that routes `.recorder` to the worker's Recorder."""
+
+    def __init__(self, run, recorder):
+        self._run = run
+        self.recorder = recorder
+
+    def __getattr__(self, name):
+        return getattr(self._run, name)
+
+
 class Context:
-    def __init__(self, cfg, run, state, fixtures):
+    def __init__(
+        self,
+        cfg,
+        run,
+        state,
+        fixtures,
+        recorder=None,
+        login_locks=None,
+        login_locks_guard=None,
+    ):
         self.cfg = cfg
         self.run = run
+        self.recorder = run.recorder if recorder is None else recorder
         self.state = state
         self.fx = fixtures
-        self.db = DB(cfg.db_exec, run.recorder)
+        self.db = DB(cfg.db_exec, self.recorder)
         self._sessions = {}
+        self._login_locks = {} if login_locks is None else login_locks
+        self._login_locks_guard = (
+            threading.Lock() if login_locks_guard is None else login_locks_guard
+        )
+
+    def _user_login_lock(self, user_id, email=None):
+        key = int(user_id) if user_id is not None else email
+        with self._login_locks_guard:
+            lock = self._login_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._login_locks[key] = lock
+            return lock
+
+    def fork_for_worker(self, scoped_state, worker_recorder=None):
+        """Return an isolated WorkerContext sharing immutable config and fixtures."""
+        recorder = self.recorder.fork() if worker_recorder is None else worker_recorder
+        return WorkerContext(
+            self.cfg,
+            self.run,
+            scoped_state,
+            self.fx,
+            recorder,
+            login_locks=self._login_locks,
+            login_locks_guard=self._login_locks_guard,
+        )
+
+    def close(self):
+        """Close all cached HTTP sessions owned by this context."""
+        clients = list(self._sessions.values())
+        try:
+            for client in clients:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+        finally:
+            self._sessions.clear()
 
     # ------------------------------------------------------------------ sessions
     def set_password(self, user_id):
@@ -51,34 +111,41 @@ class Context:
         )
         if got != str(user_id):
             raise Blocked(f"password reset for user {user_id} did not apply")
-        self.run.recorder.note(
+        self.recorder.note(
             f"disposable password set for user {user_id} (hash not recorded)"
         )
         return password
 
     def session(self, role, user_id=None, email=None, fresh=False):
-        if role in self._sessions and not fresh:
-            cached = self._sessions[role]
-            if cached.alive():
-                return cached
-            # A full run logs in once per role and can then leave a session idle for
-            # longer than the container keeps it. Sending the dead cookie makes the next
-            # capability read an authentication failure as a product defect: on
-            # 2026-09-19 a 35-minute idle admin session turned into "registration creates
-            # no user" (C27) and "no processor row" (C31), both of which pass in
-            # isolation. Log in again instead.
-            self.run.recorder.note(f"session {role} was no longer live; logging in again")
-            del self._sessions[role]
+        if role in self._sessions:
+            if fresh:
+                self._sessions.pop(role).close()
+            else:
+                cached = self._sessions[role]
+                if cached.alive():
+                    return cached
+                # A full run logs in once per role and can then leave a session idle for
+                # longer than the container keeps it. Sending the dead cookie makes the next
+                # capability read an authentication failure as a product defect: on
+                # 2026-09-19 a 35-minute idle admin session turned into "registration creates
+                # no user" (C27) and "no processor row" (C31), both of which pass in
+                # isolation. Log in again instead.
+                self.recorder.note(
+                    f"session {role} was no longer live; logging in again"
+                )
+                self._sessions.pop(role).close()
         if role == "admin":
             user_id = self.cfg.admin_user_id
-        if email is None:
-            email = self.db.scalar(
-                f"SELECT email FROM starexec.users WHERE id={int(user_id)};",
-                record=False,
-            )
-        client = Client(self.cfg.base_url, self.run.recorder, role)
-        if not client.login(email, self.set_password(user_id)):
-            raise Blocked(f"could not log in as {role} (user {user_id})")
+        with self._user_login_lock(user_id, email):
+            if email is None:
+                email = self.db.scalar(
+                    f"SELECT email FROM starexec.users WHERE id={int(user_id)};",
+                    record=False,
+                )
+            client = Client(self.cfg.base_url, self.recorder, role)
+            if not client.login(email, self.set_password(user_id)):
+                client.close()
+                raise Blocked(f"could not log in as {role} (user {user_id})")
         self._sessions[role] = client
         return client
 
@@ -104,7 +171,7 @@ class Context:
             text=True,
             timeout=timeout,
         )
-        self.run.recorder.note(
+        self.recorder.note(
             f"app_exec {' '.join(argv)[:200]} -> exit {p.returncode}"
         )
         return p.returncode, p.stdout
@@ -144,7 +211,7 @@ class Context:
         while time.monotonic() - start < timeout:
             ok, value = predicate()
             if value != last:
-                self.run.recorder.note(
+                self.recorder.note(
                     f"wait {what}: {str(value)[:300]} at +{time.monotonic() - start:.1f}s"
                 )
                 last = value
@@ -160,4 +227,29 @@ class Context:
             + "".join(c for c in self.run.runid.split("-")[0] if c.isdigit())
             + "_"
             + suffix
+        )
+
+
+class WorkerContext(Context):
+    """Per-worker Context sharing immutable config and fixtures with isolated state, DB, recorder, and sessions."""
+
+    def __init__(
+        self,
+        cfg,
+        run,
+        state,
+        fixtures,
+        recorder,
+        login_locks=None,
+        login_locks_guard=None,
+    ):
+        real_run = getattr(run, "_run", run)
+        super().__init__(
+            cfg,
+            _RunView(real_run, recorder),
+            state,
+            fixtures,
+            recorder=recorder,
+            login_locks=login_locks,
+            login_locks_guard=login_locks_guard,
         )
