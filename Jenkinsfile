@@ -41,6 +41,11 @@ pipeline {
             description: 'Skip test execution (use only for hotfix builds)'
         )
         booleanParam(
+            name: 'FORCE_LOCAL_TESTS',
+            defaultValue: false,
+            description: 'Force local make test instead of reusing GitHub Actions Maven Build & Test'
+        )
+        booleanParam(
             name: 'SKIP_DEPLOY',
             defaultValue: false,
             description: 'Build and test only — skip deployment'
@@ -122,85 +127,205 @@ pipeline {
 
 
         // =======================================================================
-        stage('Resolve Published Image') {
+        stage('Resolve Image & Verify Tests') {
         // =======================================================================
-            when {
-                expression { env.IS_PR != 'true' }
-            }
-            steps {
-                script {
-                    env.DEPLOY_IMAGE_DIGEST = sh(
-                        script: """
-                            set -eu
+            failFast true
+            parallel {
 
-                            command -v curl >/dev/null
-                            command -v jq >/dev/null
-                            command -v podman >/dev/null
+                // ---------------------------------------------------------------
+                stage('Resolve Published Image') {
+                // ---------------------------------------------------------------
+                    when {
+                        expression { env.IS_PR != 'true' }
+                    }
+                    steps {
+                        script {
+                            env.DEPLOY_IMAGE_DIGEST = sh(
+                                script: """
+                                    set -eu
 
-                            WORKFLOW_RUNS_URL="https://api.github.com/repos/StarExecMiami/StarExec/actions/workflows/container-publish.yml/runs?status=completed&per_page=100"
-                            RUN_ID=""
-                            DIAG="no response"
-                            for attempt in \$(seq 1 30); do
-                                if ! WORKFLOW_RUNS="\$(curl --fail --silent --show-error --retry 3 --retry-delay 2 --retry-all-errors \\
-                                    -H 'Accept: application/vnd.github+json' "\${WORKFLOW_RUNS_URL}")"; then
-                                    DIAG="github api lookup failed"
-                                    echo "GitHub workflow lookup failed (attempt \${attempt}/30); retrying..." >&2
-                                    sleep 30
-                                    continue
-                                fi
-                                RUN_ID="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' \\
-                                    '[.workflow_runs[] | select(.head_sha == \$sha and .conclusion == "success")] | sort_by(.updated_at) | last | .id // empty')"
-                                if [ -n "\${RUN_ID}" ]; then
-                                    break
-                                fi
+                                    command -v curl >/dev/null
+                                    command -v jq >/dev/null
+                                    command -v podman >/dev/null
 
-                                DIAG="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' '
-                                    "total_count=" + ((.total_count // 0) | tostring)
-                                    + ", page_runs=" + (((.workflow_runs // []) | length) | tostring)
-                                    + ", matching_sha=" + (([(.workflow_runs // [])[] | select(.head_sha == \$sha)] | length) | tostring)
-                                    + ", latest_shas=" + (([(.workflow_runs // [])[:5][] | ((.head_sha // "unknown")[0:12] + "(" + (.conclusion // .status // "unknown") + ")")] | join(",")) | if . == "" then "none" else . end)
-                                ' 2>/dev/null || echo 'diagnostics unavailable')"
-                                echo "Waiting for successful Container Publish workflow for ${env.GIT_SHA} (attempt \${attempt}/30; \${DIAG})" >&2
-                                sleep 30
-                            done
+                                    WORKFLOW_RUNS_URL="https://api.github.com/repos/StarExecMiami/StarExec/actions/workflows/container-publish.yml/runs?status=completed&per_page=100"
+                                    RUN_ID=""
+                                    DIAG="no response"
+                                    for attempt in \$(seq 1 60); do
+                                        if ! WORKFLOW_RUNS="\$(curl --fail --silent --show-error --retry 3 --retry-delay 2 --retry-all-errors \\
+                                            -H 'Accept: application/vnd.github+json' "\${WORKFLOW_RUNS_URL}")"; then
+                                            DIAG="github api lookup failed"
+                                            echo "GitHub workflow lookup failed (attempt \${attempt}/60); retrying..." >&2
+                                            sleep 15
+                                            continue
+                                        fi
+                                        RUN_ID="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' \\
+                                            '[.workflow_runs[] | select(.head_sha == \$sha and .conclusion == "success")] | sort_by(.updated_at) | last | .id // empty')"
+                                        if [ -n "\${RUN_ID}" ]; then
+                                            break
+                                        fi
 
-                            if [ -z "\${RUN_ID}" ]; then
-                                echo "ERROR: no successful Container Publish workflow completed within 15 minutes for ${env.GIT_SHA} (\${DIAG})" >&2
-                                exit 1
-                            fi
+                                        DIAG="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' '
+                                            "total_count=" + ((.total_count // 0) | tostring)
+                                            + ", page_runs=" + (((.workflow_runs // []) | length) | tostring)
+                                            + ", matching_sha=" + (([(.workflow_runs // [])[] | select(.head_sha == \$sha)] | length) | tostring)
+                                            + ", latest_shas=" + (([(.workflow_runs // [])[:5][] | ((.head_sha // "unknown")[0:12] + "(" + (.conclusion // .status // "unknown") + ")")] | join(",")) | if . == "" then "none" else . end)
+                                        ' 2>/dev/null || echo 'diagnostics unavailable')"
+                                        echo "Waiting for successful Container Publish workflow for ${env.GIT_SHA} (attempt \${attempt}/60; \${DIAG})" >&2
+                                        sleep 15
+                                    done
 
-                            echo "Verified Container Publish run \${RUN_ID} for ${env.GIT_SHA}" >&2
-                            podman pull "${env.PUBLISHED_IMAGE}" >&2
+                                    if [ -z "\${RUN_ID}" ]; then
+                                        echo "ERROR: no successful Container Publish workflow completed within 15 minutes for ${env.GIT_SHA} (\${DIAG})" >&2
+                                        exit 1
+                                    fi
 
-                            REPOSITORY_DIGEST="\$(podman image inspect --format '{{index .RepoDigests 0}}' "${env.PUBLISHED_IMAGE}")"
-                            DEPLOY_IMAGE_DIGEST="\${REPOSITORY_DIGEST#*@}"
-                            case "\${DEPLOY_IMAGE_DIGEST}" in
-                                sha256:*) printf '%s' "\${DEPLOY_IMAGE_DIGEST}" ;;
-                                *) echo "ERROR: could not resolve an OCI digest for ${env.PUBLISHED_IMAGE}" >&2; exit 1 ;;
-                            esac
-                        """,
-                        returnStdout: true
-                    ).trim()
+                                    echo "Verified Container Publish run \${RUN_ID} for ${env.GIT_SHA}" >&2
+                                    podman pull "${env.PUBLISHED_IMAGE}" >&2
 
-                    echo "Resolved published image ${env.PUBLISHED_IMAGE}@${env.DEPLOY_IMAGE_DIGEST}"
+                                    REPOSITORY_DIGEST="\$(podman image inspect --format '{{index .RepoDigests 0}}' "${env.PUBLISHED_IMAGE}")"
+                                    DEPLOY_IMAGE_DIGEST="\${REPOSITORY_DIGEST#*@}"
+                                    case "\${DEPLOY_IMAGE_DIGEST}" in
+                                        sha256:*) printf '%s' "\${DEPLOY_IMAGE_DIGEST}" ;;
+                                        *) echo "ERROR: could not resolve an OCI digest for ${env.PUBLISHED_IMAGE}" >&2; exit 1 ;;
+                                    esac
+                                """,
+                                returnStdout: true
+                            ).trim()
+
+                            echo "Resolved published image ${env.PUBLISHED_IMAGE}@${env.DEPLOY_IMAGE_DIGEST}"
+                        }
+                    }
                 }
-            }
-        }
 
+                // ---------------------------------------------------------------
+                stage('Unit Tests') {
+                // ---------------------------------------------------------------
+                    when {
+                        expression { !params.SKIP_TESTS }
+                    }
+                    steps {
+                        script {
+                            if (params.FORCE_LOCAL_TESTS) {
+                                echo 'FORCE_LOCAL_TESTS=true; skipping GitHub Actions lookup and running local make test.'
+                                sh 'make test'
+                            } else {
+                                def ciOutcome = sh(
+                                    script: """
+                                        set -eu
 
-        // =======================================================================
-        stage('Test') {
-        // =======================================================================
-            when {
-                expression { !params.SKIP_TESTS }
-            }
-            steps {
-                sh 'make test'
-            }
-            post {
-                always {
-                    echo 'Test stage complete'
+                                        if ! command -v curl >/dev/null || ! command -v jq >/dev/null; then
+                                            echo "curl or jq missing; cannot check GitHub Actions Maven Build & Test." >&2
+                                            printf 'fallback'
+                                            exit 0
+                                        fi
+
+                                        WORKFLOW_RUNS_URL="https://api.github.com/repos/StarExecMiami/StarExec/actions/workflows/maven-test.yml/runs?per_page=100"
+                                        SEEN_RUN=0
+                                        OUTCOME=""
+                                        DIAG="no response"
+
+                                        for attempt in \$(seq 1 80); do
+                                            if ! WORKFLOW_RUNS="\$(curl --fail --silent --show-error --retry 3 --retry-delay 2 --retry-all-errors \\
+                                                -H 'Accept: application/vnd.github+json' "\${WORKFLOW_RUNS_URL}")"; then
+                                                DIAG="github api lookup failed"
+                                                echo "GitHub Maven Build & Test lookup failed (attempt \${attempt}/80); retrying..." >&2
+                                                if [ "\${SEEN_RUN}" -eq 0 ] && [ "\${attempt}" -ge 3 ]; then
+                                                    echo "GitHub API unavailable before finding a Maven Build & Test run for ${env.GIT_SHA}." >&2
+                                                    OUTCOME="fallback"
+                                                    break
+                                                fi
+                                                sleep 15
+                                                continue
+                                            fi
+
+                                            if ! RUN_INFO="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' '
+                                                ([(.workflow_runs // [])[] | select(.head_sha == \$sha)]
+                                                 | sort_by([.updated_at, .created_at, .id])
+                                                 | last) as \$run
+                                                | if \$run == null then ""
+                                                  else [(\$run.id | tostring), (\$run.status // ""), (\$run.conclusion // ""), (\$run.html_url // "")] | join("|")
+                                                  end
+                                            ')"; then
+                                                DIAG="github api response parse failed"
+                                                echo "GitHub Maven Build & Test response parse failed (attempt \${attempt}/80); retrying..." >&2
+                                                if [ "\${SEEN_RUN}" -eq 0 ] && [ "\${attempt}" -ge 3 ]; then
+                                                    echo "GitHub API response invalid before finding a Maven Build & Test run for ${env.GIT_SHA}." >&2
+                                                    OUTCOME="fallback"
+                                                    break
+                                                fi
+                                                sleep 15
+                                                continue
+                                            fi
+
+                                            if [ -n "\${RUN_INFO}" ]; then
+                                                SEEN_RUN=1
+                                                RUN_ID="\${RUN_INFO%%|*}"
+                                                REST="\${RUN_INFO#*|}"
+                                                RUN_STATUS="\${REST%%|*}"
+                                                REST="\${REST#*|}"
+                                                RUN_CONCLUSION="\${REST%%|*}"
+                                                RUN_URL="\${REST#*|}"
+
+                                                case "\${RUN_STATUS}" in
+                                                    completed)
+                                                        if [ "\${RUN_CONCLUSION}" = "success" ]; then
+                                                            echo "Verified GitHub Actions Maven Build & Test run \${RUN_ID} (\${RUN_URL})" >&2
+                                                            OUTCOME="reused"
+                                                            break
+                                                        else
+                                                            echo "ERROR: GitHub Actions Maven Build & Test run \${RUN_ID} completed with conclusion='\${RUN_CONCLUSION}' (\${RUN_URL})" >&2
+                                                            exit 1
+                                                        fi
+                                                        ;;
+                                                    queued|in_progress|waiting|requested|pending)
+                                                        echo "Waiting for GitHub Actions Maven Build & Test run \${RUN_ID} (status=\${RUN_STATUS}; \${RUN_URL}; attempt \${attempt}/80)" >&2
+                                                        ;;
+                                                    *)
+                                                        echo "Waiting for GitHub Actions Maven Build & Test run \${RUN_ID} (status=\${RUN_STATUS}; \${RUN_URL}; attempt \${attempt}/80)" >&2
+                                                        ;;
+                                                esac
+                                            else
+                                                DIAG="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' '
+                                                    "total_count=" + ((.total_count // 0) | tostring)
+                                                    + ", page_runs=" + (((.workflow_runs // []) | length) | tostring)
+                                                    + ", matching_sha=" + (([(.workflow_runs // [])[] | select(.head_sha == \$sha)] | length) | tostring)
+                                                ' 2>/dev/null || echo 'diagnostics unavailable')"
+                                                if [ "\${attempt}" -ge 3 ]; then
+                                                    echo "No GitHub Actions Maven Build & Test run found for ${env.GIT_SHA} (\${DIAG})." >&2
+                                                    OUTCOME="fallback"
+                                                    break
+                                                fi
+                                                echo "Checking for GitHub Actions Maven Build & Test run for ${env.GIT_SHA} (attempt \${attempt}/3; \${DIAG})" >&2
+                                            fi
+
+                                            sleep 15
+                                        done
+
+                                        if [ -z "\${OUTCOME}" ]; then
+                                            echo "GitHub Actions Maven Build & Test lookup/wait timed out after 20 minutes for ${env.GIT_SHA} (\${DIAG})." >&2
+                                            OUTCOME="fallback"
+                                        fi
+
+                                        printf '%s' "\${OUTCOME}"
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+
+                                if (ciOutcome != 'reused') {
+                                    echo 'Falling back to local make test...'
+                                    sh 'make test'
+                                }
+                            }
+                        }
+                    }
+                    post {
+                        always {
+                            echo 'Test stage complete'
+                        }
+                    }
                 }
+
             }
         }
         // =======================================================================
