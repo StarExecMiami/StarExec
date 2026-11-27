@@ -128,6 +128,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.TimeUnit;
 import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
@@ -538,8 +539,39 @@ public class KubernetesNativeBackend implements Backend {
         return Math.max(0L, TimeUnit.MILLISECONDS.toMinutes(now - since));
     }
 
-    /** Hard concurrency cap to prevent unbounded K8s Job creation */
+    /** How long the cached schedulable worker node count may be reused before refetching. */
+    private static final long WORKER_NODE_COUNT_CACHE_TTL_MS = 20_000L;
+
+    /**
+     * Hard concurrency cap in static mode ({@code slotsPerNode <= 0}), or an optional upper
+     * ceiling when {@code slotsPerNode > 0} and {@code maxConcurrentJobs > 0} ({@code 0} = uncapped).
+     */
     private int maxConcurrentJobs = 50;
+
+    /**
+     * Target concurrent slots per active schedulable worker node. When {@code <= 0},
+     * legacy static {@link #maxConcurrentJobs} mode is used.
+     */
+    private int slotsPerNode = 0;
+
+    /**
+     * Additional Pending backfill pod buffer above active worker capacity when
+     * {@code slotsPerNode > 0}.
+     */
+    private int queueBuffer = 0;
+
+    /** Cached count of active schedulable worker nodes (-1 = never loaded). */
+    private final AtomicInteger cachedSchedulableWorkerNodes = new AtomicInteger(-1);
+
+    /** Timestamp (from {@link #clock}) when {@link #cachedSchedulableWorkerNodes} was refreshed. */
+    private final AtomicLong workerNodeCountRefreshedAt = new AtomicLong(0L);
+
+    /** Serializes worker-node count refreshes when the cache expires. */
+    private final Object workerNodeCountLock = new Object();
+
+    /** Rate-limits warning logs when worker-node counting fails repeatedly. */
+    private final LastingConditions workerNodeCountFailures = new LastingConditions();
+    private static final String WORKER_NODE_COUNT_LISTING = "worker node count listing";
 
     /** Periodic orphan sweep interval in milliseconds */
     private int orphanSweepIntervalMs = 300000;
@@ -939,14 +971,40 @@ public class KubernetesNativeBackend implements Backend {
         killConfirmWaitMillis =
             1000L * Math.max(0, getEnvInt("STAREXEC_K8S_KILL_CONFIRM_SECONDS", 45));
         backoffLimit = getEnvInt("STAREXEC_K8S_JOB_BACKOFF_LIMIT", 0);
-        maxConcurrentJobs = getEnvInt("STAREXEC_K8S_MAX_CONCURRENT_JOBS", 50);
-        if (maxConcurrentJobs < 1) {
+        slotsPerNode = getEnvInt("STAREXEC_K8S_SLOTS_PER_NODE", 0);
+        if (slotsPerNode < 0) {
+            log.warn(
+                "Invalid STAREXEC_K8S_SLOTS_PER_NODE value: " +
+                slotsPerNode +
+                ". Falling back to 0 (static maxConcurrentJobs mode)."
+            );
+            slotsPerNode = 0;
+        }
+        queueBuffer = getEnvInt("STAREXEC_K8S_QUEUE_BUFFER", 0);
+        if (queueBuffer < 0) {
+            log.warn(
+                "Invalid STAREXEC_K8S_QUEUE_BUFFER value: " +
+                queueBuffer +
+                ". Falling back to 0."
+            );
+            queueBuffer = 0;
+        }
+        int defaultMaxConcurrentJobs = slotsPerNode > 0 ? 0 : 50;
+        maxConcurrentJobs = getEnvInt("STAREXEC_K8S_MAX_CONCURRENT_JOBS", defaultMaxConcurrentJobs);
+        if (slotsPerNode <= 0 && maxConcurrentJobs < 1) {
             log.warn(
                 "Invalid STAREXEC_K8S_MAX_CONCURRENT_JOBS value: " +
                 maxConcurrentJobs +
                 ". Falling back to 1."
             );
             maxConcurrentJobs = 1;
+        } else if (slotsPerNode > 0 && maxConcurrentJobs < 0) {
+            log.warn(
+                "Invalid STAREXEC_K8S_MAX_CONCURRENT_JOBS ceiling value: " +
+                maxConcurrentJobs +
+                ". Falling back to 0 (uncapped)."
+            );
+            maxConcurrentJobs = 0;
         }
         orphanSweepIntervalMs = getEnvInt("STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS", 300000);
         if (orphanSweepIntervalMs < 0) {
@@ -1043,6 +1101,10 @@ public class KubernetesNativeBackend implements Backend {
                 appNodeName +
                 ", ttlSeconds=" +
                 ttlSecondsAfterFinished +
+                ", slotsPerNode=" +
+                slotsPerNode +
+                ", queueBuffer=" +
+                queueBuffer +
                 ", maxConcurrentJobs=" +
                 maxConcurrentJobs +
                 ", orphanSweepIntervalMs=" +
@@ -1808,11 +1870,15 @@ public class KubernetesNativeBackend implements Backend {
                         }
                     }
                 }
+                int schedulableWorkerCount = countSchedulableWorkerNodes(nodes);
+                long refreshedAt = clock.getAsLong();
                 labelledQueues = Collections.unmodifiableSet(labelled);
                 schedulableQueues = Collections.unmodifiableSet(schedulable);
                 queueMaxAllocatableCpuMillis = Collections.unmodifiableMap(maxCpu);
-                queueViewRefreshedAt = clock.getAsLong();
+                queueViewRefreshedAt = refreshedAt;
                 queueViewLoaded = true;
+                cachedSchedulableWorkerNodes.set(schedulableWorkerCount);
+                workerNodeCountRefreshedAt.set(refreshedAt);
                 LastingConditions.Condition failing = queueViewFailures.end(QUEUE_VIEW_LISTING);
                 if (failing != null) {
                     log.info(
@@ -2085,7 +2151,7 @@ public class KubernetesNativeBackend implements Backend {
         // per pair per 20-second scheduling pass.
         if (!tryAcquireSubmissionSlot(execId)) {
             throw new SubmissionDeferredException(
-                "at concurrency cap (" + activeSlotCount() + "/" + maxConcurrentJobs +
+                "at concurrency cap (" + activeSlotCount() + "/" + currentEffectiveLimitForLogging() +
                 "); pair " + pairId + " stays queued"
             );
         }
@@ -2820,6 +2886,178 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     /**
+     * True if {@code node} matches the configured worker node selector (and optional strict
+     * CPU node selector when {@code strictOnePairPerCpu} is active).
+     */
+    private boolean matchesWorkerNodeSelector(Node node) {
+        if (node == null) {
+            return false;
+        }
+        Map<String, String> labels = node.getMetadata() != null
+            ? node.getMetadata().getLabels()
+            : null;
+        if (workerNodeSelectorKey != null && !workerNodeSelectorKey.trim().isEmpty()) {
+            if (labels == null) {
+                return false;
+            }
+            if (workerNodeSelectorValue != null && !workerNodeSelectorValue.isEmpty()) {
+                if (!workerNodeSelectorValue.equals(labels.get(workerNodeSelectorKey))) {
+                    return false;
+                }
+            } else if (!labels.containsKey(workerNodeSelectorKey)) {
+                return false;
+            }
+        }
+        if (strictOnePairPerCpu
+                && strictCpuNodeLabelKey != null
+                && !strictCpuNodeLabelKey.isEmpty()) {
+            if (labels == null
+                    || !Objects.equals(strictCpuNodeLabelValue, labels.get(strictCpuNodeLabelKey))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Counts active schedulable worker nodes from a fetched node list. */
+    private int countSchedulableWorkerNodes(List<Node> nodes) {
+        if (nodes == null || nodes.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (Node node : nodes) {
+            if (isNodeSchedulable(node) && matchesWorkerNodeSelector(node)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** Lists candidate worker nodes from Kubernetes using the configured worker selector when set. */
+    private List<Node> listCandidateWorkerNodes() {
+        if (workerNodeSelectorKey != null && !workerNodeSelectorKey.trim().isEmpty()) {
+            NodeList list = kubernetesClient
+                .nodes()
+                .withLabel(workerNodeSelectorKey, workerNodeSelectorValue)
+                .list();
+            return list != null && list.getItems() != null
+                ? list.getItems()
+                : Collections.emptyList();
+        }
+        NodeList list = kubernetesClient.nodes().list();
+        return list != null && list.getItems() != null
+            ? list.getItems()
+            : Collections.emptyList();
+    }
+
+    /**
+     * Returns the cached count of active schedulable worker nodes, refreshing from Kubernetes
+     * when the cache has never loaded or has aged past {@link #WORKER_NODE_COUNT_CACHE_TTL_MS}.
+     *
+     * <p>On transient Kubernetes API failures, returns the last known cached count if one
+     * exists, or {@code -1} when no listing has ever succeeded.
+     */
+    int getSchedulableWorkerNodeCount() {
+        int cached = cachedSchedulableWorkerNodes.get();
+        long now = clock.getAsLong();
+        if (cached >= 0 && (now - workerNodeCountRefreshedAt.get()) < WORKER_NODE_COUNT_CACHE_TTL_MS) {
+            return cached;
+        }
+        synchronized (workerNodeCountLock) {
+            cached = cachedSchedulableWorkerNodes.get();
+            now = clock.getAsLong();
+            if (cached >= 0 && (now - workerNodeCountRefreshedAt.get()) < WORKER_NODE_COUNT_CACHE_TTL_MS) {
+                return cached;
+            }
+            if (kubernetesClient == null) {
+                return cached;
+            }
+            try {
+                List<Node> nodes = listCandidateWorkerNodes();
+                int count = countSchedulableWorkerNodes(nodes);
+                long refreshedNow = clock.getAsLong();
+                cachedSchedulableWorkerNodes.set(count);
+                workerNodeCountRefreshedAt.set(refreshedNow);
+                LastingConditions.Condition failing =
+                    workerNodeCountFailures.end(WORKER_NODE_COUNT_LISTING);
+                if (failing != null) {
+                    log.info(
+                        "Refreshed Kubernetes schedulable worker node count (" + count +
+                            "); listing was first seen failing " +
+                            minutesSince(failing.since, refreshedNow) + " minute(s) ago"
+                    );
+                }
+                return count;
+            } catch (Exception e) {
+                long minutes = workerNodeCountFailures.report(
+                    WORKER_NODE_COUNT_LISTING, "failing", clock.getAsLong()
+                );
+                if (minutes >= 0) {
+                    log.warn(
+                        "Could not refresh Kubernetes schedulable worker node count" +
+                            lasting(minutes) + "; using " +
+                            (cached >= 0 ? "last cached count (" + cached + ")" : "conservative static fallback") +
+                            "." + HOLD_REPEATED,
+                        e
+                    );
+                }
+                return cached;
+            }
+        }
+    }
+
+    /**
+     * Computes the concurrency limit from a known schedulable node count in dynamic mode
+     * ({@code slotsPerNode > 0}).
+     */
+    private int computeDynamicConcurrencyLimit(int activeNodes) {
+        if (activeNodes < 0) {
+            if (maxConcurrentJobs > 0) {
+                return maxConcurrentJobs;
+            }
+            return Math.max(1, slotsPerNode);
+        }
+        if (activeNodes == 0) {
+            return 0;
+        }
+        long computed = (long) activeNodes * (long) slotsPerNode + Math.max(0L, (long) queueBuffer);
+        int limit = computed > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) computed;
+        if (limit < 1) {
+            limit = 1;
+        }
+        if (maxConcurrentJobs > 0 && limit > maxConcurrentJobs) {
+            limit = maxConcurrentJobs;
+        }
+        return limit;
+    }
+
+    /**
+     * Effective concurrency cap for Kubernetes Job submission.
+     *
+     * <p>When {@code slotsPerNode <= 0}, returns the static {@link #maxConcurrentJobs} cap.
+     * When {@code slotsPerNode > 0}, returns {@code activeNodes * slotsPerNode + queueBuffer}
+     * (floored at 1 when {@code activeNodes >= 1}, 0 when {@code activeNodes == 0}), optionally
+     * capped by {@link #maxConcurrentJobs} if {@code maxConcurrentJobs > 0}.
+     */
+    int effectiveMaxConcurrentJobs() {
+        if (slotsPerNode <= 0) {
+            return maxConcurrentJobs;
+        }
+        return computeDynamicConcurrencyLimit(getSchedulableWorkerNodeCount());
+    }
+
+    /**
+     * Returns the current effective cap from cached state without performing Kubernetes API I/O,
+     * suitable for diagnostics and lock-free logging.
+     */
+    private int currentEffectiveLimitForLogging() {
+        if (slotsPerNode <= 0) {
+            return maxConcurrentJobs;
+        }
+        return computeDynamicConcurrencyLimit(cachedSchedulableWorkerNodes.get());
+    }
+
+    /**
      * Reserves the concurrency slot for {@code execId}.
      *
      * <p>{@code jobsHoldingSlot} is the single source of truth and {@code activeJobCount}
@@ -2839,14 +3077,20 @@ public class KubernetesNativeBackend implements Backend {
             if (jobsHoldingSlot.contains(execId)) {
                 return true;
             }
-            if (jobsHoldingSlot.size() >= maxConcurrentJobs) {
+        }
+        int effectiveLimit = effectiveMaxConcurrentJobs();
+        synchronized (slotLock) {
+            if (jobsHoldingSlot.contains(execId)) {
+                return true;
+            }
+            if (jobsHoldingSlot.size() >= effectiveLimit) {
                 return false;
             }
             jobsHoldingSlot.add(execId);
             activeJobCount.set(jobsHoldingSlot.size());
             log.debug(
                 "Reserved K8s concurrency slot (execId=" + execId + ", active=" +
-                jobsHoldingSlot.size() + ", max=" + maxConcurrentJobs + ")"
+                jobsHoldingSlot.size() + ", max=" + effectiveLimit + ")"
             );
             return true;
         }
@@ -2885,26 +3129,27 @@ public class KubernetesNativeBackend implements Backend {
             }
             activeJobCount.set(jobsHoldingSlot.size());
             int held = jobsHoldingSlot.size();
+            int currentLimit = currentEffectiveLimitForLogging();
             if (unidentifiedExecution) {
                 log.error(
                     "Accounting for UNIDENTIFIED execution " + execId + ": it was found in" +
                     " the cluster rather than in StarExec's own tracking, so something ran" +
                     " outside the accounting. Held slots now " + held + "/" +
-                    maxConcurrentJobs + ". OPERATOR ACTION: identify pods labelled " +
+                    currentLimit + ". OPERATOR ACTION: identify pods labelled " +
                     EXEC_ID_LABEL + "=" + execId + " in namespace " + namespace + "."
                 );
-            } else if (held > maxConcurrentJobs) {
+            } else if (held > currentLimit) {
                 log.warn(
                     "Accounting for pre-existing execution " + execId + " takes the held" +
                     " slot count to " + held + ", above the configured cap of " +
-                    maxConcurrentJobs + ". These executions are real and already consuming" +
+                    currentLimit + ". These executions are real and already consuming" +
                     " cluster resources, so they are counted rather than hidden; admission" +
                     " defers until the count falls below the cap."
                 );
             } else {
                 log.debug(
                     "Restored K8s concurrency slot for pre-existing execution " + execId +
-                    " (active=" + held + ", max=" + maxConcurrentJobs + ")"
+                    " (active=" + held + ", max=" + currentLimit + ")"
                 );
             }
         }
@@ -3183,7 +3428,7 @@ public class KubernetesNativeBackend implements Backend {
                     ", active=" +
                     jobsHoldingSlot.size() +
                     ", max=" +
-                    maxConcurrentJobs +
+                    currentEffectiveLimitForLogging() +
                     ")"
                 );
             }
@@ -3586,7 +3831,7 @@ public class KubernetesNativeBackend implements Backend {
                 ", active=" +
                 activeSlotCount() +
                 ", max=" +
-                maxConcurrentJobs +
+                currentEffectiveLimitForLogging() +
                 ")"
             );
         }

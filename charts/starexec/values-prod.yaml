@@ -73,12 +73,15 @@ kubernetes:
   jobImage: ghcr.io/starexecmiami/starexec-job-runner@sha256:63ae82d539f7c26bc70f42036f968897fc110416043d2fedc8a917b828537cdd
   jobImagePullPolicy: IfNotPresent
   jobServiceAccount: starexec-job
-  # Maximum in-flight StarExec Kubernetes Jobs queued in the cluster.
-  # Raised to 40 so Kubernetes keeps Pending pods ready to backfill workers
-  # immediately as jobs complete, without waiting for the 20s periodic dispatcher.
-  # Sized for 2 pairs per worker (14 CPUs / 120Gi each) within namespace
-  # ResourceQuota (starexec-quota: 640 CPU / 5120Gi memory).
-  maxConcurrentJobs: 40
+  # Dynamic concurrency for in-flight StarExec Kubernetes Jobs:
+  # effective cap = activeSchedulableWorkerNodes * slotsPerNode + queueBuffer.
+  # With 5 workers (n021..n025) this yields 5 * 2 + 30 = 40; scaling to
+  # 25 workers (n001..n025) automatically scales up to 25 * 2 + 30 = 80
+  # without Helm edits or Tomcat restarts. maxConcurrentJobs=0 disables any
+  # static ceiling when dynamic mode is active.
+  slotsPerNode: 2
+  queueBuffer: 30
+  maxConcurrentJobs: 0
   nodeSelector:
     starexec.org/worker: "true"
   # Opt-in node qualification label for strict CPU mode. Leave empty when all

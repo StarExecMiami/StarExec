@@ -238,6 +238,12 @@ kubernetes:
   # Job lifecycle management
   ttlSecondsAfterFinished: 3600 # 1 hour
   backoffLimit: 0 # No retries - StarExec handles retry logic
+  # Dynamic concurrency based on Ready, uncordoned worker nodes:
+  # effective cap = activeWorkerNodes * slotsPerNode + queueBuffer.
+  # Set slotsPerNode to 0 to use static maxConcurrentJobs instead.
+  # When slotsPerNode > 0, maxConcurrentJobs (> 0) acts as an optional upper ceiling (0 = uncapped).
+  slotsPerNode: 0
+  queueBuffer: 0
   maxConcurrentJobs: 50
   orphanSweepIntervalMs: 300000
 

@@ -7,8 +7,20 @@
 {{- if and (eq .Values.postgres.host "localhost") (ne (int .Values.postgres.port) 5432) -}}
 {{- fail (printf "postgres.port (%v) must remain 5432 when postgres.host=localhost because the embedded PostgreSQL sidecar listens on 5432" .Values.postgres.port) -}}
 {{- end }}
-{{- if and (eq (include "starexec.isKubernetesBackend" .) "true") (lt (int .Values.kubernetes.maxConcurrentJobs) 1) -}}
-{{- fail (printf "kubernetes.maxConcurrentJobs (%v) must be >= 1" .Values.kubernetes.maxConcurrentJobs) -}}
+{{- $k8sSlotsPerNode := int (default 0 .Values.kubernetes.slotsPerNode) -}}
+{{- $k8sQueueBuffer := int (default 0 .Values.kubernetes.queueBuffer) -}}
+{{- $k8sMaxConcurrentJobs := int (default 0 .Values.kubernetes.maxConcurrentJobs) -}}
+{{- if and (eq (include "starexec.isKubernetesBackend" .) "true") (lt $k8sSlotsPerNode 0) -}}
+{{- fail (printf "kubernetes.slotsPerNode (%v) must be >= 0" .Values.kubernetes.slotsPerNode) -}}
+{{- end }}
+{{- if and (eq (include "starexec.isKubernetesBackend" .) "true") (lt $k8sQueueBuffer 0) -}}
+{{- fail (printf "kubernetes.queueBuffer (%v) must be >= 0" .Values.kubernetes.queueBuffer) -}}
+{{- end }}
+{{- if and (eq (include "starexec.isKubernetesBackend" .) "true") (le $k8sSlotsPerNode 0) (lt $k8sMaxConcurrentJobs 1) -}}
+{{- fail (printf "kubernetes.maxConcurrentJobs (%v) must be >= 1 when kubernetes.slotsPerNode <= 0" .Values.kubernetes.maxConcurrentJobs) -}}
+{{- end }}
+{{- if and (eq (include "starexec.isKubernetesBackend" .) "true") (gt $k8sSlotsPerNode 0) (lt $k8sMaxConcurrentJobs 0) -}}
+{{- fail (printf "kubernetes.maxConcurrentJobs (%v) must be >= 0 when kubernetes.slotsPerNode > 0" .Values.kubernetes.maxConcurrentJobs) -}}
 {{- end }}
 {{- if and (eq (include "starexec.isKubernetesBackend" .) "true") (lt (int .Values.kubernetes.orphanSweepIntervalMs) 0) -}}
 {{- fail (printf "kubernetes.orphanSweepIntervalMs (%v) must be >= 0" .Values.kubernetes.orphanSweepIntervalMs) -}}
@@ -273,6 +285,10 @@ spec:
               value: "{{ .Values.kubernetes.backoffLimit }}"
             - name: STAREXEC_K8S_MAX_CONCURRENT_JOBS
               value: "{{ .Values.kubernetes.maxConcurrentJobs }}"
+            - name: STAREXEC_K8S_SLOTS_PER_NODE
+              value: "{{ default 0 .Values.kubernetes.slotsPerNode }}"
+            - name: STAREXEC_K8S_QUEUE_BUFFER
+              value: "{{ default 0 .Values.kubernetes.queueBuffer }}"
             - name: STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS
               value: "{{ .Values.kubernetes.orphanSweepIntervalMs }}"
             - name: STAREXEC_K8S_MEMORY_LIMIT

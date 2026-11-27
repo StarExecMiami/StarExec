@@ -5583,4 +5583,202 @@ public class KubernetesNativeBackendTests {
             jp.verifyNoInteractions();
         }
     }
+
+    // ---------------------------------------------------------------------
+    // Dynamic concurrency based on active schedulable worker nodes
+    // ---------------------------------------------------------------------
+
+    private int effectiveMaxConcurrentJobs(KubernetesNativeBackend backend) throws Exception {
+        Method m = KubernetesNativeBackend.class.getDeclaredMethod("effectiveMaxConcurrentJobs");
+        m.setAccessible(true);
+        return (Integer) m.invoke(backend);
+    }
+
+    private io.fabric8.kubernetes.api.model.NodeList workerNodeList(
+        int count,
+        String prefix
+    ) {
+        List<io.fabric8.kubernetes.api.model.Node> nodes = new java.util.ArrayList<>();
+        for (int i = 1; i <= count; i++) {
+            nodes.add(nodeWithQueueLabel(
+                String.format("%s%03d", prefix, i),
+                "all.q",
+                Boolean.FALSE,
+                "True"
+            ));
+        }
+        return new io.fabric8.kubernetes.api.model.NodeListBuilder()
+            .withItems(nodes)
+            .build();
+    }
+
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable stubWorkerNodeListing(
+        KubernetesNativeBackend backend
+    ) throws Exception {
+        setField(backend, "queueLabelKey", "starexec/queue");
+        setField(backend, "workerNodeSelectorKey", "starexec.org/worker");
+        setField(backend, "workerNodeSelectorValue", "true");
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        io.fabric8.kubernetes.client.dsl.NonNamespaceOperation nodesOp =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.NonNamespaceOperation.class);
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filtered =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+        Mockito.when(client.nodes()).thenReturn(nodesOp);
+        Mockito.when(nodesOp.withLabel("starexec.org/worker", "true")).thenReturn(filtered);
+        setField(backend, "kubernetesClient", client);
+        return filtered;
+    }
+
+    @Test
+    public void dynamicConcurrencyScalesFromFiveToTwentyFiveSchedulableWorkers() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1_000_000L);
+        setField(backend, "clock", (java.util.function.LongSupplier) now::get);
+        setField(backend, "slotsPerNode", 2);
+        setField(backend, "queueBuffer", 30);
+        setField(backend, "maxConcurrentJobs", 0);
+
+        var listing = stubWorkerNodeListing(backend);
+        Mockito.when(listing.list())
+            .thenReturn(workerNodeList(5, "n"))
+            .thenReturn(workerNodeList(25, "n"));
+
+        assertEquals(40, effectiveMaxConcurrentJobs(backend), "5 * 2 + 30 = 40");
+        for (int execId = 1; execId <= 40; execId++) {
+            assertTrue(acquire(backend, execId), "slot " + execId + " must fit within 40");
+        }
+        assertFalse(acquire(backend, 41), "41st slot must defer when cap is 40");
+
+        // Advance past the cache TTL to observe cluster expansion to 25 workers without restart.
+        now.addAndGet(25_000L);
+        assertEquals(80, effectiveMaxConcurrentJobs(backend), "25 * 2 + 30 = 80");
+        for (int execId = 41; execId <= 80; execId++) {
+            assertTrue(acquire(backend, execId), "slot " + execId + " must fit within 80");
+        }
+        assertFalse(acquire(backend, 81), "81st slot must defer when cap is 80");
+    }
+
+    @Test
+    public void dynamicConcurrencyExcludesNotReadyCordonedAndNonMatchingNodes() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(2_000_000L);
+        setField(backend, "clock", (java.util.function.LongSupplier) now::get);
+        setField(backend, "slotsPerNode", 2);
+        setField(backend, "queueBuffer", 30);
+        setField(backend, "maxConcurrentJobs", 0);
+
+        List<io.fabric8.kubernetes.api.model.Node> mixedNodes = new java.util.ArrayList<>();
+        for (int i = 1; i <= 22; i++) {
+            mixedNodes.add(nodeWithQueueLabel(String.format("n%03d", i), "all.q", Boolean.FALSE, "True"));
+        }
+        // Two more Ready, uncordoned workers: total 24 schedulable matching workers.
+        mixedNodes.add(nodeWithQueueLabel("n023", "all.q", Boolean.FALSE, "True"));
+        mixedNodes.add(nodeWithQueueLabel("n024", "all.q", Boolean.FALSE, "True"));
+        // 1 NotReady node, 1 cordoned node, and 1 non-matching nodeSelector node.
+        mixedNodes.add(nodeWithQueueLabel("n025", "all.q", Boolean.FALSE, "False"));
+        mixedNodes.add(nodeWithQueueLabel("n026", "all.q", Boolean.TRUE, "True"));
+        mixedNodes.add(new io.fabric8.kubernetes.api.model.NodeBuilder()
+            .withNewMetadata()
+                .withName("control-plane")
+                .addToLabels("starexec.org/worker", "false")
+            .endMetadata()
+            .withNewSpec().withUnschedulable(false).endSpec()
+            .withNewStatus()
+                .addNewCondition().withType("Ready").withStatus("True").endCondition()
+            .endStatus()
+            .build());
+
+        var listing = stubWorkerNodeListing(backend);
+        Mockito.when(listing.list())
+            .thenReturn(new io.fabric8.kubernetes.api.model.NodeListBuilder().withItems(mixedNodes).build())
+            .thenReturn(new io.fabric8.kubernetes.api.model.NodeListBuilder().withItems(
+                nodeWithQueueLabel("n025", "all.q", Boolean.FALSE, "False"),
+                nodeWithQueueLabel("n026", "all.q", Boolean.TRUE, "True")
+            ).build());
+
+        assertEquals(78, effectiveMaxConcurrentJobs(backend), "24 * 2 + 30 = 78");
+
+        // Zero schedulable workers -> effective limit is 0 so pods are not flooded.
+        now.addAndGet(25_000L);
+        assertEquals(0, effectiveMaxConcurrentJobs(backend), "0 schedulable workers -> 0 limit");
+        assertFalse(acquire(backend, 1), "no slot may be acquired when 0 workers are schedulable");
+    }
+
+    @Test
+    public void staticModeAndOptionalDynamicCeilingCapBehaveAsConfigured() throws Exception {
+        // Static mode (slotsPerNode <= 0): uses maxConcurrentJobs directly without querying nodes.
+        KubernetesNativeBackend staticBackend = new KubernetesNativeBackend();
+        setField(staticBackend, "slotsPerNode", 0);
+        setField(staticBackend, "queueBuffer", 30);
+        setField(staticBackend, "maxConcurrentJobs", 4);
+        KubernetesClient untouchedClient = Mockito.mock(KubernetesClient.class);
+        setField(staticBackend, "kubernetesClient", untouchedClient);
+
+        assertEquals(4, effectiveMaxConcurrentJobs(staticBackend));
+        Mockito.verifyNoInteractions(untouchedClient);
+
+        // Dynamic mode with positive maxConcurrentJobs acting as an upper ceiling cap.
+        KubernetesNativeBackend cappedBackend = new KubernetesNativeBackend();
+        setField(cappedBackend, "slotsPerNode", 2);
+        setField(cappedBackend, "queueBuffer", 30);
+        setField(cappedBackend, "maxConcurrentJobs", 60);
+        var listing = stubWorkerNodeListing(cappedBackend);
+        Mockito.when(listing.list()).thenReturn(workerNodeList(25, "n"));
+
+        assertEquals(60, effectiveMaxConcurrentJobs(cappedBackend), "25 * 2 + 30 = 80 capped at 60");
+
+        // Floor safety: 1 active node with minimal slotsPerNode=1 and queueBuffer=0 yields >= 1.
+        KubernetesNativeBackend floorBackend = new KubernetesNativeBackend();
+        setField(floorBackend, "slotsPerNode", 1);
+        setField(floorBackend, "queueBuffer", 0);
+        setField(floorBackend, "maxConcurrentJobs", 0);
+        var floorListing = stubWorkerNodeListing(floorBackend);
+        Mockito.when(floorListing.list()).thenReturn(workerNodeList(1, "n"));
+
+        assertEquals(1, effectiveMaxConcurrentJobs(floorBackend));
+    }
+
+    @Test
+    public void dynamicNodeCountCacheRespectsTtlAndFallsBackOnApiFailure() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(5_000_000L);
+        setField(backend, "clock", (java.util.function.LongSupplier) now::get);
+        setField(backend, "slotsPerNode", 2);
+        setField(backend, "queueBuffer", 30);
+        setField(backend, "maxConcurrentJobs", 0);
+
+        var listing = stubWorkerNodeListing(backend);
+        Mockito.when(listing.list())
+            .thenReturn(workerNodeList(5, "n"))
+            .thenThrow(new RuntimeException("transient apiserver timeout"))
+            .thenReturn(workerNodeList(8, "n"));
+
+        // First call populates cache; subsequent calls within TTL reuse it without extra API calls.
+        assertEquals(40, effectiveMaxConcurrentJobs(backend));
+        now.addAndGet(5_000L);
+        assertEquals(40, effectiveMaxConcurrentJobs(backend));
+        now.addAndGet(10_000L);
+        assertEquals(40, effectiveMaxConcurrentJobs(backend));
+        Mockito.verify(listing, Mockito.times(1)).list();
+
+        // After TTL expires, transient API failure falls back to the last cached count (5 -> 40).
+        now.addAndGet(10_000L);
+        assertEquals(40, effectiveMaxConcurrentJobs(backend));
+        Mockito.verify(listing, Mockito.times(2)).list();
+
+        // Once the API recovers, the next check refreshes cleanly to the new node count (8 -> 46).
+        assertEquals(46, effectiveMaxConcurrentJobs(backend));
+        Mockito.verify(listing, Mockito.times(3)).list();
+
+        // Initial API failure before any cached count exists uses conservative static fallback.
+        KubernetesNativeBackend unprimed = new KubernetesNativeBackend();
+        setField(unprimed, "slotsPerNode", 2);
+        setField(unprimed, "queueBuffer", 30);
+        setField(unprimed, "maxConcurrentJobs", 12);
+        var failingListing = stubWorkerNodeListing(unprimed);
+        Mockito.when(failingListing.list()).thenThrow(new RuntimeException("apiserver unreachable"));
+
+        assertEquals(12, effectiveMaxConcurrentJobs(unprimed));
+    }
 }

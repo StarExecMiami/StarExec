@@ -51,9 +51,12 @@ kubernetes:
   # Because dataPvc uses ReadWriteOnce (microk8s-hostpath pinned to quokka),
   # KubernetesNativeBackend binds job pods directly via spec.nodeName=quokka
   # (8 CPUs / 64GiB allocatable, ~5.8 CPUs free beside app/system pods),
-  # bypassing kube-scheduler queuing. Keep maxConcurrentJobs <= 4 and per-job
-  # limits at integer 1 CPU (required by strictOnePairPerCpu=true) / 2Gi so
-  # kubelet on quokka never rejects concurrent E2E pods with OutOfcpu.
+  # bypassing kube-scheduler queuing. Keep legacy static mode (slotsPerNode: 0,
+  # maxConcurrentJobs <= 4) and per-job limits at integer 1 CPU (required by
+  # strictOnePairPerCpu=true) / 2Gi so kubelet on quokka never rejects
+  # concurrent E2E pods with OutOfcpu.
+  slotsPerNode: 0
+  queueBuffer: 0
   maxConcurrentJobs: 4
   nodeSelector:
     starexec.org/worker: "true"
