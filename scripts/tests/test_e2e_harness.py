@@ -693,6 +693,7 @@ class E2EDAGExecutorTest(unittest.TestCase):
 
         dag = build_dag(CAPABILITIES, buckets=bucket_for, after_map=after_for)
         self.assertEqual(len(dag.order), 45)
+        self.assertEqual(bucket_for(17), "exclusive")
         self.assertIn(30, dag.preds[35])
         self.assertTrue({11, 12, 15, 20}.issubset(dag.preds[14]))
         self.assertIn(25, dag.preds[24])
@@ -712,6 +713,8 @@ class E2EDAGExecutorTest(unittest.TestCase):
         payload = json.loads(cli.stdout)
         self.assertTrue(payload["valid"])
         self.assertEqual(payload["capabilities"], 45)
+        self.assertEqual(payload["buckets"]["exclusive"], 4)
+        self.assertEqual(payload["buckets"]["parallel"], 16)
 
     def test_dag_validator_detects_cycles_orphan_needs_and_duplicates(self):
         from lib.dag import DAGValidationError, build_dag

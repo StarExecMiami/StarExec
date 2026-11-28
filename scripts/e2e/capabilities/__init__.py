@@ -389,9 +389,10 @@ VALID_BUCKETS = ("setup", "parallel", "k8s", "exclusive", "teardown")
 _BUCKET_GROUPS = {
     "setup": (0, 1, 3, 4, 5, 6, 7, 8),
     "teardown": (22,),
-    "parallel": (2, 9, 15, 17, 18, 20, 27, 28, 29, 30, 35, 39, 40, 41, 42, 43, 44),
+    "parallel": (2, 9, 15, 18, 20, 27, 28, 29, 30, 35, 39, 40, 41, 42, 43, 44),
     "k8s": (10, 11, 12, 13, 19, 21, 23, 24, 25, 26, 31, 32, 33, 36, 37, 38),
-    "exclusive": (14, 16, 34),
+    # c17 asserts exact users.disk_size deltas on owner_user, so it must run exclusively
+    "exclusive": (14, 16, 17, 34),
 }
 
 CONCURRENCY_BUCKETS = {
